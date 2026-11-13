@@ -15,11 +15,16 @@ use crate::file_stream::FileOpener;
 use crate::morsel::{FileOpenerMorselizer, Morselizer};
 #[expect(deprecated)]
 use crate::schema_adapter::SchemaAdapterFactory;
+use arrow::datatypes::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{Result, not_impl_err};
+use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 use datafusion_execution::memory_pool::MemoryPool;
+use datafusion_expr::Operator;
+use datafusion_expr_common::casts::try_cast_literal_to_type;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, InListExpr, Literal};
 use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::DisplayFormatType;
 use datafusion_physical_plan::SortOrderPushdownResult;
@@ -32,6 +37,152 @@ use object_store::ObjectStore;
 /// Helper function to convert any type implementing [`FileSource`] to `Arc<dyn FileSource>`
 pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource> {
     Arc::new(source)
+}
+
+/// Rebuild a supported equality or `IN` filter after selected columns change
+/// to a dictionary representation.
+///
+/// Dictionary comparison kernels operate on the dictionary's value type, so
+/// corresponding literals must be converted to that type. Rebuilding
+/// [`InListExpr`] also refreshes its type-specific static filter.
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub fn try_rewrite_dictionary_filter_predicate(
+    predicate: &Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+    changed_column_indices: &[usize],
+) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    let references_changed_column = |expr: &Arc<dyn PhysicalExpr>| {
+        collect_columns(expr)
+            .iter()
+            .any(|column| changed_column_indices.contains(&column.index()))
+    };
+    if !references_changed_column(predicate) {
+        return Ok(Some(Arc::clone(predicate)));
+    }
+
+    let dictionary_value_type = |column: &Column| -> Result<&DataType> {
+        let Some(field) = input_schema.fields().get(column.index()) else {
+            return internal_err!("Dictionary filter column is not in its input schema");
+        };
+        let DataType::Dictionary(_, value_type) = field.data_type() else {
+            return internal_err!(
+                "Changed dictionary filter column does not have a dictionary type"
+            );
+        };
+        Ok(value_type.as_ref())
+    };
+
+    if let Some(binary) = predicate.downcast_ref::<BinaryExpr>() {
+        return match binary.op() {
+            Operator::And | Operator::Or => {
+                let Some(left) = try_rewrite_dictionary_filter_predicate(
+                    binary.left(),
+                    input_schema,
+                    changed_column_indices,
+                )?
+                else {
+                    return Ok(None);
+                };
+                let Some(right) = try_rewrite_dictionary_filter_predicate(
+                    binary.right(),
+                    input_schema,
+                    changed_column_indices,
+                )?
+                else {
+                    return Ok(None);
+                };
+                Ok(Some(Arc::new(BinaryExpr::new(left, *binary.op(), right))))
+            }
+            Operator::Eq => {
+                let left_column = binary
+                    .left()
+                    .downcast_ref::<Column>()
+                    .filter(|column| changed_column_indices.contains(&column.index()));
+                let right_column = binary
+                    .right()
+                    .downcast_ref::<Column>()
+                    .filter(|column| changed_column_indices.contains(&column.index()));
+                let (column_expr, column, literal, column_is_left) =
+                    if let Some(column) = left_column {
+                        (binary.left(), column, binary.right(), true)
+                    } else if let Some(column) = right_column {
+                        (binary.right(), column, binary.left(), false)
+                    } else {
+                        return Ok(None);
+                    };
+                let Some(literal) = literal.downcast_ref::<Literal>() else {
+                    return Ok(None);
+                };
+                let value_type = dictionary_value_type(column)?;
+                let value = if literal.value().is_null() {
+                    ScalarValue::try_new_null(value_type)?
+                } else {
+                    let Some(value) =
+                        try_cast_literal_to_type(literal.value(), value_type)
+                    else {
+                        return Ok(None);
+                    };
+                    value
+                };
+                let literal = Arc::new(Literal::new(value)) as Arc<dyn PhysicalExpr>;
+                let (left, right) = if column_is_left {
+                    (Arc::clone(column_expr), literal)
+                } else {
+                    (literal, Arc::clone(column_expr))
+                };
+                Ok(Some(Arc::new(BinaryExpr::new(left, Operator::Eq, right))))
+            }
+            _ => Ok(None),
+        };
+    }
+
+    if let Some(in_list) = predicate.downcast_ref::<InListExpr>() {
+        let Some(column) = in_list.expr().downcast_ref::<Column>() else {
+            return Ok(None);
+        };
+        if in_list.negated()
+            || in_list.list().is_empty()
+            || !changed_column_indices.contains(&column.index())
+        {
+            return Ok(None);
+        }
+        let value_type = dictionary_value_type(column)?;
+        let values = in_list
+            .list()
+            .iter()
+            .map(|expr| {
+                let Some(literal) = expr.downcast_ref::<Literal>() else {
+                    return Ok(None);
+                };
+                if literal.value().is_null() {
+                    return ScalarValue::try_new_null(value_type).map(Some);
+                }
+                let Some(value) = try_cast_literal_to_type(literal.value(), value_type)
+                else {
+                    return Ok(None);
+                };
+                Ok(Some(value))
+            })
+            .collect::<Result<Option<Vec<ScalarValue>>>>()?;
+        let Some(values) = values else {
+            return Ok(None);
+        };
+        let values = ScalarValue::iter_to_array(values)?;
+        return Ok(Some(Arc::new(InListExpr::try_new_from_array(
+            Arc::clone(in_list.expr()),
+            values,
+            false,
+            input_schema,
+        )?)));
+    }
+
+    Ok(None)
 }
 
 /// File format specific behaviors for [`DataSource`]
@@ -333,6 +484,27 @@ pub trait FileSource: Any + Send + Sync {
     fn try_pushdown_projection(
         &self,
         _projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        Ok(None)
+    }
+
+    /// Try to create a new [`FileSource`] that emits the specified table
+    /// columns using Arrow dictionary arrays.
+    ///
+    /// `column_indices` refer to the unprojected [`Self::table_schema`]. A
+    /// source must return `None` unless every requested column can be emitted
+    /// as a dictionary without changing row values, column order, field names,
+    /// nullability, or metadata. In particular, implementations should reject
+    /// partition and virtual columns unless they can provide the same native
+    /// dictionary representation as file columns.
+    ///
+    /// The default implementation reports that dictionary output is not
+    /// supported. This hook is intended for physical optimizers that already
+    /// established, from format-specific metadata, that preserving an encoded
+    /// representation is likely to be cheaper than decoding it.
+    fn try_pushdown_dictionary_encoding(
+        &self,
+        _column_indices: &[usize],
     ) -> Result<Option<Arc<dyn FileSource>>> {
         Ok(None)
     }

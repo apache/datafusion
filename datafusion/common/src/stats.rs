@@ -369,6 +369,57 @@ pub struct Statistics {
     pub column_statistics: Vec<ColumnStatistics>,
 }
 
+/// Physical statistics for the columns stored in a single data file.
+///
+/// Unlike [`ColumnStatistics`], which describes the values produced by a plan,
+/// this metadata describes how a file stores those values. File formats can
+/// attach it to a [`PartitionedFile`](https://docs.rs/datafusion-datasource/latest/datafusion_datasource/struct.PartitionedFile.html)
+/// so scan-aware optimizers can make conservative format-specific decisions.
+///
+/// # Public Only for Internal Use
+///
+/// This is not a public API and is for internal use only; see the
+/// [API policy](https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis).
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PhysicalFileStatistics {
+    /// Exact number of rows described by the file footer.
+    ///
+    /// `None` means the format did not provide a valid count or the count
+    /// could not be represented by `usize`.
+    pub num_rows: Option<usize>,
+    /// One entry for each column in the file schema.
+    pub column_statistics: Vec<PhysicalColumnStatistics>,
+}
+
+/// Physical statistics for one column stored in a data file.
+///
+/// # Public Only for Internal Use
+///
+/// This is not a public API and is for internal use only; see the
+/// [API policy](https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis).
+#[doc(hidden)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PhysicalColumnStatistics {
+    /// Whether every data page containing this column is dictionary encoded.
+    ///
+    /// `false` also covers formats or writers that do not provide enough
+    /// metadata to prove this property.
+    pub all_dictionary_encoded: bool,
+    /// Native value type used by dictionary pages for this column.
+    ///
+    /// `None` means the type cannot be preserved by the dictionary reader.
+    pub native_dictionary_value_type: Option<DataType>,
+    /// Smallest decoded value-byte count per row among non-empty row groups.
+    ///
+    /// The denominator includes null rows, making this a conservative lower
+    /// bound for the average non-null value width.
+    pub min_row_group_value_bytes_per_row: Option<usize>,
+    /// Smallest ratio of decoded value bytes to uncompressed encoded column
+    /// bytes among non-empty row groups.
+    pub min_row_group_value_bytes_per_encoded_byte: Option<usize>,
+}
+
 /// Returns `true` when the statistics prove that the input contains no rows.
 ///
 /// Inexact or absent row counts are not sufficient to treat an input as empty.

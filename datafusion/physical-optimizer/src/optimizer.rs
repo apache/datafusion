@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::aggregate_statistics::AggregateStatistics;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
+use crate::dictionary_aggregation::DictionaryPreservation;
 use crate::eliminate_constant_join::EliminateConstantJoin;
 use crate::ensure_coop::EnsureCooperative;
 use crate::ensure_requirements::EnsureRequirements;
@@ -185,6 +186,7 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 /// | `EliminateConstantJoin`        | [`EliminateConstantJoin`]        | Replaces inner joins against a single row of literals with a filter.                          |
 /// | `join_selection`               | [`JoinSelection`]                | Chooses the join implementation, build side, and partition mode.                              |
 /// | `LimitedDistinctAggregation`   | [`LimitedDistinctAggregation`]   | Pushes limit hints into grouped distinct-style aggregations.                                  |
+/// | `DictionaryPreservation(Aggregation)` | [`DictionaryPreservation`] | Preserves profitable file-native dictionaries through supported aggregations.                 |
 /// | `FilterPushdown`               | [`FilterPushdown`]               | Pushes static filters toward data sources (pre-optimization phase).                           |
 /// | `WindowTopN`                   | [`WindowTopN`]                   | Replaces row-number window and filter patterns with per-partition TopK.                       |
 /// | `EnsureRequirements`           | [`EnsureRequirements`]           | Inserts the repartitioning and sorting needed to meet distribution and ordering requirements. |
@@ -198,6 +200,7 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 /// | `LimitPushdown`                | [`LimitPushdown`]                | Pushes limits into child operators or fetch-enabled variants.                                 |
 /// | `TopKRepartition`              | [`TopKRepartition`]              | Pushes TopK below hash repartition when the partition key is a prefix of the sort key.        |
 /// | `ProjectionPushdown`           | [`ProjectionPushdown`]           | Pushes projections again after limit and TopK rewrites (late pass).                           |
+/// | `DictionaryPreservation(Filter)` | [`DictionaryPreservation`]     | Preserves profitable file-native dictionaries through supported filters.                      |
 /// | `PushdownSort`                 | [`PushdownSort`]                 | Pushes sort requirements into data sources that can return sorted output.                     |
 /// | `EnsureCooperative`            | [`EnsureCooperative`]            | Wraps non-cooperative operators so long-running tasks yield.                                  |
 /// | `FilterPushdown(Post)`         | [`FilterPushdown`]               | Pushes dynamic filters once plan references stop moving (post-optimization phase).            |
@@ -241,6 +244,10 @@ impl PhysicalOptimizer {
             // as that rule may inject other operations in between the different AggregateExecs.
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
+            // Preserve eligible Parquet dictionaries through grouped hash
+            // aggregation before distribution requirements insert exchanges
+            // between partial and final aggregates.
+            Arc::new(DictionaryPreservation::new()),
             // The FilterPushdown rule tries to push down filters as far as it can.
             // For example, it will push down filtering from a `FilterExec` to `DataSourceExec`.
             // Note that this does not push down dynamic filters (such as those created by a `SortExec` operator in TopK mode),
@@ -312,6 +319,10 @@ impl PhysicalOptimizer {
             // are not present, the load of executors such as join or union will be
             // reduced by narrowing their input tables.
             Arc::new(ProjectionPushdown::new()),
+            // ProjectionPushdown makes it explicit when a predicate column is
+            // discarded by FilterExec. Run after LimitPushdown so a fetch or
+            // scan limit introduced there keeps the rewrite disabled.
+            Arc::new(DictionaryPreservation::new_filter_pass()),
             // PushdownSort: Detect sorts that can be pushed down to data sources.
             Arc::new(PushdownSort::new()),
             Arc::new(EnsureCooperative::new()),

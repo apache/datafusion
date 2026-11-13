@@ -18,7 +18,8 @@ use crate::file_sink_config::FileSinkConfig;
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    GetExt, Result, SchemaError, Statistics, internal_err, not_impl_err, schema_err,
+    GetExt, PhysicalFileStatistics, Result, SchemaError, Statistics, internal_err,
+    not_impl_err, schema_err,
 };
 use datafusion_physical_expr::LexRequirement;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -63,6 +64,8 @@ pub struct FileMeta {
     pub statistics: Statistics,
     /// The ordering (sort order) of the file, if known.
     pub ordering: Option<LexOrdering>,
+    /// Physical per-column statistics supplied by the file format, if known.
+    pub physical_statistics: Option<PhysicalFileStatistics>,
 }
 
 impl FileMeta {
@@ -71,12 +74,22 @@ impl FileMeta {
         Self {
             statistics,
             ordering: None,
+            physical_statistics: None,
         }
     }
 
     /// Sets the ordering for this file metadata.
     pub fn with_ordering(mut self, ordering: Option<LexOrdering>) -> Self {
         self.ordering = ordering;
+        self
+    }
+
+    /// Sets physical per-column statistics for this file.
+    pub fn with_physical_statistics(
+        mut self,
+        physical_statistics: PhysicalFileStatistics,
+    ) -> Self {
+        self.physical_statistics = Some(physical_statistics);
         self
     }
 }
@@ -166,10 +179,31 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
         let ordering = self
             .infer_ordering(state, store, table_schema, object)
             .await?;
-        Ok(FileMeta {
-            statistics,
-            ordering,
-        })
+        Ok(FileMeta::new(statistics).with_ordering(ordering))
+    }
+
+    /// Infer statistics and ordering, including format-specific physical
+    /// statistics used by scan-aware optimizers.
+    ///
+    /// The default implementation delegates to
+    /// [`Self::infer_stats_and_ordering`] and returns unknown physical
+    /// statistics. File formats that can provide physical statistics should
+    /// override this method.
+    async fn infer_stats_and_ordering_with_physical_statistics(
+        &self,
+        state: &dyn Session,
+        store: &Arc<dyn ObjectStore>,
+        table_schema: SchemaRef,
+        object: &ObjectMeta,
+    ) -> Result<FileMeta> {
+        let column_count = table_schema.fields().len();
+        let file_meta = self
+            .infer_stats_and_ordering(state, store, table_schema, object)
+            .await?;
+        Ok(file_meta.with_physical_statistics(PhysicalFileStatistics {
+            num_rows: None,
+            column_statistics: vec![Default::default(); column_count],
+        }))
     }
 
     /// Take a list of files and convert it to the appropriate executor
