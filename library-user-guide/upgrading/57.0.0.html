@@ -540,6 +540,19 @@ available without the Spark function library:</p>
 </pre></div>
 </div>
 </section>
+<section id="parquetfilereaderfactory-adds-any-as-a-supertrait">
+<h3><code class="docutils literal notranslate"><span class="pre">ParquetFileReaderFactory</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait<a class="headerlink" href="#parquetfilereaderfactory-adds-any-as-a-supertrait" title="Link to this heading">#</a></h3>
+<p>To enable downcasting of <code class="docutils literal notranslate"><span class="pre">dyn</span> <span class="pre">ParquetFileReaderFactory</span></code> to concrete factory
+types (via <code class="docutils literal notranslate"><span class="pre">is::&lt;T&gt;()</span></code> / <code class="docutils literal notranslate"><span class="pre">downcast_ref::&lt;T&gt;()</span></code>), the
+<code class="docutils literal notranslate"><span class="pre">ParquetFileReaderFactory</span></code> trait now has <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- pub trait ParquetFileReaderFactory: Debug + Send + Sync + &#39;static</span>
+<span class="gi">+ pub trait ParquetFileReaderFactory: Any + Debug + Send + Sync</span>
+</pre></div>
+</div>
+<p>The trait already required <code class="docutils literal notranslate"><span class="pre">'static</span></code>, which <code class="docutils literal notranslate"><span class="pre">Any</span></code> implies, so existing
+implementations need no changes. <code class="docutils literal notranslate"><span class="pre">ParquetSource::parquet_file_reader_factory</span></code>
+returns the trait object to downcast.</p>
+</section>
 </section>
 </section>
 
@@ -594,6 +607,7 @@ available without the Spark function library:</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#substrait-consumers-use-explicit-scope-context">Substrait consumers use explicit scope context</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupclusteringmode-full-no-longer-implies-sorted-input"><code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> no longer implies sorted input</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-spark-moved-to-its-own-repository"><code class="docutils literal notranslate"><span class="pre">datafusion-spark</span></code> moved to its own repository</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetfilereaderfactory-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">ParquetFileReaderFactory</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
 </ul>
 </li>
 </ul>
