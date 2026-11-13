@@ -1227,7 +1227,7 @@ pub fn ordering_from_parquet_metadata(
         return Ok(None);
     }
 
-    let num_ordered = num_columns_ordered_across_row_groups(metadata, sorting_columns)?;
+    let num_ordered = num_columns_ordered_across_row_groups(metadata, sorting_columns);
     let sorting_columns = &sorting_columns[..num_ordered];
 
     let parquet_schema = metadata.file_metadata().schema_descr();
@@ -1288,19 +1288,24 @@ fn sorting_columns_to_physical_exprs(
 /// row groups [(1, 8), (1, 9)] [(1, 0), (1, 1)]: ordered by (a) only, because a is equal and 9 > 0
 /// ```
 ///
-/// A column without usable statistics counts as not ordered.
+/// A column whose order cannot be proved, for example because it has no
+/// usable statistics, counts as not ordered. Ordering is optional information,
+/// so this never fails the query.
 fn num_columns_ordered_across_row_groups(
     metadata: &ParquetMetaData,
     sorting_columns: &[SortingColumn],
-) -> Result<usize> {
+) -> usize {
     let row_groups = metadata.row_groups();
     if row_groups.len() < 2 {
-        return Ok(sorting_columns.len());
+        return sorting_columns.len();
     }
     let file_metadata = metadata.file_metadata();
     let parquet_schema = file_metadata.schema_descr();
-    let arrow_schema =
-        parquet_to_arrow_schema(parquet_schema, file_metadata.key_value_metadata())?;
+    let Ok(arrow_schema) =
+        parquet_to_arrow_schema(parquet_schema, file_metadata.key_value_metadata())
+    else {
+        return 0;
+    };
     let resolver = LeafResolver::new(parquet_schema, &arrow_schema);
 
     let column_bounds: Vec<_> = sorting_columns
@@ -1325,19 +1330,20 @@ fn num_columns_ordered_across_row_groups(
             )];
             let last = std::slice::from_ref(&bounds[i].1);
             let next_first = std::slice::from_ref(&bounds[i + 1].0);
-            match compare_rows(last, next_first, &options)? {
+            // An unsupported comparison does not prove the order
+            match compare_rows(last, next_first, &options) {
                 // In order, so the later columns do not matter here
-                Ordering::Less => break,
+                Ok(Ordering::Less) => break,
                 // Equal, so the next column decides
-                Ordering::Equal => {}
-                Ordering::Greater => {
+                Ok(Ordering::Equal) => {}
+                Ok(Ordering::Greater) | Err(_) => {
                     num_ordered = column;
                     break;
                 }
             }
         }
     }
-    Ok(num_ordered)
+    num_ordered
 }
 
 /// Returns the values that sort first and last in each row group under
