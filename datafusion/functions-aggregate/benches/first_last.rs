@@ -11,6 +11,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Fields, Float64Type, Int64Type, Schema};
 use arrow::util::bench_util::{
     create_boolean_array, create_primitive_array, create_string_array_with_len,
+    create_string_view_array_with_len,
 };
 use datafusion_common::instant::Instant;
 use std::hint::black_box;
@@ -367,6 +368,20 @@ fn create_struct_array(n: usize, null_density: f32) -> ArrayRef {
         vec![a, b, d],
         top_level_nulls(n, null_density),
     ))
+}
+
+/// A 3-field struct value column `Struct<Int64, Utf8View, Float64>`. Each
+/// string is 16 bytes, so it is stored in a data buffer, not in its view.
+fn create_struct_view_array(n: usize) -> ArrayRef {
+    let a = Arc::new(create_primitive_array::<Int64Type>(n, 0.0)) as ArrayRef;
+    let b = Arc::new(create_string_view_array_with_len(n, 0.0, 16, false)) as ArrayRef;
+    let d = Arc::new(create_primitive_array::<Float64Type>(n, 0.0)) as ArrayRef;
+    let fields = Fields::from(vec![
+        Field::new("c0", DataType::Int64, true),
+        Field::new("c1", DataType::Utf8View, true),
+        Field::new("c2", DataType::Float64, true),
+    ]);
+    Arc::new(StructArray::new(fields, vec![a, b, d], None))
 }
 
 /// A `List<Int64>` value column with fixed-size lists of `list_len` elements.
@@ -762,5 +777,55 @@ fn first_last_benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, first_last_benchmark, first_last_nested_benchmark);
+/// The final stage of a two-stage aggregation with one row per group: a
+/// partial accumulator emits its state, and a final accumulator merges it.
+/// The timed part is `state` plus `merge_batch`.
+fn first_last_state_merge_benchmark(c: &mut Criterion) {
+    const N: usize = 8192;
+    let group_indices: Vec<usize> = (0..N).collect();
+    let ord = Arc::new(create_primitive_array::<Int64Type>(N, 0.0)) as ArrayRef;
+
+    let mut group = c.benchmark_group("first_value state_merge_bench");
+    // A merge on the slow path takes about a second, so take fewer samples.
+    group.sample_size(10);
+    let columns: [(&str, ArrayRef); 2] = [
+        ("struct(i64,utf8,f64)", create_struct_array(N, 0.0)),
+        ("struct(i64,utf8view,f64)", create_struct_view_array(N)),
+    ];
+    for (type_label, values) in columns {
+        let value_type = values.data_type().clone();
+        group.bench_function(format!("{type_label} groups={N}"), |b| {
+            b.iter_batched(
+                || {
+                    let mut partial =
+                        prepare_typed_groups_accumulator(true, value_type.clone());
+                    partial
+                        .update_batch(
+                            &[Arc::clone(&values), Arc::clone(&ord)],
+                            &group_indices,
+                            None,
+                            N,
+                        )
+                        .unwrap();
+                    let fin = prepare_typed_groups_accumulator(true, value_type.clone());
+                    (partial, fin)
+                },
+                |(mut partial, mut fin)| {
+                    let state = partial.state(EmitTo::All).unwrap();
+                    fin.merge_batch(&state, &group_indices, N).unwrap();
+                    black_box(fin)
+                },
+                BatchSize::SmallInput,
+            )
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    first_last_benchmark,
+    first_last_nested_benchmark,
+    first_last_state_merge_benchmark
+);
 criterion_main!(benches);

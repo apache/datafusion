@@ -5300,7 +5300,18 @@ impl ScalarValue {
     /// `LargeListView`, `Struct`, `Map`) are handled by recursing into their
     /// child / values arrays and reconstructing the parent with the compacted
     /// children.  All other types are returned unchanged.
-    fn compact_view_buffers(array: ArrayRef) -> ArrayRef {
+    ///
+    /// `gc` copies the bytes of each view separately. Views that share bytes,
+    /// such as the output of `take` with repeated indices, each get their own
+    /// copy, so the result can be larger than the input.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    pub fn compact_view_buffers(array: ArrayRef) -> ArrayRef {
         // Macro for the i32/i64-offset list pair (List / LargeList).
         macro_rules! gc_list {
             ($field:expr, $offset_type:ty, $array_type:ty) => {{

@@ -291,15 +291,35 @@ pub(crate) struct GenericValueState {
     /// Cached total heap size of `vals`, updated on each mutation to avoid
     /// walking the vector on every `size()` call.
     total_size: usize,
+    /// Whether `data_type` has a `Utf8View` or `BinaryView` array that
+    /// `take` must compact.
+    has_view_types: bool,
 }
 
 impl GenericValueState {
     pub(crate) fn new(data_type: DataType) -> Self {
         Self {
             vals: vec![],
+            has_view_types: has_view_types(&data_type),
             data_type,
             total_size: 0,
         }
+    }
+}
+
+/// Returns true if `data_type` is or contains a type whose data buffers
+/// [`ScalarValue::compact_view_buffers`] compacts.
+fn has_view_types(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Utf8View | DataType::BinaryView => true,
+        DataType::Struct(fields) => fields.iter().any(|f| has_view_types(f.data_type())),
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::Map(field, _) => has_view_types(field.data_type()),
+        _ => false,
     }
 }
 
@@ -341,7 +361,16 @@ impl ValueState for GenericValueState {
         if scalars.is_empty() {
             return Ok(arrow::array::new_empty_array(&self.data_type));
         }
-        ScalarValue::iter_to_array(scalars)
+        let array = ScalarValue::iter_to_array(scalars)?;
+        if !self.has_view_types {
+            return Ok(array);
+        }
+        // `update` compacted each value into its own data buffer, and
+        // `iter_to_array` keeps all of them: one buffer per group. A later
+        // merge that copies a row out of this array clones every buffer, so
+        // merging N groups costs O(N^2). Each value owns its bytes, so the
+        // compacted array is no larger than the values were.
+        Ok(ScalarValue::compact_view_buffers(array))
     }
 
     fn size(&self) -> usize {
@@ -632,6 +661,34 @@ mod tests {
         assert_eq!(out_id.value(1), 3);
         assert_eq!(out_name.value(0), "a");
         assert_eq!(out_name.value(1), "c");
+        Ok(())
+    }
+
+    #[test]
+    fn test_generic_value_state_struct_utf8view_take_has_one_buffer() -> Result<()> {
+        const N: usize = 50;
+        let fields = Fields::from(vec![Field::new("name", DataType::Utf8View, true)]);
+        let names: StringViewArray = (0..N)
+            .map(|i| Some(format!("a value longer than 12 bytes {i:02}")))
+            .collect();
+        let struct_array = Arc::new(StructArray::new(
+            fields.clone(),
+            vec![Arc::new(names.clone()) as ArrayRef],
+            None,
+        )) as ArrayRef;
+
+        let mut state = GenericValueState::new(DataType::Struct(fields));
+        state.resize(N);
+        for i in 0..N {
+            state.update(i, &struct_array, i)?;
+        }
+
+        let out = state.take(EmitTo::All)?;
+        let out_names = out.as_struct().column(0).as_string_view();
+        assert_eq!(out_names, &names);
+        assert_eq!(out_names.data_buffers().len(), 1);
+        let value_bytes: usize = names.iter().flatten().map(str::len).sum();
+        assert_eq!(out_names.data_buffers()[0].len(), value_bytes);
         Ok(())
     }
 
