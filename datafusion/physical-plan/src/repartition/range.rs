@@ -713,6 +713,51 @@ mod tests {
         )
     }
 
+    /// `-0.0` sorts before `0.0`, so a `0.0` split point separates them.
+    #[test]
+    fn test_float_router_signed_zero() -> Result<()> {
+        let split_points = make_split_points_1d(vec![ScalarValue::Float64(Some(0.0))]);
+        let router = RangeRouter::try_new(&[SortOptions::default()], &split_points)?;
+        let input = Arc::new(Float64Array::from(vec![-0.0, 0.0])) as ArrayRef;
+        assert_routing(&router, &[input], &[0, 1], None)
+    }
+
+    /// NULLs in composite keys follow each key's own `nulls_first`.
+    #[test]
+    fn test_router_composite_nullable_keys() -> Result<()> {
+        let split_points = vec![
+            SplitPoint::new(vec![ScalarValue::Int32(None), ScalarValue::Int32(Some(10))]),
+            SplitPoint::new(vec![ScalarValue::Int32(None), ScalarValue::Int32(None)]),
+            SplitPoint::new(vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(None)]),
+        ];
+        let sort_options = [
+            SortOptions::new(false, true),
+            SortOptions::new(false, false),
+        ];
+        let router = RangeRouter::try_new(&sort_options, &split_points)?;
+        let key = Arc::new(Int32Array::from(vec![
+            None,
+            None,
+            None,
+            None,
+            Some(9),
+            Some(10),
+            Some(10),
+            Some(11),
+        ])) as ArrayRef;
+        let tie = Arc::new(Int32Array::from(vec![
+            Some(9),
+            Some(10),
+            Some(11),
+            None,
+            None,
+            Some(9),
+            None,
+            None,
+        ])) as ArrayRef;
+        assert_routing(&router, &[key, tie], &[0, 1, 1, 2, 2, 2, 3, 3], None)
+    }
+
     #[test]
     fn test_row_converter_strings() -> Result<()> {
         let split_points = make_split_points_1d(vec![

@@ -66,7 +66,7 @@ use arrow::array::{
 use arrow::buffer::NullBuffer;
 use arrow::compute::{SortOptions, interleave};
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion_common::float_semantics::normalize_floats;
+use datafusion_common::float_semantics;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
@@ -902,7 +902,7 @@ impl InputCursor {
             // Arrow's comparator distinguishes -0.0 from +0.0, while SQL does
             // not. Normalizing once here is cheaper than fixing every row-level
             // comparison and lets the cached comparator use the arrays directly.
-            self.match_array = Some(normalize_floats(&match_array));
+            self.match_array = Some(float_semantics::normalize(match_array));
             self.key_batch_id += 1;
             self.batch = Some(batch);
         }

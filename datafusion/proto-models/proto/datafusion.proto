@@ -1383,6 +1383,10 @@ message ParquetScanExecNode {
 
   // Source-specific footer prefetch size. Absent means no hint.
   optional uint64 metadata_size_hint = 7;
+
+  // Reverse the rows within each row group too, making a reversed scan
+  // exactly ordered. Only meaningful with `reverse_row_groups`.
+  bool reverse_rows = 8;
 }
 
 message CsvScanExecNode {
@@ -1400,6 +1404,7 @@ message CsvScanExecNode {
   bool truncate_rows = 8;
   // Custom one-byte line terminator. Absent means the default newline terminator.
   optional bytes terminator = 9;
+  bool match_columns_by_header = 10;
 }
 
 message JsonScanExecNode {

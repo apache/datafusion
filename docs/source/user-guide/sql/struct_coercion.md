@@ -175,6 +175,21 @@ SELECT [
 
 ### Limitations
 
+**Implicit coercion requires identical field name sets.** Two structs coerce to a common type only when they have the same field names (in any order). Structs with different field names have no common type, and the query fails at plan time:
+
+```sql
+-- Different field names: foo vs xxx
+SELECT {foo: 'baz'} UNION ALL SELECT {xxx: 'blarg'};
+-- Error: Incompatible inputs for Union
+
+SELECT CASE WHEN a = 1 THEN {foo: 'baz'} ELSE {xxx: 'blarg'} END FROM t;
+-- Error: Failed to coerce then (...) and else (...) to common types
+-- in CASE WHEN expression
+
+SELECT {foo: 'baz'} = {xxx: 'blarg'};
+-- Error: Cannot infer common argument type for comparison operation
+```
+
 **Field count must match exactly.** If structs have different numbers of fields and their field names don't completely overlap, the query will fail:
 
 ```sql
