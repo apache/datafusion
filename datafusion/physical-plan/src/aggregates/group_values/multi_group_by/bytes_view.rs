@@ -663,6 +663,7 @@ mod tests {
     use arrow::datatypes::StringViewType;
 
     use super::GroupColumn;
+    use insta::assert_snapshot;
 
     fn make_true_buffer(n: usize) -> BooleanBufferBuilder {
         let mut buf = BooleanBufferBuilder::new(n);
@@ -1066,46 +1067,65 @@ mod tests {
         assert_eq!(&taken_array, &input_array.slice(0, 3));
     }
 
+    /// Calls `take_n(n)` and describes what was emitted and what the builder keeps.
+    fn describe_take_n(
+        builder: &mut ByteViewGroupValueBuilder<StringViewType>,
+        n: usize,
+    ) -> String {
+        let taken = builder.take_n(n);
+        let taken = taken.as_string_view();
+        let values: Vec<_> = taken.iter().flatten().collect();
+        let emitted: Vec<_> = taken.data_buffers().iter().map(|b| b.len()).collect();
+        let completed: Vec<_> = builder.completed.iter().map(|b| b.len()).collect();
+        let in_progress = builder.in_progress.len();
+        [
+            format!("take_n({n}): {values:?}"),
+            format!("  emitted buffer bytes: {emitted:?}"),
+            format!(
+                "  kept buffer bytes: completed {completed:?}, in_progress {in_progress}"
+            ),
+            String::new(),
+        ]
+        .join("\n")
+    }
+
+    /// Each take emits only its own strings.
     #[test]
     fn test_byte_view_take_n_drains_in_progress() {
         let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
-        let values = [
+        let input_array: ArrayRef = Arc::new(StringViewArray::from(vec![
             "the first string is quite long",
             "the second string is also quite long",
             "the third string is long too",
             "the fourth string is the longest of them all",
-        ];
-        let input_array: ArrayRef = Arc::new(StringViewArray::from(values.to_vec()));
-
+        ]));
         for row in 0..3 {
             builder.append_val(&input_array, row).unwrap();
         }
 
-        // Each partial take should emit only its own bytes
-        let mut remaining_len = values[..3].iter().map(|v| v.len()).sum::<usize>();
-        for (row, value) in values.iter().enumerate().take(2) {
-            let taken_array = builder.take_n(1);
-            assert_eq!(&taken_array, &input_array.slice(row, 1));
-
-            let taken_buffers = taken_array.as_string_view().data_buffers();
-            assert_eq!(taken_buffers.len(), 1);
-            assert_eq!(taken_buffers[0].len(), value.len());
-
-            remaining_len -= value.len();
-            assert_eq!(builder.in_progress.len(), remaining_len);
-        }
-
-        // The remaining and newly appended values are still addressed correctly
-        assert!(builder.equal_to(0, &input_array, 2));
+        let mut transcript = describe_take_n(&mut builder, 1);
+        transcript += &describe_take_n(&mut builder, 1);
         builder.append_val(&input_array, 3).unwrap();
-        assert!(builder.equal_to(1, &input_array, 3));
+        transcript += "append the fourth string\n";
+        transcript += &describe_take_n(&mut builder, 2);
 
-        let taken_array = builder.take_n(2);
-        assert_eq!(&taken_array, &input_array.slice(2, 2));
+        assert_snapshot!(transcript, @r#"
+        take_n(1): ["the first string is quite long"]
+          emitted buffer bytes: [30]
+          kept buffer bytes: completed [], in_progress 64
+        take_n(1): ["the second string is also quite long"]
+          emitted buffer bytes: [36]
+          kept buffer bytes: completed [], in_progress 28
+        append the fourth string
+        take_n(2): ["the third string is long too", "the fourth string is the longest of them all"]
+          emitted buffer bytes: [72]
+          kept buffer bytes: completed [], in_progress 0
+        "#);
     }
 
     #[test]
     fn test_byte_view_take_n_spans_completed_and_partial_in_progress() {
+        // A block holds two of the 14 byte strings
         let mut builder =
             ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(30);
         let input_array: ArrayRef = Arc::new(StringViewArray::from(vec![
@@ -1117,26 +1137,23 @@ mod tests {
             "ffffffffffffff",
             "gggggggggggggg",
         ]));
-
         for row in 0..6 {
             builder.append_val(&input_array, row).unwrap();
         }
-        assert_eq!(builder.completed.len(), 2);
-        assert_eq!(builder.in_progress.len(), 28);
 
-        // Takes both completed buffers and the first half of `in_progress`
-        let taken_array = builder.take_n(5);
-        assert_eq!(&taken_array, &input_array.slice(0, 5));
-        let taken_buffers = taken_array.as_string_view().data_buffers();
-        assert_eq!(taken_buffers.len(), 3);
-        assert_eq!(taken_buffers[2].len(), 14);
-
-        assert!(builder.completed.is_empty());
-        assert_eq!(builder.in_progress.len(), 14);
-        assert!(builder.equal_to(0, &input_array, 5));
-
+        let mut transcript = describe_take_n(&mut builder, 5);
         builder.append_val(&input_array, 6).unwrap();
-        let taken_array = builder.take_n(2);
-        assert_eq!(&taken_array, &input_array.slice(5, 2));
+        transcript += "append the 'g' string\n";
+        transcript += &describe_take_n(&mut builder, 2);
+
+        assert_snapshot!(transcript, @r#"
+        take_n(5): ["aaaaaaaaaaaaaa", "bbbbbbbbbbbbbb", "cccccccccccccc", "dddddddddddddd", "eeeeeeeeeeeeee"]
+          emitted buffer bytes: [28, 28, 14]
+          kept buffer bytes: completed [], in_progress 14
+        append the 'g' string
+        take_n(2): ["ffffffffffffff", "gggggggggggggg"]
+          emitted buffer bytes: [28]
+          kept buffer bytes: completed [], in_progress 0
+        "#);
     }
 }
