@@ -95,7 +95,10 @@ pub struct CachedFileMetadata {
     /// Cached ordering for the file.
     pub ordering: Option<LexOrdering>,
     /// Cached physical per-column statistics for the file.
-    pub physical_statistics: Option<PhysicalFileStatistics>,
+    ///
+    /// This is shared so cache lookups do not copy the per-column metadata
+    /// when a scan only needs the logical statistics.
+    pub physical_statistics: Option<Arc<PhysicalFileStatistics>>,
 }
 
 impl CachedFileMetadata {
@@ -120,7 +123,7 @@ impl CachedFileMetadata {
         mut self,
         physical_statistics: PhysicalFileStatistics,
     ) -> Self {
-        self.physical_statistics = Some(physical_statistics);
+        self.physical_statistics = Some(Arc::new(physical_statistics));
         self
     }
 
