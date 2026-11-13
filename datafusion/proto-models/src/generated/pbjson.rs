@@ -5015,6 +5015,9 @@ impl serde::Serialize for CsvScanExecNode {
         if self.terminator.is_some() {
             len += 1;
         }
+        if self.match_columns_by_header {
+            len += 1;
+        }
         if self.optional_escape.is_some() {
             len += 1;
         }
@@ -5044,6 +5047,9 @@ impl serde::Serialize for CsvScanExecNode {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("terminator", pbjson::private::base64::encode(&v).as_str())?;
+        }
+        if self.match_columns_by_header {
+            struct_ser.serialize_field("matchColumnsByHeader", &self.match_columns_by_header)?;
         }
         if let Some(v) = self.optional_escape.as_ref() {
             match v {
@@ -5080,6 +5086,8 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             "truncate_rows",
             "truncateRows",
             "terminator",
+            "match_columns_by_header",
+            "matchColumnsByHeader",
             "escape",
             "comment",
         ];
@@ -5093,6 +5101,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             NewlinesInValues,
             TruncateRows,
             Terminator,
+            MatchColumnsByHeader,
             Escape,
             Comment,
         }
@@ -5123,6 +5132,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             "newlinesInValues" | "newlines_in_values" => Ok(GeneratedField::NewlinesInValues),
                             "truncateRows" | "truncate_rows" => Ok(GeneratedField::TruncateRows),
                             "terminator" => Ok(GeneratedField::Terminator),
+                            "matchColumnsByHeader" | "match_columns_by_header" => Ok(GeneratedField::MatchColumnsByHeader),
                             "escape" => Ok(GeneratedField::Escape),
                             "comment" => Ok(GeneratedField::Comment),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -5151,6 +5161,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                 let mut newlines_in_values__ = None;
                 let mut truncate_rows__ = None;
                 let mut terminator__ = None;
+                let mut match_columns_by_header__ = None;
                 let mut optional_escape__ = None;
                 let mut optional_comment__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -5199,6 +5210,12 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::MatchColumnsByHeader => {
+                            if match_columns_by_header__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("matchColumnsByHeader"));
+                            }
+                            match_columns_by_header__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::Escape => {
                             if optional_escape__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("escape"));
@@ -5221,6 +5238,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                     newlines_in_values: newlines_in_values__.unwrap_or_default(),
                     truncate_rows: truncate_rows__.unwrap_or_default(),
                     terminator: terminator__,
+                    match_columns_by_header: match_columns_by_header__.unwrap_or_default(),
                     optional_escape: optional_escape__,
                     optional_comment: optional_comment__,
                 })
@@ -16926,6 +16944,9 @@ impl serde::Serialize for ParquetScanExecNode {
         if self.metadata_size_hint.is_some() {
             len += 1;
         }
+        if self.reverse_rows {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ParquetScanExecNode", len)?;
         if let Some(v) = self.base_conf.as_ref() {
             struct_ser.serialize_field("baseConf", v)?;
@@ -16946,6 +16967,9 @@ impl serde::Serialize for ParquetScanExecNode {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("metadataSizeHint", ToString::to_string(&v).as_str())?;
+        }
+        if self.reverse_rows {
+            struct_ser.serialize_field("reverseRows", &self.reverse_rows)?;
         }
         struct_ser.end()
     }
@@ -16968,6 +16992,8 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
             "reverseRowGroups",
             "metadata_size_hint",
             "metadataSizeHint",
+            "reverse_rows",
+            "reverseRows",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16978,6 +17004,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
             SortOrderForReorder,
             ReverseRowGroups,
             MetadataSizeHint,
+            ReverseRows,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -17005,6 +17032,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                             "sortOrderForReorder" | "sort_order_for_reorder" => Ok(GeneratedField::SortOrderForReorder),
                             "reverseRowGroups" | "reverse_row_groups" => Ok(GeneratedField::ReverseRowGroups),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
+                            "reverseRows" | "reverse_rows" => Ok(GeneratedField::ReverseRows),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17030,6 +17058,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                 let mut sort_order_for_reorder__ = None;
                 let mut reverse_row_groups__ = None;
                 let mut metadata_size_hint__ = None;
+                let mut reverse_rows__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::BaseConf => {
@@ -17070,6 +17099,12 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::ReverseRows => {
+                            if reverse_rows__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("reverseRows"));
+                            }
+                            reverse_rows__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ParquetScanExecNode {
@@ -17079,6 +17114,7 @@ impl<'de> serde::Deserialize<'de> for ParquetScanExecNode {
                     sort_order_for_reorder: sort_order_for_reorder__,
                     reverse_row_groups: reverse_row_groups__.unwrap_or_default(),
                     metadata_size_hint: metadata_size_hint__,
+                    reverse_rows: reverse_rows__.unwrap_or_default(),
                 })
             }
         }

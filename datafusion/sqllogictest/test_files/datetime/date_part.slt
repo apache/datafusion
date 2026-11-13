@@ -1209,6 +1209,37 @@ SELECT extract(epoch from interval '1 month')
 ----
 2592000
 
+# whole years count as 365.25 days, leftover months as 30 days (PostgreSQL, DuckDB)
+query R
+SELECT extract(epoch from interval '11 months')
+----
+28512000
+
+query R
+SELECT extract(epoch from interval '1 year')
+----
+31557600
+
+query R
+SELECT extract(epoch from interval '14 months')
+----
+36741600
+
+query R
+SELECT extract(epoch from interval '-14 months')
+----
+-36741600
+
+query R
+SELECT extract(epoch from interval '1 year 1 day')
+----
+31644000
+
+query R
+SELECT extract(epoch from arrow_cast('1 year', 'Interval(YearMonth)'))
+----
+31557600
+
 query R
 SELECT extract(epoch from arrow_cast('3 days', 'Interval(DayTime)'))
 ----

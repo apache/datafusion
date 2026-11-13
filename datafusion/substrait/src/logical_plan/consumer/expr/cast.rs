@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::logical_plan::consumer::SubstraitConsumerContext;
+
 use crate::logical_plan::consumer::{
     SubstraitConsumer, field_from_substrait_type_without_names,
 };
@@ -14,6 +16,7 @@ pub async fn from_cast(
     consumer: &impl SubstraitConsumer,
     cast: &substrait_expression::Cast,
     input_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Expr> {
     match cast.r#type.as_ref() {
         Some(output_type) => {
@@ -22,6 +25,7 @@ pub async fn from_cast(
                     .consume_expression(
                         cast.input.as_ref().unwrap().as_ref(),
                         input_schema,
+                        context,
                     )
                     .await?,
             );

@@ -43,6 +43,7 @@ actually produced during execution.
 [listingtable]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 [viewtable]: https://docs.rs/datafusion/latest/datafusion/datasource/view/struct.ViewTable.html
 [planproperties]: https://docs.rs/datafusion/latest/datafusion/physical_plan/struct.PlanProperties.html
+[equivalenceproperties]: https://docs.rs/datafusion/latest/datafusion/physical_expr/struct.EquivalenceProperties.html
 [streamingtableexec]: https://docs.rs/datafusion/latest/datafusion/physical_plan/streaming/struct.StreamingTableExec.html
 [`optimizer`]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.Optimizer.html#built-in-optimizer-rules
 [`physicaloptimizer`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/optimizer/struct.PhysicalOptimizer.html#built-in-physical-optimizer-rules
@@ -278,7 +279,8 @@ by file or by shard), expose that here.
 
 **Output ordering** declares whether your data is naturally sorted. This
 enables the optimizer to avoid inserting a `SortExec` when a query requires
-ordered data. Getting this right can be a significant performance win.
+ordered data. Getting this right can be a significant performance win. See
+[EquivalenceProperties] for more details.
 
 ### Partitioning Strategies
 
