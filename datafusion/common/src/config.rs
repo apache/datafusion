@@ -1367,6 +1367,16 @@ config_namespace! {
         /// pattern of selected rows.
         pub force_filter_selections: bool, default = false
 
+        /// (reading) If true, a scan whose requested ordering is the reverse of
+        /// the files' declared ordering reads each row group into memory and
+        /// emits its rows in reverse, so the scan is exactly ordered and the
+        /// `SortExec` above it can be removed. Peak memory per scanned file is
+        /// one decoded row group (after projection and filtering). If false,
+        /// only the row group order is reversed and the sort is kept. The value
+        /// is captured when the table is created, so a later `SET` does not
+        /// affect existing tables.
+        pub enable_exact_reverse_scan: bool, default = false
+
         /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
         /// and `Binary/BinaryLarge` with `BinaryView`.
         ///
@@ -2239,8 +2249,8 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
 }
 
 config_namespace! {
-    /// Options controlling DataFusion's Spark-compatibility layer (functions
-    /// under `datafusion/spark`). Keys here mirror their `spark.sql.*`
+    /// Options controlling DataFusion's Spark-compatibility layer (the
+    /// `datafusion-spark` crate). Keys here mirror their `spark.sql.*`
     /// equivalents in Apache Spark.
     pub struct SparkOptions {
         /// Policy for handling duplicate keys in Spark-compatible map-construction
@@ -2287,7 +2297,7 @@ pub struct ConfigOptions {
     pub extensions: Extensions,
     /// Formatting options when printing batches
     pub format: FormatOptions,
-    /// Spark-compatibility options (functions under `datafusion/spark`)
+    /// Spark-compatibility options (the `datafusion-spark` crate)
     pub spark: SparkOptions,
 }
 

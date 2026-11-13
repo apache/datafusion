@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::{DFSchema, Spans, substrait_datafusion_err, substrait_err};
 use datafusion::logical_expr::expr::{Exists, InSubquery, SetComparison, SetQuantifier};
 use datafusion::logical_expr::{Expr, LogicalPlan, Operator, Subquery};
@@ -18,22 +18,22 @@ use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 ///
 /// Substrait represents correlated references using `OuterReference`
 /// field references with a `steps_out` depth. To resolve these,
-/// the consumer maintains a stack of outer schemas.
+/// the context carries the enclosing query schemas.
 async fn consume_subquery_rel(
     consumer: &impl SubstraitConsumer,
     rel: &Rel,
     outer_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
-    consumer.push_outer_schema(Arc::new(outer_schema.clone()));
-    let result = consumer.consume_rel(rel).await;
-    consumer.pop_outer_schema();
-    result
+    let child_context = context.with_outer_schema(Arc::new(outer_schema.clone()));
+    consumer.consume_rel(rel, &child_context).await
 }
 
 pub async fn from_subquery(
     consumer: &impl SubstraitConsumer,
     subquery: &substrait_expression::Subquery,
     input_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Expr> {
     match &subquery.subquery_type {
         Some(subquery_type) => match subquery_type {
@@ -46,14 +46,22 @@ pub async fn from_subquery(
                     let needle_expr = &in_predicate.needles[0];
                     let haystack_expr = &in_predicate.haystack;
                     if let Some(haystack_expr) = haystack_expr {
-                        let haystack_expr =
-                            consume_subquery_rel(consumer, haystack_expr, input_schema)
-                                .await?;
+                        let haystack_expr = consume_subquery_rel(
+                            consumer,
+                            haystack_expr,
+                            input_schema,
+                            context,
+                        )
+                        .await?;
                         let outer_refs = haystack_expr.all_out_ref_exprs();
                         Ok(Expr::InSubquery(InSubquery {
                             expr: Box::new(
                                 consumer
-                                    .consume_expression(needle_expr, input_schema)
+                                    .consume_expression(
+                                        needle_expr,
+                                        input_schema,
+                                        context,
+                                    )
                                     .await?,
                             ),
                             subquery: Subquery {
@@ -75,6 +83,7 @@ pub async fn from_subquery(
                     consumer,
                     &(query.input.clone()).unwrap_or_default(),
                     input_schema,
+                    context,
                 )
                 .await?;
                 let outer_ref_columns = plan.all_out_ref_exprs();
@@ -93,6 +102,7 @@ pub async fn from_subquery(
                             consumer,
                             &relation.clone().unwrap_or_default(),
                             input_schema,
+                            context,
                         )
                         .await?;
                         let outer_ref_columns = plan.all_out_ref_exprs();
@@ -143,8 +153,11 @@ pub async fn from_subquery(
                     }
                 };
 
-                let left_expr = consumer.consume_expression(left, input_schema).await?;
-                let plan = consume_subquery_rel(consumer, right, input_schema).await?;
+                let left_expr = consumer
+                    .consume_expression(left, input_schema, context)
+                    .await?;
+                let plan =
+                    consume_subquery_rel(consumer, right, input_schema, context).await?;
                 let outer_ref_columns = plan.all_out_ref_exprs();
 
                 Ok(Expr::SetComparison(SetComparison::new(
