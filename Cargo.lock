@@ -2421,8 +2421,10 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "bytes",
+ "datafusion",
  "datafusion-common",
  "datafusion-execution",
+ "datafusion-expr",
  "datafusion-physical-plan",
  "futures",
  "parking_lot 0.13.0",
