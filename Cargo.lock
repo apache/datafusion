@@ -2074,7 +2074,9 @@ dependencies = [
  "datafusion-session",
  "futures",
  "object_store",
+ "rstest",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
 ]
