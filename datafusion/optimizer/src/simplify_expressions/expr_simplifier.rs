@@ -4870,10 +4870,10 @@ mod tests {
         assert_eq!(simplify(expr.clone()), expr);
     }
 
-    fn assert_inlist_simplification_result(
+    fn assert_simplification_preserves_results(
         expr: Expr,
         batch: &RecordBatch,
-        expected: Vec<bool>,
+        expected: impl Into<BooleanArray>,
     ) -> Result<()> {
         let schema = batch.schema().to_dfschema_ref()?;
         let simplifier = ExprSimplifier::new(
@@ -4897,7 +4897,7 @@ mod tests {
         let original_result = evaluate(&original)?;
         let actual = evaluate(&simplified)?;
         assert_eq!(original_result.as_ref(), actual.as_ref());
-        assert_eq!(actual.as_boolean(), &BooleanArray::from(expected));
+        assert_eq!(actual.as_boolean(), &expected.into());
         Ok(())
     }
 
@@ -4933,7 +4933,7 @@ mod tests {
             (left(false).or(right(false)), vec![true, true, true]),
             (left(true).and(right(true)), vec![false, false, false]),
         ] {
-            assert_inlist_simplification_result(expr, &batch, expected)?;
+            assert_simplification_preserves_results(expr, &batch, expected)?;
         }
 
         // Coercion must precede structural comparison of mixed integer literals.
@@ -4943,7 +4943,76 @@ mod tests {
                 vec![lit(1i64), lit(3i64), lit(12i64), lit(13i64)],
                 false,
             ));
-        assert_inlist_simplification_result(expr, &batch, vec![true, false, false])
+        assert_simplification_preserves_results(expr, &batch, vec![true, false, false])
+    }
+
+    #[test]
+    fn simplify_signed_zero_conjunctions_preserve_results() -> Result<()> {
+        for data_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+            let values = arrow::compute::cast(
+                &Float64Array::from(vec![
+                    Some(0.0),
+                    Some(-0.0),
+                    Some(1.5),
+                    Some(-1.5),
+                    None,
+                    Some(f64::NAN),
+                ]),
+                &data_type,
+            )?;
+            let schema = Arc::new(Schema::new(vec![Field::new("f", data_type, true)]));
+            let batch = RecordBatch::try_new(schema, vec![values])?;
+            let zero = |value: f64| {
+                ScalarValue::Float64(Some(value))
+                    .cast_to(batch.schema().field(0).data_type())
+                    .map(lit)
+            };
+            let (pos, neg) = (zero(0.0)?, zero(-0.0)?);
+            let f = col("f");
+            // NULL input gives NULL, NaN is not equal to zero
+            let true_for_zeros = vec![
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(false),
+                None,
+                Some(false),
+            ];
+            let false_unless_null = vec![
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(false),
+                None,
+                Some(false),
+            ];
+            for (a, b) in [(pos.clone(), neg.clone()), (neg, pos)] {
+                let eq = |lit: &Expr| f.clone().eq(lit.clone());
+                let ne = |lit: &Expr| f.clone().not_eq(lit.clone());
+                let in_list =
+                    |lit: &Expr, negated| f.clone().in_list(vec![lit.clone()], negated);
+                for (expr, expected) in [
+                    (eq(&a).and(eq(&b)), &true_for_zeros),
+                    (eq(&a).and(ne(&b)), &false_unless_null),
+                    (ne(&b).and(eq(&a)), &false_unless_null),
+                    (
+                        in_list(&a, false).and(in_list(&b, true)),
+                        &false_unless_null,
+                    ),
+                    (
+                        in_list(&b, true).and(in_list(&a, false)),
+                        &false_unless_null,
+                    ),
+                ] {
+                    assert_simplification_preserves_results(
+                        expr,
+                        &batch,
+                        expected.clone(),
+                    )?;
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]
