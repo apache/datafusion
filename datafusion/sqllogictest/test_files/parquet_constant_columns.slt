@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Parquet writers exclude NaN from floating point min/max statistics, as the
+# format requires, so a column holding 1.0, NaN and 1.0 has min == max == 1.0
+# and null_count = 0. Statistics must not be used to replace such a projected
+# column with that value: doing so silently turns the NaN row into a 1.0 row.
+statement ok
+COPY (SELECT v::double AS f FROM (VALUES (1.0::double), ('NaN'::double), (1.0::double)) AS t(v))
+TO 'test_files/scratch/parquet_constant_columns/nan.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE nan_statistics STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_constant_columns/nan.parquet';
+
+query R
+SELECT f FROM nan_statistics ORDER BY f;
+----
+1
+1
+NaN

@@ -2066,6 +2066,20 @@ fn constant_columns_from_stats(
     constants
 }
 
+/// Returns true when `data_type` stores IEEE-754 floating point values,
+/// including dictionary encoded floats.
+///
+/// `min == max` does not prove that such a column is constant: parquet writers
+/// exclude `NaN` from `min`/`max` statistics as the format requires, and
+/// `-0.0 == 0.0` compares equal even though the rows differ. Substituting the
+/// statistic for the data would silently rewrite those rows.
+fn is_float_like(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Dictionary(_, value_type) => value_type.is_floating(),
+        _ => data_type.is_floating(),
+    }
+}
+
 fn constant_value_from_stats(
     column_stats: &ColumnStatistics,
     num_rows: Option<usize>,
@@ -2076,6 +2090,8 @@ fn constant_value_from_stats(
         && min == max
         && !min.is_null()
         && matches!(column_stats.null_count, Precision::Exact(0))
+        && !is_float_like(&min.data_type())
+        && !is_float_like(data_type)
     {
         // Cast to the expected data type if needed (e.g., Utf8 -> Dictionary)
         if min.data_type() != *data_type {
