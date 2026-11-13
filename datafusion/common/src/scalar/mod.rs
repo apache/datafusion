@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarValue`]: stores single  values
 
@@ -52,6 +39,7 @@ use crate::cast::{
     as_uint16_array, as_uint32_array, as_uint64_array, as_union_array,
 };
 use crate::error::{_exec_err, _internal_err, _not_impl_err, DataFusionError, Result};
+use crate::float_semantics::{self, normalize_float};
 use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
 use crate::scalar::consts::{
@@ -75,7 +63,7 @@ use arrow::array::{
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, UnionArray,
-    downcast_run_array, make_comparator, new_empty_array, new_null_array,
+    downcast_array, downcast_run_array, make_comparator, new_empty_array, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
@@ -1278,6 +1266,17 @@ macro_rules! eq_array_float {
             None => !is_valid,
         })
     }};
+}
+
+/// Applies [`float_semantics::normalize`] to a typed array, keeping the
+/// original `Arc` when nothing needed to change
+fn normalize_array<A: Array + From<ArrayData> + 'static>(array: Arc<A>) -> Arc<A> {
+    let normalized = float_semantics::normalize(Arc::clone(&array) as ArrayRef);
+    if std::ptr::addr_eq(Arc::as_ptr(&array), Arc::as_ptr(&normalized)) {
+        array
+    } else {
+        Arc::new(downcast_array(normalized.as_ref()))
+    }
 }
 
 impl ScalarValue {
@@ -2773,6 +2772,92 @@ impl ScalarValue {
                 | ScalarValue::UInt32(_)
                 | ScalarValue::UInt64(_)
         )
+    }
+
+    /// Applies DataFusion's [floating-point equality semantics] to this value
+    ///
+    /// [floating-point equality semantics]: crate::float_semantics
+    pub fn normalize(self) -> Self {
+        match self {
+            ScalarValue::Float16(Some(v)) => {
+                ScalarValue::Float16(Some(normalize_float(v)))
+            }
+            ScalarValue::Float32(Some(v)) => {
+                ScalarValue::Float32(Some(normalize_float(v)))
+            }
+            ScalarValue::Float64(Some(v)) => {
+                ScalarValue::Float64(Some(normalize_float(v)))
+            }
+            ScalarValue::FixedSizeList(array) => {
+                ScalarValue::FixedSizeList(normalize_array(array))
+            }
+            ScalarValue::List(array) => ScalarValue::List(normalize_array(array)),
+            ScalarValue::LargeList(array) => {
+                ScalarValue::LargeList(normalize_array(array))
+            }
+            ScalarValue::ListView(array) => ScalarValue::ListView(normalize_array(array)),
+            ScalarValue::LargeListView(array) => {
+                ScalarValue::LargeListView(normalize_array(array))
+            }
+            ScalarValue::Struct(array) => ScalarValue::Struct(normalize_array(array)),
+            ScalarValue::Map(array) => ScalarValue::Map(normalize_array(array)),
+            ScalarValue::Union(Some((type_id, value)), fields, mode) => {
+                ScalarValue::Union(
+                    Some((type_id, Box::new(value.normalize()))),
+                    fields,
+                    mode,
+                )
+            }
+            ScalarValue::Dictionary(key_type, value) => {
+                ScalarValue::Dictionary(key_type, Box::new(value.normalize()))
+            }
+            ScalarValue::RunEndEncoded(run_ends, values, value) => {
+                ScalarValue::RunEndEncoded(run_ends, values, Box::new(value.normalize()))
+            }
+            // Everything else holds no float, or is a null float
+            other @ (ScalarValue::Null
+            | ScalarValue::Boolean(_)
+            | ScalarValue::Float16(None)
+            | ScalarValue::Float32(None)
+            | ScalarValue::Float64(None)
+            | ScalarValue::Decimal32(..)
+            | ScalarValue::Decimal64(..)
+            | ScalarValue::Decimal128(..)
+            | ScalarValue::Decimal256(..)
+            | ScalarValue::Int8(_)
+            | ScalarValue::Int16(_)
+            | ScalarValue::Int32(_)
+            | ScalarValue::Int64(_)
+            | ScalarValue::UInt8(_)
+            | ScalarValue::UInt16(_)
+            | ScalarValue::UInt32(_)
+            | ScalarValue::UInt64(_)
+            | ScalarValue::Utf8(_)
+            | ScalarValue::Utf8View(_)
+            | ScalarValue::LargeUtf8(_)
+            | ScalarValue::Binary(_)
+            | ScalarValue::BinaryView(_)
+            | ScalarValue::FixedSizeBinary(..)
+            | ScalarValue::LargeBinary(_)
+            | ScalarValue::Date32(_)
+            | ScalarValue::Date64(_)
+            | ScalarValue::Time32Second(_)
+            | ScalarValue::Time32Millisecond(_)
+            | ScalarValue::Time64Microsecond(_)
+            | ScalarValue::Time64Nanosecond(_)
+            | ScalarValue::TimestampSecond(..)
+            | ScalarValue::TimestampMillisecond(..)
+            | ScalarValue::TimestampMicrosecond(..)
+            | ScalarValue::TimestampNanosecond(..)
+            | ScalarValue::IntervalYearMonth(_)
+            | ScalarValue::IntervalDayTime(_)
+            | ScalarValue::IntervalMonthDayNano(_)
+            | ScalarValue::DurationSecond(_)
+            | ScalarValue::DurationMillisecond(_)
+            | ScalarValue::DurationMicrosecond(_)
+            | ScalarValue::DurationNanosecond(_)
+            | ScalarValue::Union(None, ..)) => other,
+        }
     }
 
     /// whether this value is null or not.
@@ -12068,5 +12153,29 @@ mod tests {
         assert_eq!(arr.len(), 1);
         assert_eq!(arr.null_count(), 0);
         assert_eq!(arr.num_columns(), 0);
+    }
+
+    #[test]
+    fn normalize_folds_negative_zero() {
+        assert_eq!(
+            ScalarValue::Float64(Some(-0.0)).normalize(),
+            ScalarValue::Float64(Some(0.0))
+        );
+        assert_eq!(
+            ScalarValue::Float32(Some(-0.0)).normalize(),
+            ScalarValue::Float32(Some(0.0))
+        );
+        assert_eq!(
+            ScalarValue::Float16(Some(f16::NEG_ZERO)).normalize(),
+            ScalarValue::Float16(Some(f16::ZERO))
+        );
+        assert_eq!(
+            ScalarValue::Float64(None).normalize(),
+            ScalarValue::Float64(None)
+        );
+        assert_eq!(
+            ScalarValue::Int32(Some(0)).normalize(),
+            ScalarValue::Int32(Some(0))
+        );
     }
 }

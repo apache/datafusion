@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
 use std::collections::HashMap;
@@ -23,6 +10,7 @@ use std::vec;
 
 use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
+use arrow_schema::extension::{Json, Uuid};
 use datafusion_common::TableReference;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
@@ -677,6 +665,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // If no type_planner can handle this type, use the default conversion
         match sql_type {
+            // Canonical Arrow extension types
+            SQLDataType::Uuid => Ok(Arc::new(
+                Field::new("", DataType::FixedSizeBinary(16), true)
+                    .with_extension_type(Uuid),
+            )),
+            SQLDataType::JSON => Ok(Arc::new(
+                Field::new("", DataType::Utf8, true).with_extension_type(Json::default()),
+            )),
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
                 Ok(self.convert_data_type_to_field(inner_sql_type)?.into_list())
@@ -768,7 +764,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             SQLDataType::Timestamp(precision, tz_info)
-                if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
+                if let Some(unit) = time_unit_for_precision(*precision) =>
             {
                 let tz = if *tz_info == TimezoneInfo::Tz
                     || *tz_info == TimezoneInfo::WithTimeZone
@@ -792,21 +788,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp Without Time zone
                     None
                 };
-                let precision = match precision {
-                    Some(0) => TimeUnit::Second,
-                    Some(3) => TimeUnit::Millisecond,
-                    Some(6) => TimeUnit::Microsecond,
-                    None | Some(9) => TimeUnit::Nanosecond,
-                    _ => unreachable!(),
-                };
-                Ok(DataType::Timestamp(precision, tz.map(Into::into)))
+                Ok(DataType::Timestamp(unit, tz.map(Into::into)))
+            }
+            SQLDataType::Datetime(precision)
+                if time_unit_for_precision(*precision).is_some() =>
+            {
+                self.convert_simple_data_type(&SQLDataType::Timestamp(
+                    *precision,
+                    TimezoneInfo::None,
+                ))
             }
             SQLDataType::Date => Ok(DataType::Date32),
-            SQLDataType::Time(None, tz_info) => {
+            SQLDataType::Time(precision, tz_info)
+                if let Some(unit) = time_unit_for_precision(*precision) =>
+            {
                 if *tz_info == TimezoneInfo::None
                     || *tz_info == TimezoneInfo::WithoutTimeZone
                 {
-                    Ok(DataType::Time64(TimeUnit::Nanosecond))
+                    Ok(match unit {
+                        TimeUnit::Second | TimeUnit::Millisecond => DataType::Time32(unit),
+                        TimeUnit::Microsecond | TimeUnit::Nanosecond => {
+                            DataType::Time64(unit)
+                        }
+                    })
                 } else {
                     // We don't support TIMETZ and TIME WITH TIME ZONE for now
                     not_impl_err!("Unsupported SQL type {sql_type}")
@@ -876,7 +880,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharacterLargeObject(_)
             | SQLDataType::CharLargeObject(_)
             | SQLDataType::Timestamp(_, _)
-            | SQLDataType::Time(Some(_), _)
+            | SQLDataType::Time(_, _)
             | SQLDataType::Dec(_)
             | SQLDataType::BigNumeric(_)
             | SQLDataType::BigDecimal(_)
@@ -948,6 +952,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             object_name,
             self.options.enable_ident_normalization,
         )
+    }
+}
+
+/// Maps SQL fractional-seconds precision to an Arrow [`TimeUnit`]. No precision
+/// means nanoseconds. Returns `None` for unsupported precisions.
+fn time_unit_for_precision(precision: Option<u64>) -> Option<TimeUnit> {
+    match precision {
+        Some(0) => Some(TimeUnit::Second),
+        Some(3) => Some(TimeUnit::Millisecond),
+        Some(6) => Some(TimeUnit::Microsecond),
+        None | Some(9) => Some(TimeUnit::Nanosecond),
+        _ => None,
     }
 }
 

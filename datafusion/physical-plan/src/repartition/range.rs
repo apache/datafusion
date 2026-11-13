@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Routers for range partitioning.
 
@@ -24,6 +11,7 @@ use arrow::array::*;
 use arrow::compute::SortOptions;
 use arrow::datatypes::*;
 use arrow::row::{Row, RowConverter, Rows, SortField};
+use datafusion_common::float_semantics::compare_floats;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_err, not_impl_err, plan_err,
     validate_range_split_points,
@@ -471,14 +459,14 @@ macro_rules! impl_float_values_router {
                     if !descending {
                         for (idx, &val) in values.iter().enumerate() {
                             let p = split_points.partition_point(|&sp| {
-                                sp.total_cmp(&val) != Ordering::Greater
+                                compare_floats(sp, val) != Ordering::Greater
                             });
                             emit(idx, p);
                         }
                     } else {
                         for (idx, &val) in values.iter().enumerate() {
                             let p = split_points.partition_point(|&sp| {
-                                sp.total_cmp(&val) != Ordering::Less
+                                compare_floats(sp, val) != Ordering::Less
                             });
                             emit(idx, p);
                         }
@@ -492,11 +480,11 @@ macro_rules! impl_float_values_router {
                             let val = array.value(idx);
                             let p = if !descending {
                                 split_points.partition_point(|&sp| {
-                                    sp.total_cmp(&val) != Ordering::Greater
+                                    compare_floats(sp, val) != Ordering::Greater
                                 })
                             } else {
                                 split_points.partition_point(|&sp| {
-                                    sp.total_cmp(&val) != Ordering::Less
+                                    compare_floats(sp, val) != Ordering::Less
                                 })
                             };
                             emit(idx, p);
@@ -723,6 +711,51 @@ mod tests {
             &[0, 1, 1, 2, 2, 2],
             Some(&[vec![0], vec![1, 2], vec![3, 4, 5]]),
         )
+    }
+
+    /// `-0.0` sorts before `0.0`, so a `0.0` split point separates them.
+    #[test]
+    fn test_float_router_signed_zero() -> Result<()> {
+        let split_points = make_split_points_1d(vec![ScalarValue::Float64(Some(0.0))]);
+        let router = RangeRouter::try_new(&[SortOptions::default()], &split_points)?;
+        let input = Arc::new(Float64Array::from(vec![-0.0, 0.0])) as ArrayRef;
+        assert_routing(&router, &[input], &[0, 1], None)
+    }
+
+    /// NULLs in composite keys follow each key's own `nulls_first`.
+    #[test]
+    fn test_router_composite_nullable_keys() -> Result<()> {
+        let split_points = vec![
+            SplitPoint::new(vec![ScalarValue::Int32(None), ScalarValue::Int32(Some(10))]),
+            SplitPoint::new(vec![ScalarValue::Int32(None), ScalarValue::Int32(None)]),
+            SplitPoint::new(vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(None)]),
+        ];
+        let sort_options = [
+            SortOptions::new(false, true),
+            SortOptions::new(false, false),
+        ];
+        let router = RangeRouter::try_new(&sort_options, &split_points)?;
+        let key = Arc::new(Int32Array::from(vec![
+            None,
+            None,
+            None,
+            None,
+            Some(9),
+            Some(10),
+            Some(10),
+            Some(11),
+        ])) as ArrayRef;
+        let tie = Arc::new(Int32Array::from(vec![
+            Some(9),
+            Some(10),
+            Some(11),
+            None,
+            None,
+            Some(9),
+            None,
+            None,
+        ])) as ArrayRef;
+        assert_routing(&router, &[key, tie], &[0, 1, 1, 2, 2, 2, 3, 3], None)
     }
 
     #[test]

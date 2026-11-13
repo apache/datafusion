@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Coercion rules for matching argument types for binary operators
 
@@ -982,7 +969,8 @@ pub fn try_type_union_resolution_with_struct(
 /// [`comparison_coercion`], which prefers numeric types so that ordering and
 /// equality follow numeric semantics.
 pub fn type_union_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type.equals_datatype(rhs_type) {
+    if lhs_type.equals_datatype(rhs_type) && struct_field_names_match(lhs_type, rhs_type)
+    {
         return Some(lhs_type.clone());
     }
     binary_numeric_coercion(lhs_type, rhs_type)
@@ -1031,7 +1019,8 @@ fn comparison_coercion_inner<F>(
 where
     F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
 {
-    if lhs_type.equals_datatype(rhs_type) {
+    if lhs_type.equals_datatype(rhs_type) && struct_field_names_match(lhs_type, rhs_type)
+    {
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
@@ -1446,26 +1435,70 @@ where
                 return None;
             }
 
-            // If the two structs have exactly the same set of field names (possibly in
-            // different order), prefer name-based coercion. Otherwise fall back to
-            // positional coercion which preserves backward compatibility.
-            //
-            // Name-based coercion is used in:
-            // 1. Array construction: [s1, s2] where s1 and s2 have reordered fields
-            // 2. UNION operations: different field orders unified by name
-            // 3. VALUES clauses: heterogeneous struct rows unified by field name
-            // 4. JOIN conditions: structs with matching field names
-            // 5. Window functions: partitions/orders by struct fields
-            // 6. Aggregate functions: collecting structs with reordered fields
-            //
-            // See docs/source/user-guide/sql/struct_coercion.md for detailed examples.
+            // Structs coerce only when they have the same set of field names
+            // (any order). Field names are part of the struct type, and the
+            // cast layer matches fields by name, so no other common type is
+            // executable. See docs/source/user-guide/sql/struct_coercion.md.
             if fields_have_same_names(lhs_fields, rhs_fields) {
                 return coerce_struct_by_name(lhs_fields, rhs_fields, coerce_fn);
             }
 
-            coerce_struct_by_position(lhs_fields, rhs_fields, coerce_fn)
+            None
         }
         _ => None,
+    }
+}
+
+/// Return true if the field names of every nested struct agree.
+///
+/// Guards the `equals_datatype` fast paths: `equals_datatype` ignores struct
+/// field names, but struct casts match fields by name, so types that differ
+/// only in struct field names must not count as equal. Container labels
+/// (list items, map entries and their key/value fields, union variants) stay
+/// ignored because casts do not depend on them.
+///
+/// Call this only after `equals_datatype` returned true, so the two type
+/// trees have the same shape.
+fn struct_field_names_match(lhs_type: &DataType, rhs_type: &DataType) -> bool {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (Struct(lhs), Struct(rhs)) => {
+            lhs.len() == rhs.len()
+                && lhs.iter().zip(rhs.iter()).all(|(l, r)| {
+                    l.name() == r.name()
+                        && struct_field_names_match(l.data_type(), r.data_type())
+                })
+        }
+        (List(l), List(r))
+        | (LargeList(l), LargeList(r))
+        | (ListView(l), ListView(r))
+        | (LargeListView(l), LargeListView(r))
+        | (FixedSizeList(l, _), FixedSizeList(r, _)) => {
+            struct_field_names_match(l.data_type(), r.data_type())
+        }
+        // Map entry key/value fields are positional; check only their types.
+        (Map(l, _), Map(r, _)) => match (l.data_type(), r.data_type()) {
+            (Struct(le), Struct(re)) => {
+                le.len() == re.len()
+                    && le.iter().zip(re.iter()).all(|(lf, rf)| {
+                        struct_field_names_match(lf.data_type(), rf.data_type())
+                    })
+            }
+            _ => true,
+        },
+        (Dictionary(_, l), Dictionary(_, r)) => struct_field_names_match(l, r),
+        (RunEndEncoded(_, l), RunEndEncoded(_, r)) => {
+            struct_field_names_match(l.data_type(), r.data_type())
+        }
+        // Union variants are identified by type id, not by listing order.
+        (Union(l, _), Union(r, _)) => l.iter().all(|(lid, lf)| {
+            r.iter()
+                .find(|(rid, _)| *rid == lid)
+                .is_some_and(|(_, rf)| {
+                    struct_field_names_match(lf.data_type(), rf.data_type())
+                })
+        }),
+        _ => true,
     }
 }
 
@@ -1537,36 +1570,6 @@ where
     Some(Struct(coerced.into()))
 }
 
-/// Coerce two structs positionally (left-to-right) using `coerce_fn`.
-/// Preserves field names from the left struct and uses combined nullability.
-fn coerce_struct_by_position<F>(
-    lhs_fields: &Fields,
-    rhs_fields: &Fields,
-    coerce_fn: F,
-) -> Option<DataType>
-where
-    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
-{
-    use arrow::datatypes::DataType::*;
-
-    // First coerce individual types; fail early if any pair cannot be coerced.
-    let coerced_types: Vec<DataType> = lhs_fields
-        .iter()
-        .zip(rhs_fields.iter())
-        .map(|(l, r)| coerce_fn(l.data_type(), r.data_type()))
-        .collect::<Option<Vec<DataType>>>()?;
-
-    // Build final fields preserving left-side names and combined nullability.
-    let orig_pairs = lhs_fields.iter().zip(rhs_fields.iter());
-    let fields: Vec<FieldRef> = coerced_types
-        .into_iter()
-        .zip(orig_pairs)
-        .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
-        .collect();
-
-    Some(Struct(fields.into()))
-}
-
 /// returns the result of coercing two fields to a common type
 fn coerce_fields(common_type: DataType, lhs: &FieldRef, rhs: &FieldRef) -> FieldRef {
     let is_nullable = lhs.is_nullable() || rhs.is_nullable();
@@ -1587,14 +1590,33 @@ where
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (Map(lhs_field, lhs_ordered), Map(rhs_field, rhs_ordered)) => {
-            struct_coercion(lhs_field.data_type(), rhs_field.data_type(), coerce_fn).map(
-                |key_value_type| {
-                    Map(
-                        Arc::new((**lhs_field).clone().with_data_type(key_value_type)),
-                        *lhs_ordered && *rhs_ordered,
-                    )
-                },
-            )
+            // A map entry struct has exactly two positional fields (key,
+            // value) with arbitrary names; coerce their types positionally
+            // and keep the left side's names.
+            let (Struct(lhs_entry), Struct(rhs_entry)) =
+                (lhs_field.data_type(), rhs_field.data_type())
+            else {
+                return None;
+            };
+            if lhs_entry.len() != 2 || rhs_entry.len() != 2 {
+                return None;
+            }
+            let entry_fields: Vec<FieldRef> = lhs_entry
+                .iter()
+                .zip(rhs_entry.iter())
+                .map(|(lhs, rhs)| {
+                    coerce_fn(lhs.data_type(), rhs.data_type())
+                        .map(|common_type| coerce_fields(common_type, lhs, rhs))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(Map(
+                Arc::new(
+                    (**lhs_field)
+                        .clone()
+                        .with_data_type(Struct(entry_fields.into())),
+                ),
+                *lhs_ordered && *rhs_ordered,
+            ))
         }
         _ => None,
     }
@@ -1871,7 +1893,8 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Si
 }
 
 fn array_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type.equals_datatype(rhs_type) {
+    if lhs_type.equals_datatype(rhs_type) && struct_field_names_match(lhs_type, rhs_type)
+    {
         Some(lhs_type.to_owned())
     } else {
         None

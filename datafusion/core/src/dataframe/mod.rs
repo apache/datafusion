@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`DataFrame`] API for building and executing query plans.
 
@@ -298,6 +285,8 @@ fn alias_aggregate_exprs(
 ) -> Result<(Vec<Expr>, HashMap<Expr, Expr>)> {
     let exprs = normalize_cols(exprs, plan)?;
     let mut used = HashSet::new();
+    // Arrow buffer memory accounting does not affect expression equality or hashing.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
     let mut rewrite_map = HashMap::new();
     let mut aliased = Vec::with_capacity(exprs.len());
     for expr in exprs {
@@ -318,6 +307,8 @@ fn alias_aggregate_exprs(
 }
 
 /// Replace aggregate subexpressions with columns produced by the Aggregate node.
+// Arrow buffer memory accounting does not affect expression equality or hashing.
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)]
 fn rewrite_select_aggs(
     expr_list: Vec<SelectExpr>,
     input: &LogicalPlan,
@@ -2800,19 +2791,19 @@ impl DataFrame {
         let projections = self
             .logical_plan()
             .schema()
-            .fields()
             .iter()
-            .map(|field| {
+            .map(|(qualifier, field)| {
+                let column = Expr::Column(Column::from((qualifier, field)));
                 if cols.contains(field) && applies(field) {
                     // Try to cast fill value to column type. If the cast fails, fallback to the original column.
                     match value.clone().cast_to(field.data_type()) {
-                        Ok(fill_value) => func
-                            .call(vec![col(field.name()), lit(fill_value)])
-                            .alias(field.name()),
-                        Err(_) => col(field.name()),
+                        Ok(fill_value) => {
+                            func.call(vec![column, lit(fill_value)]).alias(field.name())
+                        }
+                        Err(_) => column,
                     }
                 } else {
-                    col(field.name())
+                    column
                 }
             })
             .collect::<Vec<_>>();

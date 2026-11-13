@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Scans and data sources: file formats, `FileScanConfig`, listing tables
 //! and memory sources.
@@ -48,7 +35,7 @@ use datafusion::physical_plan::{
     ExecutionPlan, Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, Statistics,
     displayable,
 };
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::stats::Precision;
@@ -179,6 +166,51 @@ async fn roundtrip_parquet_exec_with_sort_pushdown() -> Result<()> {
         before.contains("sort_order_for_reorder=[id@0 DESC NULLS LAST]")
             && before.contains("reverse_row_groups=true"),
         "expected sort pushdown in plan:\n{before}"
+    );
+
+    let roundtripped = roundtrip_test_and_return(
+        plan,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let after = displayable(roundtripped.as_ref()).indent(true).to_string();
+    pretty_assertions::assert_eq!(before, after);
+    Ok(())
+}
+
+/// An exact reverse scan carries `reverse_rows` alongside
+/// `reverse_row_groups`; losing it in the round trip would make the decoded
+/// scan emit rows in on-disk order under a plan with no `SortExec` left.
+#[tokio::test]
+async fn roundtrip_parquet_exec_with_exact_reverse_scan() -> Result<()> {
+    let mut config = SessionConfig::new();
+    config
+        .options_mut()
+        .execution
+        .parquet
+        .enable_exact_reverse_scan = true;
+    let ctx = SessionContext::new_with_config(config);
+    let testdata = datafusion::test_util::parquet_test_data();
+    ctx.register_parquet(
+        "alltypes_plain",
+        &format!("{testdata}/alltypes_plain.parquet"),
+        ParquetReadOptions {
+            file_sort_order: vec![vec![datafusion::prelude::col("id").sort(true, false)]],
+            ..Default::default()
+        },
+    )
+    .await?;
+    let plan = ctx
+        .sql("SELECT id FROM alltypes_plain ORDER BY id DESC NULLS FIRST LIMIT 5")
+        .await?
+        .create_physical_plan()
+        .await?;
+    let before = displayable(plan.as_ref()).indent(true).to_string();
+    assert!(
+        before.contains("reverse_row_groups=true, reverse_rows=true")
+            && !before.contains("SortExec"),
+        "expected an exact reverse scan in plan:\n{before}"
     );
 
     let roundtripped = roundtrip_test_and_return(
@@ -1122,6 +1154,87 @@ fn roundtrip_parquet_exec_range_output_partitioning() -> Result<()> {
             vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
             2,
         )?);
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-1.parquet".to_string(),
+                    1024,
+                )]),
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-2.parquet".to_string(),
+                    1024,
+                )]),
+            ])
+            .with_output_partitioning(Some(output_partitioning.clone()))
+            .build();
+
+    assert_eq!(
+        roundtrip_file_scan_config(scan_config)?.output_partitioning,
+        Some(output_partitioning)
+    );
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_parquet_exec_range_output_partitioning_dict_split_points() -> Result<()> {
+    let file_schema = Arc::new(Schema::new(vec![Field::new(
+        "col",
+        wrap_partition_type_in_dict(DataType::Utf8),
+        false,
+    )]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let output_partitioning = Partitioning::Range(RangePartitioning::try_new(
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+            "col", 0,
+        )))])
+        .unwrap(),
+        vec![SplitPoint::new(vec![wrap_partition_value_in_dict(
+            ScalarValue::from("B"),
+        )])],
+    )?);
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-1.parquet".to_string(),
+                    1024,
+                )]),
+                FileGroup::new(vec![PartitionedFile::new(
+                    "/path/to/file-2.parquet".to_string(),
+                    1024,
+                )]),
+            ])
+            .with_output_partitioning(Some(output_partitioning.clone()))
+            .build();
+
+    assert_eq!(
+        roundtrip_file_scan_config(scan_config)?.output_partitioning,
+        Some(output_partitioning)
+    );
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_parquet_exec_range_output_partitioning_utf8view_split_points() -> Result<()>
+{
+    let file_schema = Arc::new(Schema::new(vec![Field::new(
+        "col",
+        DataType::Utf8View,
+        false,
+    )]));
+    let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
+    let output_partitioning = Partitioning::Range(RangePartitioning::try_new(
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+            "col", 0,
+        )))])
+        .unwrap(),
+        vec![SplitPoint::new(vec![ScalarValue::Utf8View(Some(
+            "B".to_string(),
+        ))])],
+    )?);
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_file_groups(vec![

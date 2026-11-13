@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`SingleDistinctToGroupBy`] replaces `AGG(DISTINCT ..)` with `AGG(..) GROUP BY ..`
 
@@ -30,7 +17,7 @@ use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::expr_schema::ExprSchemable;
 use datafusion_expr::{
-    AggregateUDF, Expr, col,
+    AggregateUDF, Expr, cast, col,
     expr::AggregateFunction,
     lit,
     logical_plan::{Aggregate, LogicalPlan},
@@ -81,6 +68,9 @@ use datafusion_expr::{
 /// `sum` of no rows is NULL.
 ///
 /// See `rewrite_pays_for_count` for when the `count` is allowed.
+/// With `single_distinct_prefer_native` enabled and one target partition, grouped
+/// all-DISTINCT aggregates stay native if every function explicitly supports a
+/// specialized `GroupsAccumulator` for its argument types.
 #[derive(Default, Debug)]
 pub struct SingleDistinctToGroupBy {}
 
@@ -125,6 +115,7 @@ fn is_single_distinct_agg(
     aggr_expr: &[Expr],
     input_schema: &DFSchema,
     count_rollup: Option<&CountRollup>,
+    use_native_grouped_distinct: bool,
 ) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
@@ -167,10 +158,45 @@ fn is_single_distinct_agg(
     if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
         return Ok(false);
     }
+    // With one target partition, a native GroupsAccumulator avoids building an
+    // extra aggregate with a row per (group, distinct value) pair. With multiple
+    // partitions, the rewrite also distributes deduplication by both keys;
+    // keeping DISTINCT instead repartitions lists of values by group and merges
+    // them in the final accumulator. That can concentrate work on a few groups.
+    // Even one target partition can have multiple input partitions (e.g. UNION
+    // ALL or an existing partitioned table), requiring Partial/Final state merging.
+    // This is opt-in: the rule cannot see memory limits or cost the input, and
+    // native DISTINCT must fit each group's distinct values in memory.
+    if use_native_grouped_distinct
+        && distinct_aggs.len() == aggregate_count
+        // An unknown answer must preserve the existing rewrite.
+        && distinct_groups_support(&distinct_aggs, input_schema)?
+            .iter()
+            .all(|support| *support == Some(true))
+    {
+        return Ok(false);
+    }
     if has_count_rollup && !rewrite_pays_for_count(&distinct_aggs, input_schema)? {
         return Ok(false);
     }
     Ok(true)
+}
+
+/// Each distinct aggregate's specialized GroupsAccumulator support for its types.
+fn distinct_groups_support(
+    distinct_aggs: &[(&Arc<AggregateUDF>, &[Expr])],
+    input_schema: &DFSchema,
+) -> Result<Vec<Option<bool>>> {
+    distinct_aggs
+        .iter()
+        .map(|(func, args)| {
+            let arg_types = args
+                .iter()
+                .map(|arg| arg.get_type(input_schema))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(func.groups_accumulator_supported_for_types(&arg_types, true))
+        })
+        .collect()
 }
 
 /// Whether the rewrite is worth extending to a plan that only qualifies because
@@ -198,16 +224,7 @@ fn rewrite_pays_for_count(
     distinct_aggs: &[(&Arc<AggregateUDF>, &[Expr])],
     input_schema: &DFSchema,
 ) -> Result<bool> {
-    for (func, args) in distinct_aggs {
-        let arg_types = args
-            .iter()
-            .map(|arg| arg.get_type(input_schema))
-            .collect::<Result<Vec<_>>>()?;
-        if func.groups_accumulator_supported_for_types(&arg_types, true) == Some(false) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(distinct_groups_support(distinct_aggs, input_schema)?.contains(&Some(false)))
 }
 
 /// Check if the first expr is [Expr::GroupingSet].
@@ -244,6 +261,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 &aggr_expr,
                 input.schema(),
                 count_rollup.as_ref(),
+                !group_expr.is_empty()
+                    && config.options().execution.target_partitions == 1
+                    && config.options().optimizer.single_distinct_prefer_native,
             )? && !contains_grouping_set(&group_expr) =>
             {
                 let group_size = group_expr.len();
@@ -402,6 +422,12 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .map(|(expr, _)| expr.clone())
                     .collect();
 
+                let outer_aggr = LogicalPlan::Aggregate(Aggregate::try_new(
+                    Arc::new(inner_agg),
+                    outer_group_exprs,
+                    outer_aggr_exprs,
+                )?);
+
                 // so the aggregates are displayed in the same way even after the rewrite
                 // this optimizer has two kinds of alias:
                 // - group_by aggr
@@ -417,15 +443,16 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .chain(outer_proj_exprs.into_iter().enumerate().map(|(idx, expr)| {
                         let idx = idx + group_size;
                         let (qualifier, field) = schema.qualified_field(idx);
+                        let current_type = outer_aggr.schema().field(idx).data_type();
+                        let expr = if current_type != field.data_type() {
+                            cast(expr, field.data_type().clone())
+                        } else {
+                            expr
+                        };
                         expr.alias_qualified(qualifier.cloned(), field.name())
                     }))
                     .collect();
 
-                let outer_aggr = LogicalPlan::Aggregate(Aggregate::try_new(
-                    Arc::new(inner_agg),
-                    outer_group_exprs,
-                    outer_aggr_exprs,
-                )?);
                 Ok(Transformed::yes(project(outer_aggr, alias_expr)?))
             }
             _ => Ok(Transformed::no(plan)),
@@ -578,8 +605,11 @@ mod tests {
             let mut registry = MemoryFunctionRegistry::new();
             registry.register_udaf(count_udaf()).unwrap();
             registry.register_udaf(sum_udaf()).unwrap();
+            // Keep logical-plan snapshots independent of the available CPUs.
+            let mut options = OptimizerContext::new().options();
+            Arc::make_mut(&mut options).execution.target_partitions = 4;
             Self {
-                inner: OptimizerContext::new(),
+                inner: OptimizerContext::new_with_config_options(options),
                 registry,
             }
         }
@@ -752,7 +782,7 @@ mod tests {
             .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
             .build()?;
 
-        // Should work
+        // Multiple target partitions keep deduplication distributed by both keys.
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -1309,5 +1339,31 @@ mod tests {
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         ",
         )
+    }
+
+    #[test]
+    fn sum_decimal_with_distinct_preserves_declared_type() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("d", DataType::Decimal128(5, 2), false),
+            Field::new("x", DataType::Int32, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![sum(col("d")), count_distinct(col("x"))],
+            )?
+            .build()?;
+
+        let rule: Arc<dyn OptimizerRule + Send + Sync> =
+            Arc::new(SingleDistinctToGroupBy::new());
+        let optimizer = Optimizer::with_rules(vec![rule]);
+        let optimized_plan = optimizer
+            .optimize(plan.clone(), &RegistryOptimizerContext::new(), |_, _| {})
+            .expect("failed to optimize plan");
+
+        assert_eq!(plan.schema().as_ref(), optimized_plan.schema().as_ref());
+        Ok(())
     }
 }

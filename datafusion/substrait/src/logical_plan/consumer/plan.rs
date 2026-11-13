@@ -1,19 +1,8 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+use crate::logical_plan::consumer::SubstraitConsumerContext;
 
 use super::utils::{make_renamed_schema, rename_expressions};
 use super::{DefaultSubstraitConsumer, SubstraitConsumer};
@@ -48,10 +37,16 @@ pub async fn from_substrait_plan_with_consumer(
         1 => {
             match plan.relations[0].rel_type.as_ref() {
                 Some(rt) => match rt {
-                    plan_rel::RelType::Rel(rel) => Ok(consumer.consume_rel(rel).await?),
+                    plan_rel::RelType::Rel(rel) => Ok(consumer
+                        .consume_rel(rel, &SubstraitConsumerContext::default())
+                        .await?),
                     plan_rel::RelType::Root(root) => {
-                        let plan =
-                            consumer.consume_rel(root.input.as_ref().unwrap()).await?;
+                        let plan = consumer
+                            .consume_rel(
+                                root.input.as_ref().unwrap(),
+                                &SubstraitConsumerContext::default(),
+                            )
+                            .await?;
                         if root.names.is_empty() {
                             // Backwards compatibility for plans missing names
                             return Ok(plan);

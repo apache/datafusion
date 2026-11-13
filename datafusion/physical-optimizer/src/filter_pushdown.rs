@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Filter Pushdown Optimization Process
 //!
@@ -443,6 +430,16 @@ fn push_down_filters(
     config: &ConfigOptions,
     phase: FilterPushdownPhase,
 ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+    // A node with a fetch picks its rows before a filter from above applies, so
+    // that filter can't move below or into it. The node's own filters still can.
+    if node.fetch().is_some() && !parent_predicates.is_empty() {
+        let result = push_down_filters(node, vec![], config, phase)?;
+        return Ok(FilterPushdownPropagation {
+            filters: vec![PushedDown::No; parent_predicates.len()],
+            updated_node: result.updated_node,
+        });
+    }
+
     let mut parent_filter_pushdown_supports: Vec<Vec<PushedDown>> =
         vec![vec![]; parent_predicates.len()];
 

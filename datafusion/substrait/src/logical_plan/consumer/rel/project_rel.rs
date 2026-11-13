@@ -1,22 +1,9 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::utils::NameTracker;
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use async_recursion::async_recursion;
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, not_impl_err};
@@ -32,9 +19,10 @@ use substrait::proto::ProjectRel;
 pub async fn from_project_rel(
     consumer: &impl SubstraitConsumer,
     p: &ProjectRel,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
     if let Some(input) = p.input.as_ref() {
-        let input = consumer.consume_rel(input).await?;
+        let input = consumer.consume_rel(input, context).await?;
         let original_schema = Arc::clone(input.schema());
 
         // Ensure that all expressions have a unique display name, so that
@@ -57,7 +45,9 @@ pub async fn from_project_rel(
         // Expr contains Arc with interior mutability but is intentionally used as hash key
         let mut window_exprs: HashSet<Expr> = HashSet::new();
         for expr in &p.expressions {
-            let e = consumer.consume_expression(expr, input.schema()).await?;
+            let e = consumer
+                .consume_expression(expr, input.schema(), context)
+                .await?;
             // The project's builder uses columnize_expr(..) to transform
             // nested window expressions into column references.
             window_exprs.extend(find_window_exprs([&e]));
