@@ -679,6 +679,10 @@ a<span class="p">;</span>b
 <td><p>Sets the character which should be used to indicate comment lines in the CSV file.</p></td>
 <td><p>None</p></td>
 </tr>
+<tr class="row-odd"><td><p>MATCH_COLUMNS_BY_HEADER</p></td>
+<td><p>Only applies when <code class="docutils literal notranslate"><span class="pre">HAS_HEADER</span></code> is true. Matches columns to the table schema by header name instead of by position. Missing columns are read as null and undeclared columns are ignored. Names are matched exactly (case-sensitive); duplicate header names resolve to the first occurrence. A leading UTF-8 BOM, blank lines, and comment lines before the header are skipped, as the CSV parser does.</p></td>
+<td><p>None</p></td>
+</tr>
 </tbody>
 </table>
 </div>

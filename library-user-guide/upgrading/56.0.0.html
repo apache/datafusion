@@ -1956,6 +1956,27 @@ the name <code class="docutils literal notranslate"><span class="pre">&quot;&quo
 <p><code class="docutils literal notranslate"><span class="pre">CreateFunction::try_new</span></code> takes <code class="docutils literal notranslate"><span class="pre">Option&lt;FieldRef&gt;</span></code> for the return type.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/18235">issue #18235</a> for details.</p>
 </section>
+<section id="new-match-columns-by-header-field-on-csv-options">
+<h3>New <code class="docutils literal notranslate"><span class="pre">match_columns_by_header</span></code> field on CSV options<a class="headerlink" href="#new-match-columns-by-header-field-on-csv-options" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_common::config::CsvOptions</span></code> and <code class="docutils literal notranslate"><span class="pre">datafusion::prelude::CsvReadOptions</span></code>
+have a new public field, <code class="docutils literal notranslate"><span class="pre">match_columns_by_header</span></code>, which maps CSV file columns
+to the table schema by header name instead of by position. The protobuf
+messages <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code> and <code class="docutils literal notranslate"><span class="pre">CsvScanExecNode</span></code> gained the same field.</p>
+<p>Code that constructs these structs with an exhaustive struct literal must add
+the field or use <code class="docutils literal notranslate"><span class="pre">..Default::default()</span></code>. Builder methods are unaffected:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// 55.0.0</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">has_header</span><span class="p">:</span><span class="w"> </span><span class="nc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span><span class="nb">Default</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="p">};</span>
+
+<span class="c1">// 56.0.0</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">has_header</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">match_columns_by_header</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -2075,6 +2096,7 @@ the name <code class="docutils literal notranslate"><span class="pre">&quot;&quo
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sanitycheckplan-is-deprecated-and-no-longer-in-the-default-physical-optimizer-rules"><code class="docutils literal notranslate"><span class="pre">SanityCheckPlan</span></code> is deprecated and no longer in the default physical optimizer rules</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-is-nullable-is-deprecated"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_nullable</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#createfunction-argument-and-return-types-are-fieldrefs"><code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> argument and return types are <code class="docutils literal notranslate"><span class="pre">FieldRef</span></code>s</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#new-match-columns-by-header-field-on-csv-options">New <code class="docutils literal notranslate"><span class="pre">match_columns_by_header</span></code> field on CSV options</a></li>
 </ul>
 </li>
 </ul>
