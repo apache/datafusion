@@ -78,13 +78,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 1
-      - name: Checkout test data
-        # datafusion-testing is used only with --include-sqlite.
-        run: git submodule update --init --depth=1 testing parquet-testing
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Checkout test data
+        # datafusion-testing is used only with --include-sqlite.
+        run: git submodule update --init --depth=1 testing parquet-testing
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
       - name: Install Python
