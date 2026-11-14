@@ -28,11 +28,11 @@ use datafusion_physical_plan::{ExecutionPlan, collect};
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    OptimizationTest, TestScan, coalesce_partitions_exec, inexact_memory_exec,
-    parquet_exec, parquet_exec_with_sort, projection_exec, projection_exec_with_alias,
-    repartition_exec, schema, simple_projection_exec, sort_exec, sort_exec_with_fetch,
-    sort_exec_with_fetch_and_preserve_partitioning, sort_expr, sort_expr_named,
-    test_scan_with_ordering,
+    OptimizationTest, TestScan, coalesce_partitions_exec, filter_exec,
+    inexact_memory_exec, parquet_exec, parquet_exec_with_sort, projection_exec,
+    projection_exec_with_alias, repartition_exec, schema, simple_projection_exec,
+    sort_exec, sort_exec_with_fetch, sort_exec_with_fetch_and_preserve_partitioning,
+    sort_expr, sort_expr_named, test_scan_with_ordering,
 };
 
 #[test]
@@ -1205,3 +1205,37 @@ fn test_sort_pushdown_exact_preserves_fetch_with_source_support() {
     "
     );
 }
+
+#[test]
+fn test_sort_pushdown_through_filter_exec() {
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let source = Arc::new(TestScan::new(schema.clone(), vec![]));
+    let predicate = expressions::binary(
+        expressions::col("b", &schema).unwrap(),
+        datafusion_expr::Operator::Gt,
+        expressions::lit(0i64),
+        &schema,
+    )
+    .unwrap();
+    let filter = filter_exec(predicate, source);
+    let ordering = LexOrdering::new(vec![a]).unwrap();
+    let plan = sort_exec(ordering, filter);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+        -   FilterExec: b@1 > 0
+        -     TestScan
+      output:
+        Ok:
+          - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          -   FilterExec: b@1 > 0
+          -     TestScan: requested_ordering=[a@0 ASC]
+    "
+    );
+}
+

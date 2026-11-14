@@ -28,6 +28,7 @@ use crate::projection::{
     EmbeddedProjection, ProjectionExec, ProjectionExpr, make_with_child,
     try_embed_projection, update_expr,
 };
+use crate::sort_pushdown::SortOrderPushdownResult;
 use crate::statistics::{ChildStats, StatisticsArgs, StatisticsContext};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
@@ -61,6 +62,7 @@ use datafusion_physical_expr::{
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -979,6 +981,46 @@ impl ExecutionPlan for FilterExec {
             batch_size: self.batch_size,
             fetch,
         }))
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        if self.fetch.is_some() {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        }
+
+        let child_order = match &self.projection {
+            None => order.to_vec(),
+            Some(projection) => {
+                // Remap parent output column indices back to child input column indices
+                let remapper = FilterRemapper::with_column_mapping(
+                    self.input.schema(),
+                    projection.iter().copied().enumerate().collect(),
+                );
+                let mut child_order = Vec::with_capacity(order.len());
+                for sort_expr in order {
+                    let Some(expr) = remapper.try_remap(&sort_expr.expr)? else {
+                        return Ok(SortOrderPushdownResult::Unsupported);
+                    };
+                    child_order.push(PhysicalSortExpr {
+                        expr,
+                        options: sort_expr.options,
+                    });
+                }
+                child_order
+            }
+        };
+
+        self.input
+            .try_pushdown_sort(&child_order)?
+            .try_map(|new_input| {
+                let new_filter = FilterExecBuilder::from(self)
+                    .with_input(new_input)
+                    .build()?;
+                Ok(Arc::new(new_filter) as Arc<dyn ExecutionPlan>)
+            })
     }
 
     #[cfg(feature = "proto")]
@@ -5595,5 +5637,147 @@ mod tests {
             (result - 0.2).abs() < 1e-12,
             "expected default 0.2 when both columns lack NDV, got {result}"
         );
+    }
+
+    #[derive(Debug)]
+    struct MockPushdownSource {
+        schema: SchemaRef,
+        properties: Arc<PlanProperties>,
+        recorded_order: Arc<std::sync::Mutex<Option<Vec<PhysicalSortExpr>>>>,
+    }
+
+    impl MockPushdownSource {
+        fn new(
+            schema: SchemaRef,
+        ) -> (Self, Arc<std::sync::Mutex<Option<Vec<PhysicalSortExpr>>>>) {
+            let recorded_order = Arc::new(std::sync::Mutex::new(None));
+            let properties = Arc::clone(EmptyExec::new(Arc::clone(&schema)).properties());
+            (
+                Self {
+                    schema,
+                    properties,
+                    recorded_order: Arc::clone(&recorded_order),
+                },
+                recorded_order,
+            )
+        }
+    }
+
+    impl DisplayAs for MockPushdownSource {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            write!(f, "MockPushdownSource")
+        }
+    }
+
+    impl ExecutionPlan for MockPushdownSource {
+        fn name(&self) -> &'static str {
+            "MockPushdownSource"
+        }
+        fn properties(&self) -> &Arc<PlanProperties> {
+            &self.properties
+        }
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+        fn replace_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(self)
+        }
+        fn execute(
+            &self,
+            _: usize,
+            _: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+        fn try_pushdown_sort(
+            &self,
+            order: &[PhysicalSortExpr],
+        ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+            *self.recorded_order.lock().unwrap() = Some(order.to_vec());
+            Ok(SortOrderPushdownResult::Inexact {
+                inner: Arc::new(Self {
+                    schema: Arc::clone(&self.schema),
+                    properties: Arc::clone(&self.properties),
+                    recorded_order: Arc::clone(&self.recorded_order),
+                }),
+            })
+        }
+    }
+
+    // Without projection, FilterExec forwards the sort order to its child unchanged.
+    #[test]
+    fn test_filter_try_pushdown_sort_delegation() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let (mock_source, recorded_order) = MockPushdownSource::new(Arc::clone(&schema));
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(col("a", &schema)?, Operator::Gt, lit(0i32), &schema)?;
+        let filter = FilterExec::try_new(predicate, Arc::new(mock_source))?;
+
+        let sort_expr = PhysicalSortExpr {
+            expr: col("b", &schema)?,
+            options: arrow::compute::SortOptions::default(),
+        };
+        let result = filter.try_pushdown_sort(std::slice::from_ref(&sort_expr))?;
+        assert!(matches!(result, SortOrderPushdownResult::Inexact { .. }));
+
+        let recorded = recorded_order.lock().unwrap().take();
+        assert_eq!(recorded, Some(vec![sort_expr]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_try_pushdown_sort_with_projection() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let (mock_source, recorded_order) = MockPushdownSource::new(Arc::clone(&schema));
+        let predicate: Arc<dyn PhysicalExpr> =
+            binary(col("a", &schema)?, Operator::Gt, lit(0i32), &schema)?;
+        // Simulates `SELECT MAX(b) FROM t WHERE a > 0`:
+        // Child reads [a@0, b@1], FilterExec checks `a > 0` and projects only `b` -> output is [b@0]
+        let filter = FilterExecBuilder::new(predicate, Arc::new(mock_source))
+            .apply_projection(Some(vec![1]))?
+            .build()?;
+
+        // Parent requests sort on `b`, which is at index 0 in the 1-column filter output [b@0]
+        let output_schema = filter.schema();
+        let sort_expr = PhysicalSortExpr {
+            expr: col("b", &output_schema)?,
+            options: arrow::compute::SortOptions::default(),
+        };
+        let result = filter.try_pushdown_sort(&[sort_expr])?;
+        assert!(matches!(result, SortOrderPushdownResult::Inexact { .. }));
+
+        // Child receives `b` remapped back to index 1 in the 2-column child schema [a@0, b@1]
+        let recorded = recorded_order.lock().unwrap().take().unwrap();
+        assert_eq!(recorded.len(), 1);
+        let col = recorded[0].expr.downcast_ref::<Column>().unwrap();
+        assert_eq!(col.index(), 1);
+        assert_eq!(col.name(), "b");
+        Ok(())
     }
 }
