@@ -374,6 +374,7 @@ impl StepContext {
                         "datafusion-benchmarks",
                         "--profile",
                         "ci",
+                        "--lib",
                         "--features=ci",
                         "--",
                         "--test-threads=1",
@@ -399,6 +400,8 @@ impl StepContext {
                         "datafusion-sqllogictest",
                         "--test",
                         "sqllogictests",
+                        "--",
+                        "tpch",
                     ])
                     .env("RUST_MIN_STACK", "20971520")
                     .env("TPCH_DATA", tpch_data.as_os_str())
@@ -890,6 +893,7 @@ TPCH_DATA=/workspace/datafusion/sqllogictest/test_files/tpch/data \
 cargo test plan_q \
 --package datafusion-benchmarks \
 --profile ci \
+--lib \
 --features=ci \
 -- --test-threads=1
 ")
@@ -908,7 +912,8 @@ cargo test \
 --features backtrace,parquet_encryption,substrait \
 --profile ci \
 --package datafusion-sqllogictest \
---test sqllogictests
+--test sqllogictests \
+-- tpch
 ")
                 },
             },
