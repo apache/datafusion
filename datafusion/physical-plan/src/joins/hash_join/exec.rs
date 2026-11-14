@@ -3070,7 +3070,7 @@ impl CollectLeftAccumulator {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum BuildMode {
     Ordinary,
     Prepared,
@@ -3382,7 +3382,7 @@ async fn collect_left_input(
         null_equality,
         not_in,
         &array_map_created_count,
-        prepared,
+        mode,
         regular,
     )
 }
@@ -3414,9 +3414,10 @@ fn build_in_memory(
     null_equality: NullEquality,
     not_in: Option<NotIn>,
     array_map_created_count: &Count,
-    prepared: bool,
+    mode: BuildMode,
     regular: bool,
 ) -> Result<CollectedBuild> {
+    let prepared = mode == BuildMode::Prepared;
     let is_phj_candidate = is_perfect_hash_join_candidate(on_left, schema)?;
 
     // Bound before the map so error paths release the map before its charge.
