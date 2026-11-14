@@ -187,6 +187,34 @@ pub trait PartitionEvaluator: Debug + Send + std::any::Any {
         not_impl_err!("evaluate is not implemented by default")
     }
 
+    /// Optionally evaluate consecutive rows as an array during stateful execution.
+    ///
+    /// `values` contains the currently buffered argument arrays, each with
+    /// `num_rows` rows. `start_idx` is the first buffered row without a result.
+    /// A returned array contains a contiguous prefix of the remaining results:
+    /// output row zero corresponds to input row `start_idx`. Its data type must
+    /// match the evaluator's declared output type, and its length must not exceed
+    /// `num_rows - start_idx`. When `is_end` is true, it must contain all
+    /// remaining results.
+    ///
+    /// The returned range is the buffered input range required by the last
+    /// produced row and must lie within `0..num_rows`. It determines which input
+    /// rows can be pruned and is ignored when the returned array is empty.
+    ///
+    /// Returning `None` selects the row-oriented [`Self::evaluate`] fallback.
+    /// Implementations that return `None` must have no observable side effects;
+    /// in particular, they must not mutate state through interior mutability.
+    /// Errors are propagated without invoking the fallback.
+    fn evaluate_stateful_array(
+        &self,
+        _values: &[ArrayRef],
+        _start_idx: usize,
+        _num_rows: usize,
+        _is_end: bool,
+    ) -> Result<Option<(ArrayRef, Range<usize>)>> {
+        Ok(None)
+    }
+
     /// Evaluate window function on the window frames of consecutive rows
     /// in an input partition, returning one result per range.
     ///
