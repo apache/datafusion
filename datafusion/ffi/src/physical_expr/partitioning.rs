@@ -6,9 +6,10 @@ use std::sync::Arc;
 
 use datafusion_common::{DataFusionError, ScalarValue, SplitPoint};
 use datafusion_physical_expr::{
-    LexOrdering, Partitioning, PhysicalSortExpr, RangePartitioning,
+    Distribution, LexOrdering, Partitioning, PhysicalSortExpr, RangePartitioning,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_plan::InputDistributionRequirements;
 use stabby::vec::Vec as SVec;
 
 use crate::arrow_wrappers::WrappedArray;
@@ -125,6 +126,85 @@ impl TryFrom<FFI_Partitioning> for Partitioning {
                 Self::UnknownPartitioning(size)
             }
         })
+    }
+}
+
+/// A stable enum for sharing a [`Distribution`] across FFI boundaries.
+///
+/// The deprecated [`Distribution::HashPartitioned`] is sent as
+/// `KeyPartitioned`, which the optimizer treats identically.
+#[repr(C)]
+#[derive(Debug)]
+pub enum FFI_Distribution {
+    UnspecifiedDistribution,
+    SinglePartition,
+    KeyPartitioned(SVec<FFI_PhysicalExpr>),
+}
+
+impl From<&Distribution> for FFI_Distribution {
+    #[expect(
+        deprecated,
+        reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+    )]
+    fn from(value: &Distribution) -> Self {
+        match value {
+            Distribution::UnspecifiedDistribution => Self::UnspecifiedDistribution,
+            Distribution::SinglePartition => Self::SinglePartition,
+            Distribution::HashPartitioned(exprs)
+            | Distribution::KeyPartitioned(exprs) => Self::KeyPartitioned(
+                exprs
+                    .iter()
+                    .map(Arc::clone)
+                    .map(FFI_PhysicalExpr::from)
+                    .collect(),
+            ),
+        }
+    }
+}
+
+impl From<&FFI_Distribution> for Distribution {
+    fn from(value: &FFI_Distribution) -> Self {
+        match value {
+            FFI_Distribution::UnspecifiedDistribution => Self::UnspecifiedDistribution,
+            FFI_Distribution::SinglePartition => Self::SinglePartition,
+            FFI_Distribution::KeyPartitioned(exprs) => Self::KeyPartitioned(
+                exprs.iter().map(<Arc<dyn PhysicalExpr>>::from).collect(),
+            ),
+        }
+    }
+}
+
+/// A stable struct for sharing [`InputDistributionRequirements`] across FFI
+/// boundaries.
+#[repr(C)]
+#[derive(Debug)]
+pub struct FFI_InputDistributionRequirements {
+    /// One distribution per child.
+    distributions: SVec<FFI_Distribution>,
+    /// Whether all children must be co-partitioned.
+    co_partitioned: bool,
+}
+
+impl From<&InputDistributionRequirements> for FFI_InputDistributionRequirements {
+    fn from(value: &InputDistributionRequirements) -> Self {
+        Self {
+            distributions: value
+                .per_child_distributions()
+                .map(FFI_Distribution::from)
+                .collect(),
+            co_partitioned: value.is_co_partitioned(),
+        }
+    }
+}
+
+impl From<&FFI_InputDistributionRequirements> for InputDistributionRequirements {
+    fn from(value: &FFI_InputDistributionRequirements) -> Self {
+        let distributions = value.distributions.iter().map(Distribution::from).collect();
+        if value.co_partitioned {
+            Self::co_partitioned(distributions)
+        } else {
+            Self::new(distributions)
+        }
     }
 }
 
@@ -247,5 +327,53 @@ mod tests {
             err.to_string().contains("ordering must be non-empty"),
             "{err}"
         );
+    }
+
+    #[test]
+    #[expect(
+        deprecated,
+        reason = "test covers deprecated HashPartitioned being sent as KeyPartitioned"
+    )]
+    fn round_trip_ffi_input_distribution_requirements() {
+        use datafusion_physical_expr::Distribution;
+        use datafusion_physical_plan::InputDistributionRequirements;
+
+        use crate::physical_expr::partitioning::FFI_InputDistributionRequirements;
+
+        let a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let b = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+
+        let round_trip = |reqs: &InputDistributionRequirements| {
+            let ffi = FFI_InputDistributionRequirements::from(reqs);
+            InputDistributionRequirements::from(&ffi)
+        };
+
+        let single = InputDistributionRequirements::new(vec![
+            Distribution::UnspecifiedDistribution,
+            Distribution::SinglePartition,
+            Distribution::KeyPartitioned(vec![Arc::clone(&a), Arc::clone(&b)]),
+        ]);
+        let returned = round_trip(&single);
+        assert!(!returned.is_co_partitioned());
+        assert_eq!(format!("{single:?}"), format!("{returned:?}"));
+
+        let co_partitioned = InputDistributionRequirements::co_partitioned(vec![
+            Distribution::KeyPartitioned(vec![Arc::clone(&a)]),
+            Distribution::KeyPartitioned(vec![Arc::clone(&b)]),
+        ]);
+        let returned = round_trip(&co_partitioned);
+        assert!(returned.is_co_partitioned());
+        assert_eq!(format!("{co_partitioned:?}"), format!("{returned:?}"));
+
+        // The deprecated HashPartitioned is sent as the equivalent KeyPartitioned.
+        let hash =
+            InputDistributionRequirements::new(vec![Distribution::HashPartitioned(
+                vec![Arc::clone(&a)],
+            )]);
+        let returned = round_trip(&hash);
+        assert!(matches!(
+            returned.child_distribution(0),
+            Some(Distribution::KeyPartitioned(exprs)) if exprs.len() == 1
+        ));
     }
 }
