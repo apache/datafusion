@@ -828,6 +828,128 @@ mod tests {
         Ok(())
     }
 
+    /// Writes `batch` through a manager without a bound and through one with
+    /// `max_batch_bytes`. Checks the rows read back and returns, for each, the batches
+    /// read and the bytes written.
+    async fn spilled_bytes_with_and_without_bound(
+        batch: &RecordBatch,
+        max_batch_bytes: usize,
+    ) -> Result<[(usize, usize); 2]> {
+        let mut written = [(0, 0); 2];
+        for (i, bound) in [None, Some(max_batch_bytes)].into_iter().enumerate() {
+            let manager = manager(batch.schema(), bound)?;
+            let mut file = manager.create_in_progress_file("test")?;
+            let max_memory = file.append_batch(batch)?;
+            let file = file.finish()?.unwrap();
+            let read = manager
+                .read_spill_as_stream(file, Some(max_memory))?
+                .try_collect::<Vec<_>>()
+                .await?;
+            assert_same_rows(&read, std::slice::from_ref(batch));
+            written[i] = (read.len(), manager.metrics.spilled_bytes.value());
+        }
+        Ok(written)
+    }
+
+    /// Many keys share a dictionary that is larger than the bound. Every piece keeps the
+    /// whole dictionary, so the file holds it once, as without a bound.
+    #[tokio::test]
+    async fn shared_dictionary_larger_than_bound_is_written_once() -> Result<()> {
+        const ROWS: usize = 8192;
+        // 64 values of 64 KiB: a 4 MiB dictionary that 8192 keys share.
+        let values = StringArray::from_iter_values((0..64).map(wide_value));
+        let keys = Int32Array::from_iter_values((0..ROWS as i32).map(|i| i % 64));
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("d", dictionary_type(DataType::Utf8), false),
+                Field::new("id", DataType::Int64, false),
+            ])),
+            vec![
+                Arc::new(DictionaryArray::try_new(keys, Arc::new(values))?),
+                Arc::new(Int64Array::from_iter_values(0..ROWS as i64)),
+            ],
+        )?;
+        let [unbounded, bounded] =
+            spilled_bytes_with_and_without_bound(&batch, 1024 * 1024).await?;
+        assert_eq!(unbounded.0, 1);
+        assert_eq!(bounded.0, 1);
+        assert!(
+            bounded.1 < unbounded.1 + unbounded.1 / 10,
+            "bounded {bounded:?}, unbounded {unbounded:?}"
+        );
+        Ok(())
+    }
+
+    /// Another column cuts the batch into small pieces. The dictionary that the rows
+    /// share is still written once, and the pieces are within the bound, less the
+    /// dictionary.
+    #[tokio::test]
+    async fn shared_dictionary_is_not_copied_into_small_pieces() -> Result<()> {
+        const ROWS: usize = 8192;
+        let values = StringArray::from_iter_values(
+            (0..64).map(|i| format!("{i}{}", "x".repeat(16 * 1024))),
+        );
+        // Pseudo-random keys, so that each piece uses many values.
+        let keys =
+            Int32Array::from_iter_values((0..ROWS as i32).map(|i| (i * 7919 + 13) % 64));
+        let strings = StringArray::from_iter_values(
+            (0..ROWS).map(|i| format!("{i}{}", "y".repeat(1024))),
+        );
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("s", DataType::Utf8, false),
+                Field::new("d", dictionary_type(DataType::Utf8), false),
+            ])),
+            vec![
+                Arc::new(strings),
+                Arc::new(DictionaryArray::try_new(keys, Arc::new(values))?),
+            ],
+        )?;
+        let bound = 64 * 1024;
+        let [unbounded, bounded] =
+            spilled_bytes_with_and_without_bound(&batch, bound).await?;
+        assert!(bounded.0 > ROWS * 1024 / bound, "{bounded:?}");
+        assert!(
+            bounded.1 < unbounded.1 + unbounded.1 / 4,
+            "bounded {bounded:?}, unbounded {unbounded:?}"
+        );
+        let dictionary = 64 * (16 * 1024 + 2) + 65 * 4;
+        let pieces =
+            SpillPieces::new(&batch, Some(bound), false)?.collect::<Result<Vec<_>>>()?;
+        for piece in &pieces {
+            assert!(piece.size <= bound + dictionary, "piece of {}", piece.size);
+        }
+        Ok(())
+    }
+
+    /// Views that share a few large values are written about once, not once per
+    /// piece or per row.
+    #[tokio::test]
+    async fn views_that_share_values_are_not_copied_per_row() -> Result<()> {
+        let values = StringViewArray::from_iter_values(
+            (0..3).map(|i| format!("{i}{}", "x".repeat(1024 * 1024))),
+        );
+        let indices = UInt32Array::from_iter_values((0..512).map(|i| i % 3));
+        let views = arrow::compute::take(&values, &indices, None)?;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "v",
+                DataType::Utf8View,
+                false,
+            )])),
+            vec![views],
+        )?;
+        // The default bound of a sort: `sort_spill_reservation_bytes / 4`.
+        let [unbounded, bounded] =
+            spilled_bytes_with_and_without_bound(&batch, 2_621_440).await?;
+        assert_eq!(unbounded.0, 1);
+        assert!(
+            bounded.1 < 2 * unbounded.1,
+            "bounded {bounded:?}, unbounded {unbounded:?}"
+        );
+        Ok(())
+    }
+
     /// The largest row count returned with the size describes the pieces, not the
     /// appended batch.
     #[tokio::test]

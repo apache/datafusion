@@ -5030,4 +5030,49 @@ mod tests {
         assert_eq!(output.as_ref(), expected.as_ref());
         Ok(())
     }
+
+    /// Rows that share view bytes spill about as many bytes as they hold. Splitting the
+    /// batches would copy the shared values once per row, so they are written whole, and
+    /// the merge needs about the memory it needs without a bound.
+    #[tokio::test]
+    async fn test_sort_spill_of_views_that_share_values() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("c", DataType::Utf8View, true),
+        ]));
+        // Each batch has 256 rows over three values of 1 MiB.
+        let batches = (0..6)
+            .map(|b| {
+                let values = StringViewArray::from_iter_values(
+                    (0..3).map(|i| wide_value(b * 3 + i, 1024 * 1024)),
+                );
+                let indices = UInt32Array::from_iter_values((0..256).map(|i| i % 3));
+                let ids =
+                    Int64Array::from_iter_values((0..256).map(|r| (b * 256 + r) as i64));
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(ids),
+                        arrow::compute::take(&values, &indices, None)?,
+                    ],
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let input: usize = batches.iter().map(get_record_batch_memory_size).sum();
+        let (expected, _) = sort_with_pool(&batches, None, 4 * 1024 * 1024, 256).await?;
+        let (output, metrics) =
+            sort_with_pool(&batches, Some(24 * 1024 * 1024), 4 * 1024 * 1024, 256)
+                .await?;
+        assert!(metrics.spill_count().unwrap() > 0);
+        assert_eq!(
+            concat_batches(&schema, &output)?,
+            concat_batches(&schema, &expected)?
+        );
+        let spilled = metrics.spilled_bytes().unwrap();
+        assert!(
+            spilled < 4 * input,
+            "spilled {spilled} bytes of {input} bytes"
+        );
+        Ok(())
+    }
 }

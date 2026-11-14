@@ -11,11 +11,15 @@
 //!
 //! | Type              | What `take` keeps                       | Fix                    |
 //! |-------------------|-----------------------------------------|------------------------|
-//! | View arrays       | the whole data buffers                  | `gc`                   |
+//! | View arrays       | the whole data buffers                  | copy the used bytes    |
 //! | Dictionaries      | every value                             | keep only used values  |
 //! | List views        | the whole child                         | copy the covered range |
 //!
 //! [`fixup`] applies these fixes at every nesting level.
+//!
+//! The fixes never copy data that several rows share more than once into one batch. A
+//! caller that splits a batch into pieces can still copy shared data once per piece. To
+//! prevent that, it can keep the dictionaries of a column whole (see [`compact_batch`]).
 //!
 //! Temporary: arrow-rs `minify` (<https://github.com/apache/arrow-rs/pull/12184>) replaces
 //! this module.
@@ -23,20 +27,30 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, GenericListViewArray, OffsetSizeTrait, RecordBatch,
-    RecordBatchOptions, UInt32Array, make_array,
+    Array, ArrayRef, AsArray, GenericByteViewArray, GenericListViewArray,
+    OffsetSizeTrait, RecordBatch, RecordBatchOptions, UInt32Array, make_array,
 };
-use arrow::buffer::{NullBuffer, ScalarBuffer};
+use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow::compute::{cast, take};
+use arrow::datatypes::ByteViewType;
 use arrow::datatypes::{DataType, Field};
+use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use datafusion_common::Result;
 
 /// Returns a copy of `batch` whose buffers hold only the data of its rows.
-pub(crate) fn compact_batch(batch: &RecordBatch) -> Result<RecordBatch> {
+///
+/// The dictionaries of column `i` keep all their values when `keep_dictionaries[i]` is
+/// true. The piece then shares the values with `batch`, so the IPC writer writes them once
+/// for all the pieces of `batch`, and the reader decodes them once.
+pub(crate) fn compact_batch(
+    batch: &RecordBatch,
+    keep_dictionaries: &[bool],
+) -> Result<RecordBatch> {
     let columns = batch
         .columns()
         .iter()
-        .map(compact_array)
+        .zip(keep_dictionaries)
+        .map(|(column, &keep)| compact_array(column, keep))
         .collect::<Result<Vec<_>>>()?;
     let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
     Ok(RecordBatch::try_new_with_options(
@@ -46,8 +60,12 @@ pub(crate) fn compact_batch(batch: &RecordBatch) -> Result<RecordBatch> {
     )?)
 }
 
-/// Returns a copy of `array` whose buffers hold only the data of its rows.
-pub(crate) fn compact_array(array: &ArrayRef) -> Result<ArrayRef> {
+/// Returns a copy of `array` whose buffers hold only the data of its rows, except the
+/// values of its dictionaries when `keep_dictionaries` is true.
+pub(crate) fn compact_array(
+    array: &ArrayRef,
+    keep_dictionaries: bool,
+) -> Result<ArrayRef> {
     let taken = match array.data_type() {
         // `fixup` copies a list view's values, which also copies its offsets.
         DataType::ListView(_) | DataType::LargeListView(_) => Arc::clone(array),
@@ -56,25 +74,33 @@ pub(crate) fn compact_array(array: &ArrayRef) -> Result<ArrayRef> {
             take(array.as_ref(), &indices, None)?
         }
     };
-    fixup(&taken)
+    fixup(&taken, keep_dictionaries)
 }
 
 /// Compacts the parts of `array` that `take` keeps whole, at every nesting level. The
 /// result has the same length as `array`.
-fn fixup(array: &ArrayRef) -> Result<ArrayRef> {
+fn fixup(array: &ArrayRef, keep_dictionaries: bool) -> Result<ArrayRef> {
     Ok(match array.data_type() {
-        DataType::Utf8View => Arc::new(array.as_string_view().gc()),
-        DataType::BinaryView => Arc::new(array.as_binary_view().gc()),
+        DataType::Utf8View => Arc::new(compact_views(array.as_string_view())?),
+        DataType::BinaryView => Arc::new(compact_views(array.as_binary_view())?),
+        // `take` copies the keys and shares the values.
+        DataType::Dictionary(_, _) if keep_dictionaries => Arc::clone(array),
         DataType::Dictionary(key_type, _) => compact_dictionary(array, key_type)?,
-        DataType::ListView(field) => compact_list_view::<i32>(array, field)?,
-        DataType::LargeListView(field) => compact_list_view::<i64>(array, field)?,
+        DataType::ListView(field) => {
+            compact_list_view::<i32>(array, field, keep_dictionaries)?
+        }
+        DataType::LargeListView(field) => {
+            compact_list_view::<i64>(array, field, keep_dictionaries)?
+        }
         _ if array.to_data().child_data().is_empty() => Arc::clone(array),
         _ => {
             let data = array.to_data();
             let children = data
                 .child_data()
                 .iter()
-                .map(|child| Ok(fixup(&make_array(child.clone()))?.to_data()))
+                .map(|child| {
+                    Ok(fixup(&make_array(child.clone()), keep_dictionaries)?.to_data())
+                })
                 .collect::<Result<Vec<_>>>()?;
             make_array(data.into_builder().child_data(children).build()?)
         }
@@ -106,7 +132,10 @@ fn compact_dictionary(array: &ArrayRef, key_type: &DataType) -> Result<ArrayRef>
             }
             new_index[key]
         }));
-    let new_values = fixup(&take(values.as_ref(), &UInt32Array::from(used), None)?)?;
+    let new_values = fixup(
+        &take(values.as_ref(), &UInt32Array::from(used), None)?,
+        false,
+    )?;
     let new_keys = cast(&remapped, key_type)?.to_data();
     let data = array
         .to_data()
@@ -117,12 +146,91 @@ fn compact_dictionary(array: &ArrayRef, key_type: &DataType) -> Result<ArrayRef>
     Ok(make_array(data.build()?))
 }
 
+/// Copies the bytes that the views of `array` reference into new data buffers.
+///
+/// Views can share bytes, such as the rows that `take` repeats. `gc` copies the bytes of
+/// each view, so shared bytes would be copied once per view. Here the referenced ranges
+/// of each buffer are merged first, so each byte is copied at most once.
+fn compact_views<T: ByteViewType + ?Sized>(
+    array: &GenericByteViewArray<T>,
+) -> Result<GenericByteViewArray<T>> {
+    let views = array.views();
+    let long =
+        |row: usize| array.is_valid(row) && views[row] as u32 > MAX_INLINE_VIEW_LEN;
+    // (buffer, start, end) of each long view, merged where they overlap or touch.
+    let mut ranges: Vec<(u32, u32, u32)> = (0..array.len())
+        .filter(|&row| long(row))
+        .map(|row| {
+            let view = ByteView::from(views[row]);
+            (view.buffer_index, view.offset, view.offset + view.length)
+        })
+        .collect();
+    ranges.sort_unstable();
+    let mut merged: Vec<(u32, u32, u32)> = Vec::with_capacity(ranges.len());
+    for (buffer, start, end) in ranges {
+        match merged.last_mut() {
+            Some(last) if last.0 == buffer && start <= last.2 => last.2 = last.2.max(end),
+            _ => merged.push((buffer, start, end)),
+        }
+    }
+    // The new buffer and offset of each merged range. A view offset is a `u32`, so a new
+    // buffer starts before one would grow past `u32::MAX` bytes.
+    let total: usize = merged.iter().map(|r| (r.2 - r.1) as usize).sum();
+    let mut new_buffers: Vec<Vec<u8>> = vec![];
+    let mut copied = 0;
+    let mut placed: Vec<(u32, u32)> = Vec::with_capacity(merged.len());
+    for &(buffer, start, end) in &merged {
+        let bytes = &array.data_buffers()[buffer as usize][start as usize..end as usize];
+        if new_buffers
+            .last()
+            .is_none_or(|b| b.len() + bytes.len() > u32::MAX as usize)
+        {
+            let capacity = (total - copied).min(u32::MAX as usize).max(bytes.len());
+            new_buffers.push(Vec::with_capacity(capacity));
+        }
+        let index = new_buffers.len() - 1;
+        let target = &mut new_buffers[index];
+        placed.push((index as u32, target.len() as u32));
+        target.extend_from_slice(bytes);
+        copied += bytes.len();
+    }
+    let new_views = (0..array.len())
+        .map(|row| {
+            if !array.is_valid(row) {
+                return 0;
+            }
+            if !long(row) {
+                return views[row];
+            }
+            let view = ByteView::from(views[row]);
+            // The last merged range that starts at or before the view holds it.
+            let index = merged
+                .partition_point(|r| (r.0, r.1) <= (view.buffer_index, view.offset))
+                - 1;
+            let (new_buffer, new_start) = placed[index];
+            ByteView {
+                buffer_index: new_buffer,
+                offset: new_start + (view.offset - merged[index].1),
+                ..view
+            }
+            .as_u128()
+        })
+        .collect::<ScalarBuffer<u128>>();
+    let new_buffers: Vec<Buffer> = new_buffers.into_iter().map(Buffer::from).collect();
+    Ok(GenericByteViewArray::try_new(
+        new_views,
+        new_buffers,
+        array.nulls().cloned(),
+    )?)
+}
+
 /// Copies the range of child values that the rows of a list view cover, and rebases the
 /// offsets onto it. Rows of a list view can share or overlap child ranges, so copying each
 /// row's values separately could multiply the data. Unused values inside the range stay.
 fn compact_list_view<O: OffsetSizeTrait>(
     array: &ArrayRef,
     field: &Arc<Field>,
+    keep_dictionaries: bool,
 ) -> Result<ArrayRef> {
     let list = array.as_list_view::<O>();
     let rows = || {
@@ -149,7 +257,8 @@ fn compact_list_view<O: OffsetSizeTrait>(
             false => O::usize_as(0),
         })
         .collect::<Vec<_>>();
-    let values = compact_array(&list.values().slice(start, end - start))?;
+    let values =
+        compact_array(&list.values().slice(start, end - start), keep_dictionaries)?;
     Ok(Arc::new(GenericListViewArray::<O>::try_new(
         Arc::clone(field),
         ScalarBuffer::from(offsets),
@@ -287,7 +396,7 @@ mod tests {
         ];
         for (name, column) in columns {
             let slice = column.slice(10, 10);
-            let compacted = compact_array(&slice)?;
+            let compacted = compact_array(&slice, false)?;
             assert_eq!(compacted.as_ref(), slice.as_ref(), "{name}");
             let size = compacted.get_array_memory_size();
             assert!(size < 4 * 10 * WIDTH, "{name}: {size} bytes");
@@ -336,7 +445,7 @@ mod tests {
         for column in columns {
             for (offset, len) in [(0, column.len()), (1, column.len() - 1)] {
                 let slice = column.slice(offset, len);
-                let compacted = compact_array(&slice)?;
+                let compacted = compact_array(&slice, false)?;
                 compacted.to_data().validate_full()?;
                 assert_eq!(compacted.as_ref(), slice.as_ref(), "{}", column.data_type());
                 assert_eq!(
@@ -347,6 +456,49 @@ mod tests {
                 );
             }
         }
+        Ok(())
+    }
+
+    /// Views that share bytes keep sharing them, so a compacted array holds each value
+    /// once.
+    #[test]
+    fn compacted_views_copy_shared_bytes_once() -> Result<()> {
+        let values = StringViewArray::from_iter_values(
+            (0..3).map(|i| format!("{i}{}", "x".repeat(WIDTH))),
+        );
+        let indices = UInt32Array::from_iter_values((0..ROWS as u32).map(|i| i % 3));
+        let shared = take(&values, &indices, None)?;
+        let compacted = compact_array(&shared.slice(1, 100), false)?;
+        assert_eq!(compacted.as_ref(), shared.slice(1, 100).as_ref());
+        let bytes: usize = compacted
+            .as_string_view()
+            .data_buffers()
+            .iter()
+            .map(|b| b.len())
+            .sum();
+        assert_eq!(bytes, 3 * (WIDTH + 1));
+        Ok(())
+    }
+
+    /// With `keep_dictionaries`, a piece shares the dictionary values of its batch.
+    #[test]
+    fn kept_dictionaries_share_their_values() -> Result<()> {
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..10).map(|i| format!("{i}{}", "x".repeat(WIDTH))),
+        ));
+        let dictionary: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from_iter_values((0..ROWS as i32).map(|i| i % 10)),
+            Arc::clone(&values),
+        )?);
+        let compacted = compact_array(&dictionary.slice(5, 3), true)?;
+        assert_eq!(compacted.as_ref(), dictionary.slice(5, 3).as_ref());
+        assert!(
+            compacted
+                .as_any_dictionary()
+                .values()
+                .to_data()
+                .ptr_eq(&values.to_data())
+        );
         Ok(())
     }
 }
