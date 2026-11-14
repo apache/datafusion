@@ -23,6 +23,7 @@ mod helper;
 mod lower;
 mod repeat;
 mod replace;
+mod replace_dictionary;
 mod replace_scalar;
 mod split_part;
 mod starts_with;
@@ -41,6 +42,7 @@ criterion_main!(
     lower::benches,
     repeat::benches,
     replace::benches,
+    replace_dictionary::benches,
     replace_scalar::benches,
     split_part::benches,
     starts_with::benches,
