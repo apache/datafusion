@@ -83,6 +83,33 @@ Coverage helps find missing tests; high coverage does not guarantee good tests:
 
 [codecov]: https://app.codecov.io/gh/apache/datafusion
 
+### Mutation testing
+
+Coverage shows which lines a test executes, not whether any test would fail if
+those lines were wrong. [cargo-mutants] checks the second property: it makes a
+small change to the code, such as replacing `>` with `>=` or `&&` with `||`,
+and runs the tests. If they still pass, the mutant is _missed_.
+
+The [mutants.yml] workflow runs cargo-mutants on pull requests, mutating only
+the lines the PR changes. It runs every mutant against the tests of its own
+package, then reruns the missed ones against the `datafusion` core tests and
+sqllogictests. The check is advisory and does not block merging. When it
+fails, the job summary lists the missed mutants. Add a test that fails for
+each, or explain in the PR why the change does not matter.
+
+To run the same check locally against your branch:
+
+```shell
+cargo install --locked cargo-mutants
+git diff "$(git merge-base HEAD upstream/main)" > pr.diff
+cargo mutants --in-diff pr.diff
+# Retest missed mutants against the end-to-end suites
+cargo mutants --in-diff pr.diff --iterate --test-package datafusion,datafusion-sqllogictest
+```
+
+[cargo-mutants]: https://mutants.rs/
+[mutants.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/mutants.yml
+
 ## Choosing What Kind of Test to Write
 
 When adding tests, prefer tests that exercise **user-visible behavior** over

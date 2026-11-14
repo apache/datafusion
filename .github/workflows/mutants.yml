@@ -1,0 +1,126 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Mutation testing of the code a PR changes, using cargo-mutants.
+#
+# This check is advisory: it is not listed in `.asf.yaml`
+# required_status_checks and never blocks a merge. It only mutates lines in
+# the PR diff, so the author who wrote the code sees the results. See the
+# "Mutation testing" section of docs/source/contributor-guide/testing.md.
+#
+# Many crates are mostly tested from other packages, for example optimizer
+# rules from `datafusion/core/tests` and sqllogictest. Testing every mutant
+# against those suites means rebuilding them per mutant, so the job runs two
+# passes:
+#   1. Every mutant against the tests of the package it is in (cheap).
+#   2. Only the survivors, via `--iterate`, against the end-to-end suites.
+
+name: "Mutation testing"
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "**.rs"
+      - ".cargo/mutants.toml"
+      - ".github/workflows/mutants.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    name: Mutation testing of changed code
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    timeout-minutes: 180
+    steps:
+      # The checkout is GitHub's test merge commit of the PR into the base
+      # branch, so HEAD^1 is the base commit the PR was merged into.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 2
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
+        with:
+          tool: cargo-mutants@27.1.0
+      - name: Compute PR diff
+        run: git diff HEAD^1 HEAD > "$RUNNER_TEMP/pr.diff"
+      # Keep the baseline: if the unmutated tests fail in this environment,
+      # for example because test data is missing, every mutant would
+      # otherwise be reported as caught.
+      #
+      # Exit codes 2 (missed) and 3 (timeout) are expected outcomes; the
+      # result is decided from missed.txt in the last step.
+      - name: Test mutants against their own package
+        run: |
+          set +e
+          cargo mutants --in-diff "$RUNNER_TEMP/pr.diff" \
+            --output "$RUNNER_TEMP"
+          rc=$?
+          [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ] || [ "$rc" -eq 3 ]
+      # The timeout is explicit because cargo-mutants 27.1.0 runs this
+      # baseline against the mutated package, not `--test-package`, and
+      # derives a test timeout far too short for these suites. Mutants then
+      # time out instead of being reported as missed.
+      - name: Retest survivors against end-to-end tests
+        run: |
+          if [ ! -s "$RUNNER_TEMP/mutants.out/missed.txt" ]; then
+            exit 0
+          fi
+          set +e
+          cargo mutants --in-diff "$RUNNER_TEMP/pr.diff" \
+            --output "$RUNNER_TEMP" --iterate --timeout 1800 \
+            --test-package datafusion,datafusion-sqllogictest
+          rc=$?
+          [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ] || [ "$rc" -eq 3 ]
+      - name: Report missed mutants
+        run: |
+          timeout="$RUNNER_TEMP/mutants.out/timeout.txt"
+          if [ -s "$timeout" ]; then
+            {
+              echo "## Mutants that made the tests time out"
+              echo
+              echo "These usually mean the mutant caused a hang, which counts as caught."
+              echo
+              echo '```'
+              cat "$timeout"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          missed="$RUNNER_TEMP/mutants.out/missed.txt"
+          if [ -s "$missed" ]; then
+            {
+              echo "## Mutants not caught by any test"
+              echo
+              echo "Each line is a change to this PR's code that no test detected."
+              echo "Add a test that fails for it, or explain in the PR why it does not matter."
+              echo
+              echo '```'
+              cat "$missed"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - name: Upload cargo-mutants output
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: mutants-out
+          path: |
+            ${{ runner.temp }}/mutants.out
+            ${{ runner.temp }}/mutants.out.old
+          if-no-files-found: ignore
+          retention-days: 7
