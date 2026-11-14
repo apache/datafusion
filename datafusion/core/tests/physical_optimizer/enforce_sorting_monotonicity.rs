@@ -666,14 +666,10 @@ fn test_window_partial_constant_and_set_monotonicity_17() {
         ],
     }.run(),
         @ r#"
-    Input Plan:
+    Input / Optimized Plan:
     SortExec: expr=[max@2 DESC, nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]
       WindowAggExec: wdw=[max: Ok(Field { name: "max", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(NULL)), is_causal: false }]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
-
-    Optimized Plan:
-    WindowAggExec: wdw=[max: Ok(Field { name: "max", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(NULL)), is_causal: false }]
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
     "#
     );
 }
@@ -691,14 +687,10 @@ fn test_window_partial_constant_and_set_monotonicity_18() {
         ],
     }.run(),
         @ r#"
-    Input Plan:
+    Input / Optimized Plan:
     SortExec: expr=[min@2 ASC, nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]
       WindowAggExec: wdw=[min: Ok(Field { name: "min", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(NULL)), is_causal: false }]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
-
-    Optimized Plan:
-    WindowAggExec: wdw=[min: Ok(Field { name: "min", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(NULL)), is_causal: false }]
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
     "#
     );
 }
@@ -787,10 +779,14 @@ fn test_window_partial_constant_and_set_monotonicity_22() {
         ],
     }.run(),
         @ r#"
-    Input / Optimized Plan:
+    Input Plan:
     SortExec: expr=[min@2 ASC NULLS LAST, nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]
       WindowAggExec: wdw=[min: Ok(Field { name: "min", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(NULL)), is_causal: false }]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
+
+    Optimized Plan:
+    WindowAggExec: wdw=[min: Ok(Field { name: "min", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(NULL)), is_causal: false }]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
     "#
     );
 }
@@ -867,10 +863,9 @@ fn test_window_partial_constant_and_set_monotonicity_25() {
 
     Optimized Plan:
     SortPreservingMergeExec: [nullable_col@0 ASC NULLS LAST, max@2 ASC NULLS LAST]
-      SortExec: expr=[nullable_col@0 ASC NULLS LAST, max@2 ASC NULLS LAST], preserve_partitioning=[true]
-        WindowAggExec: wdw=[max: Ok(Field { name: "max", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(NULL)), is_causal: false }]
-          RepartitionExec: partitioning=Hash([nullable_col@0], 10), input_partitions=1, maintains_sort_order=true
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
+      WindowAggExec: wdw=[max: Ok(Field { name: "max", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(NULL)), is_causal: false }]
+        RepartitionExec: partitioning=Hash([nullable_col@0], 10), input_partitions=1, maintains_sort_order=true
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
     "#
     );
 }
@@ -1206,10 +1201,14 @@ fn test_window_partial_constant_and_set_monotonicity_38() {
         ],
     }.run(),
         @ r#"
-    Input / Optimized Plan:
+    Input Plan:
     SortExec: expr=[min@2 DESC, nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]
       BoundedWindowAggExec: wdw=[min: Field { "min": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
+
+    Optimized Plan:
+    BoundedWindowAggExec: wdw=[min: Field { "min": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
     "#
     );
 }
@@ -1481,14 +1480,10 @@ fn test_window_partial_constant_and_set_monotonicity_48() {
         ],
     }.run(),
         @ r#"
-    Input Plan:
+    Input / Optimized Plan:
     SortExec: expr=[count@2 ASC NULLS LAST, nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]
       BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
-
-    Optimized Plan:
-    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
     "#
     );
 }
@@ -1505,10 +1500,14 @@ fn test_window_partial_constant_and_set_monotonicity_49() {
         ],
     }.run(),
         @ r#"
-    Input / Optimized Plan:
+    Input Plan:
     SortExec: expr=[max@2 ASC NULLS LAST], preserve_partitioning=[false]
       BoundedWindowAggExec: wdw=[max: Field { "max": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
+
+    Optimized Plan:
+    BoundedWindowAggExec: wdw=[max: Field { "max": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
     "#
     );
 }
@@ -1526,14 +1525,10 @@ fn test_window_partial_constant_and_set_monotonicity_50() {
         ],
     }.run(),
         @ r#"
-    Input Plan:
+    Input / Optimized Plan:
     SortExec: expr=[nullable_col@0 ASC NULLS LAST, min@2 DESC NULLS LAST], preserve_partitioning=[false]
       BoundedWindowAggExec: wdw=[min: Field { "min": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
-
-    Optimized Plan:
-    BoundedWindowAggExec: wdw=[min: Field { "min": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
     "#
     );
 }
@@ -1674,9 +1669,10 @@ fn test_window_partial_constant_and_set_monotonicity_56() {
 
     Optimized Plan:
     SortPreservingMergeExec: [count@2 ASC NULLS LAST, nullable_col@0 ASC NULLS LAST]
-      BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
-        RepartitionExec: partitioning=Hash([nullable_col@0], 10), input_partitions=1, maintains_sort_order=true
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
+      SortExec: expr=[count@2 ASC NULLS LAST, nullable_col@0 ASC NULLS LAST], preserve_partitioning=[true]
+        BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
+          RepartitionExec: partitioning=Hash([nullable_col@0], 10), input_partitions=1, maintains_sort_order=true
+            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
     "#
     );
 }
@@ -1701,10 +1697,9 @@ fn test_window_partial_constant_and_set_monotonicity_57() {
 
     Optimized Plan:
     SortPreservingMergeExec: [nullable_col@0 ASC NULLS LAST, max@2 ASC NULLS LAST]
-      SortExec: expr=[nullable_col@0 ASC NULLS LAST, max@2 ASC NULLS LAST], preserve_partitioning=[true]
-        BoundedWindowAggExec: wdw=[max: Field { "max": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
-          RepartitionExec: partitioning=Hash([nullable_col@0], 10), input_partitions=1, maintains_sort_order=true
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
+      BoundedWindowAggExec: wdw=[max: Field { "max": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
+        RepartitionExec: partitioning=Hash([nullable_col@0], 10), input_partitions=1, maintains_sort_order=true
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet
     "#
     );
 }

@@ -23,7 +23,7 @@ use arrow_schema::{FieldRef, SortOptions};
 use datafusion_common::{Result, assert_or_internal_err, exec_err};
 use datafusion_expr::{
     LimitEffect, PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
+    WindowFrameBound, WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -31,11 +31,11 @@ use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::window::{
-    SlidingAggregateWindowExpr, StandardWindowFunctionExpr,
+    AggregateWindowExpr, SlidingAggregateWindowExpr, StandardWindowFunctionExpr,
 };
 use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
 use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortRequirement,
+    LexRequirement, OrderingRequirements, PhysicalSortRequirement,
 };
 
 use itertools::Itertools;
@@ -374,206 +374,188 @@ pub(crate) fn window_equivalence_properties(
     input: &Arc<dyn ExecutionPlan>,
     window_exprs: &[Arc<dyn WindowExpr>],
 ) -> Result<EquivalenceProperties> {
-    // We need to update the schema, so we can't directly use input's equivalence
-    // properties.
     let mut window_eq_properties = EquivalenceProperties::new(Arc::clone(schema))
         .extend(input.equivalence_properties().clone())?;
-
-    let window_schema_len = schema.fields.len();
-    let input_schema_len = window_schema_len - window_exprs.len();
-    let window_expr_indices = (input_schema_len..window_schema_len).collect::<Vec<_>>();
+    let input_schema_len = input.schema().fields().len();
 
     for (i, expr) in window_exprs.iter().enumerate() {
         let partitioning_exprs = expr.partition_by();
-        let no_partitioning = partitioning_exprs.is_empty();
-
-        // Find "one" valid ordering for partition columns to avoid exponential complexity.
-        // see https://github.com/apache/datafusion/issues/17401
-        let mut all_satisfied_lexs = vec![];
-        let mut candidate_ordering = Vec::with_capacity(partitioning_exprs.len());
-
-        for partition_expr in partitioning_exprs.iter() {
-            let sort_options =
-                sort_options_resolving_constant(Arc::clone(partition_expr), true);
-
-            // Try each sort option and pick the first one that works
-            let mut found = false;
-            for sort_expr in sort_options.into_iter() {
-                candidate_ordering.push(sort_expr);
-                if let Some(lex) = LexOrdering::new(candidate_ordering.clone())
-                    && window_eq_properties.ordering_satisfy(lex)?
-                {
-                    found = true;
-                    break;
-                }
-                // This option didn't work, remove it and try the next one
-                candidate_ordering.pop();
-            }
-            // If no sort option works for this column, we can't build a valid ordering
-            if !found {
-                candidate_ordering.clear();
-                break;
-            }
+        let (partition_ordering, _) =
+            window_eq_properties.find_longest_permutation(partitioning_exprs)?;
+        if partition_ordering.len() != partitioning_exprs.len() {
+            continue;
         }
 
-        // If we successfully built an ordering for all columns, use it
-        // When there are no partition expressions, candidate_ordering will be empty and won't be added
-        if candidate_ordering.len() == partitioning_exprs.len()
-            && let Some(lex) = LexOrdering::new(candidate_ordering)
-        {
-            all_satisfied_lexs.push(lex);
-        }
-        // If there is a partitioning, and no possible ordering cannot satisfy
-        // the input plan's orderings, then we cannot further introduce any
-        // new orderings for the window plan.
-        if !no_partitioning && all_satisfied_lexs.is_empty() {
-            return Ok(window_eq_properties);
-        } else if let Some(std_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>()
-        {
-            std_expr.add_equal_orderings(&mut window_eq_properties)?;
+        let window_col = Arc::new(Column::new(expr.name(), i + input_schema_len))
+            as Arc<dyn PhysicalExpr>;
+        let frame = expr.get_window_frame();
+        if let Some(std_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>() {
+            if frame.is_ever_expanding()
+                && frame.end_bound.is_unbounded()
+                && std_expr
+                    .get_standard_func_expr()
+                    .create_evaluator()?
+                    .is_constant_for_frame()
+            {
+                add_constant_window_orderings(
+                    &mut window_eq_properties,
+                    window_col,
+                    &partition_ordering,
+                )?;
+            } else {
+                std_expr.add_equal_orderings(&mut window_eq_properties)?;
+            }
         } else if let Some(plain_expr) =
             expr.as_any().downcast_ref::<PlainAggregateWindowExpr>()
         {
-            // We are dealing with plain window frames; i.e. frames having an
-            // unbounded starting point.
-            // First, check if the frame covers the whole table:
-            if plain_expr.get_window_frame().end_bound.is_unbounded() {
-                let window_col =
-                    Arc::new(Column::new(expr.name(), i + input_schema_len)) as _;
-                if no_partitioning {
-                    // Window function has a constant result across the table:
-                    window_eq_properties
-                        .add_constants(std::iter::once(ConstExpr::from(window_col)))?
-                } else {
-                    // Window function results in a partial constant value in
-                    // some ordering. Adjust the ordering equivalences accordingly:
-                    let new_lexs = all_satisfied_lexs.into_iter().flat_map(|lex| {
-                        let new_partial_consts = sort_options_resolving_constant(
-                            Arc::clone(&window_col),
-                            false,
-                        );
-
-                        new_partial_consts.into_iter().map(move |partial| {
-                            let mut existing = lex.clone();
-                            existing.push(partial);
-                            existing
-                        })
-                    });
-                    window_eq_properties.add_orderings(new_lexs);
-                }
-            } else {
-                // The window frame is ever expanding, so set monotonicity comes
-                // into play.
-                plain_expr.add_equal_orderings(
-                    &mut window_eq_properties,
-                    window_expr_indices[i],
-                )?;
-            }
+            add_aggregate_window_orderings(
+                &mut window_eq_properties,
+                plain_expr,
+                plain_expr.get_aggregate_expr(),
+                window_col,
+                &partition_ordering,
+            )?;
         } else if let Some(sliding_expr) =
             expr.as_any().downcast_ref::<SlidingAggregateWindowExpr>()
         {
-            // We are dealing with sliding window frames; i.e. frames having an
-            // advancing starting point. If we have a set-monotonic expression,
-            // we might be able to leverage this property.
-            let set_monotonicity = sliding_expr.get_aggregate_expr().set_monotonicity();
-            if set_monotonicity.ne(&SetMonotonicity::NotMonotonic) {
-                // If the window frame is ever-receding, and we have set
-                // monotonicity, we can utilize it to introduce new orderings.
-                let frame = sliding_expr.get_window_frame();
-                if frame.end_bound.is_unbounded() {
-                    let increasing = set_monotonicity.eq(&SetMonotonicity::Increasing);
-                    let window_col = Column::new(expr.name(), i + input_schema_len);
-                    if no_partitioning {
-                        // Reverse set-monotonic cases with no partitioning:
-                        window_eq_properties.add_ordering([PhysicalSortExpr::new(
-                            Arc::new(window_col),
-                            SortOptions::new(increasing, true),
-                        )]);
-                    } else {
-                        // Reverse set-monotonic cases for all orderings:
-                        for mut lex in all_satisfied_lexs.into_iter() {
-                            lex.push(PhysicalSortExpr::new(
-                                Arc::new(window_col.clone()),
-                                SortOptions::new(increasing, true),
-                            ));
-                            window_eq_properties.add_ordering(lex);
-                        }
-                    }
-                }
-                // If we ensure that the elements entering the frame is greater
-                // than the ones leaving, and we have increasing set-monotonicity,
-                // then the window function result will be increasing. However,
-                // we also need to check if the frame is causal. If not, we cannot
-                // utilize set-monotonicity since the set shrinks as the frame
-                // boundary starts "touching" the end of the table.
-                else if frame.is_causal() {
-                    // Find one valid ordering for aggregate arguments instead of
-                    // checking all combinations
-                    let aggregate_exprs = sliding_expr.get_aggregate_expr().expressions();
-                    let mut candidate_order = Vec::with_capacity(aggregate_exprs.len());
-                    let mut asc = false;
-
-                    for (idx, expr) in aggregate_exprs.iter().enumerate() {
-                        let mut found = false;
-                        let sort_options =
-                            sort_options_resolving_constant(Arc::clone(expr), false);
-
-                        // Try each option and pick the first that works
-                        for sort_expr in sort_options.into_iter() {
-                            let is_asc = !sort_expr.options.descending;
-                            candidate_order.push(sort_expr);
-
-                            if let Some(lex) = LexOrdering::new(candidate_order.clone())
-                                && window_eq_properties.ordering_satisfy(lex)?
-                            {
-                                if idx == 0 {
-                                    // The first column's ordering direction determines the overall
-                                    // monotonicity behavior of the window result.
-                                    // - If the aggregate has increasing set monotonicity (e.g., MAX, COUNT)
-                                    //   and the first arg is ascending, the window result is increasing
-                                    // - If the aggregate has decreasing set monotonicity (e.g., MIN)
-                                    //   and the first arg is ascending, the window result is also increasing
-                                    // This flag is used to determine the final window column ordering.
-                                    asc = is_asc;
-                                }
-                                found = true;
-                                break;
-                            }
-                            // This option didn't work, remove it and try the next one
-                            candidate_order.pop();
-                        }
-
-                        // If we couldn't extend the ordering, stop trying
-                        if !found {
-                            break;
-                        }
-                    }
-
-                    // Check if we successfully built a complete ordering
-                    let satisfied = candidate_order.len() == aggregate_exprs.len()
-                        && !aggregate_exprs.is_empty();
-
-                    if satisfied {
-                        let increasing =
-                            set_monotonicity.eq(&SetMonotonicity::Increasing);
-                        let window_col = Column::new(expr.name(), i + input_schema_len);
-                        if increasing && (asc || no_partitioning) {
-                            window_eq_properties.add_ordering([PhysicalSortExpr::new(
-                                Arc::new(window_col),
-                                SortOptions::new(false, false),
-                            )]);
-                        } else if !increasing && (!asc || no_partitioning) {
-                            window_eq_properties.add_ordering([PhysicalSortExpr::new(
-                                Arc::new(window_col),
-                                SortOptions::new(true, false),
-                            )]);
-                        }
-                    }
-                }
-            }
+            add_aggregate_window_orderings(
+                &mut window_eq_properties,
+                sliding_expr,
+                sliding_expr.get_aggregate_expr(),
+                window_col,
+                &partition_ordering,
+            )?;
         }
     }
     Ok(window_eq_properties)
+}
+
+fn add_constant_window_orderings(
+    eq_properties: &mut EquivalenceProperties,
+    window_col: Arc<dyn PhysicalExpr>,
+    partition_ordering: &[PhysicalSortExpr],
+) -> Result<()> {
+    if partition_ordering.is_empty() {
+        eq_properties.add_constants([ConstExpr::from(window_col)])?;
+    } else {
+        for sort_expr in sort_options_resolving_constant(window_col) {
+            let mut ordering = partition_ordering.to_vec();
+            ordering.push(sort_expr);
+            eq_properties.add_ordering(ordering);
+        }
+    }
+    Ok(())
+}
+
+fn add_window_ordering(
+    eq_properties: &mut EquivalenceProperties,
+    window_col: Arc<dyn PhysicalExpr>,
+    partition_ordering: &[PhysicalSortExpr],
+    options: SortOptions,
+    result_never_null: bool,
+) {
+    let mut ordering = partition_ordering.to_vec();
+    ordering.push(PhysicalSortExpr::new(Arc::clone(&window_col), options));
+    eq_properties.add_ordering(ordering);
+    if result_never_null {
+        let mut ordering = partition_ordering.to_vec();
+        ordering.push(PhysicalSortExpr::new(
+            window_col,
+            SortOptions::new(options.descending, !options.nulls_first),
+        ));
+        eq_properties.add_ordering(ordering);
+    }
+}
+
+fn frame_contains_current_row(frame: &WindowFrame) -> bool {
+    matches!(
+        frame.start_bound,
+        WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow
+    ) && matches!(
+        frame.end_bound,
+        WindowFrameBound::CurrentRow | WindowFrameBound::Following(_)
+    )
+}
+
+fn add_aggregate_window_orderings(
+    eq_properties: &mut EquivalenceProperties,
+    window_expr: &dyn AggregateWindowExpr,
+    aggregate: &AggregateFunctionExpr,
+    window_col: Arc<dyn PhysicalExpr>,
+    partition_ordering: &[PhysicalSortExpr],
+) -> Result<()> {
+    let frame = window_expr.get_window_frame();
+    if frame.is_ever_expanding() && frame.end_bound.is_unbounded() {
+        return add_constant_window_orderings(
+            eq_properties,
+            window_col,
+            partition_ordering,
+        );
+    }
+
+    let monotonicity = aggregate.set_monotonicity();
+    if monotonicity == SetMonotonicity::NotMonotonic {
+        return Ok(());
+    }
+
+    let arguments = aggregate.expressions();
+    let mut result_never_null = !aggregate.is_nullable();
+    if !result_never_null
+        && window_expr.filter_expr().is_none()
+        && frame_contains_current_row(frame)
+    {
+        result_never_null = !arguments.is_empty();
+        for argument in &arguments {
+            result_never_null &= !argument.nullable(eq_properties.schema())?;
+        }
+    }
+
+    let options = if frame.is_ever_expanding() {
+        Some(SortOptions::new(
+            monotonicity == SetMonotonicity::Decreasing,
+            true,
+        ))
+    } else if frame.end_bound.is_unbounded() {
+        Some(SortOptions::new(
+            monotonicity == SetMonotonicity::Increasing,
+            false,
+        ))
+    } else {
+        None
+    };
+    if let Some(options) = options {
+        add_window_ordering(
+            eq_properties,
+            Arc::clone(&window_col),
+            partition_ordering,
+            options,
+            result_never_null,
+        );
+    }
+
+    // Set monotonicity does not order a frame that both gains and loses rows.
+    if aggregate.get_minmax_desc().is_some()
+        && window_expr.filter_expr().is_none()
+        && frame_contains_current_row(frame)
+        && let [argument] = arguments.as_slice()
+    {
+        for sort_expr in sort_options_resolving_constant(Arc::clone(argument)) {
+            let mut candidate = partition_ordering.to_vec();
+            let options = sort_expr.options;
+            candidate.push(sort_expr);
+            if eq_properties.ordering_satisfy(candidate)? {
+                add_window_ordering(
+                    eq_properties,
+                    window_col,
+                    partition_ordering,
+                    options,
+                    result_never_null,
+                );
+                break;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Constructs the best-fitting windowing operator (a `WindowAggExec` or a
@@ -723,45 +705,14 @@ pub fn get_window_mode(
     Ok(None)
 }
 
-/// Generates sort option variations for a given expression.
-///
-/// This function is used to handle constant columns in window operations. Since constant
-/// columns can be considered as having any ordering, we generate multiple sort options
-/// to explore different ordering possibilities.
-///
-/// # Parameters
-/// - `expr`: The physical expression to generate sort options for
-/// - `only_monotonic`: If false, generates all 4 possible sort options (ASC/DESC × NULLS FIRST/LAST).
-///   If true, generates only 2 options that preserve set monotonicity.
-///
-/// # When to use `only_monotonic = false`:
-/// Use for PARTITION BY columns where we want to explore all possible orderings to find
-/// one that matches the existing data ordering.
-///
-/// # When to use `only_monotonic = true`:
-/// Use for aggregate/window function arguments where set monotonicity needs to be preserved.
-/// Only generates ASC NULLS LAST and DESC NULLS FIRST because:
-/// - Set monotonicity is broken if data has increasing order but nulls come first
-/// - Set monotonicity is broken if data has decreasing order but nulls come last
-fn sort_options_resolving_constant(
-    expr: Arc<dyn PhysicalExpr>,
-    only_monotonic: bool,
-) -> Vec<PhysicalSortExpr> {
-    if only_monotonic {
-        // Generate only the 2 options that preserve set monotonicity
-        vec![
-            PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)), // ASC NULLS LAST
-            PhysicalSortExpr::new(expr, SortOptions::new(true, true)), // DESC NULLS FIRST
-        ]
-    } else {
-        // Generate all 4 possible sort options for partition columns
-        vec![
-            PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)), // ASC NULLS LAST
-            PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, true)), // ASC NULLS FIRST
-            PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(true, false)), // DESC NULLS LAST
-            PhysicalSortExpr::new(expr, SortOptions::new(true, true)), // DESC NULLS FIRST
-        ]
-    }
+/// All sort options are valid for a constant within its partition.
+fn sort_options_resolving_constant(expr: Arc<dyn PhysicalExpr>) -> Vec<PhysicalSortExpr> {
+    vec![
+        PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)),
+        PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, true)),
+        PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(true, false)),
+        PhysicalSortExpr::new(expr, SortOptions::new(true, true)),
+    ]
 }
 
 #[cfg(test)]
@@ -772,6 +723,7 @@ mod tests {
     use crate::streaming::StreamingTableExec;
     use crate::test::assert_is_pending;
     use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
+    use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
     use InputOrderMode::{Linear, PartiallySorted, Sorted};
     use arrow::compute::SortOptions;

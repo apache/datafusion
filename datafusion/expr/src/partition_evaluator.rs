@@ -265,6 +265,15 @@ pub trait PartitionEvaluator: Debug + Send + std::any::Any {
         false
     }
 
+    /// Whether identical window frames produce identical results within a partition.
+    ///
+    /// Returning `true` lets the optimizer treat the result as constant when the
+    /// frame covers the entire partition. Functions whose results also depend
+    /// on the current row or evaluation state must return `false`.
+    fn is_constant_for_frame(&self) -> bool {
+        false
+    }
+
     /// Can this function be evaluated with (only) rank
     ///
     /// See the table on [`Self`] for what functions to implement
