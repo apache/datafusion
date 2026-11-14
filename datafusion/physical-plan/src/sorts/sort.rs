@@ -4941,4 +4941,93 @@ mod tests {
 
         Ok(())
     }
+
+    /// Sorts `batches` by `id` descending, with a `FairSpillPool` of `pool` bytes, or
+    /// no limit. Returns the output and the spill metrics.
+    async fn sort_with_pool(
+        batches: &[RecordBatch],
+        pool: Option<usize>,
+        sort_spill_reservation_bytes: usize,
+        batch_size: usize,
+    ) -> Result<(Vec<RecordBatch>, MetricsSet)> {
+        let schema = batches[0].schema();
+        let mut runtime = RuntimeEnvBuilder::new();
+        if let Some(pool) = pool {
+            runtime = runtime.with_memory_pool(Arc::new(
+                datafusion_execution::memory_pool::FairSpillPool::new(pool),
+            ));
+        }
+        let config = SessionConfig::new()
+            .with_batch_size(batch_size)
+            .with_sort_spill_reservation_bytes(sort_spill_reservation_bytes);
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(config)
+                .with_runtime(runtime.build_arc()?),
+        );
+        let input =
+            TestMemoryExec::try_new_exec(&[batches.to_vec()], Arc::clone(&schema), None)?;
+        let sort = Arc::new(SortExec::new(
+            [PhysicalSortExpr {
+                expr: col("id", &schema)?,
+                options: SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            }]
+            .into(),
+            input,
+        ));
+        let output = collect(Arc::clone(&sort) as _, task_ctx).await?;
+        Ok((output, sort.metrics().unwrap()))
+    }
+
+    fn wide_value(i: usize, width: usize) -> String {
+        format!("{i:08}{}", "x".repeat(width))
+    }
+
+    /// A dictionary value can be null. The rows whose valid key references it stay null
+    /// when the sort splits its spilled batches.
+    #[tokio::test]
+    async fn test_sort_spill_keeps_null_dictionary_values() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new(
+                "d",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
+        ]));
+        // 66 rows over 33 values of 64 KiB, the first of them null. Each key is used
+        // twice, so the dictionary is compacted when the batch is split.
+        let batches = (0..16)
+            .map(|b| {
+                let ids =
+                    Int64Array::from_iter_values((0..66).map(|r| (b * 66 + r) as i64));
+                let values = StringArray::from_iter(
+                    (0..33).map(|v| (v != 0).then(|| wide_value(b * 33 + v, 64 * 1024))),
+                );
+                let keys = Int32Array::from_iter_values((0..66).map(|r| r % 33));
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(ids),
+                        Arc::new(DictionaryArray::new(keys, Arc::new(values))),
+                    ],
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let (expected, _) = sort_with_pool(&batches, None, 1024 * 1024, 66).await?;
+        let (output, metrics) =
+            sort_with_pool(&batches, Some(16 * 1024 * 1024), 1024 * 1024, 66).await?;
+        assert!(metrics.spill_count().unwrap() > 0);
+        let flatten = |batches: &[RecordBatch]| -> Result<ArrayRef> {
+            let batch = concat_batches(&schema, batches)?;
+            Ok(arrow::compute::cast(batch.column(1), &DataType::Utf8)?)
+        };
+        let (expected, output) = (flatten(&expected)?, flatten(&output)?);
+        assert_eq!(expected.null_count(), 32);
+        assert_eq!(output.as_ref(), expected.as_ref());
+        Ok(())
+    }
 }

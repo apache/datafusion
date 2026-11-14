@@ -92,10 +92,12 @@ fn compact_dictionary(array: &ArrayRef, key_type: &DataType) -> Result<ArrayRef>
     let mut new_index = vec![u32::MAX; values.len()];
     let mut used = vec![];
     let keys = dictionary.normalized_keys();
-    let nulls = array.logical_nulls();
+    // A valid key can reference a null value, so `logical_nulls` would also skip rows
+    // whose value is null. Their keys must keep a null value to reference.
+    let nulls = dictionary.keys().nulls();
     let remapped =
         UInt32Array::from_iter_values(keys.iter().enumerate().map(|(row, &key)| {
-            if nulls.as_ref().is_some_and(|n| n.is_null(row)) {
+            if nulls.is_some_and(|n| n.is_null(row)) {
                 return 0;
             }
             if new_index[key] == u32::MAX {
@@ -289,6 +291,61 @@ mod tests {
             assert_eq!(compacted.as_ref(), slice.as_ref(), "{name}");
             let size = compacted.get_array_memory_size();
             assert!(size < 4 * 10 * WIDTH, "{name}: {size} bytes");
+        }
+        Ok(())
+    }
+
+    /// A valid key can reference a null value. Compaction keeps that value, at every
+    /// nesting level.
+    #[test]
+    fn compaction_keeps_null_dictionary_values() -> Result<()> {
+        let dictionary = |keys: Vec<i32>| -> ArrayRef {
+            let values = StringArray::from(vec![Some("a"), None, Some("b")]);
+            Arc::new(DictionaryArray::new(
+                Int32Array::from(keys),
+                Arc::new(values),
+            ))
+        };
+        let item = |array: &ArrayRef| {
+            Arc::new(Field::new_list_field(array.data_type().clone(), true))
+        };
+        let mixed = dictionary(vec![1, 0, 2, 1, 1, 0]);
+        let only_null = dictionary(vec![1, 1, 1]);
+        let columns: Vec<ArrayRef> = vec![
+            Arc::clone(&mixed),
+            Arc::clone(&only_null),
+            Arc::new(ListArray::new(
+                item(&mixed),
+                OffsetBuffer::from_lengths(vec![2, 1, 3]),
+                Arc::clone(&mixed),
+                None,
+            )),
+            Arc::new(StructArray::new(
+                vec![Field::new("d", mixed.data_type().clone(), true)].into(),
+                vec![Arc::clone(&mixed)],
+                None,
+            )),
+            Arc::new(ListViewArray::new(
+                item(&only_null),
+                ScalarBuffer::from(vec![0, 1]),
+                ScalarBuffer::from(vec![1, 2]),
+                Arc::clone(&only_null),
+                None,
+            )),
+        ];
+        for column in columns {
+            for (offset, len) in [(0, column.len()), (1, column.len() - 1)] {
+                let slice = column.slice(offset, len);
+                let compacted = compact_array(&slice)?;
+                compacted.to_data().validate_full()?;
+                assert_eq!(compacted.as_ref(), slice.as_ref(), "{}", column.data_type());
+                assert_eq!(
+                    compacted.logical_null_count(),
+                    slice.logical_null_count(),
+                    "{}",
+                    column.data_type()
+                );
+            }
         }
         Ok(())
     }
