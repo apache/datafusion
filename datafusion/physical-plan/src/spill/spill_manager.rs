@@ -97,6 +97,26 @@ impl SpillManager {
         }
     }
 
+    /// The size recorded for a piece of `size` bytes (see [`Self::recorded_size`]) that
+    /// was written as `written` bytes.
+    ///
+    /// The compressed IPC writer writes a buffer that does not get smaller as it is. The
+    /// reader keeps such a buffer as a slice of the whole message, so the decoded batch
+    /// also holds the message, which is at most `written` bytes. For example, the offsets
+    /// of a list of compressible strings stay uncompressed. A bounded manager adds
+    /// `written` for a compressed file, so that the recorded size stays an upper bound.
+    /// It is too large by the uncompressed buffers, at most twice the decoded size.
+    /// An unbounded manager records `size`.
+    pub(crate) fn read_back_size(&self, size: usize, written: usize) -> usize {
+        if self.max_batch_bytes.is_some()
+            && self.compression != SpillCompression::Uncompressed
+        {
+            size + written
+        } else {
+            size
+        }
+    }
+
     /// Returns the schema for batches managed by this SpillManager
     pub fn schema(&self) -> &SchemaRef {
         &self.schema

@@ -20,7 +20,7 @@ use datafusion_execution::memory_pool::{MemoryReservation, MergeMemoryPool};
 use crate::sorts::builder::try_grow_reservation_to_at_least;
 use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::gc_view_arrays;
+use crate::spill::{gc_view_arrays, get_record_batch_memory_size};
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -769,7 +769,11 @@ impl MultiLevelMergeBuilder {
                 let batch = batch?;
                 max_batch_rows = max_batch_rows.max(batch.num_rows());
                 all_singletons &= batch.num_rows() == 1;
-                decoded_max = decoded_max.max(self.spill_manager.recorded_size(&batch)?);
+                // A decoded batch can hold its whole IPC message (see
+                // `SpillManager::read_back_size`), which only its memory size counts.
+                decoded_max = decoded_max
+                    .max(self.spill_manager.recorded_size(&batch)?)
+                    .max(get_record_batch_memory_size(&batch));
                 if batch.num_rows() == 1
                     && self.spill_manager.recorded_size(&gc_view_arrays(&batch)?)?
                         >= old_max
@@ -1393,9 +1397,7 @@ mod tests {
             let batch = batch?;
             // Short input runs must not rebuild a larger output batch than
             // the attached merge reservation can hold.
-            assert!(
-                crate::spill::get_record_batch_memory_size(&batch) <= pool.reserved()
-            );
+            assert!(get_record_batch_memory_size(&batch) <= pool.reserved());
             batches.push(batch);
             assert!(pool.reserved() <= merge_limit);
         }

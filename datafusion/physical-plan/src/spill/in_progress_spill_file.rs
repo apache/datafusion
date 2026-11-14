@@ -122,6 +122,7 @@ impl InProgressSpillFile {
 
                 self.spill_manager.metrics.spilled_rows.add(spilled_rows);
                 self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
+                let size = self.spill_manager.read_back_size(size, delta_bytes);
                 stats.memory_size = stats.memory_size.max(size);
                 stats.rows = stats.rows.max(piece.num_rows());
             }
@@ -187,6 +188,7 @@ impl InProgressSpillFile {
 
                     self.spill_manager.metrics.spilled_rows.add(spilled_rows);
                     self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
+                    let size = self.spill_manager.read_back_size(size, delta_bytes);
                     stats.memory_size = stats.memory_size.max(size);
                     stats.rows = stats.rows.max(piece.num_rows());
                 }
@@ -1289,6 +1291,51 @@ mod decoded_size_bound_tests {
                         "{comp:?} {name} cols={n} rows={rows}: recorded {rec}, decoded {actual}"
                     );
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// The offsets of a list of compressible strings do not get smaller, so the IPC
+    /// writer stores them uncompressed, and the decoded batch keeps the whole message.
+    /// The recorded size counts it, without the reader's margin.
+    #[tokio::test]
+    async fn recorded_size_counts_the_message_of_uncompressed_buffers() -> Result<()> {
+        let rows = 8192;
+        let strings: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..rows).map(|i| format!("{i:08}{}", "x".repeat(500 + (i * 37) % 1000))),
+        ));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Utf8, true)),
+            arrow::buffer::OffsetBuffer::from_lengths(vec![4; rows / 4]),
+            strings,
+            None,
+        ));
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "l",
+                list.data_type().clone(),
+                true,
+            )])),
+            vec![list],
+        )?;
+        for comp in [SpillCompression::Lz4Frame, SpillCompression::Zstd] {
+            for bound in [64 * 1024, 1024 * 1024, 1 << 30] {
+                let runtime = Arc::new(RuntimeEnvBuilder::new().build()?);
+                let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+                let m = SpillManager::new(runtime, metrics, batch.schema())
+                    .with_compression_type(comp)
+                    .with_max_batch_bytes(Some(bound));
+                let mut f = m.create_in_progress_file("t")?;
+                let rec = f.append_batch(&batch)?;
+                let file = f.finish()?.unwrap();
+                let read: Vec<RecordBatch> =
+                    m.read_spill_as_stream(file, None)?.try_collect().await?;
+                let actual = read.iter().map(get_record_batch_memory_size).max().unwrap();
+                assert!(
+                    actual <= rec,
+                    "{comp:?} bound {bound}: recorded {rec}, decoded {actual}"
+                );
             }
         }
         Ok(())
