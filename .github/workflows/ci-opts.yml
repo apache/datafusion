@@ -67,7 +67,7 @@ jobs:
   linux-test:
     name: cargo test (amd64)
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
+    if: false # Resume after the extended/fuzz experiments.
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -143,3 +143,47 @@ jobs:
           disable_search: true
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  linux-test-extended:
+    name: cargo test 'extended_tests' (amd64)
+    needs: linux-build-lib
+    # Long-running job: run in the merge queue, on release pushes, or manually.
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    # note: do not use amd/rust container to preserve disk space
+    steps:
+      - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
+          submodules: true
+          fetch-depth: 1
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6  # v2.0.0
+      - parallel:
+          - name: Install Rust
+            run: |
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+              source $HOME/.cargo/env
+              rustup toolchain install
+          - name: Install Protobuf Compiler
+            run: |
+              sudo apt-get update
+              sudo apt-get install -y protobuf-compiler
+      # For debugging, test binaries can be large.
+      - name: Show available disk space
+        run: |
+          df -h
+      - name: Run extended tests
+        run: cargo xtask ci step test extended
+      - name: Run fuzz tests
+        run: cargo xtask ci step test fuzz
+      # Migrate it to the above unified fuzz runner over time
+      # Tracker: https://github.com/apache/datafusion/issues/27082
+      - name: Run unmigrated fuzzers with more iterations
+        run: cargo xtask ci step test fuzz-legacy
+      - parallel:
+          - name: Verify Working Directory Clean
+            run: git diff --exit-code
+          - name: Cleanup
+            run: cargo clean
