@@ -257,3 +257,76 @@ select a, p from null_part_write order by a;
 
 statement ok
 set datafusion.execution.listing_table_hive_default_partition_name = '__HIVE_DEFAULT_PARTITION__';
+
+
+# Test: Merging statistics across partitions preserves min/max bounds
+# when a null partition is present. See #26748.
+#
+# Set up a table with three date partitions plus a null partition.
+
+query I
+copy (values(1, 100))
+to 'test_files/scratch/listing_table_partitions/null_part_stats/d=2024-01-01/data.parquet';
+----
+1
+
+query I
+copy (values(2, 200))
+to 'test_files/scratch/listing_table_partitions/null_part_stats/d=2024-06-15/data.parquet';
+----
+1
+
+query I
+copy (values(3, 300))
+to 'test_files/scratch/listing_table_partitions/null_part_stats/d=2024-12-31/data.parquet';
+----
+1
+
+query I
+copy (values(4, 400))
+to 'test_files/scratch/listing_table_partitions/null_part_stats/d=__HIVE_DEFAULT_PARTITION__/data.parquet';
+----
+1
+
+statement count 0
+create external table null_part_stats (column1 int, column2 int, d date)
+stored as parquet
+partitioned by (d)
+location 'test_files/scratch/listing_table_partitions/null_part_stats/';
+
+# The null partition must not wipe out the known partition bounds.
+# Before the #26748 fix, min(d) and max(d) would be computed by scanning
+# data because the merged statistics had Absent min/max (the optimizer
+# could not use them for pruning). After the fix, the merged statistics
+# correctly report min=2024-01-01 and max=2024-12-31.
+query DD
+select min(d), max(d) from null_part_stats;
+----
+2024-01-01 2024-12-31
+
+# A filter on the partition column should still return correct results
+# even with the null partition present.
+query III
+select column1, column2, extract(month from d) as month from null_part_stats
+where d >= '2024-06-01' order by column1;
+----
+2 200 6
+3 300 12
+
+# Rows in the null partition are excluded by a non-null filter.
+query I
+select count(*) from null_part_stats where d is not null;
+----
+3
+
+# Rows in the null partition are found by IS NULL.
+query II
+select column1, column2 from null_part_stats where d is null;
+----
+4 400
+
+# Total row count includes all partitions.
+query I
+select count(*) from null_part_stats;
+----
+4

@@ -751,6 +751,9 @@ impl Statistics {
                     i + 1
                 );
             }
+            // Save the accumulator's row count before merging, so we can
+            // check whether the accumulator side is all-null per column.
+            let acc_num_rows = num_rows;
             num_rows = num_rows.add(&stat.num_rows);
             total_byte_size = total_byte_size.add(&stat.total_byte_size);
 
@@ -773,8 +776,25 @@ impl Statistics {
                     ),
                     _ => Precision::Absent,
                 };
-                precision_min(&mut col_stats.min_value, &item_cs.min_value);
-                precision_max(&mut col_stats.max_value, &item_cs.max_value);
+
+                // Skip min/max from all-null or empty inputs so their
+                // Absent bounds don't wipe out known bounds from other
+                // files. See https://github.com/apache/datafusion/issues/26748
+                let acc_all_null = is_all_null_or_empty(col_stats, &acc_num_rows);
+                let item_all_null = is_all_null_or_empty(item_cs, &stat.num_rows);
+                match (acc_all_null, item_all_null) {
+                    (false, false) => {
+                        precision_min(&mut col_stats.min_value, &item_cs.min_value);
+                        precision_max(&mut col_stats.max_value, &item_cs.max_value);
+                    }
+                    (true, false) => {
+                        col_stats.min_value = item_cs.min_value.clone();
+                        col_stats.max_value = item_cs.max_value.clone();
+                    }
+                    // (false, true) and (true, true): keep accumulator as-is
+                    _ => {}
+                }
+
                 precision_add_for_sum_in_place(
                     &mut col_stats.sum_value,
                     &item_cs.sum_value,
@@ -879,6 +899,24 @@ pub fn estimate_ndv_with_overlap(
     let only_right = (1.0 - overlap_right) * ndv_right as f64;
 
     Some((intersection + only_left + only_right).round() as usize)
+}
+
+/// Returns `true` when a column is provably all-null or empty,
+/// meaning its min/max bounds carry no meaningful value and should
+/// be skipped during merge.
+///
+/// Conservative: returns `false` when null_count or num_rows are
+/// inexact or absent, since we cannot be sure no real values exist.
+#[inline]
+fn is_all_null_or_empty(
+    col_stats: &ColumnStatistics,
+    num_rows: &Precision<usize>,
+) -> bool {
+    match (num_rows, &col_stats.null_count) {
+        (Precision::Exact(0), _) => true,
+        (Precision::Exact(rows), Precision::Exact(nulls)) if nulls == rows => true,
+        _ => false,
+    }
 }
 
 /// Returns the minimum precision while not allocating a new value,
@@ -3385,5 +3423,222 @@ mod tests {
         assert!(!is_known_empty(&statistics(Precision::Inexact(0))));
         assert!(!is_known_empty(&statistics(Precision::Exact(1))));
         assert!(!is_known_empty(&statistics(Precision::Absent)));
+    }
+
+    #[test]
+    fn test_is_all_null_or_empty() {
+        let cs = |null_count| ColumnStatistics {
+            null_count,
+            ..ColumnStatistics::new_unknown()
+        };
+        // Exact(0) rows → empty, always skip
+        assert!(is_all_null_or_empty(
+            &cs(Precision::Exact(0)),
+            &Precision::Exact(0)
+        ));
+        // All rows are null
+        assert!(is_all_null_or_empty(
+            &cs(Precision::Exact(5)),
+            &Precision::Exact(5)
+        ));
+        // Some rows are non-null
+        assert!(!is_all_null_or_empty(
+            &cs(Precision::Exact(3)),
+            &Precision::Exact(5)
+        ));
+        // Zero nulls
+        assert!(!is_all_null_or_empty(
+            &cs(Precision::Exact(0)),
+            &Precision::Exact(5)
+        ));
+        // Inexact null_count → conservative false
+        assert!(!is_all_null_or_empty(
+            &cs(Precision::Inexact(5)),
+            &Precision::Exact(5)
+        ));
+        // Absent null_count → conservative false
+        assert!(!is_all_null_or_empty(
+            &cs(Precision::Absent),
+            &Precision::Exact(5)
+        ));
+        // Absent num_rows → conservative false
+        assert!(!is_all_null_or_empty(
+            &cs(Precision::Exact(5)),
+            &Precision::Absent
+        ));
+    }
+
+    #[test]
+    fn test_try_merge_iter_skips_all_null_partition() {
+        let schema = Schema::new(vec![Field::new("d", DataType::Date32, true)]);
+
+        let stats_real = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(0))
+                    .with_min_value(Precision::Exact(ScalarValue::Date32(Some(19723))))
+                    .with_max_value(Precision::Exact(ScalarValue::Date32(Some(19723)))),
+            );
+
+        let stats_null = Statistics::default()
+            .with_num_rows(Precision::Exact(5))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(5))
+                    .with_min_value(Precision::Absent)
+                    .with_max_value(Precision::Absent),
+            );
+
+        // real + null → preserves real bounds
+        let merged = Statistics::try_merge_iter(
+            &[stats_real.clone(), stats_null.clone()],
+            &schema,
+        )
+        .unwrap();
+        assert_eq!(
+            merged.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Date32(Some(19723)))
+        );
+        assert_eq!(
+            merged.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Date32(Some(19723)))
+        );
+        assert_eq!(merged.num_rows, Precision::Exact(15));
+
+        // null + real (reversed) → same result
+        let merged2 = Statistics::try_merge_iter(
+            &[stats_null.clone(), stats_real.clone()],
+            &schema,
+        )
+        .unwrap();
+        assert_eq!(
+            merged2.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Date32(Some(19723)))
+        );
+        assert_eq!(
+            merged2.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Date32(Some(19723)))
+        );
+
+        // null + null → stays Absent
+        let merged3 = Statistics::try_merge_iter(
+            &[stats_null.clone(), stats_null.clone()],
+            &schema,
+        )
+        .unwrap();
+        assert_eq!(merged3.column_statistics[0].min_value, Precision::Absent);
+        assert_eq!(merged3.column_statistics[0].max_value, Precision::Absent);
+    }
+
+    #[test]
+    fn test_try_merge_iter_inexact_null_count_stays_conservative() {
+        let schema = Schema::new(vec![Field::new("x", DataType::Int32, true)]);
+
+        let stats_real = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(0))
+                    .with_min_value(Precision::Exact(ScalarValue::from(1)))
+                    .with_max_value(Precision::Exact(ScalarValue::from(100))),
+            );
+
+        // Inexact null_count → can't prove all-null
+        let stats_unknown = Statistics::default()
+            .with_num_rows(Precision::Exact(5))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Inexact(5))
+                    .with_min_value(Precision::Absent)
+                    .with_max_value(Precision::Absent),
+            );
+
+        let merged =
+            Statistics::try_merge_iter(&[stats_real, stats_unknown], &schema).unwrap();
+        // Conservative: Absent because we can't prove the second input is all-null
+        assert_eq!(merged.column_statistics[0].min_value, Precision::Absent);
+    }
+
+    #[test]
+    fn test_try_merge_iter_empty_partition_skipped() {
+        let schema = Schema::new(vec![Field::new("x", DataType::Int32, true)]);
+
+        let stats_real = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(0))
+                    .with_min_value(Precision::Exact(ScalarValue::from(1)))
+                    .with_max_value(Precision::Exact(ScalarValue::from(100))),
+            );
+
+        // Empty partition (0 rows)
+        let stats_empty = Statistics::default()
+            .with_num_rows(Precision::Exact(0))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(0))
+                    .with_min_value(Precision::Absent)
+                    .with_max_value(Precision::Absent),
+            );
+
+        let merged =
+            Statistics::try_merge_iter(&[stats_real, stats_empty], &schema).unwrap();
+        assert_eq!(
+            merged.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::from(1))
+        );
+        assert_eq!(
+            merged.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::from(100))
+        );
+        assert_eq!(merged.num_rows, Precision::Exact(10));
+    }
+
+    #[test]
+    fn test_try_merge_iter_three_files_with_null_partition() {
+        let schema = Schema::new(vec![Field::new("d", DataType::Int32, true)]);
+
+        let stats_a = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(0))
+                    .with_min_value(Precision::Exact(ScalarValue::from(1)))
+                    .with_max_value(Precision::Exact(ScalarValue::from(50))),
+            );
+
+        let stats_null = Statistics::default()
+            .with_num_rows(Precision::Exact(5))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(5))
+                    .with_min_value(Precision::Absent)
+                    .with_max_value(Precision::Absent),
+            );
+
+        let stats_b = Statistics::default()
+            .with_num_rows(Precision::Exact(8))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(0))
+                    .with_min_value(Precision::Exact(ScalarValue::from(30)))
+                    .with_max_value(Precision::Exact(ScalarValue::from(200))),
+            );
+
+        // a + null + b → should merge a and b, skip null
+        let merged =
+            Statistics::try_merge_iter(&[stats_a, stats_null, stats_b], &schema).unwrap();
+        assert_eq!(
+            merged.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::from(1))
+        );
+        assert_eq!(
+            merged.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::from(200))
+        );
+        assert_eq!(merged.num_rows, Precision::Exact(23));
+        assert_eq!(merged.column_statistics[0].null_count, Precision::Exact(5));
     }
 }
