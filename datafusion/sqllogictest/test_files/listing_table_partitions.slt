@@ -257,3 +257,81 @@ select a, p from null_part_write order by a;
 
 statement ok
 set datafusion.execution.listing_table_hive_default_partition_name = '__HIVE_DEFAULT_PARTITION__';
+
+# A root filename cannot supply an integer partition value. Previously this
+# attempted to cast "2025.parquet" to INT and failed the query; it is now skipped.
+query I
+copy (values(7))
+to 'test_files/scratch/listing_table_partitions/filename_partition_int/year=2024/data.parquet';
+----
+1
+
+statement ok
+create external table filename_partition_int (column1 bigint)
+partitioned by (year int)
+stored as parquet
+location 'test_files/scratch/listing_table_partitions/filename_partition_int/';
+
+# A new stray file arrives after the table's valid layout has been registered.
+query I
+copy (values(8))
+to 'test_files/scratch/listing_table_partitions/filename_partition_int/year=2025.parquet';
+----
+1
+
+statement ok
+set datafusion.runtime.list_files_cache_limit = '0K';
+
+query II
+select column1, year from filename_partition_int order by column1;
+----
+7 2024
+
+# A filename shaped like a partition must not supply a missing directory level.
+query I
+copy (values(3))
+to 'test_files/scratch/listing_table_partitions/filename_partition/year=2024/month=01/a.parquet';
+----
+1
+
+statement ok
+create external table filename_partition (column1 bigint)
+partitioned by (year varchar, month varchar)
+stored as parquet
+location 'test_files/scratch/listing_table_partitions/filename_partition/';
+
+query I
+copy (values(4))
+to 'test_files/scratch/listing_table_partitions/filename_partition/year=2024/month=02.parquet';
+----
+1
+
+query I
+copy (values(5))
+to 'test_files/scratch/listing_table_partitions/filename_partition/year=2024/data.parquet';
+----
+1
+
+# A key=value filename inside a complete partition path remains a valid file.
+query I
+copy (values(6))
+to 'test_files/scratch/listing_table_partitions/filename_partition/year=2024/month=01/month=03.parquet';
+----
+1
+
+statement ok
+set datafusion.runtime.list_files_cache_limit = '0K';
+
+query ITT
+select column1, year, month from filename_partition order by column1;
+----
+3 2024 01
+6 2024 01
+
+query I
+select count(*) from filename_partition where month = '01';
+----
+2
+
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema;
