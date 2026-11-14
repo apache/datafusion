@@ -597,6 +597,9 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         range: &Range<usize>,
     ) -> Result<ScalarValue> {
         let array = &values[0];
+        if self.shift_offset == 0 {
+            return ScalarValue::try_from_array(array, range.start);
+        }
         let len = array.len();
 
         // LAG mode
