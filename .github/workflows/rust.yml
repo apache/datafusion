@@ -741,7 +741,7 @@ jobs:
       - name: Install protoc
         uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
         with:
-          tool: protoc@3.21.12
+          tool: protoc@36.2
       - name: Run gen
         run: ./regen.sh
         working-directory: ./datafusion/proto
@@ -814,7 +814,7 @@ jobs:
       - name: Install taplo
         uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
         with:
-          tool: taplo-cli@0.9
+          tool: taplo-cli@0.10.0
       # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
       - name: Check Cargo.toml formatting
         run: taplo format --check
@@ -838,7 +838,7 @@ jobs:
           rust-version: stable
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Check generated config and function docs
         run: |
           ./ci/scripts/check_generated_docs.sh
@@ -872,7 +872,7 @@ jobs:
             # doc_prettier_check.sh uses npx to run prettier for Markdown formatting
             uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
             with:
-              node-version: '18'
+              node-version: '24'
 
       - name: Run examples docs check script
         run: |
