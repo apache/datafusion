@@ -529,9 +529,74 @@ SELECT g, count(DISTINCT x) FROM t_prefer_mem GROUP BY g ORDER BY g;
 1 2
 2 1
 
+# Queries without GROUP BY retain the rewrite even with single_distinct_prefer_native = true
+query TT
+EXPLAIN SELECT count(DISTINCT x) FROM t_prefer_mem;
+----
+logical_plan
+01)Projection: count(alias1) AS count(DISTINCT t_prefer_mem.x)
+02)--Aggregate: groupBy=[[]], aggr=[[count(alias1)]]
+03)----Aggregate: groupBy=[[t_prefer_mem.x AS alias1]], aggr=[[]]
+04)------TableScan: t_prefer_mem projection=[x]
+physical_plan
+01)ProjectionExec: expr=[count(alias1)@0 as count(DISTINCT t_prefer_mem.x)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(alias1)]
+03)----AggregateExec: mode=Single, gby=[x@0 as alias1], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Variable-length string types retain the rewrite
+statement ok
+CREATE TABLE t_prefer_mem_str AS SELECT * FROM (VALUES (1, '10'), (1, '20'), (2, '10')) AS v(g, s);
+
+query TT
+EXPLAIN SELECT g, count(DISTINCT s) FROM t_prefer_mem_str GROUP BY g;
+----
+logical_plan
+01)Projection: t_prefer_mem_str.g, count(alias1) AS count(DISTINCT t_prefer_mem_str.s)
+02)--Aggregate: groupBy=[[t_prefer_mem_str.g]], aggr=[[count(alias1)]]
+03)----Aggregate: groupBy=[[t_prefer_mem_str.g, t_prefer_mem_str.s AS alias1]], aggr=[[]]
+04)------TableScan: t_prefer_mem_str projection=[g, s]
+physical_plan
+01)ProjectionExec: expr=[g@0 as g, count(alias1)@1 as count(DISTINCT t_prefer_mem_str.s)]
+02)--AggregateExec: mode=Single, gby=[g@0 as g], aggr=[count(alias1)]
+03)----AggregateExec: mode=Single, gby=[g@0 as g, s@1 as alias1], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE t_prefer_mem_str;
+
+# Unsupported DISTINCT aggregates (like stddev) retain the rewrite
+query TT
+EXPLAIN SELECT g, stddev(DISTINCT x) FROM t_prefer_mem GROUP BY g;
+----
+logical_plan
+01)Projection: t_prefer_mem.g, stddev(alias1) AS stddev(DISTINCT t_prefer_mem.x)
+02)--Aggregate: groupBy=[[t_prefer_mem.g]], aggr=[[stddev(alias1)]]
+03)----Aggregate: groupBy=[[t_prefer_mem.g, CAST(t_prefer_mem.x AS Float64) AS alias1]], aggr=[[]]
+04)------TableScan: t_prefer_mem projection=[g, x]
+physical_plan
+01)ProjectionExec: expr=[g@0 as g, stddev(alias1)@1 as stddev(DISTINCT t_prefer_mem.x)]
+02)--AggregateExec: mode=Single, gby=[g@0 as g], aggr=[stddev(alias1)]
+03)----AggregateExec: mode=Single, gby=[g@0 as g, CAST(x@1 AS Float64) as alias1], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Float DISTINCT keeps the rewrite: the native accumulator counts -0.0 and 0.0 separately.
 statement ok
 CREATE TABLE t_prefer_mem_float AS SELECT * FROM (VALUES (1, CAST('0.0' AS DOUBLE)), (1, CAST('-0.0' AS DOUBLE)), (1, CAST('1.5' AS DOUBLE))) AS v(g, f);
+
+query TT
+EXPLAIN SELECT g, count(DISTINCT f) FROM t_prefer_mem_float GROUP BY g;
+----
+logical_plan
+01)Projection: t_prefer_mem_float.g, count(alias1) AS count(DISTINCT t_prefer_mem_float.f)
+02)--Aggregate: groupBy=[[t_prefer_mem_float.g]], aggr=[[count(alias1)]]
+03)----Aggregate: groupBy=[[t_prefer_mem_float.g, t_prefer_mem_float.f AS alias1]], aggr=[[]]
+04)------TableScan: t_prefer_mem_float projection=[g, f]
+physical_plan
+01)ProjectionExec: expr=[g@0 as g, count(alias1)@1 as count(DISTINCT t_prefer_mem_float.f)]
+02)--AggregateExec: mode=Single, gby=[g@0 as g], aggr=[count(alias1)]
+03)----AggregateExec: mode=Single, gby=[g@0 as g, f@1 as alias1], aggr=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query IIR
 SELECT g, count(DISTINCT f), avg(DISTINCT f) FROM t_prefer_mem_float GROUP BY g;

@@ -1940,25 +1940,14 @@ config_namespace! {
         /// projections or aliases.
         pub enable_unions_to_filter: bool, default = false
 
-        /// When `true` and `target_partitions` is 1, the `SingleDistinctToGroupBy`
-        /// optimizer rule keeps a grouped aggregate whose aggregates are all DISTINCT
-        /// native, instead of rewriting it into a two-phase `GROUP BY`, when every
-        /// DISTINCT argument is an integer, boolean, decimal, date, time, timestamp
-        /// or interval type.
+        /// When `true`, queries with a single DISTINCT aggregate will take less
+        /// memory but may also run more slowly, by skipping the two-phase `GROUP BY`
+        /// rewrite and executing with native accumulators.
         ///
-        /// The native plan avoids materializing intermediate `(group, distinct value)`
-        /// pairs, which lowers peak memory when there are few groups with many
-        /// distinct values each. With many small groups it can use more memory and
-        /// run slower, because functions without a specialized DISTINCT
-        /// `GroupsAccumulator` (such as `sum`) keep one accumulator per group.
-        /// Native DISTINCT must also fit each group's distinct values in memory:
-        /// under a memory limit, it can spill whole groups but not split one group's
-        /// distinct values, so a query with a few large groups that succeeds by
-        /// spilling with the rewrite may fail with this option enabled.
-        ///
-        /// Queries without `GROUP BY`, and other argument types, keep the rewrite.
-        ///
-        /// See <https://github.com/apache/datafusion/issues/25932>
+        /// Only applies when `target_partitions` is 1 and all DISTINCT arguments are
+        /// fixed-width, non-float types. See
+        /// [`SingleDistinctToGroupBy`](https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/single_distinct_to_groupby/struct.SingleDistinctToGroupBy.html)
+        /// for details.
         pub single_distinct_prefer_native: bool, default = false
     }
 }

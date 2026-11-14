@@ -69,9 +69,20 @@ use datafusion_expr::{
 /// `sum` of no rows is NULL.
 ///
 /// See `rewrite_pays_for_count` for when the `count` is allowed.
+///
+/// # Memory vs Performance Tradeoffs (`single_distinct_prefer_native`)
+///
 /// With `single_distinct_prefer_native` enabled and one target partition, grouped
 /// all-DISTINCT aggregates stay native when every DISTINCT argument is a
 /// fixed-width, non-float type (such as integers, decimals, dates).
+///
+/// Skipping the two-phase rewrite avoids materializing intermediate
+/// `(group, distinct value)` pairs, lowering peak memory when there are few
+/// groups with many distinct values each. With many small groups it can use
+/// more memory and run slower, because functions without a specialized DISTINCT
+/// `GroupsAccumulator` maintain one accumulator per group. Queries without
+/// `GROUP BY`, multi-partition queries, or queries with float/variable-length
+/// arguments continue to use the two-phase rewrite.
 #[derive(Default, Debug)]
 pub struct SingleDistinctToGroupBy {}
 
@@ -150,19 +161,10 @@ fn is_fixed_width_type(dt: &DataType) -> bool {
 
 /// Check whether all aggregate exprs are eligible for the single-distinct-to-group-by rewrite.
 ///
-/// With `use_native_grouped_distinct` enabled (which requires one target partition,
-/// non-empty `GROUP BY`, and `single_distinct_prefer_native = true`), the rewrite
-/// is skipped for all-DISTINCT queries on fixed-width primitive integer/decimal/date
-/// types, where it avoids materializing intermediate `(group, distinct value)` pairs.
-/// Float types (`Float16`, `Float32`, `Float64`) are **not** candidates for skipping:
-/// their native accumulators hash raw bits, counting `-0.0` and `0.0` separately,
-/// while `GROUP BY` treats them as equal under IEEE 754. Skipping the rewrite for
-/// floats would silently produce wrong counts and averages.
-/// Variable-length types (strings, binary), un-grouped aggregates, queries with
-/// companion non-distinct aggregates, and multi-partition plans always continue
-/// with the 2-phase rewrite.
-/// Aggregates with [`DistinctHandling::Unsupported`] (e.g. `approx_median`) cannot
-/// run natively with `DISTINCT` and are always rewritten.
+/// When `use_native_grouped_distinct` is set, all-DISTINCT queries on fixed-width,
+/// non-float types skip the rewrite and run natively to reduce intermediate memory.
+/// All other queries (un-grouped, multi-partition, mixed distinct, unsupported UDAFs,
+/// floats, or variable-width types) proceed with the rewrite.
 fn is_single_distinct_agg(
     aggr_expr: &[Expr],
     input_schema: &DFSchema,
@@ -533,7 +535,6 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 mod tests {
     use super::*;
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
-    use crate::test::udfs;
     use crate::test::*;
     use crate::{Optimizer, OptimizerContext};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -661,22 +662,6 @@ mod tests {
         table_scan(Some("test"), &schema, None)?.build()
     }
 
-    /// `test` with a `Float64` `b`.
-    ///
-    /// Used to verify that `single_distinct_prefer_native` does **not** skip the rewrite for
-    /// float columns: `-0.0` and `0.0` are equal under IEEE 754 (GROUP BY
-    /// treats them as one group) but are bit-distinct (native accumulators
-    /// count them separately).  Skipping the rewrite for floats would silently
-    /// change query results.
-    fn test_table_scan_float64_b() -> Result<LogicalPlan> {
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::UInt32, false),
-            Field::new("b", DataType::Float64, false),
-            Field::new("c", DataType::UInt32, false),
-        ]);
-        table_scan(Some("test"), &schema, None)?.build()
-    }
-
     /// An [`OptimizerConfig`] that resolves functions the way a session does.
     /// The rule needs `count` and `sum` from the registry to rewrite a
     /// non-distinct `count`.
@@ -688,29 +673,16 @@ mod tests {
 
     impl RegistryOptimizerContext {
         fn new() -> Self {
-            Self::with_prefer_native(false)
-        }
-
-        fn with_prefer_native_and_partitions(
-            prefer_native: bool,
-            target_partitions: usize,
-        ) -> Self {
             let mut registry = MemoryFunctionRegistry::new();
             registry.register_udaf(count_udaf()).unwrap();
             registry.register_udaf(sum_udaf()).unwrap();
             // Keep logical-plan snapshots independent of the available CPUs.
             let mut options = OptimizerContext::new().options();
-            let opts = Arc::make_mut(&mut options);
-            opts.execution.target_partitions = target_partitions;
-            opts.optimizer.single_distinct_prefer_native = prefer_native;
+            Arc::make_mut(&mut options).execution.target_partitions = 4;
             Self {
                 inner: OptimizerContext::new_with_config_options(options),
                 registry,
             }
-        }
-
-        fn with_prefer_native(prefer_native: bool) -> Self {
-            Self::with_prefer_native_and_partitions(prefer_native, 1)
         }
     }
 
@@ -742,24 +714,6 @@ mod tests {
             let optimizer = Optimizer::with_rules(vec![rule]);
             let optimized_plan = optimizer
                 .optimize($plan, &RegistryOptimizerContext::new(), |_, _| {})
-                .expect("failed to optimize plan");
-            insta::assert_snapshot!(optimized_plan.display_indent_schema(), @ $expected);
-
-            Ok::<(), DataFusionError>(())
-        }};
-    }
-
-    macro_rules! assert_optimized_plan_equal_with_context {
-        (
-            $ctx:expr,
-            $plan:expr,
-            @ $expected:literal $(,)?
-        ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> =
-                Arc::new(SingleDistinctToGroupBy::new());
-            let optimizer = Optimizer::with_rules(vec![rule]);
-            let optimized_plan = optimizer
-                .optimize($plan, &$ctx, |_, _| {})
                 .expect("failed to optimize plan");
             insta::assert_snapshot!(optimized_plan.display_indent_schema(), @ $expected);
 
@@ -1482,183 +1436,5 @@ mod tests {
 
         assert_eq!(plan.schema().as_ref(), optimized_plan.schema().as_ref());
         Ok(())
-    }
-
-    fn unsupported_distinct(expr: Expr) -> Expr {
-        Expr::AggregateFunction(AggregateFunction::new_udf(
-            Arc::new(AggregateUDF::from(udfs::DistinctHandlingTestUDAF::new(
-                "unsupported",
-                DistinctHandling::Unsupported,
-            ))),
-            vec![expr],
-            true,
-            None,
-            vec![],
-            None,
-        ))
-    }
-
-    #[test]
-    fn single_distinct_prefer_native_default_rewrites_lone_distinct() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
-            .build()?;
-
-        assert_optimized_plan_equal!(
-            plan,
-            @r"
-        Projection: test.a, count(alias1) AS count(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-        "
-        )
-    }
-
-    #[test]
-    fn single_distinct_prefer_native_true_skips_rewrite_for_groups_accumulator()
-    -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
-            .build()?;
-
-        let ctx = RegistryOptimizerContext::with_prefer_native(true);
-        assert_optimized_plan_equal_with_context!(
-            ctx,
-            plan,
-            @r"
-        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b)]] [a:UInt32, count(DISTINCT test.b):Int64]
-          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-        "
-        )
-    }
-
-    #[test]
-    // single_distinct_prefer_native=true must NOT skip the rewrite when there is no GROUP BY:
-    // without the 2-phase path DataFusion cannot parallelize un-grouped distinct
-    // work and the whole aggregation is forced onto a single thread.
-    fn single_distinct_prefer_native_true_rewrites_when_no_group_by() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        // No GROUP BY: only a bare count(DISTINCT b).
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
-            .build()?;
-
-        let ctx = RegistryOptimizerContext::with_prefer_native(true);
-        assert_optimized_plan_equal_with_context!(
-            ctx,
-            plan,
-            @r"
-        Projection: count(alias1) AS count(DISTINCT test.b) [count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
-            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[]] [alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-        "
-        )
-    }
-
-    #[test]
-    // single_distinct_prefer_native=true must NOT skip the rewrite when target_partitions > 1:
-    // parallel accumulation regresses throughput and raises memory under limits.
-    fn single_distinct_prefer_native_true_rewrites_when_target_partitions_greater_than_one()
-    -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
-            .build()?;
-
-        let ctx = RegistryOptimizerContext::with_prefer_native_and_partitions(true, 4);
-        assert_optimized_plan_equal_with_context!(
-            ctx,
-            plan,
-            @r"
-        Projection: test.a, count(alias1) AS count(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-        "
-        )
-    }
-
-    #[test]
-    // single_distinct_prefer_native=true must NOT skip the rewrite for Utf8 columns.
-    // Single-phase distinct on strings causes heavy per-value heap allocation churn
-    // and actually increases peak memory compared to the 2-phase rewrite.
-    fn single_distinct_prefer_native_true_rewrites_for_utf8() -> Result<()> {
-        // test_table_scan_utf8_b() has column `b` as Utf8.
-        let table_scan = test_table_scan_utf8_b()?;
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
-            .build()?;
-
-        let ctx = RegistryOptimizerContext::with_prefer_native(true);
-        assert_optimized_plan_equal_with_context!(
-            ctx,
-            plan,
-            @r"
-        Projection: test.a, count(alias1) AS count(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:Utf8]
-              TableScan: test [a:UInt32, b:Utf8, c:UInt32]
-        "
-        )
-    }
-
-    #[test]
-    fn single_distinct_prefer_native_true_still_rewrites_unsupported() -> Result<()> {
-        let table_scan = test_table_scan()?;
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![unsupported_distinct(col("b"))])?
-            .build()?;
-
-        let ctx = RegistryOptimizerContext::with_prefer_native(true);
-        assert_optimized_plan_equal_with_context!(
-            ctx,
-            plan,
-            @r"
-        Projection: test.a, unsupported(alias1) AS unsupported(DISTINCT test.b) [a:UInt32, unsupported(DISTINCT test.b):UInt32;N]
-          Aggregate: groupBy=[[test.a]], aggr=[[unsupported(alias1)]] [a:UInt32, unsupported(alias1):UInt32;N]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
-              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
-        "
-        )
-    }
-
-    #[test]
-    // single_distinct_prefer_native=true must NOT skip the rewrite for Float64 columns.
-    //
-    // The native distinct accumulators hash raw bits, so they count `-0.0` and
-    // `0.0` as two separate values.  A GROUP BY on those same floats collapses
-    // them into one group under IEEE 754 equality.  Skipping the rewrite for
-    // floats would silently change `count(DISTINCT f)` from 2 to 3 (and
-    // `avg(DISTINCT f)` from 0.75 to 0.5) on a table containing (0.0, -0.0, 1.5).
-    // The rewrite must still fire so the two-phase path's GROUP BY-based
-    // deduplication is what actually runs.
-    fn single_distinct_prefer_native_true_rewrites_for_float64() -> Result<()> {
-        let table_scan = test_table_scan_float64_b()?;
-
-        let plan = LogicalPlanBuilder::from(table_scan)
-            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
-            .build()?;
-
-        let ctx = RegistryOptimizerContext::with_prefer_native(true);
-        assert_optimized_plan_equal_with_context!(
-            ctx,
-            plan,
-            @r"
-        Projection: test.a, count(alias1) AS count(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64]
-          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
-            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:Float64]
-              TableScan: test [a:UInt32, b:Float64, c:UInt32]
-        "
-        )
     }
 }
