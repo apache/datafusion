@@ -1100,6 +1100,18 @@ config_namespace! {
         /// inferred and will be represented in the table schema).
         pub listing_table_factory_infer_partitions: bool, default = true
 
+        /// Should a `ListingTable` return an error, rather than skip the file, when a
+        /// listed file's directories do not match the table's partition columns.
+        /// When true, every file must be under one `key=value` directory per partition
+        /// column, in the declared order, with no further `key=value` directories below
+        /// them (this also applies to tables without partition columns). Defaults to
+        /// false (non-matching files are skipped). Only files listed for a query are
+        /// checked, so partition filters that narrow the listing prefix narrow the check,
+        /// and a `LIMIT` can stop the listing before it reaches a non-matching file.
+        /// `INSERT INTO` lists every file in the table, so it also fails when any file
+        /// does not match.
+        pub listing_table_strict_partitions: bool, default = false
+
         /// The directory name Hive compliant writers use in place of a null partition
         /// value, e.g. `/table/date=__HIVE_DEFAULT_PARTITION__/data.parquet`. Partition
         /// values equal to this name are read as NULL, as Hive, Spark and Impala do, and
