@@ -864,5 +864,71 @@ physical_plan
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/union_const_order/sorted.parquet]]}, projection=[b as id, ts, x], output_ordering=[ts@1 ASC NULLS LAST], file_type=parquet
 05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/union_const_order/sorted.parquet]]}, projection=[a as id, ts, x], output_ordering=[ts@1 ASC NULLS LAST], file_type=parquet
 
+# COPY without ORDER BY does not guarantee preservation of the source ordering,
+# even when the source file is sorted. PostgreSQL also requires explicit ordering:
+# https://www.postgresql.org/docs/current/queries-order.html
+# Check the read-back plan, since the copied rows may still happen to be sorted.
+query I
+COPY (SELECT * FROM union_const_src)
+TO 'test_files/scratch/copy/union_const_order/without_order.parquet';
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE copy_without_order STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/union_const_order/without_order.parquet';
+
+# Ensure `without_order.parquet` don't have existing order in property, so the plan
+# has explicit SortExec
+query TT
+EXPLAIN SELECT ts FROM copy_without_order ORDER BY ts;
+----
+logical_plan
+01)Sort: copy_without_order.ts ASC NULLS LAST
+02)--TableScan: copy_without_order projection=[ts]
+physical_plan
+01)SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/union_const_order/without_order.parquet]]}, projection=[ts], file_type=parquet, sort_order_for_reorder=[ts@0 ASC NULLS LAST]
+
+query I
+SELECT ts FROM copy_without_order ORDER BY ts;
+----
+1
+2
+3
+
+# Explicit ORDER BY preserves the file's ordering, avoiding a sort on read-back.
+query I
+COPY (SELECT * FROM union_const_src ORDER BY ts)
+TO 'test_files/scratch/copy/union_const_order/with_order.parquet';
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE copy_with_order STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/union_const_order/with_order.parquet';
+
+# Physical plan has optimized away the SortExec
+query TT
+EXPLAIN SELECT ts FROM copy_with_order ORDER BY ts;
+----
+logical_plan
+01)Sort: copy_with_order.ts ASC NULLS LAST
+02)--TableScan: copy_with_order projection=[ts]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/union_const_order/with_order.parquet]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], file_type=parquet
+
+query I
+SELECT ts FROM copy_with_order ORDER BY ts;
+----
+1
+2
+3
+
+statement ok
+DROP TABLE copy_without_order;
+
+statement ok
+DROP TABLE copy_with_order;
+
 statement ok
 DROP TABLE union_const_src;
