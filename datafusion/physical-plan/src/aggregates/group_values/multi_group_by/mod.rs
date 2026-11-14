@@ -36,7 +36,7 @@ use arrow::datatypes::{
 };
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::downcast_dictionary_array;
-use datafusion_common::float_semantics::{has_float_leaf, normalize_floats};
+use datafusion_common::float_semantics::{self, has_float_leaf};
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 #[cfg(not(feature = "force_hash_collisions"))]
 use datafusion_common::hash_utils::{hash_column, scatter_dictionary_hashes};
@@ -1145,7 +1145,11 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         let normalized: Option<Vec<ArrayRef>> = cols
             .iter()
             .any(|col| col.data_type().is_nested() && has_float_leaf(col.data_type()))
-            .then(|| cols.iter().map(normalize_floats).collect());
+            .then(|| {
+                cols.iter()
+                    .map(|col| float_semantics::normalize(Arc::clone(col)))
+                    .collect()
+            });
         let cols = normalized.as_deref().unwrap_or(cols);
 
         // `try_new` and the reset points in `emit` / `clear_shrink` keep

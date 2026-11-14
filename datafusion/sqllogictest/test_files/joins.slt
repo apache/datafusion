@@ -2703,8 +2703,11 @@ SELECT t1.c1, t2.c2 FROM test_partition_table t1 JOIN test_partition_table t2 US
 0 10
 
 # left_join_using_qualified (snowflake syntax)
-query error DataFusion error: This feature is not implemented: Invalid identifier in USING clause\. Expected single identifier, got t2\.c2
+query error
 SELECT t1.c1, t2.c2 FROM test_partition_table t1 JOIN test_partition_table t2 USING (t2.c2) ORDER BY t2.c2;
+----
+DataFusion error: This feature is not implemented: Invalid identifier in USING clause. Expected single identifier, got t2.c2
+
 
 # left_join_using_join_key_projection
 query III
@@ -4183,8 +4186,11 @@ physical_plan_error This feature is not implemented: Physical plan does not supp
 
 # Test CROSS JOIN LATERAL syntax (execution)
 # TODO: https://github.com/apache/datafusion/issues/10048
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(Field \{ name: "t1_int", data_type: UInt32, nullable: true \}, Column \{ relation: Some\(Bare \{ table: "t1" \}\), name: "t1_int" \}\)
+query error
 select t1_id, t1_name, i from join_t1 t1 cross join lateral (select * from unnest(generate_series(1, t1_int))) as series(i);
+----
+DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "t1_int", data_type: UInt32, nullable: true }, Column { relation: Some(Bare { table: "t1" }), name: "t1_int" })
+
 
 
 # Test INNER JOIN LATERAL syntax (planning)
@@ -4207,12 +4213,18 @@ physical_plan_error This feature is not implemented: Physical plan does not supp
 
 # Test INNER JOIN LATERAL syntax (execution)
 # TODO: https://github.com/apache/datafusion/issues/10048
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(Field \{ name: "t1_int", data_type: UInt32, nullable: true \}, Column \{ relation: Some\(Bare \{ table: "t2" \}\), name: "t1_int" \}\)
+query error
 select t1_id, t1_name, i from join_t1 t2 inner join lateral (select * from unnest(generate_series(1, t1_int))) as series(i) on(t1_id > i);
+----
+DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "t1_int", data_type: UInt32, nullable: true }, Column { relation: Some(Bare { table: "t2" }), name: "t1_int" })
+
 
 # Test RIGHT JOIN LATERAL syntax (unsupported)
-query error DataFusion error: This feature is not implemented: LATERAL syntax is not supported for FULL OUTER and RIGHT \[OUTER \| ANTI \| SEMI\] joins
+query error
 select t1_id, t1_name, i from join_t1 t1 right join lateral (select * from unnest(generate_series(1, t1_int))) as series(i);
+----
+DataFusion error: This feature is not implemented: LATERAL syntax is not supported for FULL OUTER and RIGHT [OUTER | ANTI | SEMI] joins
+
 
 
 # Functional dependencies across a join
