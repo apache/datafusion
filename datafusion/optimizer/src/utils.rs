@@ -18,7 +18,8 @@ use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
-    ColumnarValue, DistinctHandling, Expr, WriteOp, logical_plan::LogicalPlan,
+    ColumnarValue, DistinctHandling, Expr, GroupingSet, WriteOp,
+    logical_plan::LogicalPlan,
 };
 use datafusion_physical_expr::create_physical_expr;
 use log::{debug, trace};
@@ -44,6 +45,19 @@ pub(crate) fn is_repeatable(expr: &Expr) -> bool {
                 ))
         })
         .expect("expression traversal is infallible")
+}
+
+/// A global aggregate or an empty grouping set produces a grand total even on empty input.
+pub(crate) fn aggregate_emits_on_empty_input(group_expr: &[Expr]) -> bool {
+    match group_expr.first() {
+        None | Some(Expr::GroupingSet(GroupingSet::Rollup(_) | GroupingSet::Cube(_))) => {
+            true
+        }
+        Some(Expr::GroupingSet(GroupingSet::GroupingSets(groups))) => {
+            groups.iter().any(Vec::is_empty)
+        }
+        _ => false,
+    }
 }
 
 /// Whether an aggregate can safely ignore repeated input rows. This holds when
