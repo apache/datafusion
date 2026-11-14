@@ -861,6 +861,41 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     }
 
+    // Nested SELECTs that each name every column of the one below, against
+    // the same nesting through qualified wildcards
+    {
+        let named_columns = |qualifier: &str, width: usize| {
+            (0..width)
+                .map(|i| format!("{qualifier}.c{i} AS c{i}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let nested_query = |depth: usize, projection: &dyn Fn(&str) -> String| {
+            let mut query = format!("SELECT {} FROM t700", projection("t700"));
+            for level in 0..depth {
+                query = format!(
+                    "SELECT {} FROM ({query}) l{level}",
+                    projection(&format!("l{level}"))
+                );
+            }
+            query
+        };
+        for (width, depth) in [(100, 1), (100, 8), (700, 1), (700, 8)] {
+            let query = nested_query(depth, &|qualifier| named_columns(qualifier, width));
+            c.bench_function(
+                &format!("logical_nested_select_{width}_columns_{depth}_levels"),
+                |b| b.iter(|| logical_plan(&ctx, &rt, &query)),
+            );
+        }
+        for depth in [1, 8] {
+            let query = nested_query(depth, &|qualifier| format!("{qualifier}.*"));
+            c.bench_function(
+                &format!("logical_nested_qualified_wildcard_700_columns_{depth}_levels"),
+                |b| b.iter(|| logical_plan(&ctx, &rt, &query)),
+            );
+        }
+    }
+
     // --- Mixed: deep plan + wide expressions ---
     // This is the worst case for optimizer: many nodes AND many expressions.
 
