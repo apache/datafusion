@@ -104,7 +104,8 @@ cargo install --locked cargo-mutants
 git diff "$(git merge-base HEAD upstream/main)" > pr.diff
 cargo mutants --in-diff pr.diff
 # Retest missed mutants against the end-to-end suites
-cargo mutants --in-diff pr.diff --iterate --test-package datafusion,datafusion-sqllogictest
+cargo mutants --in-diff pr.diff --iterate --timeout 1800 \
+  --test-package datafusion,datafusion-sqllogictest
 ```
 
 [cargo-mutants]: https://mutants.rs/
