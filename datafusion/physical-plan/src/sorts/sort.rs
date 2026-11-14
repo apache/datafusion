@@ -9,6 +9,7 @@
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::RwLock;
@@ -311,6 +312,13 @@ struct ExternalSorter {
     /// How much memory to reserve for performing in-memory sort/merges
     /// prior to spilling.
     sort_spill_reservation_bytes: usize,
+    /// Partitions of the owning `SortExec`, this one included, still reading
+    /// their input. Each one will need memory from the pool this sort shares.
+    partitions_reading_input: Arc<AtomicUsize>,
+    /// Whether this partition is still counted in `partitions_reading_input`.
+    /// It leaves the count when it starts its final sort, or when it is
+    /// dropped before that (its stream dropped early, or its input failed).
+    reading_input: bool,
     /// Shared by the owning SortExec's partitions. Initialized on the runtime
     /// that polls the sort, which may differ from the one calling `execute`.
     sort_concurrency: Arc<OnceLock<SortConcurrency>>,
@@ -375,8 +383,35 @@ impl ExternalSorter {
             batch_size,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
+            partitions_reading_input: Arc::new(AtomicUsize::new(1)),
+            reading_input: true,
             sort_concurrency: Arc::new(OnceLock::new()),
         })
+    }
+
+    /// Share the count of partitions still reading their input with the
+    /// other partitions of this sort. It must include this partition.
+    fn with_partitions_reading_input(mut self, reading: Arc<AtomicUsize>) -> Self {
+        self.partitions_reading_input = reading;
+        self
+    }
+
+    /// Records that this partition has read all its input, and returns whether
+    /// another partition still reads its own. Executing partitions again
+    /// without `reset_state` finds the count already at zero and keeps it
+    /// there, so those partitions keep headroom only for other consumers of
+    /// the pool; their output is the same.
+    fn finish_reading_input(&mut self) -> bool {
+        if !std::mem::replace(&mut self.reading_input, false) {
+            return false;
+        }
+        let before = self
+            .partitions_reading_input
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |reading| {
+                Some(reading.saturating_sub(1))
+            })
+            .unwrap_or_else(|reading| reading);
+        before > 1
     }
 
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
@@ -409,6 +444,7 @@ impl ExternalSorter {
     /// 2. A combined streaming merge incorporating both in-memory
     ///    batches and data from spill files on disk.
     async fn sort(&mut self) -> Result<SendableRecordBatchStream> {
+        let other_partitions_reading = self.finish_reading_input();
         if self.spilled_before() {
             // Sort `in_mem_batches` and spill it first. If there are many
             // `in_mem_batches` and the memory limit is almost reached, merging
@@ -437,6 +473,21 @@ impl ExternalSorter {
                 .with_fetch(None)
                 .with_reservation(self.merge_reservation.take())
                 .with_merge_pool(Arc::clone(&self.merge_pool))
+                // Other partitions of this sort, still buffering input, share
+                // the pool with this merge, and may hold nothing at the moment
+                // it seats its runs. Seating every run the pool admits would
+                // leave them nothing, so keep headroom while any of them is
+                // still reading or anyone else holds memory in the pool;
+                // partitions already merging hold memory, so the second check
+                // covers them. A lone partition, or the last one to finish
+                // reading, with the pool to itself seats every run that fits:
+                // the operator consuming its output reserves nothing before
+                // its first batch, and keeping headroom for it would cost an
+                // extra merge pass whether or not it ever needs the memory.
+                .with_fan_in_headroom(
+                    Arc::clone(&self.runtime.memory_pool),
+                    other_partitions_reading,
+                )
                 .build()
         } else {
             // Final output needs no reserve for future spills. Return unused
@@ -1343,6 +1394,14 @@ fn sorted_copy_keeps_buffers(data_type: &DataType) -> bool {
     }
 }
 
+impl Drop for ExternalSorter {
+    /// A partition dropped before its final sort no longer reads its input,
+    /// so it must not keep its siblings' merges holding headroom for it.
+    fn drop(&mut self) {
+        self.finish_reading_input();
+    }
+}
+
 impl Debug for ExternalSorter {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("ExternalSorter")
@@ -1423,6 +1482,10 @@ pub struct SortExec {
     /// Batch-sort limit shared by partitions and clones.
     /// `reset_state` returns a new plan with a fresh limit.
     sort_concurrency: Arc<OnceLock<SortConcurrency>>,
+    /// Partitions still reading their input, shared with their sorters. Set
+    /// on the first `execute`, once the input can no longer change.
+    /// `reset_state` returns a new plan with a fresh count.
+    partitions_reading_input: Arc<OnceLock<Arc<AtomicUsize>>>,
 }
 
 impl SortExec {
@@ -1443,6 +1506,7 @@ impl SortExec {
             cache: Arc::new(cache),
             filter: None,
             sort_concurrency: Arc::new(OnceLock::new()),
+            partitions_reading_input: Arc::new(OnceLock::new()),
         }
     }
 
@@ -1520,6 +1584,7 @@ impl SortExec {
             cache: Arc::clone(&self.cache),
             filter: self.filter.clone(),
             sort_concurrency: Arc::clone(&self.sort_concurrency),
+            partitions_reading_input: Arc::clone(&self.partitions_reading_input),
         }
     }
 
@@ -1850,14 +1915,15 @@ impl ExecutionPlan for SortExec {
             .downcast_ref::<SortExec>()
             .expect("rebuilt SortExec with new children")
             .clone();
-        // Our dynamic filter, execution metrics and sort concurrency are the state
-        // we need to reset.
+        // Our dynamic filter, execution metrics, sort concurrency and count of
+        // partitions reading input are the state we need to reset.
         if let Some(filter) = &new_sort.filter {
             filter.read().expr().reset();
             new_sort.filter = Some(new_sort.create_filter());
         }
         new_sort.metrics_set = ExecutionPlanMetricsSet::new();
         new_sort.sort_concurrency = Arc::new(OnceLock::new());
+        new_sort.partitions_reading_input = Arc::new(OnceLock::new());
 
         Ok(Arc::new(new_sort))
     }
@@ -1938,7 +2004,14 @@ impl ExecutionPlan for SortExec {
                     context.session_config().spill_compression(),
                     &self.metrics_set,
                     context.runtime_env(),
-                )?;
+                )?
+                .with_partitions_reading_input(Arc::clone(
+                    self.partitions_reading_input.get_or_init(|| {
+                        Arc::new(AtomicUsize::new(
+                            self.input.output_partitioning().partition_count(),
+                        ))
+                    }),
+                ));
                 sorter.sort_concurrency = Arc::clone(&self.sort_concurrency);
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
@@ -2141,6 +2214,7 @@ impl ExecutionPlan for SortExec {
             filter,
             // Execution state, initialized on the runtime polling the decoded plan.
             sort_concurrency: _,
+            partitions_reading_input: _,
         } = self;
         let input = ctx.encode_child(input)?;
         let expr = expr

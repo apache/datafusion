@@ -6,7 +6,7 @@
 //! This is an order-preserving merge.
 
 use crate::metrics::BaselineMetrics;
-use crate::sorts::multi_level_merge::MultiLevelMergeBuilder;
+use crate::sorts::multi_level_merge::{FanInHeadroom, MultiLevelMergeBuilder};
 use crate::sorts::{
     merge::SortPreservingMergeStream,
     stream::{FieldCursorStream, RowCursorStream},
@@ -88,6 +88,9 @@ pub struct StreamingMergeBuilder<'a> {
     merge_pool: Option<Arc<MergeMemoryPool>>,
     /// Leave memory for the aggregate consuming the merged spill rows.
     reserve_replay_headroom: bool,
+    /// Leave memory for others sharing the execution pool when seating more
+    /// than the minimum two runs.
+    fan_in_headroom: Option<FanInHeadroom>,
     min_spill_batch_rows: Option<usize>,
     enable_round_robin_tie_breaker: bool,
 }
@@ -177,6 +180,23 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// While `siblings` is true or another consumer holds memory in `pool`,
+    /// seat spill runs beyond the minimum two only if the pool can admit their
+    /// buffers plus as much again as they exceed the retained workspace.
+    /// Release the headroom before merging.
+    ///
+    /// `pool` is the execution pool: the parent of the merge pool when one is
+    /// set, not the merge pool itself. `siblings` says other partitions share
+    /// that pool even when they hold nothing at the moment.
+    pub(crate) fn with_fan_in_headroom(
+        mut self,
+        pool: Arc<dyn MemoryPool>,
+        siblings: bool,
+    ) -> Self {
+        self.fan_in_headroom = Some(FanInHeadroom { pool, siblings });
+        self
+    }
+
     /// Limit intermediate rewrites when the retained buffer reservation can
     /// also admit the final replay pass with its headroom.
     /// `min_spill_batch_rows` is the minimum largest-batch row count across input
@@ -226,6 +246,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             reservation,
             merge_pool,
             reserve_replay_headroom,
+            fan_in_headroom,
             min_spill_batch_rows,
             fetch,
             expressions,
@@ -269,6 +290,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             )
             .with_merge_pool(merge_pool)
             .with_replay_headroom(reserve_replay_headroom)
+            .with_fan_in_headroom(fan_in_headroom)
             .with_intermediate_merge_sizing(min_spill_batch_rows)
             .with_max_batch_bytes(max_batch_bytes)
             .with_spill_max_batch_bytes(spill_max_batch_bytes)

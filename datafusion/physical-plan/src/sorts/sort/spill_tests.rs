@@ -3,11 +3,14 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::{
-    ExternalSorter, get_reserved_bytes_for_record_batch, sort_batch, sort_batch_chunked,
+    ExternalSorter, SortExec, get_reserved_bytes_for_record_batch,
+    get_reserved_bytes_for_record_batch_size, sort_batch, sort_batch_chunked,
 };
+use crate::ExecutionPlan;
 use crate::metrics::ExecutionPlanMetricsSet;
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::spill_pieces::recorded_size;
+use crate::test::TestMemoryExec;
 use arrow::array::{
     ArrayRef, Decimal128Array, DictionaryArray, FixedSizeBinaryArray, Int8Array,
     Int32Array, Int64Array, StringArray, StringViewArray,
@@ -17,6 +20,8 @@ use arrow::datatypes::{DataType, Field, Int8Type, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::{ExecutionOptions, SpillCompression};
 use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::TaskContext;
+use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::memory_pool::{
     GreedyMemoryPool, MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
@@ -26,6 +31,7 @@ use datafusion_physical_expr::expressions::{CastExpr, Column};
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 use futures::TryStreamExt;
 use std::fmt::{Display, Formatter};
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -1427,4 +1433,213 @@ async fn test_single_batch_spill_returns_live_workspace_loan_on_drop() -> Result
     drop(stream);
     assert_released(&pool, &runtime).await;
     Ok(())
+}
+
+/// The final merge of a spilled sort shares the pool with sibling partitions
+/// still sorting their input. Seating every run the pool admits leaves them
+/// nothing, so whatever the merge takes beyond its own workspace, it must leave
+/// as much free: while another consumer holds memory, and while sibling
+/// partitions still read their input even if they hold nothing at the moment.
+#[rstest::rstest]
+#[case::other_consumer_holds_memory(false)]
+#[case::idle_sibling_partitions(true)]
+#[tokio::test]
+async fn test_final_spilled_merge_leaves_headroom(#[case] siblings: bool) -> Result<()> {
+    let fixture = fixture()?;
+    let schema = fixture.parent.schema();
+    let capacity = 16 * fixture.capacity;
+    let pool = AdjustablePool::new(capacity);
+    // Spill under the fixture's limit, then merge with room for every run.
+    pool.set_limit(fixture.capacity);
+    let (sorter, runtime) = sorter(&fixture, Arc::clone(&pool))?;
+    let mut sorter = sorter.with_partitions_reading_input(Arc::new(AtomicUsize::new(
+        1 + usize::from(siblings),
+    )));
+    for batch in &fixture.batches {
+        sorter.insert_batch(batch.clone()).await?;
+    }
+    if !sorter.in_mem_batches.is_empty() {
+        sorter.sort_and_spill_in_mem_batches().await?;
+    }
+    // What the merge reserves to read each run with two buffers.
+    let needs: Vec<usize> = sorter
+        .finished_spill_files
+        .iter()
+        .map(|spill| {
+            let size = spill.max_record_batch_memory;
+            2 * get_reserved_bytes_for_record_batch_size(size, size)
+        })
+        .collect();
+    assert!(needs.len() >= 3, "need three runs, got {}", needs.len());
+    let all: usize = needs.iter().sum();
+    let smallest = *needs.iter().min().unwrap();
+    pool.set_limit(capacity);
+
+    let mut stream = sorter.sort().await?;
+    drop(sorter);
+    // The merge already holds its workspace. Leave it room to seat every
+    // run, but not to seat them all and leave as much free.
+    let workspace = pool.reserved();
+    let free = (2 * all)
+        .checked_sub(2 * workspace + smallest)
+        .expect("the runs must need more than the workspace");
+    assert!(all <= free + workspace);
+    // Either another consumer holds the rest of the pool, or idle siblings
+    // hold nothing and the pool is only as large as the merge may use.
+    let contender =
+        MemoryConsumer::new("sibling partition").register(&runtime.memory_pool);
+    let limit = if siblings {
+        pool.set_limit(workspace + free);
+        workspace + free
+    } else {
+        contender.try_grow(capacity - workspace - free)?;
+        capacity
+    };
+
+    let first = stream
+        .try_next()
+        .await?
+        .expect("the merge must produce output");
+    let taken = (pool.reserved() - contender.size()).saturating_sub(workspace);
+    assert!(
+        limit - pool.reserved() >= taken,
+        "the final merge takes {taken} bytes beyond its workspace and leaves {} free",
+        limit - pool.reserved()
+    );
+    drop(contender);
+
+    let mut output = vec![first];
+    while let Some(batch) = stream.try_next().await? {
+        output.push(batch);
+    }
+    assert_eq!(
+        concat_batches(&schema, &output)?,
+        sort_batch(&fixture.parent, &fixture.ordering, None)?
+    );
+    drop(stream);
+    assert_released(&pool, &runtime).await;
+    Ok(())
+}
+
+/// What partition 1 does before partition 0 runs.
+#[derive(Debug, Clone, Copy)]
+enum Sibling {
+    /// Never executed, so it still counts as reading its input.
+    Idle,
+    /// Read all its (empty) input.
+    Finished,
+    /// Executed, then its stream dropped without being polled.
+    Dropped,
+}
+
+/// Whether a `SortExec` keeps fan-in headroom follows its partitions still
+/// reading input. The pool fits every run's buffers but not the headroom on
+/// top, so with headroom the final merge seats fewer runs and rewrites rows in
+/// an extra pass. Partition 0 runs alone, so nothing else ever holds pool
+/// memory and the outcome is deterministic. In the last two cases its sibling
+/// has read all its input or has been dropped before it could, so there is
+/// nobody to keep headroom for.
+#[rstest::rstest]
+#[case::lone_partition(1, Sibling::Idle, false)]
+#[case::idle_sibling(2, Sibling::Idle, true)]
+#[case::finished_sibling(2, Sibling::Finished, false)]
+#[case::dropped_sibling(2, Sibling::Dropped, false)]
+#[tokio::test]
+async fn test_sort_exec_keeps_headroom_only_while_siblings_read_input(
+    #[case] input_partitions: usize,
+    #[case] sibling: Sibling,
+    #[case] rewrites_rows: bool,
+) -> Result<()> {
+    let (sort, context, total_rows) = headroom_sort_exec(input_partitions)?;
+    match sibling {
+        Sibling::Idle => {}
+        Sibling::Finished => {
+            let output: Vec<RecordBatch> =
+                sort.execute(1, Arc::clone(&context))?.try_collect().await?;
+            assert!(output.is_empty());
+        }
+        Sibling::Dropped => drop(sort.execute(1, Arc::clone(&context))?),
+    }
+    let output: Vec<RecordBatch> = sort.execute(0, context)?.try_collect().await?;
+
+    assert_eq!(
+        output.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        total_rows
+    );
+    let spilled_rows = sort.metrics().unwrap().spilled_rows().unwrap();
+    if rewrites_rows {
+        assert!(spilled_rows > total_rows, "{spilled_rows} <= {total_rows}");
+    } else {
+        assert_eq!(spilled_rows, total_rows);
+    }
+    Ok(())
+}
+
+/// Executing a lone partition again without `reset_state` finds the count of
+/// partitions reading input at zero. The count must stay there instead of
+/// wrapping, or the third run would keep headroom for nobody.
+#[tokio::test]
+async fn test_sort_exec_rerun_without_reset_state_keeps_no_headroom() -> Result<()> {
+    let (sort, context, total_rows) = headroom_sort_exec(1)?;
+    for run in 1..=3 {
+        let output: Vec<RecordBatch> =
+            sort.execute(0, Arc::clone(&context))?.try_collect().await?;
+        assert_eq!(
+            output.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            total_rows
+        );
+        let spilled_rows = sort.metrics().unwrap().spilled_rows().unwrap();
+        assert_eq!(spilled_rows, run * total_rows, "run {run}");
+    }
+    Ok(())
+}
+
+/// A `SortExec` over `input_partitions` partitions with all rows in partition
+/// 0, and a context whose pool fits every run's buffers but not the headroom
+/// on top. Returns the sort, the context, and the number of rows.
+fn headroom_sort_exec(
+    input_partitions: usize,
+) -> Result<(SortExec, Arc<TaskContext>, usize)> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int64, false),
+        Field::new("payload", DataType::Utf8, false),
+    ]));
+    let (batches, rows) = (64, 1024);
+    let batches = (0..batches)
+        .map(|batch| {
+            let keys = (0..rows).map(|row| ((batch * rows + row) * 2654435761) % 1000003);
+            let payload = (0..rows).map(|row| format!("{row:0120}"));
+            let columns: Vec<ArrayRef> = vec![
+                Arc::new(Int64Array::from_iter_values(keys)),
+                Arc::new(StringArray::from_iter_values(payload)),
+            ];
+            Ok(RecordBatch::try_new(Arc::clone(&schema), columns)?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let total_rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+    let mut partitions = vec![batches];
+    partitions.resize(input_partitions, vec![]);
+    let input = TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+    let ordering: LexOrdering = [PhysicalSortExpr::new_default(Arc::new(Column::new(
+        "key", 0,
+    )))]
+    .into();
+    let sort = SortExec::new(ordering, input).with_preserve_partitioning(true);
+    // The sort bounds its spill batches by `sort_spill_reservation_bytes / 4`, at
+    // least 64 KiB. A batch of 1024 rows is about 135 KiB, so it is spilled in two
+    // pieces, and each run reserves half as much for the merge. The pool is sized
+    // for those runs: all of them fit without headroom, but not with it.
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(GreedyMemoryPool::new(2700 * 1024)))
+        .build_arc()?;
+    let context = Arc::new(
+        TaskContext::default()
+            .with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(1024)
+                    .with_sort_spill_reservation_bytes(128 * 1024),
+            )
+            .with_runtime(runtime),
+    );
+    Ok((sort, context, total_rows))
 }
