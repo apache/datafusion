@@ -8,7 +8,6 @@
 use std::sync::Arc;
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-#[cfg(target_arch = "wasm32")]
 use super::stream::RecordBatchStreamAdapter;
 use super::stream::{ObservedStream, RecordBatchReceiverStream};
 use super::{
@@ -26,6 +25,7 @@ use crate::{
     ReplaceChildrenOptions, validate_child_count,
 };
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use futures::StreamExt;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
@@ -245,25 +245,36 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 let elapsed_compute = baseline_metrics.elapsed_compute().clone();
                 let _timer = elapsed_compute.timer();
 
-                // use a stream that allows each sender to put in at
-                // least one result in an attempt to maximize
-                // parallelism.
-                let mut builder =
-                    RecordBatchReceiverStream::builder(self.schema(), input_partitions);
+                // Spawn the input tasks on first poll rather than here, so no
+                // work starts before the output is requested. A consumer may
+                // create this stream well before polling it (e.g. a join
+                // collecting its build side), and starting early would let the
+                // inputs run before dynamic filters from ancestors are ready.
+                let input = Arc::clone(&self.input);
+                let schema = self.schema();
+                let stream = futures::stream::once(async move {
+                    // use a stream that allows each sender to put in at
+                    // least one result in an attempt to maximize
+                    // parallelism.
+                    let mut builder =
+                        RecordBatchReceiverStream::builder(schema, input_partitions);
 
-                // spawn independent tasks whose resulting streams (of batches)
-                // are sent to the channel for consumption.
-                for part_i in 0..input_partitions {
-                    builder.run_input(
-                        Arc::clone(&self.input),
-                        part_i,
-                        Arc::clone(&context),
-                    );
-                }
+                    // spawn independent tasks whose resulting streams (of batches)
+                    // are sent to the channel for consumption.
+                    for part_i in 0..input_partitions {
+                        builder.run_input(
+                            Arc::clone(&input),
+                            part_i,
+                            Arc::clone(&context),
+                        );
+                    }
 
-                let stream = builder.build();
+                    builder.build()
+                })
+                .flatten();
+
                 Ok(Box::pin(ObservedStream::new(
-                    stream,
+                    Box::pin(RecordBatchStreamAdapter::new(self.schema(), stream)),
                     baseline_metrics,
                     self.fetch,
                 )))
@@ -552,8 +563,12 @@ mod tests {
 
         let input_plan: Arc<BarrierExec> = Arc::clone(&input);
         let coalesce = CoalescePartitionsExec::new(input_plan);
-        let stream = coalesce.execute(0, task_ctx)?;
+        let mut stream = coalesce.execute(0, task_ctx)?;
         drop(coalesce);
+
+        // Input tasks are spawned on the first poll, not by `execute`. Poll once to
+        // start them; the inputs then block on the finish barrier, so this is pending.
+        assert!(futures::poll!(stream.next()).is_pending());
 
         tokio::time::timeout(Duration::from_secs(5), async {
             // Why not `wait_finish` here: that releases the barrier which lets the input tasks
@@ -571,6 +586,40 @@ mod tests {
 
         drop(stream);
 
+        Ok(())
+    }
+
+    /// `execute` must not start the input partitions; they start on the first poll.
+    ///
+    /// Consumers may create the stream long before polling it (e.g. a `CollectLeft`
+    /// hash join creates its build-side stream during setup). Starting the inputs
+    /// early lets scans run before dynamic filters from ancestor joins are populated.
+    #[tokio::test]
+    async fn inputs_start_on_first_poll_not_on_execute() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+        let input_partitions = 2;
+        let batch = RecordBatch::new_empty(Arc::clone(&schema));
+        let input = Arc::new(
+            BarrierExec::new(vec![vec![batch]; input_partitions], schema)
+                .without_start_barrier()
+                .with_finish_barrier()
+                .with_log(false),
+        );
+
+        let coalesce = CoalescePartitionsExec::new(Arc::clone(&input) as _);
+        let stream = coalesce.execute(0, task_ctx)?;
+
+        // Give any spawned input tasks ample time to run. If `execute` had started
+        // them, every partition would emit its batch and reach the finish barrier.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !input.is_finish_barrier_reached(),
+            "input partitions must not run before the stream is polled"
+        );
+
+        drop(stream);
         Ok(())
     }
 
