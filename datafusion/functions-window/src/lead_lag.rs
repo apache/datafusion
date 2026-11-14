@@ -689,6 +689,94 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         }
     }
 
+    fn evaluate_rows(
+        &mut self,
+        values: &[ArrayRef],
+        start: usize,
+        end: usize,
+    ) -> Result<Option<ArrayRef>> {
+        if self.ignore_nulls || !self.is_lag() {
+            return Ok(None);
+        }
+        let offset = self.shift_offset as usize;
+        let n = end - start;
+        let defaulted = offset.saturating_sub(start).min(n);
+        let defaults = self.default_value.to_array_of_size(defaulted)?;
+        if defaults.data_type() != values[0].data_type() {
+            return Ok(None);
+        }
+        if defaulted == n {
+            return Ok(Some(defaults));
+        }
+        let source = values[0].slice(start + defaulted - offset, n - defaulted);
+        if defaulted == 0 {
+            return Ok(Some(source));
+        }
+        Ok(Some(
+            arrow::compute::concat(&[defaults.as_ref(), source.as_ref()])
+                .map_err(|e| arrow_datafusion_err!(e))?,
+        ))
+    }
+
+    fn evaluate_segments(
+        &mut self,
+        values: &[ArrayRef],
+        segments: &[Range<usize>],
+        _frames: &[Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        use arrow::array::{BooleanArray, BooleanBufferBuilder, UInt32Array};
+        use arrow::buffer::NullBuffer;
+        if self.ignore_nulls {
+            return Ok(None);
+        }
+        let array = &values[0];
+        let n = array.len();
+        if u32::try_from(n).is_err() {
+            return Ok(None);
+        }
+        let shift = self.shift_offset;
+        // row `i` takes row `i - shift` of its own partition (lag: shift > 0, lead: shift < 0)
+        let mut indices: Vec<u32> = Vec::with_capacity(n);
+        let mut valid = BooleanBufferBuilder::new(n);
+        let mut any_default = false;
+        for seg in segments {
+            for i in seg.start..seg.end {
+                match (i as i64)
+                    .checked_sub(shift)
+                    .and_then(|src| usize::try_from(src).ok())
+                    .filter(|src| (seg.start..seg.end).contains(src))
+                {
+                    Some(src) => {
+                        indices.push(src as u32);
+                        valid.append(true);
+                    }
+                    None => {
+                        indices.push(0);
+                        valid.append(false);
+                        any_default = true;
+                    }
+                }
+            }
+        }
+        let valid = valid.finish();
+        let indices = UInt32Array::new(
+            indices.into(),
+            any_default.then(|| NullBuffer::new(valid.clone())),
+        );
+        let Ok(taken) = take(array.as_ref(), &indices, None) else {
+            return Ok(None);
+        };
+        if !any_default || self.default_value.is_null() {
+            return Ok(Some(taken));
+        }
+        let default = self.default_value.to_scalar()?;
+        let is_default = BooleanArray::new(!&valid, None);
+        match arrow::compute::kernels::zip::zip(&is_default, &default, &taken) {
+            Ok(out) if out.data_type() == array.data_type() => Ok(Some(out)),
+            _ => Ok(None),
+        }
+    }
+
     fn evaluate_all(
         &mut self,
         values: &[ArrayRef],

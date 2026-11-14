@@ -643,6 +643,45 @@ impl Accumulator for CountAccumulator {
     fn size(&self) -> usize {
         size_of_val(self)
     }
+
+    fn evaluate_window_frames(
+        &mut self,
+        values: &[ArrayRef],
+        last_range: &std::ops::Range<usize>,
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        if values.len() != 1 {
+            return Ok(None);
+        }
+        let nulls = values[0].logical_nulls();
+        Ok(Some(
+            datafusion_functions_aggregate_common::window_kernels::count_frames(
+                nulls.as_ref(),
+                &mut self.count,
+                last_range,
+                frames,
+            ),
+        ))
+    }
+
+    fn evaluate_window_segments(
+        &mut self,
+        values: &[ArrayRef],
+        segments: &[std::ops::Range<usize>],
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        if values.len() != 1 {
+            return Ok(None);
+        }
+        let nulls = values[0].logical_nulls();
+        Ok(Some(
+            datafusion_functions_aggregate_common::window_kernels::count_frames_segments(
+                nulls.as_ref(),
+                segments,
+                frames,
+            ),
+        ))
+    }
 }
 
 /// An accumulator to compute the counts of [`PrimitiveArray<T>`].

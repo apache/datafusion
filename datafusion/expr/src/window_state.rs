@@ -20,6 +20,10 @@ use datafusion_common::{
     utils::{compare_rows, get_row_at_idx, search_in_slice},
 };
 
+mod bulk;
+
+pub use bulk::adjacent_distinct;
+
 /// Holds the state of evaluating a window function
 #[derive(Debug, Clone)]
 pub struct WindowAggState {

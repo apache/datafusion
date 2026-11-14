@@ -11,7 +11,8 @@ use std::sync::Arc;
 use crate::aggregate::AggregateFunctionExpr;
 use crate::window::standard::add_new_ordering_expr_with_partition_by;
 use crate::window::window_expr::{
-    AggregateWindowExpr, WindowEvalContext, WindowFn, filter_array,
+    AggregateWindowExpr, CompletePartitions, WindowEvalContext, WindowFn,
+    evaluate_complete_partitions_stateful, filter_array,
 };
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, SlidingAggregateWindowExpr, WindowExpr,
@@ -112,6 +113,11 @@ impl PlainAggregateWindowExpr {
         &self.aggregate
     }
 
+    /// Get the `FILTER (WHERE ...)` predicate, if any.
+    pub fn get_filter_expr(&self) -> Option<&Arc<dyn PhysicalExpr>> {
+        self.filter.as_ref()
+    }
+
     pub fn add_equal_orderings(
         &self,
         eq_properties: &mut EquivalenceProperties,
@@ -178,6 +184,18 @@ impl WindowExpr for PlainAggregateWindowExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         self.aggregate_evaluate(batch)
+    }
+
+    fn evaluate_complete_partitions(
+        &self,
+        block: &CompletePartitions<'_>,
+    ) -> Result<ArrayRef> {
+        if let Some(out) =
+            self.aggregate_evaluate_complete_partitions(block.batch(), block.ranges())?
+        {
+            return Ok(out);
+        }
+        evaluate_complete_partitions_stateful(self, block)
     }
 
     fn evaluate_stateful(
