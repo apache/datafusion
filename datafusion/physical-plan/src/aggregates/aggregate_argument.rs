@@ -13,6 +13,7 @@ use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::utils::scatter;
@@ -151,6 +152,12 @@ pub(in crate::aggregates) struct AggregateFilter {
     selected_schema: Option<(SchemaRef, SchemaRef)>,
 }
 
+/// An aggregate filter result, retaining predicates that select or reject a whole batch.
+pub(in crate::aggregates) enum AggregateFilterValue {
+    Scalar(bool),
+    Array(BooleanArray),
+}
+
 impl AggregateFilter {
     pub(in crate::aggregates) fn new(
         predicate: Arc<dyn PhysicalExpr>,
@@ -178,12 +185,18 @@ impl AggregateFilter {
     pub(in crate::aggregates) fn evaluate(
         &self,
         batch: &RecordBatch,
-    ) -> Result<BooleanArray> {
-        let selection = self
-            .predicate
-            .evaluate(batch)?
-            .into_array(batch.num_rows())?;
-        Ok(as_boolean_array(&selection)?.clone())
+    ) -> Result<AggregateFilterValue> {
+        match self.predicate.evaluate(batch)? {
+            ColumnarValue::Scalar(ScalarValue::Boolean(value)) => {
+                Ok(AggregateFilterValue::Scalar(value.unwrap_or(false)))
+            }
+            value => {
+                let selection = value.into_array(batch.num_rows())?;
+                Ok(AggregateFilterValue::Array(
+                    as_boolean_array(&selection)?.clone(),
+                ))
+            }
+        }
     }
 
     /// Returns the rows of `batch` where `selection` is true, for evaluating

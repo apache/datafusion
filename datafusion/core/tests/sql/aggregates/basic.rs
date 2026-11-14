@@ -9,6 +9,140 @@ use datafusion_common::ScalarValue;
 use insta::assert_snapshot;
 
 #[tokio::test]
+async fn aggregate_scalar_filter() -> Result<()> {
+    use arrow::array::BooleanArray;
+    use datafusion::logical_expr::{ColumnarValue, Volatility, create_udf};
+    use datafusion_common::assert_batches_eq;
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion_physical_plan::collect;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int32, false),
+        Field::new("value", DataType::Int32, true),
+        Field::new("keep", DataType::Boolean, true),
+    ]));
+    let mut offset = 0;
+    let batches = [
+        (Some(true), 3),
+        (Some(false), 2),
+        (None, 1),
+        (Some(true), 4),
+    ]
+    .into_iter()
+    .map(|(keep, len)| {
+        let keys = Int32Array::from_iter_values(offset..offset + len);
+        offset += len;
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(keys),
+                Arc::new(Int32Array::from_iter((0..len).map(|row| {
+                    if keep == Some(true) {
+                        (row != 0).then_some(2)
+                    } else {
+                        Some(0)
+                    }
+                }))),
+                Arc::new(BooleanArray::from(vec![keep; len as usize])),
+            ],
+        )
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+
+    for partitions in [1, 2] {
+        for skip in [false, true] {
+            let config = SessionConfig::new()
+                .with_target_partitions(partitions)
+                .with_coalesce_batches(false)
+                .set_usize(
+                    "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                    if skip { 0 } else { usize::MAX },
+                )
+                .set(
+                    "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                    &ScalarValue::Float64(Some(if skip { 0.0 } else { 1.0 })),
+                );
+            let ctx = SessionContext::new_with_config(config);
+            // A runtime scalar can change between batches. Volatility prevents
+            // the optimizer from folding away the FILTER before execution.
+            ctx.register_udf(create_udf(
+                "batch_filter",
+                vec![DataType::Boolean],
+                DataType::Boolean,
+                Volatility::Volatile,
+                Arc::new(|args| match &args[0] {
+                    ColumnarValue::Array(array) => Ok(ColumnarValue::Scalar(
+                        ScalarValue::try_from_array(array, 0)?,
+                    )),
+                    scalar => Ok(scalar.clone()),
+                }),
+            ));
+            ctx.register_table(
+                "scalar_filters",
+                Arc::new(MemTable::try_new(
+                    Arc::clone(&schema),
+                    vec![batches.clone(), batches.clone()],
+                )?),
+            )?;
+            for grouped in [false, true] {
+                let aggs = "count(*) FILTER (WHERE batch_filter(keep)) AS c,
+                    sum(10 / value) FILTER (WHERE batch_filter(keep)) AS s,
+                    sum(7) FILTER (WHERE batch_filter(keep)) AS l,
+                    count(value) FILTER (WHERE batch_filter(keep)) AS v";
+                let sql = if grouped {
+                    format!(
+                        "SELECT count(*) AS g, sum(c) AS c, sum(s) AS s, sum(l) AS l, sum(v) AS v
+                        FROM (SELECT {aggs} FROM scalar_filters GROUP BY key)"
+                    )
+                } else {
+                    format!("SELECT count(DISTINCT key) AS g, {aggs} FROM scalar_filters")
+                };
+                let plan = ctx.sql(&sql).await?.create_physical_plan().await?;
+                let output = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+                assert_batches_eq!(
+                    [
+                        "+----+----+----+----+----+",
+                        "| g  | c  | s  | l  | v  |",
+                        "+----+----+----+----+----+",
+                        "| 10 | 14 | 50 | 98 | 10 |",
+                        "+----+----+----+----+----+"
+                    ],
+                    &output
+                );
+                if grouped && partitions == 2 && skip {
+                    let mut skipped_rows = 0;
+                    plan.apply(|node| {
+                        skipped_rows += node
+                            .metrics()
+                            .and_then(|m| m.sum_by_name("skipped_aggregation_rows"))
+                            .map_or(0, |m| m.as_usize());
+                        Ok(TreeNodeRecursion::Continue)
+                    })?;
+                    assert!(skipped_rows > 0);
+                }
+            }
+            for predicate in ["false", "CAST(NULL AS BOOLEAN)"] {
+                let result = ctx.sql(&format!("SELECT
+                    count(*) FILTER (WHERE batch_filter({predicate})) AS c,
+                    sum(10 / (value - value)) FILTER (WHERE batch_filter({predicate})) AS s
+                    FROM scalar_filters")).await?.collect().await?;
+                assert_batches_eq!(
+                    [
+                        "+---+---+",
+                        "| c | s |",
+                        "+---+---+",
+                        "| 0 |   |",
+                        "+---+---+"
+                    ],
+                    &result
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_array_agg_distinct() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
