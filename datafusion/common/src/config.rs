@@ -1940,11 +1940,11 @@ config_namespace! {
         /// projections or aliases.
         pub enable_unions_to_filter: bool, default = false
 
-        /// When `true`, the `SingleDistinctToGroupBy` optimizer rule keeps a grouped
-        /// DISTINCT aggregate native, instead of rewriting it into a two-phase `GROUP BY`,
-        /// when every DISTINCT argument is a fixed-width, non-float type. This lowers peak
-        /// memory when no memory limit is set, because the intermediate
-        /// `(group, distinct value)` result is never built.
+        /// When `true` and `target_partitions` is 1, the `SingleDistinctToGroupBy`
+        /// optimizer rule keeps a grouped aggregate whose aggregates are all DISTINCT
+        /// native, instead of rewriting it into a two-phase `GROUP BY`, when every
+        /// DISTINCT argument is an integer, boolean, decimal, date, time, timestamp
+        /// or interval type.
         ///
         /// The native plan avoids materializing intermediate `(group, distinct value)`
         /// pairs, which lowers peak memory when there are few groups with many
@@ -1952,9 +1952,9 @@ config_namespace! {
         /// run slower, because functions without a specialized DISTINCT
         /// `GroupsAccumulator` (such as `sum`) keep one accumulator per group.
         /// Native DISTINCT must also fit each group's distinct values in memory:
-        /// under a memory limit, the rewrite can spill those pairs, but the native
-        /// accumulator cannot, so queries that succeed by spilling with the rewrite
-        /// may fail with this option enabled.
+        /// under a memory limit, it can spill whole groups but not split one group's
+        /// distinct values, so a query with a few large groups that succeeds by
+        /// spilling with the rewrite may fail with this option enabled.
         ///
         /// Queries without `GROUP BY`, and other argument types, keep the rewrite.
         ///
