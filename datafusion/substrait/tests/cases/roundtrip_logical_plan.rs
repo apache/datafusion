@@ -1298,6 +1298,39 @@ async fn roundtrip_left_join() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_left_join_with_same_side_equality() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "SELECT l.a, l.b, r.a AS ra \
+               FROM (VALUES (1, 1), (2, 3), (3, 3)) l(a, b) \
+               LEFT JOIN (VALUES (1), (2), (3)) r(a) \
+                 ON r.a = l.a AND l.a = l.b \
+               ORDER BY l.a";
+
+    let plans = [
+        ctx.sql(sql).await?.into_unoptimized_plan(),
+        ctx.sql(sql).await?.into_optimized_plan()?,
+    ];
+    for plan in plans {
+        let roundtripped = substrait_roundtrip(&plan, &ctx).await?;
+        let results = DataFrame::new(ctx.state(), roundtripped).collect().await?;
+
+        datafusion::assert_batches_sorted_eq!(
+            [
+                "+---+---+----+",
+                "| a | b | ra |",
+                "+---+---+----+",
+                "| 1 | 1 | 1  |",
+                "| 2 | 3 |    |",
+                "| 3 | 3 | 3  |",
+                "+---+---+----+",
+            ],
+            &results
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_right_join() -> Result<()> {
     roundtrip("SELECT data.a FROM data RIGHT JOIN data2 ON data.a = data2.a").await
 }
