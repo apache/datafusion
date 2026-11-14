@@ -1790,4 +1790,25 @@ mod tests {
         assert!(group.normalize_expr(a_plus_b).eq(&a));
         Ok(())
     }
+
+    #[test]
+    fn test_sub_expression_promotion_takes_several_rounds() -> Result<()> {
+        let schema = abc_schema();
+        let (a, b, c) = (col("a", &schema)?, col("b", &schema)?, col("c", &schema)?);
+        let a_plus_b = binary(Arc::clone(&a), Operator::Plus, Arc::clone(&b), &schema)?;
+        let a_plus_b_plus_c = binary(
+            Arc::clone(&a_plus_b),
+            Operator::Plus,
+            Arc::clone(&c),
+            &schema,
+        )?;
+
+        // `b * c` is canonical in `other`, so `a + b` stays ahead of `a` there
+        let b_times_c = binary(b, Operator::Multiply, c, &schema)?;
+        let other = EquivalenceClass::new([b_times_c, a_plus_b, Arc::clone(&a)]);
+        let mut class = EquivalenceClass::new([a_plus_b_plus_c]);
+        class.extend(other);
+        assert!(class.canonical_expr().unwrap().eq(&a));
+        Ok(())
+    }
 }
