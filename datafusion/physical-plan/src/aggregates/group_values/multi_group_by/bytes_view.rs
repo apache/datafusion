@@ -950,7 +950,7 @@ mod tests {
             // Test situation 5 (also test take null + inlined)
             None,
             Some("foo"),
-            Some("another string that is is quite long"),
+            Some("another string that is quite long"),
             Some("this string not so long"),
             // Test situation 6 (also test take null + inlined + insert again after taking)
             None,
