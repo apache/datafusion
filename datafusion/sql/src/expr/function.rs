@@ -2,9 +2,10 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, IdentNormalizer, PlannerContext, SqlToRel};
 
 use arrow::datatypes::{DataType, FieldRef};
+use datafusion_common::config::IdentNormalization;
 use datafusion_common::{
     DFSchema, Dependency, Diagnostic, HashSet, Result, Span, datatype::FieldExt,
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
@@ -381,7 +382,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     FunctionArg::Unnamed(FunctionArgExpr::Expr(SQLExpr::Lambda(
                         lambda,
                     ))) => {
-                        if !all_unique(&lambda.params) {
+                        if !all_unique(
+                            &lambda.params,
+                            &self.legacy_normalizer(IdentNormalization::Lower),
+                        ) {
                             return plan_err!(
                                 "lambda parameters names must be unique, got {}",
                                 lambda.params
@@ -937,10 +941,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 "Lambda parameters with explicit data types are not supported"
             );
         }
+        let normalizer = self.legacy_normalizer(IdentNormalization::Lower);
         let params = lambda
             .params
             .iter()
-            .map(|p| crate::utils::normalize_ident(p.name.clone()))
+            .map(|p| normalizer.normalize(p.name.clone()))
             .collect();
 
         let lambda_parameters = std::iter::zip(lambda_params, &params)
@@ -1188,22 +1193,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
-/// After normalization with [normalize_ident], check whether all params are unique
-///
-/// [normalize_ident]: crate::utils::normalize_ident
-fn all_unique(params: &[sqlparser::ast::LambdaFunctionParameter]) -> bool {
+/// Check parameter uniqueness under the same policy used for their bindings.
+fn all_unique(
+    params: &[sqlparser::ast::LambdaFunctionParameter],
+    normalizer: &IdentNormalizer,
+) -> bool {
     match params.len() {
         0 | 1 => true,
         2 => {
-            crate::utils::normalize_ident(params[0].name.clone())
-                != crate::utils::normalize_ident(params[1].name.clone())
+            normalizer.normalize(params[0].name.clone())
+                != normalizer.normalize(params[1].name.clone())
         }
         _ => {
             let mut set = HashSet::with_capacity(params.len());
 
             params
                 .iter()
-                .map(|p| crate::utils::normalize_ident(p.name.clone()))
+                .map(|p| normalizer.normalize(p.name.clone()))
                 .all(|p| set.insert(p))
         }
     }

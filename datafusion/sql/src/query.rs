@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
+use datafusion_common::config::IdentNormalization;
 use datafusion_common::{Constraints, DFSchema, Result, not_impl_err};
 use datafusion_expr::expr::{Sort, WildcardOptions};
 
@@ -331,7 +332,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let df_expr = self.sql_to_expr(sql_expr, plan_schema, planner_context)?;
 
                 match alias {
-                    Some(alias_ident) => df_expr.alias_if_changed(alias_ident.value),
+                    Some(alias_ident) => df_expr.alias_if_changed(
+                        self.legacy_normalizer(IdentNormalization::Preserve)
+                            .normalize(alias_ident),
+                    ),
                     None => Ok(df_expr),
                 }
             };

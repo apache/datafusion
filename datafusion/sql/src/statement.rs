@@ -13,6 +13,7 @@ use crate::parser::{
 };
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::normalize_ident;
+use datafusion_common::config::IdentNormalization;
 
 use arrow::datatypes::{FieldRef, Fields, Metadata};
 use datafusion_common::datatype::FieldExt;
@@ -60,11 +61,14 @@ use sqlparser::ast::{
 };
 use sqlparser::parser::ParserError::ParserError;
 
-fn ident_to_string(ident: &Ident) -> String {
+/// Settings tokens and index methods use lowercase unquoted spelling independently
+/// of the identifier policy for SQL object names. Quoted spelling is preserved.
+fn lowercase_unquoted_ident(ident: &Ident) -> String {
     normalize_ident(ident.to_owned())
 }
 
-fn object_name_to_string(object_name: &ObjectName) -> String {
+/// Normalize each component of a setting name without applying SQL object-name policy.
+fn lowercase_unquoted_object_name(object_name: &ObjectName) -> String {
     object_name
         .0
         .iter()
@@ -73,22 +77,10 @@ fn object_name_to_string(object_name: &ObjectName) -> String {
                 .as_ident()
                 // TODO: It might be better to return an error
                 // than to silently use a default value.
-                .map_or_else(String::new, ident_to_string)
+                .map_or_else(String::new, lowercase_unquoted_ident)
         })
         .collect::<Vec<String>>()
         .join(".")
-}
-
-fn get_schema_name(schema_name: &SchemaName) -> String {
-    match schema_name {
-        SchemaName::Simple(schema_name) => object_name_to_string(schema_name),
-        SchemaName::UnnamedAuthorization(auth) => ident_to_string(auth),
-        SchemaName::NamedAuthorization(schema_name, auth) => format!(
-            "{}.{}",
-            object_name_to_string(schema_name),
-            ident_to_string(auth)
-        ),
-    }
 }
 
 /// Construct `TableConstraint`(s) for the given columns by iterating over
@@ -218,6 +210,60 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
 }
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
+    fn ident_to_string(&self, ident: &Ident) -> String {
+        self.legacy_normalizer(IdentNormalization::Lower)
+            .normalize(ident.clone())
+    }
+
+    fn object_name_to_string(&self, name: &ObjectName) -> String {
+        name.0
+            .iter()
+            .map(|part| {
+                part.as_ident()
+                    .map_or_else(String::new, |ident| self.ident_to_string(ident))
+            })
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    /// The extended parser stores partition identifiers as SQL strings, including
+    /// quoting. Recover the identifier before applying an explicit policy.
+    fn normalize_partition_cols(&self, columns: Vec<String>) -> Result<Vec<String>> {
+        if self.options.ident_normalization.is_none() {
+            return Ok(columns);
+        }
+        columns
+            .into_iter()
+            .map(|column| {
+                // Ident::to_string retains delimiters. GenericDialect handles
+                // double quotes and backticks, but not MSSQL bracket quotes.
+                let dialect: &dyn sqlparser::dialect::Dialect = if column.starts_with('[')
+                {
+                    &sqlparser::dialect::MsSqlDialect {}
+                } else {
+                    &sqlparser::dialect::GenericDialect {}
+                };
+                let mut parser =
+                    sqlparser::parser::Parser::new(dialect).try_with_sql(&column)?;
+                let ident = parser.parse_identifier()?;
+                parser.expect_token(&sqlparser::tokenizer::Token::EOF)?;
+                Ok(self.ident_normalizer.normalize(ident))
+            })
+            .collect()
+    }
+
+    fn get_schema_name(&self, schema_name: &SchemaName) -> String {
+        match schema_name {
+            SchemaName::Simple(name) => self.object_name_to_string(name),
+            SchemaName::UnnamedAuthorization(auth) => self.ident_to_string(auth),
+            SchemaName::NamedAuthorization(name, auth) => format!(
+                "{}.{}",
+                self.object_name_to_string(name),
+                self.ident_to_string(auth),
+            ),
+        }
+    }
+
     /// Generate a logical plan from an DataFusion SQL statement
     pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
         let plan = match statement {
@@ -748,7 +794,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 ..
             } => Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(
                 CreateCatalogSchema {
-                    schema_name: get_schema_name(&schema_name),
+                    schema_name: self.get_schema_name(&schema_name),
                     if_not_exists,
                     schema: Arc::new(DFSchema::empty()),
                 },
@@ -759,7 +805,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 ..
             } => Ok(LogicalPlan::Ddl(DdlStatement::CreateCatalog(
                 CreateCatalog {
-                    catalog_name: object_name_to_string(&db_name),
+                    catalog_name: self.object_name_to_string(&db_name),
                     if_not_exists,
                     schema: Arc::new(DFSchema::empty()),
                 },
@@ -831,7 +877,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                     ObjectType::Database => {
                         Ok(LogicalPlan::Ddl(DdlStatement::DropCatalog(
-                            DropCatalog::builder(object_name_to_string(&name))
+                            DropCatalog::builder(self.object_name_to_string(&name))
                                 .with_if_exists(if_exists)
                                 .with_cascade(cascade)
                                 .build(),
@@ -882,7 +928,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
 
                 Ok(LogicalPlan::Statement(PlanStatement::Prepare(Prepare {
-                    name: ident_to_string(&name),
+                    name: self.ident_to_string(&name),
                     fields,
                     input: Arc::new(plan),
                 })))
@@ -934,7 +980,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .collect::<Result<Vec<Expr>>>()?;
 
                 Ok(LogicalPlan::Statement(PlanStatement::Execute(Execute {
-                    name: object_name_to_string(&name),
+                    name: self.object_name_to_string(&name),
                     parameters,
                 })))
             }
@@ -944,7 +990,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 prepare: _,
             } => Ok(LogicalPlan::Statement(PlanStatement::Deallocate(
                 Deallocate {
-                    name: ident_to_string(&name),
+                    name: self.ident_to_string(&name),
                 },
             ))),
 
@@ -1593,7 +1639,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if_not_exists,
                 ..
             }) => {
-                let name: Option<String> = name.as_ref().map(object_name_to_string);
+                let name: Option<String> =
+                    name.as_ref().map(|name| self.object_name_to_string(name));
                 let table = self.object_name_to_table_reference(table_name)?;
                 let table_schema = self
                     .context_provider
@@ -1602,7 +1649,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .to_dfschema_ref()?;
                 let using: Option<String> =
                     using.as_ref().map(|index_type| match index_type {
-                        IndexType::Custom(ident) => ident_to_string(ident),
+                        IndexType::Custom(ident) => lowercase_unquoted_ident(ident),
                         _ => index_type.to_string().to_ascii_lowercase(),
                     });
                 let order_by_exprs: Vec<OrderByExpr> =
@@ -1683,12 +1730,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let copy_source = statement.source;
         let (input, input_schema, table_ref) = match copy_source {
             CopyToSource::Relation(object_name) => {
-                let table_name = object_name_to_string(&object_name);
+                let table_name = self.object_name_to_string(&object_name);
                 let table_ref = self.object_name_to_table_reference(object_name)?;
                 let table_source =
                     self.context_provider.get_table_source(table_ref.clone())?;
+                // An explicit policy has already normalized each component; parsing a
+                // string here would lowercase names again and split quoted dots.
+                let scan_name = if self.options.ident_normalization.is_some() {
+                    table_ref.clone()
+                } else {
+                    table_name.into()
+                };
                 let plan =
-                    LogicalPlanBuilder::scan(table_name, table_source, None)?.build()?;
+                    LogicalPlanBuilder::scan(scan_name, table_source, None)?.build()?;
                 let input_schema = Arc::clone(plan.schema());
                 (plan, input_schema, Some(table_ref))
             }
@@ -1728,8 +1782,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         };
 
-        let partition_by = statement
-            .partitioned_by
+        let partitioned_by = self.normalize_partition_cols(statement.partitioned_by)?;
+        let partition_by = partitioned_by
             .iter()
             .map(|col| input_schema.field_with_name(table_ref.as_ref(), col))
             .collect::<Result<Vec<_>>>()?
@@ -1880,7 +1934,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Box::new(
                 PlanCreateExternalTable::builder(name, location, file_type, df_schema)
                     .with_locations(locations)
-                    .with_partition_cols(table_partition_cols)
+                    .with_partition_cols(
+                        self.normalize_partition_cols(table_partition_cols)?,
+                    )
                     .with_if_not_exists(if_not_exists)
                     .with_or_replace(or_replace)
                     .with_temporary(temporary)
@@ -1922,7 +1978,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(
             Box::new(
                 PlanCreateExternalCatalog::builder(
-                    object_name_to_string(&catalog_name),
+                    self.object_name_to_string(&catalog_name),
                     catalog_type,
                 )
                 .with_location(location)
@@ -2177,7 +2233,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
         let verbose = variable
             .last()
-            .map(|s| ident_to_string(s) == "verbose")
+            .map(|s| lowercase_unquoted_ident(s) == "verbose")
             .unwrap_or(false);
         let mut variable_vec = variable.to_vec();
 
@@ -2185,7 +2241,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             variable_vec = variable_vec.split_at(variable_vec.len() - 1).0.to_vec();
         }
 
-        let variable = object_name_to_string(&ObjectName::from(variable_vec));
+        let variable = lowercase_unquoted_object_name(&ObjectName::from(variable_vec));
         let name = if variable == "all" {
             None
         } else {
@@ -2212,7 +2268,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return not_impl_err!("SET HIVEVAR is not supported");
                 }
 
-                let variable = object_name_to_string(&variable);
+                let variable = lowercase_unquoted_object_name(&variable);
                 let mut variable_lower = variable.to_lowercase();
 
                 // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name
@@ -2225,7 +2281,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
 
                 let value_string = match &values[0] {
-                    SQLExpr::Identifier(i) => ident_to_string(i),
+                    SQLExpr::Identifier(i) => lowercase_unquoted_ident(i),
                     SQLExpr::Value(v) => match crate::utils::value_to_string(&v.value) {
                         None => {
                             return plan_err!("Unsupported value {:?}", v.value);
@@ -2254,7 +2310,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn reset_statement_to_plan(&self, statement: ResetStatement) -> Result<LogicalPlan> {
         match statement {
             ResetStatement::Variable(variable) => {
-                let variable = object_name_to_string(&variable);
+                let variable = lowercase_unquoted_object_name(&variable);
                 let mut variable_lower = variable.to_lowercase();
 
                 // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name
@@ -2349,9 +2405,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .ok_or_else(|| plan_datafusion_err!("Empty column id"))?
                     .as_ident()
                     .unwrap();
+                let col_name = self
+                    .legacy_normalizer(IdentNormalization::Preserve)
+                    .normalize(col_name.clone());
                 // Validate that the assignment target column exists
-                table_schema.field_with_unqualified_name(&col_name.value)?;
-                Ok((col_name.value.clone(), assign.value.clone()))
+                table_schema.field_with_unqualified_name(&col_name)?;
+                Ok((col_name, assign.value.clone()))
             })
             .collect::<Result<HashMap<String, SQLExpr>>>()?;
 
