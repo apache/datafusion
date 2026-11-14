@@ -898,6 +898,30 @@ ORDER BY t1.id, sub.id;
 1 30
 2 30
 
+# The added key `t2.t1_id` is pinned by the equality, so it splits no group.
+query II
+SELECT t1.id, sub.id
+FROM t1, LATERAL (SELECT DISTINCT t2.id FROM t2 WHERE t2.t1_id = t1.id AND t2.id > t1.id * 10 + 5) AS sub
+ORDER BY t1.id, sub.id;
+----
+1 20
+2 30
+
+# The same through an injective cast.
+query II
+SELECT t1.id, sub.id
+FROM t1, LATERAL (SELECT DISTINCT t2.id FROM t2 WHERE CAST(t2.t1_id AS BIGINT) = t1.id AND t2.id > t1.id * 10 + 5) AS sub
+ORDER BY t1.id, sub.id;
+----
+1 20
+2 30
+
+# A lossy cast does not pin `d`: 1.2 and 1.4 both cast to 1, so v = 7 would
+# appear twice. Expected result once supported: (1, 7) once.
+statement error OuterReferenceColumn
+SELECT t1.id, sub.v
+FROM t1, LATERAL (SELECT DISTINCT td.v FROM (VALUES (1.2, 7), (1.4, 7)) AS td(d, v) WHERE CAST(td.d AS INT) = t1.id AND td.v > t1.id) AS sub;
+
 # --- Implicit LATERAL (comma without LATERAL keyword) ---
 # DuckDB auto-detects lateral correlation; DataFusion requires
 # the explicit LATERAL keyword.

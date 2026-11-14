@@ -638,16 +638,27 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         aggregate.input.schema(),
                     )?
                 };
-                // A DISTINCT may skip this check when the pull up adds no group
-                // key, or under EXISTS/IN. An added key only adds duplicate rows,
-                // which EXISTS/IN ignore. Elsewhere, e.g. LATERAL, the duplicates
-                // reach the result. See #25808.
+                // A DISTINCT may skip this check under EXISTS/IN, or when the pull
+                // up adds no group key that splits a group. An added key only adds
+                // duplicate rows, which EXISTS/IN ignore; elsewhere, e.g. LATERAL,
+                // they reach the result (#25808). A key that a correlated equality
+                // pins to one value per outer row splits no group.
                 let is_distinct = aggregate.aggr_expr.is_empty();
                 let is_exists_or_in =
                     self.exists_sub_query || self.in_predicate_opt.is_some();
-                let adds_group_keys = missing_exprs
+                let pinned_cols: Vec<&Expr> = self
+                    .join_filters
                     .iter()
-                    .any(|expr| !aggregate.group_expr.contains(expr));
+                    .filter(|f| is_partitionable_equality(f, aggregate.input.schema()))
+                    .filter_map(|f| split_column_equality(f).map(|(col, _)| col))
+                    .map(|col| match col {
+                        Expr::Cast(Cast { expr, .. }) => expr.as_ref(),
+                        _ => col,
+                    })
+                    .collect();
+                let adds_group_keys = missing_exprs.iter().any(|expr| {
+                    !aggregate.group_expr.contains(expr) && !pinned_cols.contains(&expr)
+                });
                 let can_skip_check = is_distinct && (is_exists_or_in || !adds_group_keys);
                 if !can_skip_check {
                     self.can_pull_up = self.can_pull_up && self.can_pull_over_aggregation;

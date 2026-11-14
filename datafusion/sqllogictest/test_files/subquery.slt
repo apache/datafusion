@@ -858,6 +858,12 @@ SELECT t1_id FROM t1 WHERE t1_int IN (SELECT DISTINCT t2_int FROM t2 WHERE t2_id
 11
 33
 
+#in_subquery_with_non_equality_filter_below_group_by
+#not de-correlated: an extra group key would change the counts.
+#Expected result once supported: 11, 22.
+statement error InSubquery
+SELECT t1_id FROM t1 WHERE t1_int IN (SELECT count(*) FROM t2 WHERE t2_id > t1_id GROUP BY t2_int)
+
 #exists_subquery_with_limit_below_group_by
 #de-correlated, a grouping has rows exactly when its input has rows
 query I rowsort
