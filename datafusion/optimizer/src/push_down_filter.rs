@@ -643,7 +643,145 @@ fn infer_join_predicates(
         &mut inferred_predicates,
     )?;
 
+    // Predicates can already be below the join, for example in a derived table
+    // or a plan supplied by another optimizer. Keep them in place and infer
+    // additional restrictions on the other input.
+    if join_type == JoinType::Inner && !join_col_keys.is_empty() {
+        let left = join_input_predicates(
+            &join.left,
+            join_col_keys.iter().map(|(left, _)| (*left).clone()),
+        )?;
+        let right = join_input_predicates(
+            &join.right,
+            join_col_keys.iter().map(|(_, right)| (*right).clone()),
+        )?;
+        let mut from_inputs = InferredPredicates::new(join_type);
+        infer_join_predicates_impl::<true, false>(
+            &join_col_keys,
+            &left.iter().cloned().collect::<Vec<_>>(),
+            &mut from_inputs,
+        )?;
+        infer_join_predicates_impl::<false, true>(
+            &join_col_keys,
+            &right.iter().cloned().collect::<Vec<_>>(),
+            &mut from_inputs,
+        )?;
+        inferred_predicates.predicates.extend(
+            from_inputs.predicates.into_iter().filter(|predicate| {
+                !left.contains(predicate) && !right.contains(predicate)
+            }),
+        );
+    }
+
     Ok(inferred_predicates.predicates)
+}
+
+/// Find predicates guaranteed by an input, expressed in its join-key columns.
+/// Only follow filters and column-preserving projections/aliases. Other nodes
+/// may change values or introduce rows that do not satisfy a descendant filter.
+fn join_input_predicates(
+    mut input: &LogicalPlan,
+    columns: impl Iterator<Item = Column>,
+) -> Result<IndexSet<Expr>> {
+    let mut columns = columns
+        .map(|column| (column.clone(), column))
+        .collect::<HashMap<_, _>>();
+    let mut predicates = IndexSet::new();
+    while !columns.is_empty() {
+        let candidates = match input {
+            LogicalPlan::Filter(filter) => split_conjunction(&filter.predicate),
+            LogicalPlan::Projection(projection) => {
+                let mut projected_columns = HashMap::new();
+                for (expr, (qualifier, field)) in
+                    projection.expr.iter().zip(projection.schema.iter())
+                {
+                    let output = Column::new(qualifier.cloned(), field.name());
+                    if let Some(column) = columns.get(&output)
+                        && let Expr::Column(input_column) = unalias(expr)
+                    {
+                        projected_columns.insert(input_column.clone(), column.clone());
+                    }
+                }
+                columns = projected_columns;
+                input = &projection.input;
+                continue;
+            }
+            LogicalPlan::SubqueryAlias(alias) => {
+                let mut aliased_columns = HashMap::new();
+                for ((qualifier, field), (input_qualifier, input_field)) in
+                    alias.schema.iter().zip(alias.input.schema().iter())
+                {
+                    let output = Column::new(qualifier.cloned(), field.name());
+                    if let Some(column) = columns.get(&output) {
+                        aliased_columns.insert(
+                            Column::new(input_qualifier.cloned(), input_field.name()),
+                            column.clone(),
+                        );
+                    }
+                }
+                columns = aliased_columns;
+                input = &alias.input;
+                continue;
+            }
+            LogicalPlan::TableScan(scan) if !scan.filters.is_empty() => {
+                let filters = scan.filters.iter().collect::<Vec<_>>();
+                let support = scan.source.supports_filters_pushdown(&filters)?;
+                assert_eq_or_internal_err!(filters.len(), support.len());
+                // Inexact scan filters can return false positives. Only exact
+                // filters establish a fact without a residual Filter node.
+                filters
+                    .into_iter()
+                    .zip(support)
+                    .filter(|(_, support)| *support == TableProviderFilterPushDown::Exact)
+                    .flat_map(|(predicate, _)| split_conjunction(predicate))
+                    .collect()
+            }
+            _ => break,
+        };
+        let replacements = columns.iter().collect::<HashMap<_, _>>();
+        for predicate in candidates {
+            let refs = predicate.column_refs();
+            if refs.is_empty()
+                || !refs.iter().all(|column| columns.contains_key(*column))
+                || !is_join_key_predicate(predicate)
+            {
+                continue;
+            }
+            predicates.insert(replace_col(predicate.clone(), &replacements)?);
+        }
+        if let LogicalPlan::Filter(filter) = input {
+            input = &filter.input;
+        } else {
+            break;
+        }
+    }
+    Ok(predicates)
+}
+
+/// Only infer predicates that are invariant under join-key equality. Repeatability
+/// alone is insufficient: `atan2` distinguishes -0.0 from +0.0, which join equally.
+fn is_join_key_predicate(predicate: &Expr) -> bool {
+    match predicate {
+        Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+            [
+                Operator::Eq,
+                Operator::NotEq,
+                Operator::Lt,
+                Operator::LtEq,
+                Operator::Gt,
+                Operator::GtEq,
+            ]
+            .contains(op)
+                && ((left.try_as_col().is_some() && right.as_literal().is_some())
+                    || (left.as_literal().is_some() && right.try_as_col().is_some()))
+        }
+        Expr::IsNull(expr) | Expr::IsNotNull(expr) => expr.try_as_col().is_some(),
+        Expr::InList(list) => {
+            list.expr.try_as_col().is_some()
+                && list.list.iter().all(|expr| expr.as_literal().is_some())
+        }
+        _ => false,
+    }
 }
 
 /// Inferred predicates collector.
@@ -3521,6 +3659,61 @@ mod tests {
         table_scan_with_pushdown_provider_builder(filter_support, vec![], None)?
             .filter(col("a").eq(lit(1i64)))?
             .build()
+    }
+
+    // SQL cannot construct a scan with an inexact filter and no residual Filter.
+    // Such a scan must not be used as proof that the predicate holds.
+    #[test]
+    fn join_input_scan_filter_support() -> Result<()> {
+        for support in [
+            TableProviderFilterPushDown::Exact,
+            TableProviderFilterPushDown::Inexact,
+            TableProviderFilterPushDown::Unsupported,
+        ] {
+            let left = table_scan_with_pushdown_provider_builder(
+                support.clone(),
+                vec![col("a").eq(lit(1i32))],
+                None,
+            )?
+            .alias("l")?
+            .build()?;
+            let right = table_scan_with_pushdown_provider_builder(
+                TableProviderFilterPushDown::Exact,
+                vec![],
+                None,
+            )?
+            .alias("r")?
+            .build()?;
+            let plan = LogicalPlanBuilder::from(left)
+                .join(
+                    right,
+                    JoinType::Inner,
+                    (vec![Column::from("l.a")], vec![Column::from("r.a")]),
+                    None,
+                )?
+                .build()?;
+            let rewritten =
+                PushDownFilter::new().rewrite(plan.clone(), &OptimizerContext::new())?;
+            if support == TableProviderFilterPushDown::Exact {
+                assert!(rewritten.transformed);
+                let optimizer =
+                    Optimizer::with_rules(vec![Arc::new(PushDownFilter::new())]);
+                let optimized =
+                    optimizer.optimize(plan, &OptimizerContext::new(), observe)?;
+                assert_snapshot!(optimized, @r#"
+                Inner Join: l.a = r.a
+                  SubqueryAlias: l
+                    TableScan: test, full_filters=[a = Int32(1)]
+                  SubqueryAlias: r
+                    TableScan: test, full_filters=[a = Int32(1)]
+                "#);
+                assert_plan_not_transformed!(optimized);
+            } else {
+                assert!(!rewritten.transformed);
+                assert_eq!(rewritten.data, plan);
+            }
+        }
+        Ok(())
     }
 
     #[test]
