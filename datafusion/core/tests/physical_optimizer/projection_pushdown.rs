@@ -2115,7 +2115,8 @@ async fn split_descends_through_global_limit() -> Result<()> {
     // do not pay for it, and both of the limit's numbers survive the rebuild.
     assert_snapshot!(
         optimized_plan_text(projection)?,
-        @r"    ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+        @r"
+    ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
       GlobalLimitExec: skip=1, fetch=3
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
     "

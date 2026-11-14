@@ -566,14 +566,12 @@ fn split_host_chain(node: &Arc<dyn ExecutionPlan>) -> Option<SplitHostChain<'_>>
         hosts.push(current);
         current = child;
     }
-    // A termination guard, not an optimization. With it removed this rule is
-    // handed the same plan over and over: a projection holding a leaf whose
-    // child is another projection, so the chain is empty. The `counted_volatile`
-    // queries in `projection_pushdown.slt` are that shape, a volatile inner
-    // projection being what stops `remove_unnecessary_projections` from merging
-    // the pair first; that file then runs until the harness gives up while every
-    // Rust test stays green. Why the rewrite fails to converge is not pinned
-    // down further.
+    // A termination guard, not an optimization. With no host, `current` is the
+    // projection's own input. When that is a `ProjectionExec` the two cannot
+    // collapse into (the `counted_volatile` queries in `projection_pushdown.slt`),
+    // `ProjectionExec::try_swapping_with_projection` returns the lower
+    // projection stacked on top of it, so the split commits, and
+    // `transform_down` then visits that lower projection and splits it again.
     (!hosts.is_empty()).then_some(SplitHostChain {
         hosts,
         child: current,

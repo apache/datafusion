@@ -3051,6 +3051,36 @@ SELECT count(v) FROM (
 statement ok
 DROP TABLE leaf_split_two;
 
+# A table bigger than `batch_size` also gets a `RepartitionExec`, which lands
+# above the limit. The split then acts on the leaf projection under it.
+statement ok
+SET datafusion.execution.batch_size = 2;
+
+query TT
+EXPLAIN SELECT s['value'] AS v, id + 1 AS w FROM leaf_split OFFSET 1 LIMIT 3;
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS v, leaf_split.id + Int64(1) AS w
+02)--Limit: skip=0, fetch=3
+03)----Projection: get_field(leaf_split.s, Utf8("value")) AS __datafusion_extracted_1, leaf_split.id
+04)------TableScan: leaf_split projection=[id, s], fetch=3, skip=1
+physical_plan
+01)ProjectionExec: expr=[__datafusion_extracted_1@0 as v, id@1 + 1 as w]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----ProjectionExec: expr=[__datafusion_leaf_0@1 as __datafusion_extracted_1, id@0 as id]
+04)------GlobalLimitExec: skip=1, fetch=3
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], limit=4, file_type=parquet
+
+query II
+SELECT v, w FROM (SELECT s['value'] AS v, id + 1 AS w FROM leaf_split OFFSET 1 LIMIT 3) ORDER BY v;
+----
+150 4
+200 3
+300 5
+
+statement ok
+SET datafusion.execution.batch_size = 8192;
+
 statement ok
 DROP TABLE leaf_split;
 
