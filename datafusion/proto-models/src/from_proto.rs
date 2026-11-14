@@ -10,6 +10,7 @@
 //! instead, on the local proto type — the same arrangement
 //! `datafusion-proto-common` uses for `ScalarValue` and `Statistics`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion_common::config::{
@@ -510,15 +511,20 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
     }
 }
 
-impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
-    fn from(proto: ParquetColumnOptionsProto) -> Self {
-        ParquetColumnOptions {
+impl TryFrom<ParquetColumnOptionsProto> for ParquetColumnOptions {
+    type Error = datafusion_common::DataFusionError;
+
+    fn try_from(
+        proto: ParquetColumnOptionsProto,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        Ok(ParquetColumnOptions {
             bloom_filter_enabled: proto.bloom_filter_enabled_opt.map(
                 |parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v)| v,
             ),
             encoding: proto
                 .encoding_opt
-                .map(|parquet_column_options::EncodingOpt::Encoding(v)| v),
+                .map(|parquet_column_options::EncodingOpt::Encoding(v)| v.parse())
+                .transpose()?,
             dictionary_enabled: proto.dictionary_enabled_opt.map(
                 |parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled(v)| v,
             ),
@@ -534,7 +540,7 @@ impl From<ParquetColumnOptionsProto> for ParquetColumnOptions {
             bloom_filter_ndv: proto
                 .bloom_filter_ndv_opt
                 .map(|parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(v)| v),
-        }
+        })
     }
 }
 
@@ -555,14 +561,14 @@ impl TryFrom<&TableParquetOptionsProto> for TableParquetOptions {
                 .column_specific_options
                 .iter()
                 .map(|parquet_column_options| {
-                    (
+                    Ok((
                         parquet_column_options.column_name.clone(),
-                        ParquetColumnOptions::from(
+                        ParquetColumnOptions::try_from(
                             parquet_column_options.options.clone().unwrap_or_default(),
-                        ),
-                    )
+                        )?,
+                    ))
                 })
-                .collect(),
+                .collect::<datafusion_common::Result<HashMap<_, _>>>()?,
             key_value_metadata: proto
                 .key_value_metadata
                 .iter()
@@ -587,6 +593,22 @@ mod tests {
         };
 
         let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unknown or unsupported parquet encoding: invalid")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_column_parquet_encoding() {
+        let proto = ParquetColumnOptionsProto {
+            encoding_opt: Some(parquet_column_options::EncodingOpt::Encoding(
+                "invalid".to_string(),
+            )),
+            ..Default::default()
+        };
+
+        let err = ParquetColumnOptions::try_from(proto).unwrap_err();
         assert!(
             err.to_string()
                 .contains("Unknown or unsupported parquet encoding: invalid")
