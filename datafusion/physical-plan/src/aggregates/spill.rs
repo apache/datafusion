@@ -238,7 +238,12 @@ impl AggregateSpill {
             self.spill_expr.clone(),
             self.batch_size,
         )
-        .with_max_batch_bytes(SPILL_BATCH_TARGET_BYTES);
+        // Cut at the bound of the spill file, so that its writer need not split again.
+        .with_max_batch_bytes(
+            self.spill_manager
+                .max_batch_bytes()
+                .unwrap_or(SPILL_BATCH_TARGET_BYTES),
+        );
         let mut in_progress_file =
             self.spill_manager.create_in_progress_file(self.label)?;
         let mut written = WrittenBatchStats::default();
