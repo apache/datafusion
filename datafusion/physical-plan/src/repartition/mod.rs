@@ -2996,6 +2996,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn range_repartition_equal_split_points() -> Result<()> {
+        let schema = test_schema(false);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![5, 10, 15, 25]))],
+        )?;
+        let partitioning =
+            u32_range_partitioning(&schema, SortOptions::default(), vec![10, 10, 20])?;
+
+        let output = repartition(&schema, vec![vec![batch]], partitioning).await?;
+
+        assert_eq!(
+            output
+                .iter()
+                .map(|partition| collect_partition_u32_values(partition))
+                .collect::<Vec<_>>(),
+            vec![
+                vec![Some(5)],
+                vec![],
+                vec![Some(10), Some(15)],
+                vec![Some(25)],
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn range_repartition_equal_split_points_compound_keys() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::UInt32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![5, 10, 10, 15, 20, 20, 25])),
+                Arc::new(UInt32Array::from(vec![1, 0, 1, 1, 0, 1, 1])),
+            ],
+        )?;
+        let point = |a, b| {
+            SplitPoint::new(vec![
+                ScalarValue::UInt32(Some(a)),
+                ScalarValue::UInt32(Some(b)),
+            ])
+        };
+        let partitioning = Partitioning::Range(RangePartitioning::try_new(
+            [
+                PhysicalSortExpr::new_default(col("a", &schema)?),
+                PhysicalSortExpr::new_default(col("b", &schema)?),
+            ]
+            .into(),
+            vec![point(10, 1), point(10, 1), point(20, 1)],
+        )?);
+
+        let output = repartition(&schema, vec![vec![batch]], partitioning).await?;
+
+        assert_eq!(
+            output
+                .iter()
+                .map(|partition| collect_partition_u32_pairs(partition))
+                .collect::<Vec<_>>(),
+            vec![
+                vec![(5, 1), (10, 0)],
+                vec![],
+                vec![(10, 1), (15, 1), (20, 0)],
+                vec![(20, 1), (25, 1)],
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn range_repartition_routes_compound_keys() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::UInt32, false),

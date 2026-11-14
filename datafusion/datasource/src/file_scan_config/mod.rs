@@ -621,7 +621,7 @@ pub fn output_partitioning_from_partition_fields(
 /// [`FileGroup::group_by_partition_values_with_split_points`], each column sorted with
 /// `SortOptions::default()` to match how the groups were cut. Returns `None` when there
 /// are no partition columns or one is missing from `schema`, and errors when
-/// `split_points` are not strictly ordered. Split point values must have the partition
+/// `split_points` decrease in that ordering. Split point values must have the partition
 /// column types in `schema`.
 pub fn output_range_partitioning_from_split_points(
     schema: &Schema,
@@ -3230,7 +3230,10 @@ mod tests {
             ],
         )
         .unwrap_err();
-        assert!(err.to_string().contains("strictly ordered"), "{err}");
+        assert!(
+            err.to_string().contains("split points must be ordered"),
+            "{err}"
+        );
 
         // Test multiple partition columns
         let multiple_partition_cols = vec![
