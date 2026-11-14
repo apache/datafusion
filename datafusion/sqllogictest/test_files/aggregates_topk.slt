@@ -886,3 +886,40 @@ GROUP BY k ORDER BY MAX(v) DESC NULLS LAST LIMIT 1;
 
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+# A computed column that reuses the aggregate's name must not get a TopK limit;
+# See: https://github.com/apache/datafusion/issues/27195
+statement ok
+CREATE TABLE topk_computed_alias (g BIGINT, x BIGINT) AS VALUES (1, 100), (2, 90), (3, 10), (4, 5);
+
+query II
+SELECT g, -"min(topk_computed_alias.x)" AS "min(topk_computed_alias.x)"
+FROM (SELECT g, min(x) FROM topk_computed_alias GROUP BY g)
+ORDER BY "min(topk_computed_alias.x)"
+LIMIT 2;
+----
+1 -100
+2 -90
+
+query TT
+EXPLAIN SELECT g, -"min(topk_computed_alias.x)" AS "min(topk_computed_alias.x)"
+FROM (SELECT g, min(x) FROM topk_computed_alias GROUP BY g)
+ORDER BY "min(topk_computed_alias.x)"
+LIMIT 2;
+----
+logical_plan
+01)Sort: min(topk_computed_alias.x) ASC NULLS LAST, fetch=2
+02)--Projection: topk_computed_alias.g, (- min(topk_computed_alias.x)) AS min(topk_computed_alias.x)
+03)----Aggregate: groupBy=[[topk_computed_alias.g]], aggr=[[min(topk_computed_alias.x)]]
+04)------TableScan: topk_computed_alias projection=[g, x]
+physical_plan
+01)SortPreservingMergeExec: [min(topk_computed_alias.x)@1 ASC NULLS LAST], fetch=2
+02)--SortExec: TopK(fetch=2), expr=[min(topk_computed_alias.x)@1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[g@0 as g, (- min(topk_computed_alias.x)@1) as min(topk_computed_alias.x)]
+04)------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[min(topk_computed_alias.x)]
+05)--------RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
+06)----------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[min(topk_computed_alias.x)]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE topk_computed_alias;
