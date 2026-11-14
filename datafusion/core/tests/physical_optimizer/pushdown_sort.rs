@@ -1206,6 +1206,7 @@ fn test_sort_pushdown_exact_preserves_fetch_with_source_support() {
     );
 }
 
+// Verify that PushdownSort pushes TopK sort requirements through FilterExec to the scan.
 #[test]
 fn test_sort_pushdown_through_filter_exec() {
     let schema = schema();
@@ -1220,22 +1221,111 @@ fn test_sort_pushdown_through_filter_exec() {
     .unwrap();
     let filter = filter_exec(predicate, source);
     let ordering = LexOrdering::new(vec![a]).unwrap();
-    let plan = sort_exec(ordering, filter);
+    let plan = sort_exec_with_fetch(ordering, Some(10), filter);
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, PushdownSort::new(), true),
         @r"
     OptimizationTest:
       input:
-        - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+        - SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
         -   FilterExec: b@1 > 0
         -     TestScan
       output:
         Ok:
-          - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+          - SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
           -   FilterExec: b@1 > 0
           -     TestScan: requested_ordering=[a@0 ASC]
     "
     );
 }
 
+// Ungrouped MAX(a) pushes [a DESC NULLS LAST] down to the scan.
+#[test]
+fn test_sort_pushdown_ungrouped_max() {
+    use datafusion_functions_aggregate::min_max::max_udaf;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_plan::aggregates::{
+        AggregateExec, AggregateMode, PhysicalGroupBy,
+    };
+
+    let schema = schema();
+    let source = Arc::new(TestScan::new(schema.clone(), vec![]));
+    let col_a = expressions::col("a", &schema).unwrap();
+    let max_expr = AggregateExprBuilder::new(max_udaf(), vec![col_a])
+        .schema(Arc::clone(&schema))
+        .alias("max_a")
+        .build()
+        .unwrap();
+
+    let plan = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::default(),
+            vec![Arc::new(max_expr)],
+            vec![None],
+            source,
+            schema,
+        )
+        .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - AggregateExec: mode=Single, gby=[], aggr=[max_a]
+        -   TestScan
+      output:
+        Ok:
+          - AggregateExec: mode=Single, gby=[], aggr=[max_a]
+          -   TestScan: requested_ordering=[a@0 DESC NULLS LAST]
+    "
+    );
+}
+
+// Ungrouped MIN(a) pushes [a ASC NULLS LAST] down to the scan.
+#[test]
+fn test_sort_pushdown_ungrouped_min() {
+    use datafusion_functions_aggregate::min_max::min_udaf;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_plan::aggregates::{
+        AggregateExec, AggregateMode, PhysicalGroupBy,
+    };
+
+    let schema = schema();
+    let source = Arc::new(TestScan::new(schema.clone(), vec![]));
+    let col_a = expressions::col("a", &schema).unwrap();
+    let min_expr = AggregateExprBuilder::new(min_udaf(), vec![col_a])
+        .schema(Arc::clone(&schema))
+        .alias("min_a")
+        .build()
+        .unwrap();
+
+    let plan = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::default(),
+            vec![Arc::new(min_expr)],
+            vec![None],
+            source,
+            schema,
+        )
+        .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - AggregateExec: mode=Single, gby=[], aggr=[min_a]
+        -   TestScan
+      output:
+        Ok:
+          - AggregateExec: mode=Single, gby=[], aggr=[min_a]
+          -   TestScan: requested_ordering=[a@0 ASC NULLS LAST]
+    "
+    );
+}
