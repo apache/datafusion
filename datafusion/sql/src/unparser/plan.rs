@@ -2763,6 +2763,7 @@ impl Unparser<'_> {
             JoinType::Inner => match &constraint {
                 ast::JoinConstraint::On(_)
                 | ast::JoinConstraint::Using(_)
+                | ast::JoinConstraint::UsingAlias(_, _)
                 | ast::JoinConstraint::Natural => ast::JoinOperator::Inner(constraint),
                 ast::JoinConstraint::None => {
                     // Inner joins with no conditions or filters are not valid SQL in most systems,

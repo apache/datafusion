@@ -158,10 +158,11 @@ impl Unparser<'_> {
                     .iter()
                     .map(|e| self.expr_to_sql_inner(e))
                     .collect::<Result<Vec<_>>>()?;
-                Ok(ast::Expr::InList {
+                Ok(ast::Expr::In {
                     expr: Box::new(self.expr_to_sql_inner(expr)?),
-                    list: list_expr,
+                    target: ast::InTarget::List(list_expr),
                     negated: *negated,
+                    global: false,
                 })
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
@@ -462,10 +463,11 @@ impl Unparser<'_> {
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
                 };
-                Ok(ast::Expr::InSubquery {
+                Ok(ast::Expr::In {
                     expr: inexpr,
-                    subquery: sub_query,
+                    target: ast::InTarget::Subquery(sub_query),
                     negated: insubq.negated,
+                    global: false,
                 })
             }
             Expr::SetComparison(set_cmp) => {
@@ -3983,7 +3985,7 @@ mod tests {
                 match tz {
                     Some(tz) => ast::DataType::Custom(
                         ObjectName::from(vec![Ident::new("TIMESTAMPTZ")]),
-                        vec![tz.to_string()],
+                        vec![ast::TypeModifier::Identifier(Ident::new(tz.to_string()))],
                     ),
                     None => ast::DataType::Timestamp(None, TimezoneInfo::None),
                 }

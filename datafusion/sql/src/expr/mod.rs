@@ -12,8 +12,8 @@ use datafusion_expr::planner::{
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, CeilFloorKind,
     DataType as SQLDataType, DateTimeField, DictionaryField, Expr as SQLExpr,
-    ExprWithAlias as SQLExprWithAlias, JsonPath, JsonPathElem, MapEntry, Spanned,
-    StructField, Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
+    ExprWithAlias as SQLExprWithAlias, InTarget, JsonPath, JsonPathElem, MapEntry,
+    Spanned, StructField, Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
 };
 use sqlparser::ast::{Query, Visit, Visitor};
 
@@ -580,11 +580,36 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )?),
             ))),
 
-            SQLExpr::InList {
+            SQLExpr::In {
                 expr,
-                list,
+                target,
                 negated,
-            } => self.sql_in_list_to_expr(*expr, list, negated, schema, planner_context),
+                global,
+            } => {
+                if global {
+                    return not_impl_err!("GLOBAL IN is not supported");
+                }
+                match target {
+                    InTarget::List(list) => self.sql_in_list_to_expr(
+                        *expr,
+                        list,
+                        negated,
+                        schema,
+                        planner_context,
+                    ),
+                    InTarget::Subquery(subquery) => self.parse_in_subquery(
+                        *expr,
+                        *subquery,
+                        negated,
+                        schema,
+                        planner_context,
+                    ),
+                    InTarget::Unnest(_) => not_impl_err!("IN UNNEST is not supported"),
+                    InTarget::Table { .. } => {
+                        not_impl_err!("IN <table name> is not supported")
+                    }
+                }
+            }
 
             SQLExpr::Like {
                 negated,
@@ -727,13 +752,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             SQLExpr::Exists { subquery, negated } => {
                 self.parse_exists_subquery(*subquery, negated, schema, planner_context)
-            }
-            SQLExpr::InSubquery {
-                expr,
-                subquery,
-                negated,
-            } => {
-                self.parse_in_subquery(*expr, *subquery, negated, schema, planner_context)
             }
             SQLExpr::Subquery(subquery) => {
                 self.parse_scalar_subquery(*subquery, schema, planner_context)
