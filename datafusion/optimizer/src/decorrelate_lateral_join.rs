@@ -6,7 +6,9 @@
 
 use std::sync::Arc;
 
-use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
+use crate::decorrelate::{
+    PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR, check_alias_keeps_column_name,
+};
 use crate::optimizer::ApplyOrder;
 use crate::utils::evaluates_to_null;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -399,6 +401,7 @@ fn requalify_filter(
             if let Expr::Column(col) = &expr
                 && inner_schema.has_column(col)
             {
+                check_alias_keeps_column_name(inner_schema, col)?;
                 let new_col = Column::new(Some(alias.clone()), col.name.clone());
                 return Ok(Transformed::yes(Expr::Column(new_col)));
             }

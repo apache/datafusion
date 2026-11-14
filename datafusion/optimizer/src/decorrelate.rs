@@ -22,6 +22,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
+use datafusion_expr::logical_plan::builder::unique_field_aliases;
 use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{collect_subquery_cols, conjunction, split_conjunction};
@@ -709,6 +710,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 );
                 let mut new_correlated_cols = BTreeSet::new();
                 for col in local_correlated_cols.iter() {
+                    check_alias_keeps_column_name(alias.input.schema(), col)?;
                     new_correlated_cols
                         .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
                 }
@@ -1222,6 +1224,27 @@ pub(crate) fn find_join_exprs(exprs: Vec<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
     (joins, others)
 }
 
+/// Returns an error if `col` would be renamed when `schema` is wrapped in a `SubqueryAlias`.
+///
+/// Wrapping `schema` in a `SubqueryAlias` renames fields that collide with
+/// earlier field names or aliases (`k:1`, ...), so qualifying `col` as
+/// `<alias>.<name>` refers to `col` only when its original name is preserved.
+/// See <https://github.com/apache/datafusion/issues/26234>.
+pub(crate) fn check_alias_keeps_column_name(
+    schema: &DFSchema,
+    col: &Column,
+) -> Result<()> {
+    let Some(index) = schema.maybe_index_of_column(col) else {
+        return Ok(());
+    };
+    if unique_field_aliases(schema.fields())[index].is_some() {
+        return plan_err!(
+            "Unsupported correlated subquery: correlated column {col} has the same name as an earlier column of the subquery output"
+        );
+    }
+    Ok(())
+}
+
 /// Combines join filters and qualifies their inner columns with the subquery alias.
 ///
 /// Aliasing must precede stripping outer references so inner and outer columns
@@ -1229,12 +1252,18 @@ pub(crate) fn find_join_exprs(exprs: Vec<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
 pub(crate) fn build_join_filter<'a>(
     join_filters: Vec<Expr>,
     correlated_cols: impl IntoIterator<Item = &'a Column>,
+    subquery_schema: &DFSchema,
     subquery_alias: &str,
 ) -> Result<Option<Expr>> {
     let correlated_cols = correlated_cols
         .into_iter()
         .cloned()
         .collect::<BTreeSet<_>>();
+
+    for col in &correlated_cols {
+        check_alias_keeps_column_name(subquery_schema, col)?;
+    }
+
     conjunction(join_filters)
         .map(|filter| {
             replace_qualified_name(filter, &correlated_cols, subquery_alias)
@@ -1447,16 +1476,36 @@ mod tests {
 
     #[test]
     fn test_build_join_filter() -> Result<()> {
-        assert_eq!(build_join_filter(vec![], [], "sq")?, None);
+        let empty_schema = DFSchema::empty();
+        assert_eq!(build_join_filter(vec![], [], &empty_schema, "sq")?, None);
 
         let column = Column::from("t.a");
         let outer = out_ref_col(DataType::Int32, "t.a");
         let filters = vec![col("t.a").eq(outer.clone()), outer.gt(lit(1))];
+        let schema = DFSchema::from_unqualified_fields(
+            vec![arrow::datatypes::Field::new("a", DataType::Int32, true)].into(),
+            std::collections::HashMap::new(),
+        )?;
 
         assert_eq!(
-            build_join_filter(filters, [&column, &column], "sq")?,
+            build_join_filter(filters.clone(), [&column, &column], &schema, "sq")?,
             Some(col("sq.a").eq(col("t.a")).and(col("t.a").gt(lit(1))))
         );
+
+        // Under the alias, `one.a` keeps the name `a` and `two.a` becomes `a:1`,
+        // so only `one.a` can be qualified as `sq.a`.
+        let field_a = Arc::new(arrow::datatypes::Field::new("a", DataType::Int32, true));
+        let dup_schema = DFSchema::new_with_metadata(
+            vec![
+                (Some("one".into()), Arc::clone(&field_a)),
+                (Some("two".into()), field_a),
+            ],
+            std::collections::HashMap::new(),
+        )?;
+        let one_a = Column::from("one.a");
+        let two_a = Column::from("two.a");
+        assert!(build_join_filter(vec![], [&one_a], &dup_schema, "sq").is_ok());
+        assert!(build_join_filter(vec![], [&two_a], &dup_schema, "sq").is_err());
         Ok(())
     }
 }

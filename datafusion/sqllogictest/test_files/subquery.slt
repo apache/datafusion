@@ -4842,3 +4842,117 @@ DROP TABLE unbounded_not_in_right_nn;
 
 statement ok
 RESET datafusion.execution.batch_size;
+
+# Issue #26234: Correlated subquery confusing same-named columns of two relations
+statement ok
+CREATE TABLE t26234(k INT) AS VALUES (1), (2);
+
+# Query 1: EXISTS
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT 1 FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+);
+
+# Query 2: NOT EXISTS
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE NOT EXISTS (
+    SELECT 1 FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+);
+
+# Query 3: IN
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE t_outer.k IN (
+    SELECT one.k FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+);
+
+# Query 4: Scalar subquery
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k, (
+    SELECT count(*) FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+) FROM t26234 t_outer ORDER BY t_outer.k;
+
+# Query 5: IN with projection from one relation and correlation from another
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE t_outer.k IN (
+    SELECT one.k FROM t26234 one, t26234 two WHERE two.k = t_outer.k + 1
+);
+
+# Query 6: LATERAL join
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k, s.c FROM t26234 t_outer, LATERAL (
+    SELECT count(*) AS c FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+) s;
+
+# Same-named columns are fine when only the first one is correlated
+query I
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT * FROM t26234 one, t26234 two WHERE one.k = t_outer.k
+) ORDER BY t_outer.k;
+----
+1
+2
+
+query I
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT one.k, two.k FROM t26234 one, t26234 two WHERE one.k = t_outer.k
+) ORDER BY t_outer.k;
+----
+1
+2
+
+# Single relation correlated column works without ambiguity
+query I
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT 1 FROM t26234 one WHERE one.k = t_outer.k
+) ORDER BY t_outer.k;
+----
+1
+2
+
+# Same-named columns of a derived table inside the subquery
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT 1 FROM (
+        SELECT * FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+    ) d
+);
+
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE NOT EXISTS (
+    SELECT 1 FROM (
+        SELECT * FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+    ) d
+);
+
+# A derived table with one relation still works
+query I
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT 1 FROM (SELECT * FROM t26234 one WHERE one.k = t_outer.k + 1) d
+) ORDER BY t_outer.k;
+----
+1
+
+# A column literally named `k:1` after two `k` columns: the alias renames the
+# second `k` to `k:1`, so it renames this column too.
+statement ok
+CREATE TABLE c26234("k:1" INT) AS VALUES (1), (2);
+
+statement error Unsupported correlated subquery: correlated column c.k:1 has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT * FROM t26234 one, t26234 two, c26234 c
+    WHERE c."k:1" = t_outer.k AND two.k = 1
+);
+
+statement error Unsupported correlated subquery: correlated column c.k:1 has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE NOT EXISTS (
+    SELECT * FROM t26234 one, t26234 two, c26234 c
+    WHERE c."k:1" = t_outer.k AND two.k = 1
+);
+
+statement ok
+DROP TABLE c26234;
+
+statement ok
+DROP TABLE t26234;
+
+
