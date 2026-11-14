@@ -8,7 +8,10 @@ use std::sync::Arc;
 
 use crate::{
     PhysicalExpr,
-    expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
+    expressions::{
+        BinaryExpr, CastExpr, Column, Literal, NegativeExpr,
+        can_propagate_cast_constraints,
+    },
 };
 
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
@@ -23,19 +26,68 @@ use datafusion_expr::interval_arithmetic::Interval;
 /// will relax as more types of `PhysicalExpr`s and `Operator`s are supported.
 /// Currently, [`CastExpr`], [`NegativeExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
 pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
+    check_support_with(expr, schema, is_datatype_supported, false)
+}
+
+/// Like [`check_support`], but additionally accepts decimal types. This is
+/// used when estimating filter statistics, where decimal predicates can be
+/// analyzed with interval arithmetic. Other users of [`check_support`], such
+/// as symmetric hash join pruning, do not support decimals yet.
+///
+/// It also rejects casts that bounds cannot be propagated back through, such
+/// as a decimal to `Float64`. Interval analysis cannot narrow the cast's input
+/// then, and would estimate a selectivity of 1.0.
+pub fn check_statistics_support(
+    expr: &Arc<dyn PhysicalExpr>,
+    schema: &SchemaRef,
+) -> bool {
+    check_support_with(
+        expr,
+        schema,
+        |data_type| is_datatype_supported(data_type) || data_type.is_decimal(),
+        true,
+    )
+}
+
+fn check_support_with(
+    expr: &Arc<dyn PhysicalExpr>,
+    schema: &SchemaRef,
+    is_type_supported: fn(&DataType) -> bool,
+    require_cast_propagation: bool,
+) -> bool {
     if let Some(binary_expr) = expr.downcast_ref::<BinaryExpr>() {
+        // Arithmetic is only analyzed over the types `check_support` accepts:
+        // decimal arithmetic changes the precision and scale of its result, and
+        // propagating constraints back to its operands would not restore their
+        // types.
+        let is_type_supported: fn(&DataType) -> bool =
+            if binary_expr.op().is_numerical_operators() {
+                is_datatype_supported
+            } else {
+                is_type_supported
+            };
         is_operator_supported(binary_expr.op())
-            && check_support(binary_expr.left(), schema)
-            && check_support(binary_expr.right(), schema)
+            && check_support_with(
+                binary_expr.left(),
+                schema,
+                is_type_supported,
+                require_cast_propagation,
+            )
+            && check_support_with(
+                binary_expr.right(),
+                schema,
+                is_type_supported,
+                require_cast_propagation,
+            )
     } else if let Some(column) = expr.downcast_ref::<Column>() {
         if let Ok(field) = schema.field_with_name(column.name()) {
-            is_datatype_supported(field.data_type())
+            is_type_supported(field.data_type())
         } else {
             false
         }
     } else if let Some(literal) = expr.downcast_ref::<Literal>() {
         if let Ok(dt) = literal.data_type(schema) {
-            is_datatype_supported(&dt)
+            is_type_supported(&dt)
         } else {
             false
         }
@@ -44,9 +96,24 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
         // interval endpoints to a type with a different ordering (e.g. integers
         // to strings) does not preserve the interval, so such expressions are
         // left unanalyzed rather than producing bogus bounds.
-        is_datatype_supported(cast.cast_type()) && check_support(cast.expr(), schema)
+        is_type_supported(cast.cast_type())
+            && (!require_cast_propagation
+                || cast.expr().data_type(schema).is_ok_and(|input_type| {
+                    can_propagate_cast_constraints(&input_type, cast.cast_type())
+                }))
+            && check_support_with(
+                cast.expr(),
+                schema,
+                is_type_supported,
+                require_cast_propagation,
+            )
     } else if let Some(negative) = expr.downcast_ref::<NegativeExpr>() {
-        check_support(negative.arg(), schema)
+        check_support_with(
+            negative.arg(),
+            schema,
+            is_type_supported,
+            require_cast_propagation,
+        )
     } else {
         false
     }
@@ -182,5 +249,121 @@ fn interval_dt_to_duration_ms(dt: &IntervalDayTime) -> Result<i64> {
         internal_err!(
             "The interval cannot have a non-zero day value for duration convertibility"
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arrow::datatypes::{Field, Schema};
+
+    #[test]
+    fn check_statistics_support_decimal() {
+        for data_type in [
+            DataType::Decimal32(9, 2),
+            DataType::Decimal64(18, 2),
+            DataType::Decimal128(15, 2),
+            DataType::Decimal256(40, 2),
+        ] {
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("a", data_type.clone(), false)]));
+            let literal = ScalarValue::try_from(&data_type).unwrap();
+            let expr = Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Lt,
+                Arc::new(Literal::new(literal)),
+            )) as Arc<dyn PhysicalExpr>;
+
+            assert!(check_statistics_support(&expr, &schema));
+            // Decimal support is limited to statistics estimation for now:
+            assert!(!check_support(&expr, &schema));
+
+            // Decimal arithmetic is not analyzed, since it changes the precision
+            // and scale of its operands:
+            let literal = ScalarValue::try_from(&data_type).unwrap();
+            for op in [Operator::Plus, Operator::Minus, Operator::Multiply] {
+                let arithmetic = Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    op,
+                    Arc::new(Literal::new(literal.clone())),
+                )) as Arc<dyn PhysicalExpr>;
+                let expr = Arc::new(BinaryExpr::new(
+                    arithmetic,
+                    Operator::Gt,
+                    Arc::new(Literal::new(literal.clone())),
+                )) as Arc<dyn PhysicalExpr>;
+                assert!(!check_statistics_support(&expr, &schema), "{op}");
+            }
+        }
+
+        // Arithmetic over other supported types is unaffected:
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Plus,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+            )),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(check_statistics_support(&expr, &schema));
+        assert!(check_support(&expr, &schema));
+    }
+
+    #[test]
+    fn check_statistics_support_cast() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, false),
+            Field::new("d", DataType::Decimal128(15, 2), false),
+            Field::new("f", DataType::Float64, false),
+        ]));
+        let cast_gt_zero = |column: &str, index: usize, cast_type: DataType| {
+            let zero = ScalarValue::Int32(Some(0)).cast_to(&cast_type).unwrap();
+            Arc::new(BinaryExpr::new(
+                Arc::new(CastExpr::new(
+                    Arc::new(Column::new(column, index)),
+                    cast_type,
+                    None,
+                )),
+                Operator::Gt,
+                Arc::new(Literal::new(zero)),
+            )) as Arc<dyn PhysicalExpr>
+        };
+
+        // Bounds propagate back through these casts:
+        for (column, index, cast_type) in [
+            ("i", 0, DataType::Int64),
+            ("i", 0, DataType::Float64),
+            ("i", 0, DataType::Decimal128(11, 1)),
+            ("d", 1, DataType::Decimal128(20, 4)),
+        ] {
+            let expr = cast_gt_zero(column, index, cast_type.clone());
+            assert!(
+                check_statistics_support(&expr, &schema),
+                "{column} {cast_type}"
+            );
+        }
+
+        // These casts lose precision, so bounds do not propagate back:
+        for (column, index, cast_type) in [
+            ("i", 0, DataType::Decimal128(10, 1)),
+            ("d", 1, DataType::Float64),
+            ("d", 1, DataType::Decimal128(15, 1)),
+            ("f", 2, DataType::Int32),
+        ] {
+            let expr = cast_gt_zero(column, index, cast_type.clone());
+            assert!(
+                !check_statistics_support(&expr, &schema),
+                "{column} {cast_type}"
+            );
+        }
+
+        // `check_support` does not check the cast:
+        assert!(check_support(
+            &cast_gt_zero("f", 2, DataType::Int32),
+            &schema
+        ));
     }
 }

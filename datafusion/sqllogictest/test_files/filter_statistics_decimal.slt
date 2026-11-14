@@ -1,0 +1,306 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Tests for filter selectivity estimates on decimal columns, using min/max
+# statistics from a parquet file.
+#
+# l_discount cycles through 0.00..0.10 and l_quantity through 1.00..50.00. Since
+# lcm(11, 50) = 550, each (l_discount, l_quantity) pair appears exactly twice
+# in the 1100 rows.
+
+query I
+COPY (
+  SELECT
+    CAST((value % 11) / 100.0 AS DECIMAL(15, 2)) AS l_discount,
+    CAST(1 + value % 50 AS DECIMAL(15, 2)) AS l_quantity
+  FROM range(1100)
+)
+TO 'test_files/scratch/filter_statistics_decimal/lineitem.parquet'
+STORED AS PARQUET;
+----
+1100
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.explain.show_statistics = true;
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE EXTERNAL TABLE lineitem
+STORED AS PARQUET
+LOCATION 'test_files/scratch/filter_statistics_decimal/lineitem.parquet';
+
+# TPC-H Q6-style decimal ranges with fractional literals: the estimate uses
+# 3 of 11 discount values and 2300 of 4901 quantity values (1.00..23.99).
+query TT
+EXPLAIN SELECT l_discount FROM lineitem
+WHERE l_discount >= 0.05 AND l_discount <= 0.07 AND l_quantity < 24;
+----
+physical_plan
+01)FilterExec: l_discount@0 >= 0.05 AND l_discount@0 <= 0.07 AND l_quantity@1 < 24.00, projection=[l_discount@0], statistics=[Rows=Inexact(141), Bytes=Inexact(4506), [(Col[0]: Min=Inexact(Decimal128(0.05,15,2)) Max=Inexact(Decimal128(0.07,15,2)) Null=Exact(0) ScanBytes=Inexact(2253))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/lineitem.parquet]]}, projection=[l_discount, l_quantity], file_type=parquet, predicate=l_discount@0 >= 0.05 AND l_discount@0 <= 0.07 AND l_quantity@1 < 24.00, pruning_predicate=l_discount_null_count@1 != row_count@2 AND l_discount_max@0 >= 0.05 AND l_discount_null_count@1 != row_count@2 AND l_discount_min@3 <= 0.07 AND l_quantity_null_count@5 != row_count@2 AND l_quantity_min@4 < 24.00, required_guarantees=[], statistics=[Rows=Inexact(1100), Bytes=Inexact(35200), [(Col[0]: Min=Inexact(Decimal128(0.00,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(17600)),(Col[1]: Min=Inexact(Decimal128(1.00,15,2)) Max=Inexact(Decimal128(50.00,15,2)) Null=Inexact(0) ScanBytes=Inexact(17600))]]
+
+query I
+SELECT count(*) FROM lineitem
+WHERE l_discount >= 0.05 AND l_discount <= 0.07 AND l_quantity < 24;
+----
+138
+
+# A literal with more digits than the column's scale is compared through a
+# cast to a wider decimal; the column is still narrowed to [0.06, 0.10].
+query TT
+EXPLAIN SELECT l_discount FROM lineitem WHERE l_discount >= 0.055;
+----
+physical_plan
+01)FilterExec: CAST(l_discount@0 AS Decimal128(30, 15)) >= 0.055000000000000, statistics=[Rows=Inexact(500), Bytes=Inexact(8000), [(Col[0]: Min=Inexact(Decimal128(0.06,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(8000))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/lineitem.parquet]]}, projection=[l_discount], file_type=parquet, predicate=CAST(l_discount@0 AS Decimal128(30, 15)) >= 0.055000000000000, pruning_predicate=l_discount_null_count@1 != row_count@2 AND CAST(l_discount_max@0 AS Decimal128(30, 15);N) >= 0.055000000000000, required_guarantees=[], statistics=[Rows=Inexact(1100), Bytes=Inexact(17600), [(Col[0]: Min=Inexact(Decimal128(0.00,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(17600))]]
+
+query I
+SELECT count(*) FROM lineitem WHERE l_discount >= 0.055;
+----
+500
+
+# Decimal arithmetic is not analyzed and uses the default selectivity.
+query TT
+EXPLAIN SELECT l_discount FROM lineitem WHERE l_discount * 2 > 0.1;
+----
+physical_plan
+01)FilterExec: l_discount@0 * 2 > 0.10, statistics=[Rows=Inexact(220), Bytes=Inexact(3520), [(Col[0]: Min=Inexact(Decimal128(0.00,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(3520))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/lineitem.parquet]]}, projection=[l_discount], file_type=parquet, predicate=l_discount@0 * 2 > 0.10, statistics=[Rows=Inexact(1100), Bytes=Inexact(17600), [(Col[0]: Min=Inexact(Decimal128(0.00,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(17600))]]
+
+query I
+SELECT count(*) FROM lineitem WHERE l_discount * 2 > 0.1;
+----
+500
+
+statement ok
+DROP TABLE lineitem;
+
+# Equality on a decimal column keeps the default selectivity. Like TPC-DS's
+# ca_gmt_offset, this column holds whole numbers from -10 to -5, so counting
+# the 501 values in [-10.00, -5.00] would estimate 2 rows for `= -5`.
+
+query I
+COPY (SELECT CAST(-5 - value % 6 AS DECIMAL(5, 2)) AS ca_gmt_offset FROM range(600))
+TO 'test_files/scratch/filter_statistics_decimal/customer_address.parquet'
+STORED AS PARQUET;
+----
+600
+
+statement ok
+CREATE EXTERNAL TABLE customer_address
+STORED AS PARQUET
+LOCATION 'test_files/scratch/filter_statistics_decimal/customer_address.parquet';
+
+query TT
+EXPLAIN SELECT ca_gmt_offset FROM customer_address WHERE ca_gmt_offset = -5;
+----
+physical_plan
+01)FilterExec: ca_gmt_offset@0 = -5.00, statistics=[Rows=Inexact(120), Bytes=Inexact(1920), [(Col[0]: Min=Inexact(Decimal128(-10.00,5,2)) Max=Inexact(Decimal128(-5.00,5,2)) Null=Exact(0) Distinct=Inexact(1) ScanBytes=Inexact(1920))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/customer_address.parquet]]}, projection=[ca_gmt_offset], file_type=parquet, predicate=ca_gmt_offset@0 = -5.00, pruning_predicate=ca_gmt_offset_null_count@2 != row_count@3 AND ca_gmt_offset_min@0 <= -5.00 AND -5.00 <= ca_gmt_offset_max@1, required_guarantees=[ca_gmt_offset in (-5.00)], statistics=[Rows=Inexact(600), Bytes=Inexact(9600), [(Col[0]: Min=Inexact(Decimal128(-10.00,5,2)) Max=Inexact(Decimal128(-5.00,5,2)) Null=Inexact(0) ScanBytes=Inexact(9600))]]
+
+query I
+SELECT count(*) FROM customer_address WHERE ca_gmt_offset = -5;
+----
+100
+
+statement ok
+DROP TABLE customer_address;
+
+# Predicates that interval analysis cannot estimate use the default
+# selectivity (20%), instead of keeping every row. t has 1100 rows, with
+# i in 0..99, w in 0..99 and d in 0.00..0.10.
+
+query I
+COPY (
+  SELECT
+    CAST(value % 100 AS INT) AS i,
+    CAST(value % 100 AS DECIMAL(38, 18)) AS w,
+    CAST((value % 11) * 0.01 AS DECIMAL(15, 2)) AS d,
+    value % 10 AS k
+  FROM range(1100)
+)
+TO 'test_files/scratch/filter_statistics_decimal/t.parquet'
+STORED AS PARQUET;
+----
+1100
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/filter_statistics_decimal/t.parquet';
+
+# INT to DECIMAL(11, 1) keeps every value, so bounds propagate back through the
+# cast and i is narrowed to [0, 2].
+query TT
+EXPLAIN SELECT i FROM t WHERE i < CAST(2.5 AS DECIMAL(5, 1));
+----
+physical_plan
+01)FilterExec: CAST(i@0 AS Decimal128(11, 1)) < 2.5, statistics=[Rows=Inexact(33), Bytes=Inexact(132), [(Col[0]: Min=Inexact(Int32(0)) Max=Inexact(Int32(2)) Null=Inexact(0) ScanBytes=Inexact(132))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/t.parquet]]}, projection=[i], file_type=parquet, predicate=CAST(i@0 AS Decimal128(11, 1)) < 2.5, pruning_predicate=i_null_count@1 != row_count@2 AND CAST(i_min@0 AS Decimal128(11, 1);N) < 2.5, required_guarantees=[], statistics=[Rows=Inexact(1100), Bytes=Inexact(4400), [(Col[0]: Min=Inexact(Int32(0)) Max=Inexact(Int32(99)) Null=Inexact(0) ScanBytes=Inexact(4400))]]
+
+query I
+SELECT count(*) FROM t WHERE i < CAST(2.5 AS DECIMAL(5, 1));
+----
+33
+
+# w's range holds 99 * 10^18 values, more than fit in a u64, so the share of
+# them that passes is unknown.
+query TT
+EXPLAIN SELECT w FROM t WHERE w < 10;
+----
+physical_plan
+01)FilterExec: w@0 < 10.000000000000000000, statistics=[Rows=Inexact(220), Bytes=Inexact(3520), [(Col[0]: Min=Inexact(Decimal128(0.000000000000000000,38,18)) Max=Inexact(Decimal128(9.999999999999999999,38,18)) Null=Exact(0) ScanBytes=Inexact(3520))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/t.parquet]]}, projection=[w], file_type=parquet, predicate=w@1 < 10.000000000000000000, pruning_predicate=w_null_count@1 != row_count@2 AND w_min@0 < 10.000000000000000000, required_guarantees=[], statistics=[Rows=Inexact(1100), Bytes=Inexact(17600), [(Col[0]: Min=Inexact(Decimal128(0.000000000000000000,38,18)) Max=Inexact(Decimal128(99.000000000000000000,38,18)) Null=Inexact(0) ScanBytes=Inexact(17600))]]
+
+query I
+SELECT count(*) FROM t WHERE w < 10;
+----
+110
+
+# Casting a decimal to DOUBLE loses precision, so bounds do not propagate back
+# through the cast to d.
+query TT
+EXPLAIN SELECT d FROM t WHERE CAST(d AS DOUBLE) > 0.05;
+----
+physical_plan
+01)FilterExec: CAST(d@0 AS Float64) > 0.05, statistics=[Rows=Inexact(220), Bytes=Inexact(3520), [(Col[0]: Min=Inexact(Decimal128(0.00,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(3520))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/t.parquet]]}, projection=[d], file_type=parquet, predicate=CAST(d@2 AS Float64) > 0.05, pruning_predicate=d_null_count@1 != row_count@2 AND CAST(d_max@0 AS Float64;N) > 0.05, required_guarantees=[], statistics=[Rows=Inexact(1100), Bytes=Inexact(17600), [(Col[0]: Min=Inexact(Decimal128(0.00,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(17600))]]
+
+query I
+SELECT count(*) FROM t WHERE CAST(d AS DOUBLE) > 0.05;
+----
+500
+
+# sum(i) is an aggregate output without min/max, as in TPC-H Q18.
+query TT
+EXPLAIN SELECT k FROM t GROUP BY k HAVING sum(i) > CAST(300.5 AS DECIMAL(10, 1));
+----
+physical_plan
+01)FilterExec: CAST(sum(t.i)@1 AS Decimal128(21, 1)) > 300.5, projection=[k@0], statistics=[Rows=Inexact(220), Bytes=Inexact(2640), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(9)))]]
+02)--AggregateExec: mode=Single, gby=[k@1 as k], aggr=[sum(t.i)], statistics=[Rows=Inexact(1100), Bytes=Inexact(13200), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(9))),(Col[1]:)]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/t.parquet]]}, projection=[i, k], file_type=parquet, statistics=[Rows=Exact(1100), Bytes=Exact(13200), [(Col[0]: Min=Exact(Int32(0)) Max=Exact(Int32(99)) Null=Exact(0) ScanBytes=Exact(4400)),(Col[1]: Min=Exact(Int64(0)) Max=Exact(Int64(9)) Null=Exact(0) ScanBytes=Exact(8800))]]
+
+statement ok
+DROP TABLE t;
+
+# TPC-H Q18 plan check (https://github.com/apache/datafusion/issues/27108).
+#
+# The tables follow the TPC-H shape: 10 orders per customer and 4 lineitems
+# per order. The HAVING filter runs on an aggregate output, which has no
+# min/max statistics, so the filter keeps the default selectivity. If it were
+# estimated to keep every row, the filtered subquery would look larger than the
+# joined orders, and the semi join would build its hash table on the wrong side.
+
+query I
+COPY (SELECT value AS c_custkey, 'Customer#' || value AS c_name FROM range(1, 1501))
+TO 'test_files/scratch/filter_statistics_decimal/q18/customer.parquet'
+STORED AS PARQUET;
+----
+1500
+
+query I
+COPY (
+  SELECT
+    value AS o_orderkey,
+    1 + value % 1500 AS o_custkey,
+    CAST(1000 + value % 9000 AS DECIMAL(15, 2)) AS o_totalprice,
+    arrow_cast(9000 + value % 2000, 'Date32') AS o_orderdate
+  FROM range(1, 15001)
+)
+TO 'test_files/scratch/filter_statistics_decimal/q18/orders.parquet'
+STORED AS PARQUET;
+----
+15000
+
+query I
+COPY (
+  SELECT
+    1 + value / 4 AS l_orderkey,
+    CAST(1 + value % 50 AS DECIMAL(15, 2)) AS l_quantity
+  FROM range(60000)
+)
+TO 'test_files/scratch/filter_statistics_decimal/q18/lineitem.parquet'
+STORED AS PARQUET;
+----
+60000
+
+statement ok
+CREATE EXTERNAL TABLE customer
+STORED AS PARQUET
+LOCATION 'test_files/scratch/filter_statistics_decimal/q18/customer.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE orders
+STORED AS PARQUET
+LOCATION 'test_files/scratch/filter_statistics_decimal/q18/orders.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE lineitem
+STORED AS PARQUET
+LOCATION 'test_files/scratch/filter_statistics_decimal/q18/lineitem.parquet';
+
+# The filter on sum(l_quantity) keeps the default 20% of the aggregate's rows.
+query TT
+EXPLAIN SELECT l_orderkey FROM lineitem
+GROUP BY l_orderkey HAVING sum(l_quantity) > 300;
+----
+physical_plan
+01)FilterExec: sum(lineitem.l_quantity)@1 > 300.00, projection=[l_orderkey@0], statistics=[Rows=Inexact(12000), Bytes=Inexact(288000), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(15000)))]]
+02)--AggregateExec: mode=Single, gby=[l_orderkey@0 as l_orderkey], aggr=[sum(lineitem.l_quantity)], statistics=[Rows=Inexact(60000), Bytes=Inexact(1440000), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(15000))),(Col[1]:)]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/lineitem.parquet]]}, projection=[l_orderkey, l_quantity], file_type=parquet, statistics=[Rows=Exact(60000), Bytes=Exact(1440000), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(15000)) Null=Exact(0) ScanBytes=Exact(480000)),(Col[1]: Min=Exact(Decimal128(1.00,15,2)) Max=Exact(Decimal128(50.00,15,2)) Null=Exact(0) ScanBytes=Exact(960000))]]
+
+statement ok
+set datafusion.explain.show_statistics = false;
+
+# The semi join builds on the filtered subquery (RightSemi), as in DataFusion
+# 55, not on the joined customer, orders and lineitem rows (LeftSemi).
+query TT
+EXPLAIN SELECT
+  c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice, sum(l_quantity)
+FROM customer, orders, lineitem
+WHERE o_orderkey IN (
+    SELECT l_orderkey FROM lineitem
+    GROUP BY l_orderkey HAVING sum(l_quantity) > 300
+  )
+  AND c_custkey = o_custkey
+  AND o_orderkey = l_orderkey
+GROUP BY c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice
+ORDER BY o_totalprice DESC, o_orderdate
+LIMIT 100;
+----
+physical_plan
+01)SortExec: TopK(fetch=100), expr=[o_totalprice@4 DESC, o_orderdate@3 ASC NULLS LAST], preserve_partitioning=[false]
+02)--AggregateExec: mode=Single, gby=[c_name@1 as c_name, c_custkey@0 as c_custkey, o_orderkey@2 as o_orderkey, o_orderdate@4 as o_orderdate, o_totalprice@3 as o_totalprice], aggr=[sum(lineitem.l_quantity)]
+03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(l_orderkey@0, o_orderkey@2)]
+04)------FilterExec: sum(lineitem.l_quantity)@1 > 300.00, projection=[l_orderkey@0]
+05)--------AggregateExec: mode=Single, gby=[l_orderkey@0 as l_orderkey], aggr=[sum(lineitem.l_quantity)]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/lineitem.parquet]]}, projection=[l_orderkey, l_quantity], file_type=parquet
+07)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(o_orderkey@2, l_orderkey@0)], projection=[c_custkey@0, c_name@1, o_orderkey@2, o_totalprice@3, o_orderdate@4, l_quantity@6]
+08)--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c_custkey@0, o_custkey@1)], projection=[c_custkey@0, c_name@1, o_orderkey@2, o_totalprice@4, o_orderdate@5]
+09)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/customer.parquet]]}, projection=[c_custkey, c_name], output_ordering=[c_custkey@0 ASC NULLS LAST], file_type=parquet
+10)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/orders.parquet]]}, projection=[o_orderkey, o_custkey, o_totalprice, o_orderdate], output_ordering=[o_orderkey@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+11)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/lineitem.parquet]]}, projection=[l_orderkey, l_quantity], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+statement ok
+DROP TABLE customer;
+
+statement ok
+DROP TABLE orders;
+
+statement ok
+DROP TABLE lineitem;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
+
+statement ok
+RESET datafusion.explain.show_statistics;
