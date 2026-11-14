@@ -40,7 +40,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
-use substrait::proto::{Plan, Rel, plan_rel};
+use substrait::proto::{AggregateRel, Plan, Rel, plan_rel};
 
 #[derive(Debug)]
 struct MockSerializerRegistry;
@@ -430,6 +430,86 @@ async fn select_with_limit_offset() -> Result<()> {
 #[tokio::test]
 async fn simple_aggregate() -> Result<()> {
     roundtrip("SELECT a, sum(b) FROM data GROUP BY a").await
+}
+
+#[tokio::test]
+async fn aggregate_duplicate_group_by_key_roundtrip() -> Result<()> {
+    // https://github.com/apache/datafusion/issues/27058
+    // Repeated GROUP BY keys are legal SQL and do not change the result. The
+    // eliminate_duplicated_expr optimizer removes them, so use the unoptimized
+    // plan to exercise the producer path that used to emit duplicate grouping
+    // expression references and shift projection column indices on round trip.
+    let ctx = create_context().await?;
+    let sql = "SELECT a, sum(b) AS s FROM data GROUP BY a, a ORDER BY a";
+    let plan = ctx.sql(sql).await?.into_unoptimized_plan();
+
+    let LogicalPlan::Sort(sort) = &plan else {
+        panic!("expected Sort, got {plan}");
+    };
+    let LogicalPlan::Projection(projection) = sort.input.as_ref() else {
+        panic!("expected Projection under Sort, got {}", sort.input);
+    };
+    let LogicalPlan::Aggregate(agg) = projection.input.as_ref() else {
+        panic!(
+            "expected Aggregate under Projection, got {}",
+            projection.input
+        );
+    };
+    assert_eq!(
+        agg.group_expr.len(),
+        2,
+        "fixture must keep duplicate group keys"
+    );
+    assert_eq!(
+        agg.schema.fields().len(),
+        2,
+        "Aggregate schema still has one column per unique group key plus measures"
+    );
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let aggregate = find_aggregate_rel(&proto).expect("plan should contain AggregateRel");
+    assert_eq!(
+        aggregate.grouping_expressions.len(),
+        1,
+        "producer should declare the repeated key once"
+    );
+    assert_eq!(
+        aggregate.groupings[0].expression_references,
+        vec![0],
+        "producer should not repeat the grouping expression reference"
+    );
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let expected = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
+    let actual = DataFrame::new(ctx.state(), plan2).collect().await?;
+    assert_eq!(
+        format!("{expected:?}"),
+        format!("{actual:?}"),
+        "round trip should preserve column order and values"
+    );
+
+    // Optimized plans already drop the duplicate key via eliminate_duplicated_expr.
+    roundtrip("SELECT a, sum(b) AS s FROM data GROUP BY a, a").await?;
+    Ok(())
+}
+
+fn find_aggregate_rel(plan: &Plan) -> Option<&AggregateRel> {
+    fn walk(rel: &Rel) -> Option<&AggregateRel> {
+        match rel.rel_type.as_ref()? {
+            RelType::Aggregate(a) => Some(a.as_ref()),
+            RelType::Project(p) => walk(p.input.as_ref()?),
+            RelType::Sort(s) => walk(s.input.as_ref()?),
+            RelType::Filter(f) => walk(f.input.as_ref()?),
+            RelType::Fetch(f) => walk(f.input.as_ref()?),
+            _ => None,
+        }
+    }
+    plan.relations
+        .iter()
+        .find_map(|pr| match pr.rel_type.as_ref()? {
+            plan_rel::RelType::Root(r) => walk(r.input.as_ref()?),
+            _ => None,
+        })
 }
 
 #[tokio::test]
