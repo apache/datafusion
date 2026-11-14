@@ -423,6 +423,41 @@ SELECT * FROM test_update_false;
 statement ok
 DROP TABLE test_update_false;
 
+# Repeated expressions in the assignments and in the WHERE clause: common
+# subexpression elimination computes them once in a projection below, and the
+# table provider must still receive expressions over the table's own columns
+# (the INT column is cast to BIGINT twice to match the literal)
+statement ok
+CREATE TABLE test_update_cse(c0 INT, c1 VARCHAR, c2 BIGINT);
+
+statement ok
+INSERT INTO test_update_cse VALUES (1, 'a', 10), (NULL, 'b', 20), (7, 'c', 30);
+
+query I
+UPDATE test_update_cse SET c0 = COALESCE(c0, 0);
+----
+3
+
+query I
+UPDATE test_update_cse SET c2 = COALESCE(c0, 0) + COALESCE(c0, 0) WHERE c1 <> 'c';
+----
+2
+
+query I
+UPDATE test_update_cse SET c1 = 'z' WHERE COALESCE(c0, 0) > 0 AND COALESCE(c0, 0) < 5;
+----
+1
+
+query ITI rowsort
+SELECT * FROM test_update_cse;
+----
+0 b 0
+1 z 2
+7 c 30
+
+statement ok
+DROP TABLE test_update_cse;
+
 # Test the same statements with the optimizer switched off
 # With `max_passes = 0` no rule rewrites the subquery into a semi join and no
 # rule folds an always-false predicate, so the whole WHERE clause reaches the
