@@ -774,6 +774,7 @@ impl<'a> ObjectStoreFetch<'a> {
 
 impl MetadataFetch for ObjectStoreFetch<'_> {
     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
+        tracing::debug!(range = ?range, "Read Parquet metadata");
         async {
             self.store
                 .get_range(&self.meta.location, range)

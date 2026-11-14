@@ -1788,6 +1788,8 @@ dependencies = [
  "tempfile",
  "test-utils",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "unicode-width 0.2.3",
  "url",
  "uuid",
@@ -2114,6 +2116,7 @@ dependencies = [
  "parquet",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

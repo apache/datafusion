@@ -77,6 +77,7 @@ use parquet::arrow::parquet_column;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
+use tracing::Instrument;
 
 /// Morselizer-level state for virtual columns, precomputed once per scan
 /// partition so each file skips the validator walks, `null_replacements`
@@ -644,7 +645,12 @@ impl ParquetOpenState {
                 let Some(prepared) = (*prepared).prune_file()? else {
                     return Ok(ParquetOpenState::Done);
                 };
-                Ok(ParquetOpenState::LoadMetadata(prepared.load().boxed()))
+                Ok(ParquetOpenState::LoadMetadata(
+                    prepared
+                        .load()
+                        .instrument(tracing::debug_span!("Load Parquet metadata"))
+                        .boxed(),
+                ))
             }
             ParquetOpenState::LoadMetadata(future) => {
                 Ok(ParquetOpenState::LoadMetadata(future))
@@ -662,7 +668,10 @@ impl ParquetOpenState {
                 }
                 if prepared_row_groups.should_load_page_index()? {
                     Ok(ParquetOpenState::LoadPageIndex(
-                        prepared_row_groups.load_page_index().boxed(),
+                        prepared_row_groups
+                            .load_page_index()
+                            .instrument(tracing::debug_span!("Load page index"))
+                            .boxed(),
                     ))
                 } else {
                     if prepared_row_groups
@@ -680,7 +689,10 @@ impl ParquetOpenState {
                         );
                     }
                     Ok(ParquetOpenState::LoadBloomFilters(
-                        prepared_row_groups.load_bloom_filters().boxed(),
+                        prepared_row_groups
+                            .load_bloom_filters()
+                            .instrument(tracing::debug_span!("Load Bloom filters"))
+                            .boxed(),
                     ))
                 }
             }
@@ -805,7 +817,11 @@ impl MorselPlanner for ParquetMorselPlanner {
             ParquetOpenState::LoadPageIndex(future) => {
                 Ok(Some(Self::schedule_io(async move {
                     Ok(ParquetOpenState::LoadBloomFilters(
-                        future.await?.load_bloom_filters().boxed(),
+                        future
+                            .await?
+                            .load_bloom_filters()
+                            .instrument(tracing::debug_span!("Load Bloom filters"))
+                            .boxed(),
                     ))
                 })))
             }
@@ -839,6 +855,11 @@ impl ParquetMorselizer {
         let file_range = partitioned_file.range.clone();
         let extensions = partitioned_file.extensions.clone();
         let file_name = partitioned_file.object_meta.location.to_string();
+        tracing::debug!(
+            file = %file_name,
+            size = partitioned_file.object_meta.size,
+            "Open Parquet file"
+        );
         let file_metrics =
             ParquetFileMetrics::new(self.partition_index, &file_name, &self.metrics);
         let baseline_metrics = BaselineMetrics::new(&self.metrics, self.partition_index);
@@ -1283,6 +1304,7 @@ impl MetadataLoadedParquetOpen {
 impl FiltersPreparedParquetOpen {
     /// Prune row groups using file ranges and parquet metadata.
     fn prune_row_groups(self) -> Result<RowGroupsPrunedParquetOpen> {
+        let _span = tracing::debug_span!("Prune row groups").entered();
         let loaded = &self.loaded;
         let prepared = &loaded.prepared;
         let file_metadata = Arc::clone(loaded.reader_metadata.metadata());
@@ -1364,6 +1386,12 @@ impl FiltersPreparedParquetOpen {
                 .add_matched(remaining);
         }
 
+        tracing::debug!(
+            row_groups = rg_metadata.len(),
+            row_groups_remaining = row_groups.remaining_row_group_count(),
+            pruning_predicate = self.pruning_predicate.is_some(),
+            "Row groups remaining"
+        );
         Ok(RowGroupsPrunedParquetOpen {
             prepared: self,
             row_groups,
@@ -1583,6 +1611,17 @@ impl RowGroupsPrunedParquetOpen {
                 for (column_name, column_idx, physical_type, type_length) in
                     &parquet_columns
                 {
+                    let column = builder.metadata().row_group(idx).column(*column_idx);
+                    if let (Some(offset), Some(length)) =
+                        (column.bloom_filter_offset(), column.bloom_filter_length())
+                    {
+                        tracing::debug!(
+                            column = %column_name,
+                            row_group = idx,
+                            range = ?(offset..offset + i64::from(length)),
+                            "Read Bloom filter"
+                        );
+                    }
                     let bf: Sbbf = match builder
                         .get_row_group_column_bloom_filter(idx, *column_idx)
                         .await
@@ -1625,6 +1664,7 @@ impl BloomFiltersLoadedParquetOpen {
             .bloom_filter_eval_time
             .clone();
         let _timer_guard = bloom_filter_eval_time.timer();
+        let _span = tracing::debug_span!("Prune row groups with Bloom filters").entered();
         if let Some(predicate) = self
             .prepared
             .prepared
@@ -1638,6 +1678,11 @@ impl BloomFiltersLoadedParquetOpen {
                 predicate,
                 &self.prepared.prepared.loaded.prepared.file_metrics,
                 &self.row_group_bloom_filters,
+            );
+            tracing::debug!(
+                row_groups_remaining =
+                    self.prepared.row_groups.remaining_row_group_count(),
+                "Row groups remaining"
             );
         }
 
@@ -1689,6 +1734,7 @@ impl RowGroupsPrunedParquetOpen {
             && !access_plan.is_empty()
             && let Some(page_pruning_predicate) = page_pruning_predicate
         {
+            let _span = tracing::debug_span!("Prune pages with page index").entered();
             let page_pruning_result = page_pruning_predicate
                 .prune_plan_with_page_index_and_metrics(
                     access_plan,
@@ -1703,6 +1749,10 @@ impl RowGroupsPrunedParquetOpen {
                     },
                 );
             access_plan = page_pruning_result.access_plan;
+            tracing::debug!(
+                row_groups_remaining = access_plan.row_group_index_iter().count(),
+                "Row groups remaining"
+            );
             ParquetFileMetrics::add_page_index_pages_skipped_by_fully_matched(
                 &prepared.metrics,
                 prepared.partition_index,

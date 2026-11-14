@@ -8,16 +8,15 @@
 //! correlates each requested byte range with the Parquet file structure it
 //! covers, so the resulting trace can be compared against `insta` snapshots.
 //!
-//! `ListingTable` object store access tests live in
+//! `ListingTable`object store access tests live in
 //! [`datafusion/core/tests/datasource/object_store_access.rs`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/datasource/object_store_access.rs).
 
-use std::fmt::Write as _;
 use std::ops::Range;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion::error::Result;
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use futures::StreamExt;
 use futures::stream::BoxStream;
@@ -31,6 +30,7 @@ use parquet::file::FOOTER_SIZE;
 use parquet::file::metadata::FooterTail;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::serialized_reader::ReadOptionsBuilder;
+use tracing::Instrument;
 use url::Url;
 
 // Tests are in submodules
@@ -39,6 +39,9 @@ mod filter_pushdown_io;
 mod page_pruning_io;
 mod row_group_pruning_io;
 mod topk_io;
+mod trace_capture;
+
+use trace_capture::TraceCapture;
 
 /// Kind of per column chunk metadata structure stored outside the footer
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -278,7 +281,7 @@ impl ParquetFileLayout {
     fn describe_range(&self, range: &Range<u64>, file_size: u64) -> String {
         // The footer is read as a suffix of the file (see `footer_size`)
         if range.end >= file_size && (file_size.saturating_sub(range.start)) <= 8192 {
-            return format!("Parquet footer (offsets {}..{})", range.start, range.end);
+            return "footer".to_string();
         }
         let overlaps = |r: &Range<u64>| range.start < r.end && range.end > r.start;
         // Describe the overlapping Bloom filters / page indexes
@@ -295,69 +298,41 @@ impl ParquetFileLayout {
                 .map(|chunk| chunk.describe(range)),
         );
         if parts.is_empty() {
-            parts.push("byte range".to_string());
+            parts.push("unknown".to_string());
         }
-        format!(
-            "{} (offsets {}..{})",
-            parts.join(", "),
-            range.start,
-            range.end
-        )
+        parts.join(", ")
     }
 }
 
+/// An [`ObjectStore`] that emits a `tracing` span for every operation. Each
+/// byte range read gets an event that names the Parquet structure it covers.
 #[derive(Debug)]
 struct InstrumentedObjectStore {
     inner: Arc<dyn ObjectStore>,
     layout: ParquetFileLayout,
     file_size: u64,
-    events: Arc<Mutex<Vec<String>>>,
-    /// Number of requests made to the store (reset for each query)
-    requests: Arc<AtomicUsize>,
+}
+
+/// Target of the spans and events that this test harness emits. The capture
+/// layer only records targets that start with `datafusion`.
+const TEST_TARGET: &str = "datafusion::test";
+
+macro_rules! store_span {
+    ($op:literal, $($fields:tt)*) => {
+        tracing::debug_span!(target: TEST_TARGET, $op, $($fields)*)
+    };
 }
 
 impl InstrumentedObjectStore {
-    fn new(
-        inner: Arc<dyn ObjectStore>,
-        layout: ParquetFileLayout,
-        file_size: u64,
-        events: Arc<Mutex<Vec<String>>>,
-        requests: Arc<AtomicUsize>,
-    ) -> Self {
-        Self {
-            inner,
-            layout,
-            file_size,
-            events,
-            requests,
-        }
-    }
-
-    /// Records a request to the store and the byte ranges it reads.
-    fn record_request(&self, ranges: impl IntoIterator<Item = Range<u64>>) {
-        let mut events = self.lock_new_request();
+    fn record_ranges(&self, ranges: impl IntoIterator<Item = Range<u64>>) {
         for range in ranges {
-            let desc = self.layout.describe_range(&range, self.file_size);
-            events.push(format!("    Read {desc}"));
+            tracing::debug!(
+                target: TEST_TARGET,
+                range = ?range,
+                parquet = %self.layout.describe_range(&range, self.file_size),
+                "Read byte range"
+            );
         }
-    }
-
-    /// Records a HEAD request (object metadata only, no content)
-    fn record_head_request(&self) {
-        self.lock_new_request()
-            .push("    Head (object size and metadata)".to_string());
-    }
-
-    /// Pushes a new `Request N` line and returns the held events lock so
-    /// the caller can append the lines of that request.
-    ///
-    /// Holding the lock while appending keeps the lines of concurrent
-    /// requests (for example, from multiple partitions) from interleaving.
-    fn lock_new_request(&self) -> std::sync::MutexGuard<'_, Vec<String>> {
-        let request = self.requests.fetch_add(1, Ordering::SeqCst) + 1;
-        let mut events = self.events.lock().unwrap();
-        events.push(format!("Request {request}"));
-        events
     }
 }
 
@@ -375,7 +350,12 @@ impl ObjectStore for InstrumentedObjectStore {
         payload: PutPayload,
         opts: PutOptions,
     ) -> object_store::Result<PutResult> {
-        self.inner.put_opts(location, payload, opts).await
+        let span =
+            store_span!("ObjectStore::put", %location, bytes = payload.content_length());
+        self.inner
+            .put_opts(location, payload, opts)
+            .instrument(span)
+            .await
     }
 
     async fn put_multipart_opts(
@@ -383,7 +363,11 @@ impl ObjectStore for InstrumentedObjectStore {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart_opts(location, opts).await
+        let span = store_span!("ObjectStore::put_multipart", %location);
+        self.inner
+            .put_multipart_opts(location, opts)
+            .instrument(span)
+            .await
     }
 
     async fn get_opts(
@@ -392,19 +376,27 @@ impl ObjectStore for InstrumentedObjectStore {
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
         if options.head {
-            self.record_head_request();
-            return self.inner.get_opts(location, options).await;
+            let span = store_span!("ObjectStore::head", %location);
+            return self
+                .inner
+                .get_opts(location, options)
+                .instrument(span)
+                .await;
         }
         let range = match &options.range {
-            Some(GetRange::Bounded(r)) => r.start..r.end,
+            Some(GetRange::Bounded(r)) => r.clone(),
             Some(GetRange::Offset(offset)) => *offset..self.file_size,
             Some(GetRange::Suffix(suffix)) => {
                 self.file_size.saturating_sub(*suffix)..self.file_size
             }
             None => 0..self.file_size,
         };
-        self.record_request([range]);
-        self.inner.get_opts(location, options).await
+        let span = store_span!("ObjectStore::get", %location);
+        span.in_scope(|| self.record_ranges([range]));
+        self.inner
+            .get_opts(location, options)
+            .instrument(span)
+            .await
     }
 
     async fn get_ranges(
@@ -412,14 +404,20 @@ impl ObjectStore for InstrumentedObjectStore {
         location: &Path,
         ranges: &[Range<u64>],
     ) -> object_store::Result<Vec<Bytes>> {
-        self.record_request(ranges.iter().cloned());
-        self.inner.get_ranges(location, ranges).await
+        let span =
+            store_span!("ObjectStore::get_ranges", %location, ranges = ranges.len());
+        span.in_scope(|| self.record_ranges(ranges.iter().cloned()));
+        self.inner
+            .get_ranges(location, ranges)
+            .instrument(span)
+            .await
     }
 
     fn delete_stream(
         &self,
         locations: BoxStream<'static, object_store::Result<Path>>,
     ) -> BoxStream<'static, object_store::Result<Path>> {
+        tracing::debug!(target: TEST_TARGET, "ObjectStore::delete_stream");
         self.inner.delete_stream(locations)
     }
 
@@ -427,6 +425,7 @@ impl ObjectStore for InstrumentedObjectStore {
         &self,
         prefix: Option<&Path>,
     ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        tracing::debug!(target: TEST_TARGET, prefix = ?prefix.map(Path::as_ref), "ObjectStore::list");
         self.inner.list(prefix)
     }
 
@@ -435,6 +434,12 @@ impl ObjectStore for InstrumentedObjectStore {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        tracing::debug!(
+            target: TEST_TARGET,
+            prefix = ?prefix.map(Path::as_ref),
+            %offset,
+            "ObjectStore::list_with_offset"
+        );
         self.inner.list_with_offset(prefix, offset)
     }
 
@@ -442,7 +447,14 @@ impl ObjectStore for InstrumentedObjectStore {
         &self,
         prefix: Option<&Path>,
     ) -> object_store::Result<ListResult> {
-        self.inner.list_with_delimiter(prefix).await
+        let span = store_span!(
+            "ObjectStore::list_with_delimiter",
+            prefix = ?prefix.map(Path::as_ref)
+        );
+        self.inner
+            .list_with_delimiter(prefix)
+            .instrument(span)
+            .await
     }
 
     async fn copy_opts(
@@ -451,23 +463,28 @@ impl ObjectStore for InstrumentedObjectStore {
         to: &Path,
         options: object_store::CopyOptions,
     ) -> object_store::Result<()> {
-        self.inner.copy_opts(from, to, options).await
+        let span = store_span!("ObjectStore::copy", %from, %to);
+        self.inner
+            .copy_opts(from, to, options)
+            .instrument(span)
+            .await
     }
 }
 
 /// Test fixture: a single Parquet file registered as table `t`, read through an
-/// [`InstrumentedObjectStore`] that records every storage request.
+/// [`InstrumentedObjectStore`] that emits a `tracing` span for every storage
+/// request.
 ///
 /// Typical use:
 ///
 /// ```text
 /// let test = ParquetIoTest::new(file_bytes, SessionConfig::new()).await;
-/// assert_snapshot!(test.query("SELECT * FROM t WHERE ...").await, @"...");
+/// let traces = test.capture_traces();
+/// test.query("SELECT * FROM t WHERE ...").await.unwrap();
+/// assert_snapshot!(traces.render(), @"...");
 /// ```
 pub(crate) struct ParquetIoTest {
     ctx: SessionContext,
-    events: Arc<Mutex<Vec<String>>>,
-    requests: Arc<AtomicUsize>,
 }
 
 impl ParquetIoTest {
@@ -494,15 +511,11 @@ impl ParquetIoTest {
             .await
             .unwrap();
 
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let requests = Arc::new(AtomicUsize::new(0));
-        let instrumented_store = Arc::new(InstrumentedObjectStore::new(
-            memory_store,
+        let instrumented_store = Arc::new(InstrumentedObjectStore {
+            inner: memory_store,
             layout,
             file_size,
-            Arc::clone(&events),
-            Arc::clone(&requests),
-        ));
+        });
 
         let ctx = SessionContext::new_with_config(config);
         ctx.register_object_store(&Url::parse("mem://").unwrap(), instrumented_store);
@@ -510,48 +523,47 @@ impl ParquetIoTest {
             .await
             .unwrap();
 
-        Self {
-            ctx,
-            events,
-            requests,
-        }
+        Self { ctx }
     }
 
-    /// Runs `sql` and returns the storage requests and output batches it
-    /// produced, formatted for snapshot comparison.
-    ///
-    /// Only events recorded while running this query are included.
+    /// Captures the spans and events that DataFusion emits on this thread
+    /// until the returned [`TraceCapture`] is dropped.
+    pub(crate) fn capture_traces(&self) -> TraceCapture {
+        TraceCapture::new()
+    }
+
+    /// Runs `sql` to completion inside a `query` span and returns the number
+    /// of output rows. Emits a `Produce batch` event for each output batch.
     ///
     /// The file metadata cache is cleared first so each query shows the I/O
     /// of a cold read, including the footer and page index.
-    pub(crate) async fn query(&self, sql: &str) -> String {
+    pub(crate) async fn query(&self, sql: &str) -> Result<usize> {
         self.ctx
             .runtime_env()
             .cache_manager
             .get_file_metadata_cache()
             .clear();
-        self.events.lock().unwrap().clear();
-        self.requests.store(0, Ordering::SeqCst);
-
-        let df = self.ctx.sql(sql).await.unwrap();
-        let mut stream = df.execute_stream().await.unwrap();
-
-        let mut row_count = 0;
-        while let Some(batch) = stream.next().await {
-            let batch = batch.unwrap();
-            row_count += batch.num_rows();
-            self.events
-                .lock()
-                .unwrap()
-                .push(format!("Produce batch ({} rows)", batch.num_rows()));
+        let span = tracing::debug_span!(
+            target: TEST_TARGET,
+            "Query",
+            sql,
+            rows = tracing::field::Empty
+        );
+        let row_count = async {
+            let df = self.ctx.sql(sql).await?;
+            let mut stream = df.execute_stream().await?;
+            let mut row_count = 0;
+            while let Some(batch) = stream.next().await {
+                let rows = batch?.num_rows();
+                row_count += rows;
+                tracing::debug!(target: TEST_TARGET, rows, "Produce batch");
+            }
+            Ok::<_, datafusion::error::DataFusionError>(row_count)
         }
-
-        let recorded = self.events.lock().unwrap().clone();
-        let mut output = format!("--- Query: {sql} ({row_count} rows) ---\n");
-        for event in recorded {
-            let _ = writeln!(output, "{event}");
-        }
-        output
+        .instrument(span.clone())
+        .await?;
+        span.record("rows", row_count);
+        Ok(row_count)
     }
 }
 
