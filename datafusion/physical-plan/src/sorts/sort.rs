@@ -429,9 +429,9 @@ impl ExternalSorter {
                 .with_expressions(&self.expr.clone())
                 .with_metrics(self.metrics.baseline.clone())
                 .with_batch_size(self.batch_size)
-                // Each merge pass writes its output to a spill file of this manager,
-                // so it ends its batches at the same bound.
-                .with_max_batch_bytes(self.spill_manager.max_batch_bytes())
+                // A merge pass whose output is spilled again ends its batches at the
+                // bound of the spill files. The output keeps `batch_size` rows.
+                .with_spill_max_batch_bytes(self.spill_manager.max_batch_bytes())
                 .with_fetch(None)
                 .with_reservation(self.merge_reservation.take())
                 .with_merge_pool(Arc::clone(&self.merge_pool))
@@ -5028,6 +5028,42 @@ mod tests {
         let (expected, output) = (flatten(&expected)?, flatten(&output)?);
         assert_eq!(expected.null_count(), 32);
         assert_eq!(output.as_ref(), expected.as_ref());
+        Ok(())
+    }
+
+    /// The byte bound of the spill files applies to the merge passes that spill again,
+    /// not to the output, which keeps `batch_size` rows.
+    #[tokio::test]
+    async fn test_sort_spill_output_keeps_batch_size() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("s", DataType::Utf8, false),
+        ]));
+        let batches = (0..25)
+            .map(|b| {
+                let ids = Int64Array::from_iter_values(
+                    (0..8192).map(|r| ((b * 8192 + r) * 7919 % 1_000_003) as i64),
+                );
+                let strings =
+                    StringArray::from_iter_values((0..8192).map(|r| wide_value(r, 92)));
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(ids), Arc::new(strings)],
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for sort_spill_reservation_bytes in [0, 1024 * 1024] {
+            let (output, metrics) = sort_with_pool(
+                &batches,
+                Some(8 * 1024 * 1024),
+                sort_spill_reservation_bytes,
+                8192,
+            )
+            .await?;
+            assert!(metrics.spill_count().unwrap() > 0);
+            let rows = output.iter().map(|b| b.num_rows()).collect::<Vec<_>>();
+            assert_eq!(rows, vec![8192; 25], "{sort_spill_reservation_bytes}");
+        }
         Ok(())
     }
 

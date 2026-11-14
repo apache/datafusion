@@ -142,6 +142,8 @@ pub(crate) struct MultiLevelMergeBuilder {
     batch_size: usize,
     /// See [`StreamingMergeBuilder::with_max_batch_bytes`]
     max_batch_bytes: Option<usize>,
+    /// See [`StreamingMergeBuilder::with_spill_max_batch_bytes`]
+    spill_max_batch_bytes: Option<usize>,
     reservation: MemoryReservation,
     /// Workspace retained across retries and intermediate spill passes.
     merge_pool: Option<Arc<MergeMemoryPool>>,
@@ -187,6 +189,7 @@ impl MultiLevelMergeBuilder {
             metrics,
             batch_size,
             max_batch_bytes: None,
+            spill_max_batch_bytes: None,
             reservation,
             merge_pool: None,
             reserve_replay_headroom: false,
@@ -205,6 +208,15 @@ impl MultiLevelMergeBuilder {
     /// including the passes whose output is spilled again.
     pub(super) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
         self.max_batch_bytes = max_batch_bytes;
+        self
+    }
+
+    /// See [`StreamingMergeBuilder::with_spill_max_batch_bytes`]
+    pub(super) fn with_spill_max_batch_bytes(
+        mut self,
+        max_batch_bytes: Option<usize>,
+    ) -> Self {
+        self.spill_max_batch_bytes = max_batch_bytes;
         self
     }
 
@@ -539,7 +551,11 @@ impl MultiLevelMergeBuilder {
             })
             .with_round_robin_tie_breaker(self.enable_round_robin_tie_breaker)
             .with_streams(streams)
-            .with_max_batch_bytes(self.max_batch_bytes);
+            .with_max_batch_bytes(if is_output {
+                self.max_batch_bytes
+            } else {
+                self.spill_max_batch_bytes.or(self.max_batch_bytes)
+            });
 
         if !all_in_memory {
             // Don't track memory used by this stream as we reserve that memory by worst case sceneries

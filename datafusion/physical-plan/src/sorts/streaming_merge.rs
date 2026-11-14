@@ -82,6 +82,7 @@ pub struct StreamingMergeBuilder<'a> {
     metrics: Option<BaselineMetrics>,
     batch_size: Option<usize>,
     max_batch_bytes: Option<usize>,
+    spill_max_batch_bytes: Option<usize>,
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     merge_pool: Option<Arc<MergeMemoryPool>>,
@@ -140,6 +141,16 @@ impl<'a> StreamingMergeBuilder<'a> {
     /// See [`SortPreservingMergeStream::with_max_batch_bytes`]
     pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
         self.max_batch_bytes = max_batch_bytes;
+        self
+    }
+
+    /// Like [`Self::with_max_batch_bytes`], but only for the merge passes over spill
+    /// files whose output is spilled again, not for the pass that produces the output.
+    pub(crate) fn with_spill_max_batch_bytes(
+        mut self,
+        max_batch_bytes: Option<usize>,
+    ) -> Self {
+        self.spill_max_batch_bytes = max_batch_bytes;
         self
     }
 
@@ -211,6 +222,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             metrics,
             batch_size,
             max_batch_bytes,
+            spill_max_batch_bytes,
             reservation,
             merge_pool,
             reserve_replay_headroom,
@@ -259,6 +271,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             .with_replay_headroom(reserve_replay_headroom)
             .with_intermediate_merge_sizing(min_spill_batch_rows)
             .with_max_batch_bytes(max_batch_bytes)
+            .with_spill_max_batch_bytes(spill_max_batch_bytes)
             .create_spillable_merge_stream());
         }
 
