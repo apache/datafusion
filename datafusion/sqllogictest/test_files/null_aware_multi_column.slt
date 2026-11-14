@@ -534,6 +534,148 @@ statement ok
 DEALLOCATE mc_tuple_qualified;
 
 #############
+## NOT NULL tuple elements
+#############
+
+# `b` and `y` cannot be NULL, so they never make the tuple comparison UNKNOWN
+# and the join reads them as a scope key: a NULL `a` is compared only with the
+# subquery rows whose `y` equals its `b`.
+statement ok
+CREATE TABLE mc_nn_outer(k INT NOT NULL, a INT, b INT NOT NULL, value TEXT) AS VALUES
+(1, 1, 2, 'p'),
+(1, NULL, 2, 'q'),
+(1, NULL, 3, 'r'),
+(1, 5, 2, 's'),
+(2, NULL, 2, 't'),
+(2, 7, 9, 'u'),
+(1, 6, 4, 'v');
+
+statement ok
+CREATE TABLE mc_nn_inner(k INT NOT NULL, x INT, y INT NOT NULL) AS VALUES
+(1, 1, 2),
+(1, NULL, 4),
+(2, 8, 9);
+
+# p matches (1, 2). q and t vs (1, 2) and v vs (NULL, 4) are UNKNOWN. r, s and
+# u mismatch every row.
+query T rowsort
+SELECT value FROM mc_nn_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_nn_inner);
+----
+r
+s
+u
+
+# With a correlation, t's scope is k = 2, {(8, 9)}, which it mismatches.
+query T rowsort
+SELECT value FROM mc_nn_outer o
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_nn_inner i WHERE i.k = o.k);
+----
+r
+s
+t
+u
+
+# Two nullable elements and a scope key. The subquery gives (1, 2, 1),
+# (NULL, 4, 1) and (8, 9, NULL): t's k = 2 and u's a = 7 are definite
+# mismatches.
+query T rowsort
+SELECT value FROM mc_nn_outer
+WHERE (a, b, k) NOT IN (SELECT x, y, NULLIF(k, 2) FROM mc_nn_inner);
+----
+r
+s
+t
+u
+
+# A constant NOT NULL element: only (1, 2) is in scope.
+query T rowsort
+SELECT value FROM mc_nn_outer
+WHERE (a, 2) NOT IN (SELECT x, y FROM mc_nn_inner);
+----
+s
+u
+v
+
+# A RunEndEncoded element is not hashable. A run of NULLs has no null bit, so
+# a field declared NOT NULL does not rule out a NULL element, and the element
+# is treated like one that can be NULL: it is rejected (see above) rather than
+# read as a correlation in the join filter.
+statement ok
+CREATE TABLE mc_nn_ree_outer AS
+SELECT k, a, arrow_cast(b, 'RunEndEncoded("run_ends": non-null Int32, "values": Int32)') AS b, value
+FROM mc_nn_outer;
+
+statement ok
+CREATE TABLE mc_nn_ree_inner AS
+SELECT k, x, arrow_cast(y, 'RunEndEncoded("run_ends": non-null Int32, "values": Int32)') AS y
+FROM mc_nn_inner;
+
+statement error Multi-column NOT IN subquery is not supported when a tuple element is not a hashable equi-join key
+SELECT value FROM mc_nn_ree_outer
+WHERE (b, a) NOT IN (SELECT y, x FROM mc_nn_ree_inner);
+
+# As a nullable value.
+query TB rowsort
+SELECT value, (a, b) NOT IN (SELECT x, y FROM mc_nn_inner) AS r
+FROM mc_nn_outer;
+----
+p false
+q NULL
+r true
+s true
+t NULL
+u true
+v NULL
+
+query TB rowsort
+SELECT value, (a, b) NOT IN (SELECT x, y FROM mc_nn_inner i WHERE i.k = o.k) AS r
+FROM mc_nn_outer o;
+----
+p false
+q NULL
+r true
+s true
+t true
+u true
+v NULL
+
+# An element that can be NULL in the schema but not in scope: the correlated
+# filter `i.y >= o.b` rejects a NULL `y` or `b`, so `b = y` is a scope key, and
+# the rows with a NULL `b` reach the join with a NULL scope key. Such a row has
+# an empty subquery, so its NOT IN is TRUE.
+statement ok
+CREATE TABLE mc_scope_outer(k INT, a INT, b INT) AS VALUES
+(1, 1, 2), (2, NULL, 2), (3, NULL, NULL), (4, 5, NULL), (5, NULL, 7), (6, 1, 9), (7, 3, 3);
+
+statement ok
+CREATE TABLE mc_scope_inner(x INT, y INT) AS VALUES
+(1, 2), (NULL, 2), (5, NULL), (NULL, NULL), (3, 1), (8, 4);
+
+query IB
+SELECT k, (a, b) NOT IN (SELECT x, y FROM mc_scope_inner i WHERE i.y >= o.b)
+FROM mc_scope_outer o ORDER BY k;
+----
+1 false
+2 NULL
+3 true
+4 true
+5 true
+6 true
+7 true
+
+query I
+SELECT k FROM mc_scope_outer o
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_scope_inner i WHERE i.y >= o.b)
+ORDER BY k;
+----
+3
+4
+5
+6
+7
+
+#############
 ## Cleanup
 #############
 
@@ -602,3 +744,21 @@ DROP TABLE mc_p1;
 
 statement ok
 DROP TABLE mc_p2;
+
+statement ok
+DROP TABLE mc_nn_outer;
+
+statement ok
+DROP TABLE mc_nn_inner;
+
+statement ok
+DROP TABLE mc_nn_ree_outer;
+
+statement ok
+DROP TABLE mc_nn_ree_inner;
+
+statement ok
+DROP TABLE mc_scope_outer;
+
+statement ok
+DROP TABLE mc_scope_inner;

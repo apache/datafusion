@@ -6,6 +6,7 @@ use std::iter::Peekable;
 use std::sync::Arc;
 
 use super::EquivalenceProperties;
+use crate::equivalence::GroupingEquivalenceClass;
 use crate::equivalence::class::AcrossPartitions;
 use crate::{ConstExpr, PhysicalSortExpr};
 
@@ -24,13 +25,8 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 /// partitions.
 fn calculate_union_binary(
     lhs: EquivalenceProperties,
-    mut rhs: EquivalenceProperties,
+    rhs: &EquivalenceProperties,
 ) -> Result<EquivalenceProperties> {
-    // Harmonize the schema of the rhs with the schema of the lhs (which is the accumulator schema):
-    if !rhs.schema.eq(&lhs.schema) {
-        rhs = rhs.with_new_schema(Arc::clone(&lhs.schema))?;
-    }
-
     // First, calculate valid constants for the union. An expression is constant
     // at the output of the union if it is constant in both sides with matching values.
     let rhs_constants = rhs.constants();
@@ -61,8 +57,8 @@ fn calculate_union_binary(
     // Next, calculate valid orderings for the union by searching for prefixes
     // in both sides.
     let mut orderings = UnionEquivalentOrderingBuilder::new();
-    orderings.add_satisfied_orderings(&lhs, &rhs)?;
-    orderings.add_satisfied_orderings(&rhs, &lhs)?;
+    orderings.add_satisfied_orderings(&lhs, rhs)?;
+    orderings.add_satisfied_orderings(rhs, &lhs)?;
     let orderings = orderings.build();
 
     let mut eq_properties = EquivalenceProperties::new(lhs.schema);
@@ -81,6 +77,33 @@ pub fn calculate_union(
 ) -> Result<EquivalenceProperties> {
     // TODO: In some cases, we should be able to preserve some equivalence
     //       classes. Add support for such cases.
+    let eqps = eqps
+        .into_iter()
+        .map(move |props| {
+            if props.schema.eq(&schema) {
+                Ok(props)
+            } else {
+                props.with_new_schema(Arc::clone(&schema))
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // Each output partition is one input partition, so a grouping holds when
+    // every input satisfies it. Check the original inputs: folding orderings
+    // first can lose grouping evidence when their sort directions differ.
+    let mut groupings = GroupingEquivalenceClass::default();
+    'grouping: for grouping in eqps.iter().flat_map(|props| props.geq_class().iter()) {
+        if groupings.contains(grouping) {
+            continue;
+        }
+        for props in &eqps {
+            if !props.grouping_satisfy(grouping.iter().cloned())? {
+                continue 'grouping;
+            }
+        }
+        groupings.add_groupings(std::iter::once(grouping.iter().cloned()));
+    }
+
     let mut iter = eqps.into_iter();
     let Some(mut acc) = iter.next() else {
         return internal_err!(
@@ -88,14 +111,11 @@ pub fn calculate_union(
         );
     };
 
-    // Harmonize the schema of the init with the schema of the union:
-    if !acc.schema.eq(&schema) {
-        acc = acc.with_new_schema(schema)?;
-    }
     // Fold in the rest of the EquivalenceProperties:
     for props in iter {
-        acc = calculate_union_binary(acc, props)?;
+        acc = calculate_union_binary(acc, &props)?;
     }
+    acc.add_groupings(groupings);
     Ok(acc)
 }
 
@@ -676,6 +696,84 @@ mod tests {
             .run()
     }
 
+    #[test]
+    fn test_union_preserves_only_common_groupings() -> Result<()> {
+        let schema = create_test_schema()?;
+        UnionEquivalenceTest::new(&schema)
+            .with_child_grouping(
+                vec![vec!["e"], vec!["a", "b"], vec!["c", "d"]],
+                &schema,
+            )?
+            .with_child_grouping(
+                vec![vec!["f"], vec!["d", "c"], vec!["b", "a"]],
+                &schema,
+            )?
+            .with_expected_sort(vec![])?
+            .with_expected_grouping(vec![vec!["a", "b"], vec!["c", "d"]])?
+            .run()
+    }
+
+    #[test]
+    fn test_union_drops_grouping_missing_from_an_input() -> Result<()> {
+        let schema = create_test_schema()?;
+        for add_ordered_input in [false, true] {
+            let mut test = UnionEquivalenceTest::new(&schema)
+                .with_child_grouping(vec![vec!["a", "b"]], &schema)?
+                .with_child_sort(vec![], &schema)?;
+            if add_ordered_input {
+                test = test.with_child_sort(vec![vec!["a", "b"]], &schema)?;
+            }
+            test.with_expected_sort(vec![])?.run()?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_preserves_grouping_implied_by_ordering() -> Result<()> {
+        let schema = create_test_schema()?;
+        UnionEquivalenceTest::new(&schema)
+            .with_child_sort(vec![vec!["a", "b"]], &schema)?
+            .with_child_grouping(vec![vec!["a", "b"]], &schema)?
+            .with_expected_sort(vec![])?
+            .with_expected_grouping(vec![vec!["a", "b"]])?
+            .run()
+    }
+
+    #[test]
+    fn test_union_preserves_grouping_with_different_schemas() -> Result<()> {
+        let schema = create_test_schema()?;
+        let schema2 = append_fields(&schema, "1");
+        UnionEquivalenceTest::new(&schema)
+            .with_child_grouping(vec![vec!["a", "b"]], &schema)?
+            .with_child_grouping(vec![vec!["b1", "a1"]], &schema2)?
+            .with_expected_sort(vec![])?
+            .with_expected_grouping(vec![vec!["a", "b"]])?
+            .run()
+    }
+
+    #[test]
+    fn test_union_grouping_is_independent_of_input_order() -> Result<()> {
+        let schema = create_test_schema()?;
+        // The ordered inputs have no common ordering, but both are grouped.
+        UnionEquivalenceTest::new(&schema)
+            .with_child_sort(vec![vec!["a", "b"]], &schema)?
+            .with_child_sort(vec![vec!["a DESC", "b DESC"]], &schema)?
+            .with_child_grouping(vec![vec!["a", "b"]], &schema)?
+            .with_expected_sort(vec![])?
+            .with_expected_grouping(vec![vec!["a", "b"]])?
+            .run()
+    }
+
+    #[test]
+    fn test_union_does_not_infer_grouping_prefixes() -> Result<()> {
+        let schema = create_test_schema()?;
+        UnionEquivalenceTest::new(&schema)
+            .with_child_grouping(vec![vec!["a", "b"]], &schema)?
+            .with_child_grouping(vec![vec!["a"]], &schema)?
+            .with_expected_sort(vec![])?
+            .run()
+    }
+
     // TODO tests with multiple constants
 
     #[derive(Debug)]
@@ -696,6 +794,40 @@ mod tests {
                 child_properties: vec![],
                 expected_properties: None,
             }
+        }
+
+        fn with_child_grouping(
+            mut self,
+            groupings: Vec<Vec<&str>>,
+            schema: &SchemaRef,
+        ) -> Result<Self> {
+            let mut properties = EquivalenceProperties::new(Arc::clone(schema));
+            for grouping in groupings {
+                properties.add_grouping(
+                    grouping
+                        .into_iter()
+                        .map(|name| col(name, schema))
+                        .collect::<Result<Vec<_>>>()?,
+                );
+            }
+            self.child_properties.push(properties);
+            Ok(self)
+        }
+
+        fn with_expected_grouping(mut self, groupings: Vec<Vec<&str>>) -> Result<Self> {
+            let properties = self
+                .expected_properties
+                .as_mut()
+                .expect("expected_properties not set");
+            for grouping in groupings {
+                properties.add_grouping(
+                    grouping
+                        .into_iter()
+                        .map(|name| col(name, &self.output_schema))
+                        .collect::<Result<Vec<_>>>()?,
+                );
+            }
+            Ok(self)
         }
 
         /// Add a union input with the specified orderings
@@ -794,6 +926,15 @@ mod tests {
             rhs: &EquivalenceProperties,
             err_msg: String,
         ) {
+            assert_eq!(lhs.geq_class(), rhs.geq_class(), "{err_msg}");
+            assert_eq!(
+                lhs.normalized_geq_class(),
+                rhs.normalized_geq_class(),
+                "{err_msg}"
+            );
+            for grouping in rhs.geq_class().iter() {
+                assert!(lhs.grouping_satisfy(grouping.iter().cloned()).unwrap());
+            }
             // Check whether constants are same
             let lhs_constants = lhs.constants();
             let rhs_constants = rhs.constants();

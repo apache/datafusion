@@ -928,6 +928,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             pushdown_filters: value.pushdown_filters,
             reorder_filters: value.reorder_filters,
             force_filter_selections: value.force_filter_selections,
+            enable_exact_reverse_scan: value.enable_exact_reverse_scan,
             data_pagesize_limit: value.data_pagesize_limit as u64,
             write_batch_size: value.write_batch_size as u64,
             writer_version: value.writer_version.to_string(),
@@ -1075,6 +1076,9 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
                 .map_or_else(Vec::new, |h| vec![h as u8]),
             ignore_trailing_whitespace: opts
                 .ignore_trailing_whitespace
+                .map_or_else(Vec::new, |h| vec![h as u8]),
+            match_columns_by_header: opts
+                .match_columns_by_header
                 .map_or_else(Vec::new, |h| vec![h as u8]),
         })
     }

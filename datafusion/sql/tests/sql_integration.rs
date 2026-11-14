@@ -5673,10 +5673,13 @@ fn test_custom_type_plan() -> Result<()> {
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result.unwrap();
-    let err = planner.statement_to_plan(ast.pop_front().unwrap());
-    assert_contains!(
-        err.unwrap_err().to_string(),
-        "This feature is not implemented: Unsupported SQL type DATETIME"
+    let plan = planner.statement_to_plan(ast.pop_front().unwrap())?;
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns))
+      EmptyRelation: rows=1
+    "#
     );
 
     fn plan_sql(sql: &str) -> LogicalPlan {
@@ -5698,7 +5701,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns))
+    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns, "UTC"))
       EmptyRelation: rows=1
     "#
     );
@@ -5708,7 +5711,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)) AS Timestamp(ns))
+    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)) AS Timestamp(ns, "UTC"))
       EmptyRelation: rows=1
     "#
     );
@@ -5720,7 +5723,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(ns)))
+    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns, "UTC")), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(ns, "UTC")))
       EmptyRelation: rows=1
     "#
     );

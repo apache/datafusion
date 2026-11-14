@@ -764,7 +764,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             SQLDataType::Timestamp(precision, tz_info)
-                if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
+                if let Some(unit) = time_unit_for_precision(*precision) =>
             {
                 let tz = if *tz_info == TimezoneInfo::Tz
                     || *tz_info == TimezoneInfo::WithTimeZone
@@ -788,21 +788,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp Without Time zone
                     None
                 };
-                let precision = match precision {
-                    Some(0) => TimeUnit::Second,
-                    Some(3) => TimeUnit::Millisecond,
-                    Some(6) => TimeUnit::Microsecond,
-                    None | Some(9) => TimeUnit::Nanosecond,
-                    _ => unreachable!(),
-                };
-                Ok(DataType::Timestamp(precision, tz.map(Into::into)))
+                Ok(DataType::Timestamp(unit, tz.map(Into::into)))
+            }
+            SQLDataType::Datetime(precision)
+                if time_unit_for_precision(*precision).is_some() =>
+            {
+                self.convert_simple_data_type(&SQLDataType::Timestamp(
+                    *precision,
+                    TimezoneInfo::None,
+                ))
             }
             SQLDataType::Date => Ok(DataType::Date32),
-            SQLDataType::Time(None, tz_info) => {
+            SQLDataType::Time(precision, tz_info)
+                if let Some(unit) = time_unit_for_precision(*precision) =>
+            {
                 if *tz_info == TimezoneInfo::None
                     || *tz_info == TimezoneInfo::WithoutTimeZone
                 {
-                    Ok(DataType::Time64(TimeUnit::Nanosecond))
+                    Ok(match unit {
+                        TimeUnit::Second | TimeUnit::Millisecond => DataType::Time32(unit),
+                        TimeUnit::Microsecond | TimeUnit::Nanosecond => {
+                            DataType::Time64(unit)
+                        }
+                    })
                 } else {
                     // We don't support TIMETZ and TIME WITH TIME ZONE for now
                     not_impl_err!("Unsupported SQL type {sql_type}")
@@ -872,7 +880,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharacterLargeObject(_)
             | SQLDataType::CharLargeObject(_)
             | SQLDataType::Timestamp(_, _)
-            | SQLDataType::Time(Some(_), _)
+            | SQLDataType::Time(_, _)
             | SQLDataType::Dec(_)
             | SQLDataType::BigNumeric(_)
             | SQLDataType::BigDecimal(_)
@@ -944,6 +952,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             object_name,
             self.options.enable_ident_normalization,
         )
+    }
+}
+
+/// Maps SQL fractional-seconds precision to an Arrow [`TimeUnit`]. No precision
+/// means nanoseconds. Returns `None` for unsupported precisions.
+fn time_unit_for_precision(precision: Option<u64>) -> Option<TimeUnit> {
+    match precision {
+        Some(0) => Some(TimeUnit::Second),
+        Some(3) => Some(TimeUnit::Millisecond),
+        Some(6) => Some(TimeUnit::Microsecond),
+        None | Some(9) => Some(TimeUnit::Nanosecond),
+        _ => None,
     }
 }
 

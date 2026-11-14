@@ -387,6 +387,27 @@ OPTIONS (
 ----
 2
 
+# ALP encoding is accepted for floating-point columns.
+query I
+COPY (
+    VALUES (CAST(1.25 AS DOUBLE)), (CAST(2.5 AS DOUBLE)), (CAST(3.75 AS DOUBLE))
+)
+TO 'test_files/scratch/copy/alp/' STORED AS PARQUET
+OPTIONS ('format.encoding' 'alp', 'format.dictionary_enabled' false);
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE validate_alp
+STORED AS PARQUET LOCATION 'test_files/scratch/copy/alp/';
+
+query R rowsort
+SELECT column1 FROM validate_alp;
+----
+1.25
+2.5
+3.75
+
 # valid vs invalid metadata
 
 # accepts map with a single entry
