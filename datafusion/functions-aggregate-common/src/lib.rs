@@ -28,3 +28,5 @@ pub mod order;
 pub mod stats;
 pub mod tdigest;
 pub mod utils;
+#[doc(hidden)]
+pub mod window_kernels;

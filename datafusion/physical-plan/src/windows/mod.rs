@@ -7,6 +7,7 @@
 mod bounded_window_agg_exec;
 #[cfg(feature = "proto")]
 mod proto;
+mod pruned_input;
 mod utils;
 mod window_agg_exec;
 

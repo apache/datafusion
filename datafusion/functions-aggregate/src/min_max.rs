@@ -283,9 +283,11 @@ impl AggregateUDFImpl for Max {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMaxAccumulator::try_new(
-            args.return_field.data_type(),
-        )?))
+        let data_type = args.return_field.data_type();
+        if let Some(acc) = sliding_prim_extreme::<true>(data_type) {
+            return Ok(acc);
+        }
+        Ok(Box::new(SlidingMaxAccumulator::try_new(data_type)?))
     }
 
     fn is_descending(&self) -> Option<bool> {
@@ -319,6 +321,165 @@ impl AggregateUDFImpl for Max {
     fn distinct_handling(&self) -> DistinctHandling {
         // `MAX` is idempotent: duplicates cannot change the maximum.
         DistinctHandling::Insensitive
+    }
+}
+
+/// Sliding MIN/MAX on a typed queue (no `ScalarValue` per row).
+struct SlidingPrimExtremeAccumulator<T: ArrowPrimitiveType, const MAX: bool>
+where
+    T::Native: arrow::datatypes::ArrowNativeTypeOp,
+{
+    queue: datafusion_functions_aggregate_common::window_kernels::MovingExtreme<
+        T::Native,
+        MAX,
+    >,
+    data_type: DataType,
+}
+
+impl<T: ArrowPrimitiveType, const MAX: bool> Debug
+    for SlidingPrimExtremeAccumulator<T, MAX>
+where
+    T::Native: arrow::datatypes::ArrowNativeTypeOp,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "SlidingPrimExtremeAccumulator({}, max={})",
+            self.data_type, MAX
+        )
+    }
+}
+
+impl<T: ArrowPrimitiveType, const MAX: bool> SlidingPrimExtremeAccumulator<T, MAX>
+where
+    T::Native: arrow::datatypes::ArrowNativeTypeOp,
+{
+    fn new(data_type: DataType) -> Self {
+        Self {
+            queue:
+                datafusion_functions_aggregate_common::window_kernels::MovingExtreme::new(
+                ),
+            data_type,
+        }
+    }
+}
+
+impl<T: ArrowPrimitiveType, const MAX: bool> Accumulator
+    for SlidingPrimExtremeAccumulator<T, MAX>
+where
+    T::Native: arrow::datatypes::ArrowNativeTypeOp,
+{
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        use arrow::array::{Array, AsArray};
+        let arr = values[0].as_primitive::<T>();
+        match arr.nulls() {
+            None => {
+                for &v in arr.values().iter() {
+                    self.queue.push(v);
+                }
+            }
+            Some(n) => {
+                for (i, &v) in arr.values().iter().enumerate() {
+                    if n.is_valid(i) {
+                        self.queue.push(v);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let valid_count = values[0].len() - values[0].logical_null_count();
+        for _ in 0..valid_count {
+            self.queue.pop();
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.update_batch(states)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.evaluate()?])
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        ScalarValue::new_primitive::<T>(self.queue.extreme(), &self.data_type)
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self) + self.queue.len() * 2 * size_of::<T::Native>()
+    }
+
+    fn evaluate_window_frames(
+        &mut self,
+        values: &[ArrayRef],
+        last_range: &std::ops::Range<usize>,
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        use arrow::array::AsArray;
+        let arr = values[0].as_primitive::<T>();
+        Ok(Some(
+            datafusion_functions_aggregate_common::window_kernels::moving_extreme_frames::<
+                T,
+                MAX,
+            >(arr, &mut self.queue, last_range, frames, &self.data_type),
+        ))
+    }
+
+    fn evaluate_window_segments(
+        &mut self,
+        values: &[ArrayRef],
+        segments: &[std::ops::Range<usize>],
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        use arrow::array::AsArray;
+        let arr = values[0].as_primitive::<T>();
+        Ok(Some(
+            datafusion_functions_aggregate_common::window_kernels::moving_extreme_frames_segments::<
+                T,
+                MAX,
+            >(arr, &mut self.queue, segments, frames, &self.data_type),
+        ))
+    }
+}
+
+fn sliding_prim_extreme<const MAX: bool>(
+    data_type: &DataType,
+) -> Option<Box<dyn Accumulator>> {
+    use arrow::datatypes::*;
+    macro_rules! mk {
+        ($T:ty) => {
+            Some(Box::new(SlidingPrimExtremeAccumulator::<$T, MAX>::new(
+                data_type.clone(),
+            )))
+        };
+    }
+    match data_type {
+        DataType::Int8 => mk!(Int8Type),
+        DataType::Int16 => mk!(Int16Type),
+        DataType::Int32 => mk!(Int32Type),
+        DataType::Int64 => mk!(Int64Type),
+        DataType::UInt8 => mk!(UInt8Type),
+        DataType::UInt16 => mk!(UInt16Type),
+        DataType::UInt32 => mk!(UInt32Type),
+        DataType::UInt64 => mk!(UInt64Type),
+        DataType::Float32 => mk!(Float32Type),
+        DataType::Float64 => mk!(Float64Type),
+        DataType::Date32 => mk!(Date32Type),
+        DataType::Date64 => mk!(Date64Type),
+        DataType::Timestamp(TimeUnit::Second, _) => mk!(TimestampSecondType),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => mk!(TimestampMillisecondType),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => mk!(TimestampMicrosecondType),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => mk!(TimestampNanosecondType),
+        DataType::Decimal128(_, _) => mk!(Decimal128Type),
+        _ => None,
     }
 }
 
@@ -516,9 +677,11 @@ impl AggregateUDFImpl for Min {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(SlidingMinAccumulator::try_new(
-            args.return_field.data_type(),
-        )?))
+        let data_type = args.return_field.data_type();
+        if let Some(acc) = sliding_prim_extreme::<false>(data_type) {
+            return Ok(acc);
+        }
+        Ok(Box::new(SlidingMinAccumulator::try_new(data_type)?))
     }
 
     fn is_descending(&self) -> Option<bool> {

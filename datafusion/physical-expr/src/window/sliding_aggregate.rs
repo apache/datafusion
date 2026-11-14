@@ -11,7 +11,8 @@ use std::sync::Arc;
 use crate::aggregate::AggregateFunctionExpr;
 use crate::window::aggregate::reverse_aggregate_window_expr;
 use crate::window::window_expr::{
-    AggregateWindowExpr, WindowEvalContext, WindowFn, filter_array,
+    AggregateWindowExpr, CompletePartitions, WindowEvalContext, WindowFn,
+    evaluate_complete_partitions_stateful, filter_array,
 };
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowExpr};
 use crate::{PhysicalExpr, expressions::PhysicalSortExpr};
@@ -57,6 +58,11 @@ impl SlidingAggregateWindowExpr {
     pub fn get_aggregate_expr(&self) -> &AggregateFunctionExpr {
         &self.aggregate
     }
+
+    /// Get the `FILTER (WHERE ...)` predicate, if any.
+    pub fn get_filter_expr(&self) -> Option<&Arc<dyn PhysicalExpr>> {
+        self.filter.as_ref()
+    }
 }
 
 /// Incrementally update window function using the fact that batch is
@@ -84,6 +90,18 @@ impl WindowExpr for SlidingAggregateWindowExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         self.aggregate_evaluate(batch)
+    }
+
+    fn evaluate_complete_partitions(
+        &self,
+        block: &CompletePartitions<'_>,
+    ) -> Result<ArrayRef> {
+        if let Some(out) =
+            self.aggregate_evaluate_complete_partitions(block.batch(), block.ranges())?
+        {
+            return Ok(out);
+        }
+        evaluate_complete_partitions_stateful(self, block)
     }
 
     fn evaluate_stateful(

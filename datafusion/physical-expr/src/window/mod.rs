@@ -12,6 +12,7 @@ pub use aggregate::PlainAggregateWindowExpr;
 pub use sliding_aggregate::SlidingAggregateWindowExpr;
 pub use standard::StandardWindowExpr;
 pub use standard_window_function_expr::StandardWindowFunctionExpr;
+pub use window_expr::CompletePartitions;
 pub use window_expr::PartitionBatches;
 pub use window_expr::PartitionKey;
 pub use window_expr::PartitionWindowAggStates;

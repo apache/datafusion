@@ -421,4 +421,59 @@ pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     fn supports_retract_batch(&self) -> bool {
         false
     }
+
+    /// Evaluates this aggregate over a run of window frames at once.
+    ///
+    /// This is an optional shortcut for the protocol a window operator follows frame by frame:
+    /// `update_batch` with the rows that enter the frame, `retract_batch` with the rows that
+    /// leave it, then `evaluate`.
+    ///
+    /// The accumulator currently reflects the rows that the protocol has added and not yet
+    /// retracted: the rows of `values` inside `last_range` (the frame of the row evaluated just
+    /// before `frames[0]`) or, when the frame starts at UNBOUNDED PRECEDING and nothing is ever
+    /// retracted, every row before `last_range.end`. `frames` are the frames of consecutive rows;
+    /// start and end never move backwards.
+    ///
+    /// Returning `Ok(Some(array))` means: `array` holds one result per frame, and the
+    /// accumulator now reflects the rows inside `frames.last()`, as if the protocol had been
+    /// followed frame by frame, in the same order, so that floating point results are
+    /// identical. Returning `Ok(None)` (the default) makes the caller follow the protocol.
+    ///
+    /// Ignored when the window aggregate has a `FILTER` clause.
+    fn evaluate_window_frames(
+        &mut self,
+        _values: &[ArrayRef],
+        _last_range: &std::ops::Range<usize>,
+        _frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        Ok(None)
+    }
+
+    /// [`Self::evaluate_window_frames`] for a run of complete partitions at once.
+    ///
+    /// This accumulator is fresh (nothing was added to it). `segments` are consecutive row ranges
+    /// that cover `values`, each one a complete, independent partition; `frames` holds the frame of
+    /// every row as absolute indices into `values`, always inside the row's own segment.
+    ///
+    /// Returning `Ok(Some(array))` means: `array` holds one result per frame, equal to what a fresh
+    /// accumulator that sees the segment's rows alone gives for the same frames through
+    /// [`Self::evaluate_window_frames`], bit for bit (so state is restarted at every segment, floats
+    /// do not carry rounding residue over from the previous partition). The state of the
+    /// accumulator afterwards is unspecified. `Ok(None)` (the default) makes the caller evaluate one
+    /// partition at a time.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    fn evaluate_window_segments(
+        &mut self,
+        _values: &[ArrayRef],
+        _segments: &[std::ops::Range<usize>],
+        _frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        Ok(None)
+    }
 }
