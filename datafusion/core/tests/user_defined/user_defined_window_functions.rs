@@ -13,16 +13,13 @@ use arrow::datatypes::{DataType, Field, Metadata, Schema};
 use arrow_schema::FieldRef;
 use datafusion::common::test_util::batches_to_string;
 use datafusion::common::{Result, ScalarValue};
-use datafusion::datasource::MemTable;
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::prelude::SessionContext;
 use datafusion_common::exec_datafusion_err;
 use datafusion_expr::ptr_eq::PtrEq;
 use datafusion_expr::{
     LimitEffect, PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDF,
     WindowUDFImpl,
 };
-use datafusion_functions_window::nth_value::first_value_udwf;
-use datafusion_functions_window::row_number::row_number_udwf;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_functions_window_common::{
     expr::ExpressionArgs, field::WindowUDFFieldArgs,
@@ -31,7 +28,6 @@ use datafusion_physical_expr::{
     PhysicalExpr,
     expressions::{col, lit},
 };
-use datafusion_physical_plan::{collect, displayable};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::{
@@ -153,63 +149,6 @@ async fn test_udwf_with_alias() {
     | 2 | j | 6   | 2                        |
     +---+---+-----+--------------------------+
     ");
-}
-
-#[tokio::test]
-async fn test_aliased_udwf_full_partition_ordering() -> Result<()> {
-    let ctx =
-        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
-    ctx.register_udwf(
-        first_value_udwf()
-            .as_ref()
-            .clone()
-            .with_aliases(["my_first"]),
-    );
-    ctx.register_udwf(
-        row_number_udwf()
-            .as_ref()
-            .clone()
-            .with_aliases(["my_row_number"]),
-    );
-
-    // Presorted input isolates the final sort on the window result.
-    let batch = record_batch!(("x", Int64, [1, 2, 3]))?;
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?
-        .with_sort_order(vec![vec![datafusion_expr::col("x").sort(true, false)]]);
-    ctx.register_table("t", Arc::new(table))?;
-
-    for (function, expect_sort, expected) in [
-        (
-            "my_first(x)",
-            false,
-            record_batch!(("r", Int64, [1, 1, 1]))?,
-        ),
-        (
-            "my_row_number()",
-            true,
-            record_batch!(("r", UInt64, [3, 2, 1]))?,
-        ),
-    ] {
-        let sql = format!(
-            "SELECT {function} OVER (
-                ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-             ) AS r FROM t ORDER BY r DESC"
-        );
-        let plan = ctx.sql(&sql).await?.create_physical_plan().await?;
-        let displayed = displayable(plan.as_ref()).indent(true).to_string();
-        assert_eq!(
-            displayed.contains("SortExec"),
-            expect_sort,
-            "{function}:\n{displayed}"
-        );
-        let actual = collect(plan, ctx.task_ctx()).await?;
-        assert_eq!(
-            batches_to_string(&actual),
-            batches_to_string(&[expected]),
-            "{function}"
-        );
-    }
-    Ok(())
 }
 
 /// Basic user defined window function with bounded window

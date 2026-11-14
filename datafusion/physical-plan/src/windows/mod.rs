@@ -388,17 +388,10 @@ pub(crate) fn window_equivalence_properties(
 
         let window_col_idx = i + input_schema_len;
         let frame = expr.get_window_frame();
-        let std_expr = expr.as_any().downcast_ref::<StandardWindowExpr>();
         let aggregate = aggregate_and_filter(expr.as_ref());
         if frame.is_ever_expanding()
             && frame.end_bound.is_unbounded()
-            && (aggregate.is_some()
-                || std_expr.is_some_and(|expr| {
-                    expr.get_standard_func_expr()
-                        .as_any()
-                        .downcast_ref::<WindowUDFExpr>()
-                        .is_some_and(|expr| expr.fun().inner().is_constant_for_frame())
-                }))
+            && aggregate.is_some()
         {
             add_constant_window_orderings(
                 &mut window_eq_properties,
@@ -416,7 +409,8 @@ pub(crate) fn window_equivalence_properties(
                 growing,
                 &partition_ordering,
             )?;
-        } else if let Some(std_expr) = std_expr {
+        } else if let Some(std_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>()
+        {
             std_expr.add_equal_orderings(&mut window_eq_properties)?;
         }
     }
