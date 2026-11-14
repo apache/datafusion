@@ -44,6 +44,7 @@ pub use bloom_filter::BloomFilterStatistics;
 pub use file_format::*;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;
+pub use projection_read_plan::{ParquetReadPlan, build_projection_read_plan};
 pub use reader::*; // Expose so downstream crates can use it
 pub use row_filter::build_row_filter;
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
