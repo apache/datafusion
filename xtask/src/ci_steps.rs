@@ -431,8 +431,6 @@ impl StepContext {
             "substrait" | "substrait-optimized" => {
                 cmd_builder.program("cargo").args([
                     "test",
-                    "--profile",
-                    "ci",
                     "-p",
                     "datafusion-sqllogictest",
                     "--test",
@@ -929,7 +927,6 @@ cargo test \
                     insta::assert_snapshot!(actual, @r"
 cd /workspace && \
 cargo test \
---profile ci \
 -p datafusion-sqllogictest \
 --test sqllogictests \
 --features substrait \
@@ -943,7 +940,6 @@ cargo test \
                     insta::assert_snapshot!(actual, @r"
 cd /workspace && \
 cargo test \
---profile ci \
 -p datafusion-sqllogictest \
 --test sqllogictests \
 --features substrait \
