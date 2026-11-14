@@ -218,6 +218,24 @@ mod skip_partial;
 mod spill;
 mod topk;
 
+/// Batches passing between operators are bounded by `batch_size` rows and are
+/// not charged to the memory pool. A partial-state batch is charged only when
+/// its rows carry more than this many bytes on average, which means a row holds
+/// many input values (`median`, `array_agg`), so its size follows the input.
+const MAX_IN_FLIGHT_STATE_BYTES_PER_ROW: usize = 1024;
+
+/// Below this size a batch is never charged, whatever its row count.
+const MIN_CHARGED_STATE_BATCH_BYTES: usize = 64 * 1024;
+
+fn incoming_state_batch_reservation_bytes(batch: &RecordBatch) -> usize {
+    let bytes = datafusion_common::utils::memory::get_record_batch_memory_size(batch);
+    let in_flight_bytes = batch
+        .num_rows()
+        .saturating_mul(MAX_IN_FLIGHT_STATE_BYTES_PER_ROW)
+        .max(MIN_CHARGED_STATE_BATCH_BYTES);
+    if bytes > in_flight_bytes { bytes } else { 0 }
+}
+
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
 const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
     // This seed is chosen to be a large 64-bit number

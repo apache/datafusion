@@ -14,12 +14,12 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::StreamExt;
 
-use super::AggregateExec;
 use super::aggregate_hash_table::{
     ClusteredAggregateTable, ClusteredAggregateTableMetrics, FinalMarker,
 };
 use super::order::GroupClusteringMode;
 use super::spill::AggregateSpill;
+use super::{AggregateExec, incoming_state_batch_reservation_bytes};
 use crate::SendableRecordBatchStream;
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
@@ -323,11 +323,32 @@ impl Aggregating {
 
         while let Some(batch) = self.input.next().await.transpose()? {
             let timer = elapsed_compute.timer();
+            let batch_memory = incoming_state_batch_reservation_bytes(&batch);
+            let admission = if batch_memory > 0 {
+                reservation.try_grow(batch_memory)
+            } else {
+                Ok(())
+            };
+            match admission {
+                Ok(()) => {}
+                Err(e @ DataFusionError::ResourcesExhausted(_)) => {
+                    let Some(spill_context) = self.spill_context.as_mut() else {
+                        return Err(e);
+                    };
+                    if self.table.is_empty() {
+                        return Err(e);
+                    }
+                    spill_context.sort_and_spill(self.table.take_state_batch()?)?;
+                    reservation.try_resize(self.table.memory_size())?;
+                    reservation.try_grow(batch_memory)?;
+                }
+                Err(e) => return Err(e),
+            }
             self.table.aggregate_batch(&batch)?;
 
-            // Check the reservation before taking completed groups, as the partial
-            // stream does, so spilling is unchanged. Without spilling, the refusal
-            // is returned below only if no group is complete.
+            // Replace the input-batch reservation with the table footprint before
+            // taking completed groups, as the partial stream does. A table growth
+            // refusal can still be resolved by emitting completed groups.
             let oom = match reservation.try_resize(self.reservation_size()) {
                 Ok(()) => None,
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
@@ -470,7 +491,7 @@ mod tests {
     };
     use crate::common::collect;
     use crate::test::TestMemoryExec;
-    use arrow::array::{Int64Array, StringViewArray};
+    use arrow::array::{ArrayRef, Int64Array, StringViewArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
@@ -767,5 +788,101 @@ mod tests {
             sum_over_sorted_input(AggregateMode::Final, &["k"], single_key_batches())?;
         let limit = held_memory(&plan).await?;
         assert_resources_exhausted_under_limit(&plan, limit).await
+    }
+
+    /// The table stays small: only the incoming batch can exceed the limit.
+    #[tokio::test]
+    async fn clustered_final_refuses_large_state_batch() -> Result<()> {
+        let plan =
+            sum_over_sorted_input(AggregateMode::Final, &["k"], vec![vec![vec![1; 64]]])?;
+        // 64 rows that retain 1 MB per column, like the few rows of a `median` state.
+        let state = plan.input().schema();
+        let values: ArrayRef =
+            Arc::new(Int64Array::from(vec![1_i64; 131_072]).slice(0, 64));
+        let batch =
+            RecordBatch::try_new(Arc::clone(&state), vec![Arc::clone(&values), values])?;
+        let ordering = plan.input().properties().output_ordering().unwrap().clone();
+        let input = TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&state), None)?
+            .try_with_sort_information(vec![ordering])?;
+        let plan = AggregateExec::try_new(
+            AggregateMode::Final,
+            plan.group_expr().clone(),
+            plan.aggr_expr().to_vec(),
+            vec![None],
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(input))),
+            plan.input_schema(),
+        )?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_resources_exhausted_under_limit(&plan, 1024 * 1024).await?;
+        assert_output_unchanged_under_limit(&plan, 4 * 1024 * 1024).await
+    }
+
+    /// Spilling the table makes room for a state batch that did not fit next to it.
+    #[tokio::test]
+    async fn clustered_final_spills_to_admit_large_state_batch() -> Result<()> {
+        let plan = sum_over_sorted_input(
+            AggregateMode::Final,
+            &["k1", "k2"],
+            vec![vec![vec![0; 4000], (0..4000).collect()]],
+        )?;
+        assert_eq!(
+            plan.group_clustering_mode(),
+            &GroupClusteringMode::Partial(vec![0])
+        );
+        let state = plan.input().schema();
+        let batch = |rows: i64| {
+            RecordBatch::try_new(
+                Arc::clone(&state),
+                vec![
+                    Arc::new(Int64Array::from(vec![0_i64; rows as usize])) as ArrayRef,
+                    Arc::new(Int64Array::from((0..rows).collect::<Vec<_>>())),
+                    Arc::new(Int64Array::from(vec![1_i64; rows as usize])),
+                ],
+            )
+        };
+        // 64 rows that retain 3 MB, like the few rows of a `median` state.
+        let large = batch(131_072)?.slice(0, 64);
+        let ordering = plan.input().properties().output_ordering().unwrap().clone();
+        let input = TestMemoryExec::try_new(
+            &[vec![batch(4000)?, large]],
+            Arc::clone(&state),
+            None,
+        )?
+        .try_with_sort_information(vec![ordering])?;
+        let plan = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            plan.group_expr().clone(),
+            plan.aggr_expr().to_vec(),
+            vec![None],
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(input))),
+            plan.input_schema(),
+        )?);
+
+        // Fits the large batch, but not next to the table of 4000 groups.
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(3150 * 1024)))
+            .build_arc()?;
+        let context =
+            Arc::new(
+                TaskContext::default()
+                    .with_session_config(SessionConfig::new().set_bool(
+                        "datafusion.execution.enable_migration_aggregate",
+                        true,
+                    ))
+                    .with_runtime(runtime),
+            );
+        let output = collect(plan.execute(0, context)?).await?;
+        assert!(plan.metrics().unwrap().spill_count().unwrap() > 0);
+        let rows: usize = output.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 4000);
+        let mut total = 0;
+        for b in &output {
+            total += arrow::compute::sum(
+                b.column(2).as_any().downcast_ref::<Int64Array>().unwrap(),
+            )
+            .unwrap_or(0);
+        }
+        assert_eq!(total, 4064);
+        Ok(())
     }
 }
