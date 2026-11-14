@@ -1155,6 +1155,87 @@ FROM (VALUES (3::INT)) AS x(a) CROSS JOIN (VALUES (4::INT)) AS y(a);
 1 2
 3 4
 
+# test for https://github.com/apache/datafusion/issues/26625
+statement ok
+CREATE TABLE t_26625(a INT) AS VALUES (2), (1);
+
+query II
+SELECT a AS x, a AS y FROM t_26625
+UNION ALL
+SELECT a AS x, a AS y FROM t_26625
+ORDER BY x, y;
+----
+1 1
+1 1
+2 2
+2 2
+
+# The arm without x = y is folded last, after the arms that have it.
+query II
+SELECT a AS x, a AS y FROM t_26625
+UNION ALL
+SELECT a AS x, a AS y FROM t_26625
+UNION ALL
+SELECT a AS x, (a % 2)::INT AS y FROM t_26625
+ORDER BY x, y;
+----
+1 1
+1 1
+1 1
+2 0
+2 2
+2 2
+
+# Arms with different aliases and casts still preserve equivalence
+query II
+SELECT a AS x, a AS y FROM t_26625
+UNION ALL
+SELECT a::BIGINT AS p, a::BIGINT AS q FROM t_26625
+ORDER BY x, y;
+----
+1 1
+1 1
+2 2
+2 2
+
+# `y % 5 = z + 5` holds in the first arm only: the second arm has y = z,
+# which does not make `y % 5` equal to `z + 5`.
+statement ok
+CREATE TABLE t_26625_l(a INT, b INT, c INT) AS VALUES
+  (0, 5, -5), (1, 6, -4), (2, 7, -3), (3, 13, -2), (4, 9, -1);
+
+statement ok
+CREATE TABLE t_26625_r(d INT) AS VALUES (1), (2), (3), (4), (5), (6);
+
+query III
+SELECT y % 5 AS k, y, z FROM (
+  (SELECT b AS y, c AS z FROM t_26625_l
+   WHERE a = c + 5 AND a = b % 5 ORDER BY z LIMIT 100)
+  UNION ALL
+  (SELECT d AS y, d AS z FROM t_26625_r ORDER BY z LIMIT 100)
+) ORDER BY k, z;
+----
+0 5 -5
+0 5 5
+1 6 -4
+1 1 1
+1 6 6
+2 7 -3
+2 2 2
+3 13 -2
+3 3 3
+4 9 -1
+4 4 4
+
+statement ok
+DROP TABLE t_26625_l;
+
+statement ok
+DROP TABLE t_26625_r;
+
+statement ok
+DROP TABLE t_26625;
+
 # Config reset
 statement ok
 RESET datafusion.execution.batch_size;

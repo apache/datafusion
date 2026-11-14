@@ -6,8 +6,8 @@ use std::iter::Peekable;
 use std::sync::Arc;
 
 use super::EquivalenceProperties;
-use crate::equivalence::GroupingEquivalenceClass;
 use crate::equivalence::class::AcrossPartitions;
+use crate::equivalence::{EquivalenceGroup, GroupingEquivalenceClass};
 use crate::{ConstExpr, PhysicalSortExpr};
 
 use arrow::datatypes::SchemaRef;
@@ -61,7 +61,24 @@ fn calculate_union_binary(
     orderings.add_satisfied_orderings(rhs, &lhs)?;
     let orderings = orderings.build();
 
+    // An equality holds at the output only if it holds in both inputs. Keep
+    // it in the result so the next fold step can still use it.
+    let mut eq_group = EquivalenceGroup::default();
+    for class in lhs.eq_group().iter() {
+        for (i, left) in class.iter().enumerate() {
+            let Some(rhs_class) = rhs.eq_group().get_equivalence_class(left) else {
+                continue;
+            };
+            for right in class.iter().skip(i + 1) {
+                if rhs_class.contains(right) {
+                    eq_group.add_equal_conditions(Arc::clone(left), Arc::clone(right));
+                }
+            }
+        }
+    }
+
     let mut eq_properties = EquivalenceProperties::new(lhs.schema);
+    eq_properties.add_equivalence_group(eq_group)?;
     eq_properties.add_constants(constants)?;
     eq_properties.add_orderings(orderings);
     Ok(eq_properties)
@@ -75,8 +92,6 @@ pub fn calculate_union(
     eqps: Vec<EquivalenceProperties>,
     schema: SchemaRef,
 ) -> Result<EquivalenceProperties> {
-    // TODO: In some cases, we should be able to preserve some equivalence
-    //       classes. Add support for such cases.
     let eqps = eqps
         .into_iter()
         .map(move |props| {
@@ -1139,6 +1154,56 @@ mod tests {
             union_const_2.across_partitions,
             AcrossPartitions::Heterogeneous,
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_preserves_common_equivalence_classes() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Int32, false),
+            Field::new("z", DataType::Int32, false),
+            Field::new("w", DataType::Int32, false),
+        ]));
+
+        let col_x = col("x", &schema)?;
+        let col_y = col("y", &schema)?;
+        let col_z = col("z", &schema)?;
+        let col_w = col("w", &schema)?;
+
+        let sort_expr_x = PhysicalSortExpr::new_default(Arc::clone(&col_x));
+        let sort_expr_y = PhysicalSortExpr::new_default(Arc::clone(&col_y));
+
+        // Input 1: x = y = z, ordered by [x ASC]
+        let mut input1 = EquivalenceProperties::new(Arc::clone(&schema));
+        input1.add_equal_conditions(Arc::clone(&col_x), Arc::clone(&col_y))?;
+        input1.add_equal_conditions(Arc::clone(&col_y), Arc::clone(&col_z))?;
+        input1.add_orderings([vec![sort_expr_x.clone()]]);
+
+        // Input 2: x = y, z = w, ordered by [x ASC]
+        let mut input2 = EquivalenceProperties::new(Arc::clone(&schema));
+        input2.add_equal_conditions(Arc::clone(&col_x), Arc::clone(&col_y))?;
+        input2.add_equal_conditions(Arc::clone(&col_z), Arc::clone(&col_w))?;
+        input2.add_orderings([vec![sort_expr_x.clone()]]);
+
+        // Input 3: x = y = w, ordered by [x ASC]
+        let mut input3 = EquivalenceProperties::new(Arc::clone(&schema));
+        input3.add_equal_conditions(Arc::clone(&col_x), Arc::clone(&col_y))?;
+        input3.add_equal_conditions(Arc::clone(&col_y), Arc::clone(&col_w))?;
+        input3.add_orderings([vec![sort_expr_x.clone()]]);
+
+        let union_props = calculate_union(vec![input1, input2, input3], schema)?;
+
+        // Only x = y holds across all three inputs (common equivalence class)
+        assert!(union_props.eq_group().exprs_equal(&col_x, &col_y));
+        assert!(!union_props.eq_group().exprs_equal(&col_x, &col_z));
+        assert!(!union_props.eq_group().exprs_equal(&col_z, &col_w));
+        assert!(!union_props.eq_group().exprs_equal(&col_x, &col_w));
+
+        // Union output ordering is [x ASC], and since x = y holds,
+        // it must also satisfy the requirement [x ASC, y ASC] (issue #26625).
+        assert!(union_props.ordering_satisfy([sort_expr_x, sort_expr_y])?);
 
         Ok(())
     }
