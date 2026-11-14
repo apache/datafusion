@@ -19,8 +19,12 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{JoinSide, JoinType, Result, internal_datafusion_err};
 use datafusion_expr::ExpressionPlacement;
-use datafusion_physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
+use datafusion_expr_common::operator::Operator;
+use datafusion_physical_expr::expressions::{
+    BinaryExpr, CaseExpr, Column, LambdaExpr, LambdaVariable,
+};
 use datafusion_physical_expr::projection::ProjectionExpr;
+use datafusion_physical_expr::{HigherOrderFunctionExpr, ScalarFunctionExpr};
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -202,7 +206,7 @@ fn try_push_down_projection(
         join_filter.column_indices().to_vec(),
         alias_generator,
     );
-    let new_expr = rewriter.rewrite(expr)?;
+    let new_expr = rewriter.rewrite(expr, true)?;
 
     if new_expr.transformed {
         let new_join_side =
@@ -302,6 +306,10 @@ fn minimize_join_filter(
 /// this is never the case, no subexpressions of the filter can be pushed down. If there is a
 /// subexpression that can be computed using only one side of the join, the entire subexpression is
 /// pushed down to the join side.
+///
+/// The top-level conjuncts of the filter are searched in full. Below them, children that an
+/// expression evaluates only for some rows, such as the branches of a `CASE`, are not searched: a
+/// projection below the join would evaluate them for every row of that side.
 struct JoinFilterRewriter<'a> {
     join_side: JoinSide,
     join_side_schema: &'a Schema,
@@ -343,10 +351,13 @@ impl<'a> JoinFilterRewriter<'a> {
 
     /// Executes the push-down machinery on `expr`.
     ///
+    /// `conjunct` is true while `expr` is the filter or one of its top-level conjuncts.
+    ///
     /// See the [JoinFilterRewriter] for further information.
     fn rewrite(
         &mut self,
         expr: Arc<dyn PhysicalExpr>,
+        conjunct: bool,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         // A lambda is evaluated by its enclosing high-order function. Keep its
         // body in that scope; a complete high-order function may still be moved.
@@ -363,7 +374,28 @@ impl<'a> JoinFilterRewriter<'a> {
         let depends_on_other_side =
             self.depends_on_join_side(&expr, self.join_side.negate())?;
         if depends_on_other_side || is_volatile(&expr) {
-            return expr.map_children(|expr| self.rewrite(expr));
+            // The top-level conjuncts carry no evaluation order: the logical optimizer splits the
+            // filter into conjuncts, reorders them and may push single-side ones below the join.
+            // Below them, children that the expression evaluates only for some rows stay in the
+            // filter, because a projection below the join would evaluate them for every row.
+            let conjunct = conjunct
+                && expr
+                    .downcast_ref::<BinaryExpr>()
+                    .is_some_and(|binary| *binary.op() == Operator::And);
+            let always_evaluated = if conjunct {
+                None
+            } else {
+                always_evaluated_child_count(expr.as_ref())
+            };
+            let mut position = 0;
+            return expr.map_children(|child| {
+                position += 1;
+                if always_evaluated.is_some_and(|count| position > count) {
+                    Ok(Transformed::no(child))
+                } else {
+                    self.rewrite(child, conjunct)
+                }
+            });
         }
 
         // There is only a dependency on this side.
@@ -430,6 +462,29 @@ impl<'a> JoinFilterRewriter<'a> {
                 self.intermediate_column_indices[c.index()].side == join_side
             }))
         })
+    }
+}
+
+/// Returns the number of leading children of `expr` that are evaluated for every row, or `None`
+/// if all children are. The remaining children may be skipped for some rows.
+///
+/// Mirrors `conditional_children` in the logical `CommonSubexprEliminate` rule.
+fn always_evaluated_child_count(expr: &dyn PhysicalExpr) -> Option<usize> {
+    if expr.downcast_ref::<CaseExpr>().is_some() {
+        // For a searched CASE (no base expression), only the first WHEN is evaluated for every row.
+        // For a simple CASE (with a base expression), only the base expression is evaluated for
+        // every row, because WHEN evaluation is skipped when the base expression is NULL.
+        Some(1)
+    } else if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+        matches!(binary.op(), Operator::And | Operator::Or).then_some(1)
+    } else if let Some(func) = expr.downcast_ref::<ScalarFunctionExpr>() {
+        // `conditional_arguments` only accepts logical expressions, so every argument of a
+        // short-circuiting function is treated as conditional.
+        func.fun().short_circuits().then_some(0)
+    } else if let Some(func) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
+        func.fun().short_circuits().then_some(0)
+    } else {
+        None
     }
 }
 
@@ -687,7 +742,8 @@ mod test {
     use super::*;
     use arrow::datatypes::{DataType, Field, FieldRef, Schema};
     use datafusion_expr_common::operator::Operator;
-    use datafusion_functions::math::random;
+    use datafusion_functions::core::coalesce;
+    use datafusion_functions::math::{gcd, random};
     use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr::expressions::{binary, lit};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -739,7 +795,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn does_not_push_down_short_circuiting_expressions() -> Result<()> {
+    async fn pushes_down_all_top_level_conjuncts() -> Result<()> {
         let (left_schema, right_schema) = create_simple_schemas();
         let optimized_plan = run_test(
             left_schema,
@@ -759,6 +815,117 @@ mod test {
 
         assert_snapshot!(optimized_plan, @r"
         NestedLoopJoinExec: join_type=Inner, filter=false AND join_proj_push_down_1@0 > join_proj_push_down_2@1, projection=[a@0, x@2]
+          ProjectionExec: expr=[a@0 as a, a@0 + 1 as join_proj_push_down_1]
+            EmptyExec
+          ProjectionExec: expr=[x@0 as x, x@0 + 1 as join_proj_push_down_2]
+            EmptyExec
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn does_not_push_down_short_circuiting_expressions() -> Result<()> {
+        let (left_schema, right_schema) = create_simple_schemas();
+        let optimized_plan = run_test(
+            left_schema,
+            right_schema,
+            a_x(),
+            None,
+            |schema| {
+                binary(
+                    lit(false),
+                    Operator::Or,
+                    a_plus_one_greater_than_x_plus_one(schema)?,
+                    schema,
+                )
+            },
+            JoinType::Inner,
+        )?;
+
+        assert_snapshot!(optimized_plan, @r"
+        NestedLoopJoinExec: join_type=Inner, filter=false OR a@0 + 1 > x@1 + 1
+          EmptyExec
+          EmptyExec
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn short_circuiting_scalar_function_blocks_argument_push_down() -> Result<()> {
+        let (left_schema, right_schema) = create_simple_schemas();
+        let optimized_plan = run_test(
+            left_schema,
+            right_schema,
+            a_x(),
+            None,
+            |schema| {
+                let left_expr = binary(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Plus,
+                    lit(1),
+                    schema,
+                )?;
+                let right_expr = binary(
+                    Arc::new(Column::new("x", 1)),
+                    Operator::Plus,
+                    lit(1),
+                    schema,
+                )?;
+                let coalesce_expr = Arc::new(ScalarFunctionExpr::new(
+                    "coalesce",
+                    coalesce(),
+                    vec![left_expr, right_expr],
+                    FieldRef::new(Field::new("out", DataType::Int32, true)),
+                    Arc::new(ConfigOptions::default()),
+                ));
+                binary(coalesce_expr, Operator::Gt, lit(0), schema)
+            },
+            JoinType::Inner,
+        )?;
+
+        assert_snapshot!(optimized_plan, @r"
+        NestedLoopJoinExec: join_type=Inner, filter=coalesce(a@0 + 1, x@1 + 1) > 0
+          EmptyExec
+          EmptyExec
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn eager_scalar_function_permits_argument_push_down() -> Result<()> {
+        let (left_schema, right_schema) = create_simple_schemas();
+        let optimized_plan = run_test(
+            left_schema,
+            right_schema,
+            a_x(),
+            None,
+            |schema| {
+                let left_expr = binary(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Plus,
+                    lit(1),
+                    schema,
+                )?;
+                let right_expr = binary(
+                    Arc::new(Column::new("x", 1)),
+                    Operator::Plus,
+                    lit(1),
+                    schema,
+                )?;
+                let gcd_expr = Arc::new(ScalarFunctionExpr::new(
+                    "gcd",
+                    gcd(),
+                    vec![left_expr, right_expr],
+                    FieldRef::new(Field::new("out", DataType::Int64, true)),
+                    Arc::new(ConfigOptions::default()),
+                ));
+                binary(gcd_expr, Operator::Gt, lit(0), schema)
+            },
+            JoinType::Inner,
+        )?;
+
+        assert_snapshot!(optimized_plan, @r"
+        NestedLoopJoinExec: join_type=Inner, filter=gcd(join_proj_push_down_1@0, join_proj_push_down_2@1) > 0, projection=[a@0, x@2]
           ProjectionExec: expr=[a@0 as a, a@0 + 1 as join_proj_push_down_1]
             EmptyExec
           ProjectionExec: expr=[x@0 as x, x@0 + 1 as join_proj_push_down_2]
