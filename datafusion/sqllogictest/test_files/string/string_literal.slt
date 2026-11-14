@@ -484,6 +484,12 @@ query error DataFusion error: Execution error: string size overflow on repeat, m
 SELECT repeat(x, 9223372036854775807)
 FROM (VALUES ('abc')) AS t(x);
 
+query error
+SELECT repeat('a', 1048576) AS s FROM generate_series(1, 2048);
+----
+DataFusion error: Arrow error: Offset overflow error: 2147483648
+
+
 query T
 SELECT arrow_typeof(repeat('foo', 3))
 ----
