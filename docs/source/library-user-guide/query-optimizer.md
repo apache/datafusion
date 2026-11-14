@@ -23,6 +23,10 @@ For a deeper background on optimizer architecture and rule types and predicates,
 [Using Ordering for Better Plans in Apache DataFusion], and
 [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries].
 
+The physical optimizer's reasoning about sort orders, equivalent expressions,
+and constants is implemented by [`EquivalenceProperties`], whose documentation
+explains the details.
+
 [`optimizerrule`]: https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html
 [`physicaloptimizerrule`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html
 [optimizing sql (and dataframes) in datafusion, part 1]: https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-one
@@ -32,6 +36,7 @@ For a deeper background on optimizer architecture and rule types and predicates,
 [`analyzer`]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.Analyzer.html#built-in-analyzer-rules
 [`optimizer`]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.Optimizer.html#built-in-optimizer-rules
 [`physicaloptimizer`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/optimizer/struct.PhysicalOptimizer.html#built-in-physical-optimizer-rules
+[`equivalenceproperties`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/struct.EquivalenceProperties.html
 [`logicalplan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
 
 ## Running the Optimizer

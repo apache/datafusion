@@ -19,7 +19,6 @@ use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::kernels::cmp::eq as arrow_eq;
 use arrow::datatypes::*;
 
-use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, exec_err,
@@ -69,13 +68,6 @@ fn supports_arrow_eq(dt: &DataType) -> bool {
         Boolean | Binary | LargeBinary | BinaryView | FixedSizeBinary(_) => true,
         Dictionary(_, v) => supports_arrow_eq(v.as_ref()),
         _ => dt.is_primitive() || dt.is_null() || dt.is_string(),
-    }
-}
-
-fn normalize_in_list_value(value: ColumnarValue) -> ColumnarValue {
-    match value {
-        ColumnarValue::Array(array) => ColumnarValue::Array(normalize_floats(&array)),
-        ColumnarValue::Scalar(scalar) => ColumnarValue::Scalar(scalar.normalize()),
     }
 }
 
@@ -378,12 +370,12 @@ impl PhysicalExpr for InListExpr {
                 // comparator for unsupported types (nested, RunEndEncoded, etc.).
                 // Normalize the left side once for the whole list. Doing this
                 // outside `compare_one` avoids rescanning it for every item.
-                let value = normalize_in_list_value(value).into_array(num_rows)?;
+                let value = value.normalize().into_array(num_rows)?;
                 let lhs_supports_arrow_eq = supports_arrow_eq(value.data_type());
 
                 // Helper: compare value against a single list expression
                 let compare_one = |expr: &Arc<dyn PhysicalExpr>| -> Result<BooleanArray> {
-                    match normalize_in_list_value(expr.evaluate(batch)?) {
+                    match expr.evaluate(batch)?.normalize() {
                         ColumnarValue::Array(array) => {
                             if lhs_supports_arrow_eq
                                 && supports_arrow_eq(array.data_type())

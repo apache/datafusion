@@ -1516,10 +1516,10 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
 /// Replace `-0.0` with `+0.0` in any `Float16`, `Float32`, or `Float64` array.
 #[deprecated(
     since = "56.0.0",
-    note = "use `datafusion_common::float_semantics::normalize_floats` instead"
+    note = "use `datafusion_common::float_semantics::normalize` instead"
 )]
 pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
-    crate::float_semantics::normalize_floats(array)
+    crate::float_semantics::normalize(Arc::clone(array))
 }
 
 pub use crate::float_semantics::has_float_leaf;
