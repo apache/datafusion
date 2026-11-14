@@ -2872,6 +2872,215 @@ SET datafusion.execution.batch_size = 8192;
 statement ok
 SET datafusion.execution.target_partitions = 4;
 
+# An `OFFSET` the source pushes down puts a `GlobalLimitExec` between the scan
+# and the leaf projection, and a second node under it when the scan has more
+# than one file group, which strands `get_field` above them and reads the whole
+# struct again. See `try_split_leaf_projection` in
+# `datafusion/physical-optimizer/src/projection_pushdown.rs`.
+
+# Every `OFFSET` below sets a skip that differs from the fetch -- `OFFSET 1
+# LIMIT 3` for the single-file queries, `OFFSET 1 LIMIT 2` for the multi-file
+# ones -- never `OFFSET n LIMIT n`: the split rebuilds the limit, and with the
+# two numbers equal nothing here would notice them being swapped.
+
+# Values first: these pin the rows, which no plan assertion shows. They are not
+# the only cover for a misplaced `skip`, which reddens the plans below as well,
+# and they are no cover at all for a dropped `fetch`, which nothing in this file
+# notices. The unit tests carry that one.
+query I
+SELECT v FROM (SELECT s['value'] AS v FROM leaf_split OFFSET 1 LIMIT 3) ORDER BY v;
+----
+150
+200
+300
+
+query II
+SELECT v, w FROM (
+    SELECT s['value'] AS v, id + 1 AS w FROM leaf_split OFFSET 1 LIMIT 3
+) ORDER BY v;
+----
+150 4
+200 3
+300 5
+
+# A bare `get_field` alone in its projection.
+query TT
+EXPLAIN SELECT s['value'] AS v FROM leaf_split OFFSET 1 LIMIT 3;
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS v
+02)--Limit: skip=0, fetch=3
+03)----Projection: get_field(leaf_split.s, Utf8("value")) AS __datafusion_extracted_1
+04)------TableScan: leaf_split projection=[s], fetch=3, skip=1
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@0 as v]
+02)--GlobalLimitExec: skip=1, fetch=3
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[get_field(s@1, value) as __datafusion_leaf_0], limit=4, file_type=parquet
+
+# With a computed sibling, which stays above the limit: only the leaf descends.
+query TT
+EXPLAIN SELECT s['value'] AS v, id + 1 AS w FROM leaf_split OFFSET 1 LIMIT 3;
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS v, leaf_split.id + Int64(1) AS w
+02)--Limit: skip=0, fetch=3
+03)----Projection: get_field(leaf_split.s, Utf8("value")) AS __datafusion_extracted_1, leaf_split.id
+04)------TableScan: leaf_split projection=[id, s], fetch=3, skip=1
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+02)--GlobalLimitExec: skip=1, fetch=3
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], limit=4, file_type=parquet
+
+# A leaf nested inside a `KeepInPlace` expression. `upper` stays above the
+# limit, so the rows the limit skips do not pay for it, and the scan still
+# reads only the two fields.
+query TT
+EXPLAIN SELECT s['value'] AS v, upper(s['label']) AS l FROM leaf_split OFFSET 1 LIMIT 3;
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS v, upper(__datafusion_extracted_2) AS l
+02)--Limit: skip=0, fetch=3
+03)----Projection: get_field(leaf_split.s, Utf8("value")) AS __datafusion_extracted_1, get_field(leaf_split.s, Utf8("label")) AS __datafusion_extracted_2
+04)------TableScan: leaf_split projection=[s], fetch=3, skip=1
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@0 as v, upper(__datafusion_leaf_1@1) as l]
+02)--GlobalLimitExec: skip=1, fetch=3
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[get_field(s@1, value) as __datafusion_leaf_0, get_field(s@1, label) as __datafusion_leaf_1], limit=4, file_type=parquet
+
+# No leaf expression in the projection. This is a control, not a guard: the
+# scan prunes to `[id]` either way, so the plan is the same whether or not the
+# rule bails out early. What pins the bail-out is
+# `split_declines_global_limit_without_leaf` in
+# `datafusion/core/tests/physical_optimizer/projection_pushdown.rs`.
+query TT
+EXPLAIN SELECT id + 1 AS w FROM leaf_split OFFSET 1 LIMIT 3;
+----
+logical_plan
+01)Projection: leaf_split.id + Int64(1) AS w
+02)--Limit: skip=0, fetch=3
+03)----TableScan: leaf_split projection=[id], fetch=3, skip=1
+physical_plan
+01)ProjectionExec: expr=[id@0 + 1 as w]
+02)--GlobalLimitExec: skip=1, fetch=3
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[id], limit=4, file_type=parquet
+
+# A marker inside a lambda body, under an `OFFSET`. The lambda queries further
+# up cover the body without a limit, and the queries just above cover the limit
+# without a lambda; nothing covered both, and this errors before the fix. It is
+# also what pins `rebase_lambda_variable`: the parameter index is rebased
+# against the chain's bottom schema, which the split has just widened.
+# The lambda section above runs with `batch_size = 2`, which inserts a
+# repartition; this one has to stay here, where `batch_size` is high enough that
+# the only node between the projection and the scan is the limit.
+statement ok
+SET datafusion.sql_parser.dialect = databricks;
+
+query ?IT
+SELECT a, v, l FROM (
+    SELECT array_transform(arr, x -> x + file_row_index()) AS a,
+           s['value'] AS v, s['label'] AS l
+    FROM leaf_split OFFSET 1 LIMIT 3
+) ORDER BY v;
+----
+[8] 150 gamma
+[5, 6] 200 beta
+[10, 11, 12] 300 delta
+
+statement ok
+SET datafusion.sql_parser.dialect = generic;
+
+# More than one file group: a `CoalescePartitionsExec` sits between the limit
+# and the scan, so the leaf has to descend past two nodes. Stopping at the
+# first one leaves the scan reading the whole struct.
+
+statement ok
+COPY (
+    SELECT column1 AS id, column2 AS s FROM VALUES
+        (1, {value: 100, label: 'alpha'}), (2, {value: 200, label: 'beta'})
+) TO 'test_files/scratch/projection_pushdown/leaf_split_two/a.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+    SELECT column1 AS id, column2 AS s FROM VALUES
+        (3, {value: 150, label: 'gamma'}), (4, {value: 300, label: 'delta'})
+) TO 'test_files/scratch/projection_pushdown/leaf_split_two/b.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE leaf_split_two STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/leaf_split_two/';
+
+query TT
+EXPLAIN SELECT s['value'] AS v FROM leaf_split_two OFFSET 1 LIMIT 2;
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS v
+02)--Limit: skip=0, fetch=2
+03)----Projection: get_field(leaf_split_two.s, Utf8("value")) AS __datafusion_extracted_1
+04)------TableScan: leaf_split_two projection=[s], fetch=2, skip=1
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@0 as v]
+02)--GlobalLimitExec: skip=1, fetch=2
+03)----CoalescePartitionsExec: fetch=3
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split_two/a.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split_two/b.parquet]]}, projection=[get_field(s@1, value) as __datafusion_leaf_0], limit=3, file_type=parquet
+
+query TT
+EXPLAIN SELECT s['value'] AS v, id + 1 AS w FROM leaf_split_two OFFSET 1 LIMIT 2;
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS v, leaf_split_two.id + Int64(1) AS w
+02)--Limit: skip=0, fetch=2
+03)----Projection: get_field(leaf_split_two.s, Utf8("value")) AS __datafusion_extracted_1, leaf_split_two.id
+04)------TableScan: leaf_split_two projection=[id, s], fetch=2, skip=1
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+02)--GlobalLimitExec: skip=1, fetch=2
+03)----CoalescePartitionsExec: fetch=3
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split_two/a.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split_two/b.parquet]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], limit=3, file_type=parquet
+
+# Which rows survive the skip depends on the order the partitions are merged
+# in, which is not guaranteed, so this counts them instead of listing them.
+query I
+SELECT count(v) FROM (
+    SELECT s['value'] AS v FROM leaf_split_two OFFSET 1 LIMIT 2
+);
+----
+2
+
+statement ok
+DROP TABLE leaf_split_two;
+
+# A table bigger than `batch_size` also gets a `RepartitionExec`, which lands
+# above the limit. The split then acts on the leaf projection under it.
+statement ok
+SET datafusion.execution.batch_size = 2;
+
+query TT
+EXPLAIN SELECT s['value'] AS v, id + 1 AS w FROM leaf_split OFFSET 1 LIMIT 3;
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS v, leaf_split.id + Int64(1) AS w
+02)--Limit: skip=0, fetch=3
+03)----Projection: get_field(leaf_split.s, Utf8("value")) AS __datafusion_extracted_1, leaf_split.id
+04)------TableScan: leaf_split projection=[id, s], fetch=3, skip=1
+physical_plan
+01)ProjectionExec: expr=[__datafusion_extracted_1@0 as v, id@1 + 1 as w]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----ProjectionExec: expr=[__datafusion_leaf_0@1 as __datafusion_extracted_1, id@0 as id]
+04)------GlobalLimitExec: skip=1, fetch=3
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], limit=4, file_type=parquet
+
+query II
+SELECT v, w FROM (SELECT s['value'] AS v, id + 1 AS w FROM leaf_split OFFSET 1 LIMIT 3) ORDER BY v;
+----
+150 4
+200 3
+300 5
+
+statement ok
+SET datafusion.execution.batch_size = 8192;
+
 statement ok
 DROP TABLE leaf_split;
 
