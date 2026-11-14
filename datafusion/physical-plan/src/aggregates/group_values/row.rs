@@ -11,10 +11,10 @@ use arrow::array::{
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
-use datafusion_common::Result;
 use datafusion_common::float_semantics;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupSelection};
 use hashbrown::hash_table::HashTable;
@@ -109,13 +109,29 @@ impl GroupValuesRows {
 
 impl GroupValues for GroupValuesRows {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+        assert_eq_or_internal_err!(
+            cols.len(),
+            self.schema.fields().len(),
+            "The number of group columns must match the schema"
+        );
         // Normalize -0.0 → +0.0 so RowConverter (IEEE 754 totalOrder) and
         // primitive hashing both group ±0 together. No-op for non-float
         // columns.
-        let normalized_cols: Vec<ArrayRef> = cols
+        let normalized_cols = cols
             .iter()
-            .map(|col| float_semantics::normalize(Arc::clone(col)))
-            .collect();
+            .zip(self.schema.fields())
+            .map(|(col, field)| {
+                // The row format requires input arrays to match the schema types.
+                let col = match (col.data_type(), field.data_type()) {
+                    (DataType::Utf8, DataType::LargeUtf8)
+                    | (DataType::Binary, DataType::LargeBinary) => {
+                        cast(col, field.data_type())?
+                    }
+                    _ => Arc::clone(col),
+                };
+                Ok(float_semantics::normalize(col))
+            })
+            .collect::<Result<Vec<ArrayRef>>>()?;
         let cols = normalized_cols.as_slice();
 
         // Convert the group keys into the row format
@@ -489,6 +505,22 @@ mod tests {
             DataType::Int32,
             true,
         )]))
+    }
+
+    #[test]
+    fn rejects_extra_group_columns() -> Result<()> {
+        let mut group_values = GroupValuesRows::try_new(int32_schema())?;
+        let input: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        let error = group_values
+            .intern(&[Arc::clone(&input), input], &mut vec![])
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("The number of group columns must match the schema")
+        );
+        assert!(group_values.is_empty());
+        Ok(())
     }
 
     #[test]

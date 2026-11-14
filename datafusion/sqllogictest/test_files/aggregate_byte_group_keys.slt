@@ -1,0 +1,444 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Each query checks that Utf8 and Binary group keys keep their declared types.
+# The outer query fails if the key types change.
+#
+# The tests change key types because varchar uses Utf8View.
+# The input has 15000 groups. Of these groups, 1500 have a NULL s key.
+
+statement ok
+SET datafusion.execution.batch_size = 128
+
+statement ok
+SET datafusion.execution.enable_migration_aggregate = true
+
+statement ok
+SET datafusion.optimizer.enable_round_robin_repartition = false
+
+statement ok
+SET datafusion.optimizer.prefer_existing_sort = true
+
+statement ok
+SET datafusion.execution.parquet.schema_force_view_types = false
+
+statement ok
+SET datafusion.explain.physical_plan_only = true
+
+statement ok
+CREATE VIEW byte_keys AS
+SELECT
+  arrow_cast(concat('p', v % 3), 'Utf8') AS p,
+  arrow_cast(CASE WHEN v % 10 = 0 THEN NULL ELSE concat('s', (v * 7) % 5000) END, 'Utf8') AS s,
+  arrow_cast(concat('b', (v * 13) % 5000), 'Binary') AS b,
+  v
+FROM generate_series(1, 20000) AS t(v)
+
+# Sorted input selects the streams that use the group order.
+query I
+COPY (SELECT * FROM byte_keys ORDER BY p, s, b)
+TO 'test_files/scratch/aggregate_byte_group_keys/sorted.parquet' STORED AS PARQUET
+----
+20000
+
+statement ok
+CREATE EXTERNAL TABLE byte_keys_sorted STORED AS PARQUET
+LOCATION 'test_files/scratch/aggregate_byte_group_keys/sorted.parquet'
+WITH ORDER (p ASC, s ASC, b ASC)
+
+statement ok
+CREATE EXTERNAL TABLE byte_keys_sorted_by_p STORED AS PARQUET
+LOCATION 'test_files/scratch/aggregate_byte_group_keys/sorted.parquet'
+WITH ORDER (p ASC)
+
+query TTT
+SELECT arrow_typeof(p), arrow_typeof(s), arrow_typeof(b) FROM byte_keys LIMIT 1
+----
+Utf8 Utf8 Binary
+
+query TTT
+SELECT arrow_typeof(p), arrow_typeof(s), arrow_typeof(b) FROM byte_keys_sorted LIMIT 1
+----
+Utf8 Utf8 Binary
+
+# Reference results with Utf8View and BinaryView keys
+
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (
+  SELECT p, s, b, count(*) AS c, sum(v) AS total
+  FROM (
+    SELECT arrow_cast(p, 'Utf8View') AS p, arrow_cast(s, 'Utf8View') AS s,
+      arrow_cast(b, 'BinaryView') AS b, v
+    FROM byte_keys
+  )
+  GROUP BY p, s, b
+)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+# One stage with unsorted input
+
+query TT
+EXPLAIN SELECT p, s, b, count(*), sum(v) FROM byte_keys GROUP BY p, s, b
+----
+<slt:ignore>AggregateExec: mode=Single, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys.v)]
+<slt:ignore>
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+query TT?II
+SELECT p, s, b, count(*), sum(v) FROM byte_keys GROUP BY p, s, b ORDER BY p, s, b LIMIT 5
+----
+p0 s1 6232383539 1 7143
+p0 s1001 6231383539 1 10143
+p0 s1002 6234373138 2 19572
+p0 s1003 6232353737 1 9429
+p0 s1004 62343336 2 18144
+
+# A single key column uses a separate group storage method.
+query IIITII
+SELECT count(*), count(s), sum(length(s)), min(s), sum(c), sum(total)
+FROM (SELECT s, count(*) AS c, sum(v) AS total FROM byte_keys GROUP BY s)
+----
+4501 4500 21501 s1 20000 200010000
+
+query ITTII
+SELECT count(*), min(arrow_cast(b, 'Utf8')), max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT b, count(*) AS c, sum(v) AS total FROM byte_keys GROUP BY b)
+----
+5000 b0 b999 20000 200010000
+
+# A key column of the Null type uses the row format for the group values.
+query TT
+EXPLAIN SELECT s, n, count(*) FROM (SELECT s, NULL AS n FROM byte_keys) GROUP BY s, n
+----
+<slt:ignore>AggregateExec: mode=Single, gby=[s@0 as s, n@1 as n], aggr=[count(Int64(1))]
+<slt:ignore>
+
+query TT
+SELECT arrow_typeof(s), arrow_typeof(n)
+FROM (SELECT s, n, count(*) FROM (SELECT s, NULL AS n FROM byte_keys) GROUP BY s, n)
+LIMIT 1
+----
+Utf8 Null
+
+query IIIII
+SELECT count(*), count(s), count(n), sum(length(s)), sum(c)
+FROM (
+  SELECT s, n, count(*) AS c
+  FROM (SELECT s, NULL AS n FROM byte_keys)
+  GROUP BY s, n
+)
+----
+4501 4500 0 21501 20000
+
+# The stream writes groups to disk because of the memory limit.
+statement ok
+SET datafusion.runtime.memory_limit = '300K'
+
+query TT
+EXPLAIN ANALYZE SELECT p, s, b, count(*), sum(v) FROM byte_keys GROUP BY p, s, b
+----
+<slt:ignore>AggregateExec: mode=Single, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys.v)], metrics=[<slt:ignore>spilled_rows=<slt:ignore> K,<slt:ignore>
+<slt:ignore>
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+# Two stages with unsorted input
+
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+query TT
+EXPLAIN SELECT p, s, b, count(*), sum(v) FROM byte_keys GROUP BY p, s, b
+----
+<slt:ignore>AggregateExec: mode=FinalPartitioned, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys.v)]
+<slt:ignore>AggregateExec: mode=Partial, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys.v)]
+<slt:ignore>
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+query IIITII
+SELECT count(*), count(s), sum(length(s)), min(s), sum(c), sum(total)
+FROM (SELECT s, count(*) AS c, sum(v) AS total FROM byte_keys GROUP BY s)
+----
+4501 4500 21501 s1 20000 200010000
+
+# The final stage writes groups to disk because of the memory limit.
+statement ok
+SET datafusion.runtime.memory_limit = '1M'
+
+query TT
+EXPLAIN ANALYZE SELECT p, s, b, count(*), sum(v) FROM byte_keys GROUP BY p, s, b
+----
+<slt:ignore>AggregateExec: mode=FinalPartitioned, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys.v)], metrics=[<slt:ignore>spilled_rows=<slt:ignore> K,<slt:ignore>
+<slt:ignore>AggregateExec: mode=Partial, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys.v)], metrics=[<slt:ignore>spill_count=0,<slt:ignore>
+<slt:ignore>
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+# Grouping sets use NULL for keys outside the selected set.
+query IIIIIII
+SELECT count(*), count(p), count(s), sum(length(s)), sum(g), sum(c), sum(total)
+FROM (
+  SELECT p, s, grouping(p, s) AS g, count(*) AS c, sum(v) AS total
+  FROM byte_keys GROUP BY ROLLUP(p, s)
+)
+----
+13507 13506 13500 64503 6 60000 600030000
+
+query IIIIIII
+SELECT count(*), count(p), count(s), sum(length(s)), sum(g), sum(c), sum(total)
+FROM (
+  SELECT p, s, grouping(p, s) AS g, count(*) AS c, sum(v) AS total
+  FROM (SELECT arrow_cast(p, 'Utf8View') AS p, arrow_cast(s, 'Utf8View') AS s, v FROM byte_keys)
+  GROUP BY ROLLUP(p, s)
+)
+----
+13507 13506 13500 64503 6 60000 600030000
+
+# The partial stage returns input rows without groups.
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0
+
+query TT
+EXPLAIN ANALYZE SELECT p, s, b, count(*), sum(v) FROM byte_keys GROUP BY p, s, b
+----
+<slt:ignore>AggregateExec: mode=FinalPartitioned, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys.v)], metrics=[<slt:ignore>spill_count=0,<slt:ignore>
+<slt:ignore>AggregateExec: mode=Partial, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys.v)], metrics=[<slt:ignore>spill_count=0,<slt:ignore>skipped_aggregation_rows=<slt:ignore> K,<slt:ignore>
+<slt:ignore>
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_rows_threshold
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold
+
+# Input sorted by all group keys
+
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+query TT
+EXPLAIN SELECT p, s, b, count(*), sum(v) FROM byte_keys_sorted GROUP BY p, s, b
+----
+<slt:ignore>AggregateExec: mode=Single, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys_sorted.v)], group_clustering_mode=Full
+<slt:ignore>
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys_sorted GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+statement ok
+SET datafusion.execution.target_partitions = 2
+
+query TT
+EXPLAIN SELECT p, s, b, count(*), sum(v) FROM byte_keys_sorted GROUP BY p, s, b
+----
+<slt:ignore>AggregateExec: mode=FinalPartitioned, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys_sorted.v)], group_clustering_mode=Full
+<slt:ignore>AggregateExec: mode=Partial, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys_sorted.v)], group_clustering_mode=Full
+<slt:ignore>
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys_sorted GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+# Input sorted by the first group key
+
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+query TT
+EXPLAIN SELECT p, s, b, count(*), sum(v) FROM byte_keys_sorted_by_p GROUP BY p, s, b
+----
+<slt:ignore>AggregateExec: mode=Single, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys_sorted_by_p.v)], group_clustering_mode=Partial([0])
+<slt:ignore>
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys_sorted_by_p GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+statement ok
+SET datafusion.runtime.memory_limit = '300K'
+
+query TT
+EXPLAIN ANALYZE SELECT p, s, b, count(*), sum(v) FROM byte_keys_sorted_by_p GROUP BY p, s, b
+----
+<slt:ignore>AggregateExec: mode=Single, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys_sorted_by_p.v)], group_clustering_mode=Partial([0]), metrics=[<slt:ignore>spilled_rows=<slt:ignore> K,<slt:ignore>
+<slt:ignore>
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys_sorted_by_p GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+statement ok
+SET datafusion.execution.target_partitions = 2
+
+query TT
+EXPLAIN SELECT p, s, b, count(*), sum(v) FROM byte_keys_sorted_by_p GROUP BY p, s, b
+----
+<slt:ignore>AggregateExec: mode=FinalPartitioned, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys_sorted_by_p.v)], group_clustering_mode=Partial([0])
+<slt:ignore>AggregateExec: mode=Partial, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys_sorted_by_p.v)], group_clustering_mode=Partial([0])
+<slt:ignore>
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys_sorted_by_p GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+statement ok
+SET datafusion.runtime.memory_limit = '600K'
+
+query TT
+EXPLAIN ANALYZE SELECT p, s, b, count(*), sum(v) FROM byte_keys_sorted_by_p GROUP BY p, s, b
+----
+<slt:ignore>AggregateExec: mode=FinalPartitioned, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys_sorted_by_p.v)], group_clustering_mode=Partial([0]), metrics=[<slt:ignore>spilled_rows=<slt:ignore> K,<slt:ignore>
+<slt:ignore>AggregateExec: mode=Partial, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys_sorted_by_p.v)], group_clustering_mode=Partial([0]), metrics=[<slt:ignore>spill_count=0,<slt:ignore>
+<slt:ignore>
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys_sorted_by_p GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+# GroupedHashAggregateStream keeps 64-bit offsets in files on disk.
+
+statement ok
+SET datafusion.execution.enable_migration_aggregate = false
+
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys_sorted_by_p GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+statement ok
+SET datafusion.runtime.memory_limit = '600K'
+
+query TT
+EXPLAIN ANALYZE SELECT p, s, b, count(*), sum(v) FROM byte_keys GROUP BY p, s, b
+----
+<slt:ignore>AggregateExec: mode=Single, gby=[p@0 as p, s@1 as s, b@2 as b], aggr=[count(Int64(1)), sum(byte_keys.v)], metrics=[<slt:ignore>spilled_rows=<slt:ignore> K,<slt:ignore>
+<slt:ignore>
+
+query IIIITTII
+SELECT count(*), count(s), sum(length(p)), sum(length(s)), min(s),
+  max(arrow_cast(b, 'Utf8')), sum(c), sum(total)
+FROM (SELECT p, s, b, count(*) AS c, sum(v) AS total FROM byte_keys GROUP BY p, s, b)
+----
+15000 13500 30000 64503 s1 b999 20000 200010000
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+# Set the test options to their initial values.
+statement ok
+DROP TABLE byte_keys_sorted_by_p
+
+statement ok
+DROP TABLE byte_keys_sorted
+
+statement ok
+DROP VIEW byte_keys
+
+statement ok
+RESET datafusion.execution.batch_size
+
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+statement ok
+RESET datafusion.execution.enable_migration_aggregate
+
+statement ok
+RESET datafusion.optimizer.enable_round_robin_repartition
+
+statement ok
+RESET datafusion.optimizer.prefer_existing_sort
+
+statement ok
+RESET datafusion.execution.parquet.schema_force_view_types
+
+statement ok
+RESET datafusion.explain.physical_plan_only
+
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema

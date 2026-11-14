@@ -19,7 +19,7 @@ use futures::StreamExt;
 use super::aggregate_hash_table::ClusteredAggregateTableMetrics;
 use super::clustered_final_stream::ClusteredFinalAggregateStream;
 use super::order::GroupClusteringMode;
-use super::{AggregateExec, AggregateMode};
+use super::{AggregateExec, AggregateMode, restore_group_key_types};
 use crate::SendableRecordBatchStream;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
@@ -223,6 +223,7 @@ impl AggregateSpill {
             return Ok(());
         };
 
+        let spill_schema = Arc::clone(self.spill_manager.schema());
         let mut max_batch_rows = 0;
         let sorted_iter = IncrementalSortIterator::new(
             state_batch,
@@ -230,6 +231,7 @@ impl AggregateSpill {
             self.batch_size,
         )
         .with_max_batch_bytes(SPILL_BATCH_TARGET_BYTES)
+        .map(|batch| restore_group_key_types(batch?, &spill_schema))
         .inspect(|batch| {
             if let Ok(batch) = batch {
                 max_batch_rows = max_batch_rows.max(batch.num_rows());

@@ -17,6 +17,7 @@ use futures::stream::{Stream, StreamExt};
 
 use super::aggregate_hash_table::{ClusteredAggregateTable, SingleMarker};
 use super::order::GroupClusteringMode;
+use super::restore_group_key_stream;
 use super::spill::AggregateSpill;
 use super::{AggregateExec, create_schema};
 use crate::aggregates::AggregateMode;
@@ -207,6 +208,11 @@ impl ClusteredSingleAggregateStream {
                 spill_context,
             }),
         })
+    }
+
+    pub(super) fn into_stream(self) -> SendableRecordBatchStream {
+        let batch_size = self.batch_size;
+        restore_group_key_stream(Box::pin(self), batch_size)
     }
 
     fn close_input(&mut self) {

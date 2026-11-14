@@ -22,7 +22,7 @@ use crate::aggregates::group_values::{
 use crate::aggregates::order::{GroupClustering, GroupClusteringMode};
 use crate::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
-    evaluate_group_by,
+    evaluate_group_by, group_schema_with_large_offsets,
 };
 
 use super::AggregateTableMetrics;
@@ -320,6 +320,10 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
     /// active (incomplete) groups. Partial aggregation can pass those states to
     /// its final stage, while single and final aggregation sort and spill them
     /// before replay.
+    ///
+    /// The keys use 64-bit offsets because this batch can contain more than
+    /// 2 GiB of key data.
+    /// Callers divide the batch, then change the keys to the output types.
     pub(in crate::aggregates) fn take_state_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
@@ -340,7 +344,11 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
             Ok::<_, datafusion_common::DataFusionError>(output)
         })?;
 
-        let batch = RecordBatch::try_new(Arc::clone(&self.state_schema), output)?;
+        let state_schema = group_schema_with_large_offsets(
+            &self.state_schema,
+            self.buffer.group_by.num_group_exprs(),
+        );
+        let batch = RecordBatch::try_new(state_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
 
         // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
@@ -416,6 +424,8 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
 
     /// Removes the selected groups once and materializes their output columns.
     /// The caller chooses the completed prefix.
+    ///
+    /// The keys keep 64-bit offsets, as in [`Self::take_state_batch`].
     pub(super) fn materialize_groups(
         &mut self,
         emit_to: EmitTo,
@@ -441,7 +451,11 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
             Ok::<_, datafusion_common::DataFusionError>(output)
         })?;
 
-        let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
+        let output_schema = group_schema_with_large_offsets(
+            &self.output_schema,
+            self.buffer.group_by.num_group_exprs(),
+        );
+        let batch = RecordBatch::try_new(output_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
 
         Ok(batch)

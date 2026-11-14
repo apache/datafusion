@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, new_null_array};
 use arrow::compute::prep_null_mask_filter;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::downcast_dictionary_array;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::compact_dictionary;
@@ -29,7 +29,8 @@ use crate::aggregates::group_values::{
 use crate::aggregates::order::GroupClustering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
-    group_id_array, max_duplicate_ordinal,
+    group_id_array, group_schema_with_large_offsets, max_duplicate_ordinal,
+    output_batch_rows, restore_group_key_types,
 };
 
 use super::AggregateTableMetrics;
@@ -309,7 +310,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                         Ok::<_, datafusion_common::DataFusionError>(columns)
                     })?;
 
-                    let batch = RecordBatch::try_new(output_schema, columns)?;
+                    let emit_schema = group_schema_with_large_offsets(
+                        &output_schema,
+                        state.group_by.num_group_exprs(),
+                    );
+                    let batch = RecordBatch::try_new(emit_schema, columns)?;
                     debug_assert!(batch.num_rows() > 0);
                     MaterializedAggregateOutput::new(batch)
                 }
@@ -322,7 +327,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 }
             };
 
-        let batch = output.next_batch(batch_size)?;
+        let rows = output.next_batch_rows(&output_schema, batch_size);
+        let batch = output
+            .next_batch(rows)?
+            .map(|batch| restore_group_key_types(batch, &output_schema))
+            .transpose()?;
         if output.is_exhausted() {
             self.state = AggregateHashTableState::Done;
         } else {
@@ -362,6 +371,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     /// Unlike normal single aggregation output, this materializes intermediate
     /// states rather than final values. The states can therefore be merged after
     /// spilling without finalizing the same group more than once.
+    ///
+    /// The keys use 64-bit offsets because this batch can contain more than
+    /// 2 GiB of key data.
+    /// Callers divide the batch, then change the keys to the output types.
     pub(in crate::aggregates) fn take_state_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
@@ -385,6 +398,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             Ok::<_, datafusion_common::DataFusionError>(output)
         })?;
 
+        let state_schema = group_schema_with_large_offsets(
+            &state_schema,
+            state.group_by.num_group_exprs(),
+        );
         let batch = RecordBatch::try_new(state_schema, output)?;
         debug_assert!(batch.num_rows() > 0);
 
@@ -641,6 +658,15 @@ pub(super) struct MaterializedAggregateOutput {
 impl MaterializedAggregateOutput {
     pub(super) fn new(batch: RecordBatch) -> Self {
         Self { batch, offset: 0 }
+    }
+
+    /// Returns a row count for [`Self::next_batch`] within the row and key byte limits.
+    pub(super) fn next_batch_rows(
+        &self,
+        output_schema: &Schema,
+        batch_size: usize,
+    ) -> usize {
+        output_batch_rows(&self.batch, output_schema, self.offset, batch_size)
     }
 
     pub(super) fn next_batch(
@@ -972,6 +998,7 @@ mod tests {
 
     use super::*;
     use crate::aggregates::group_values::aggregate_sub_metrics;
+    use crate::aggregates::tests::{GIB, zeroed_group_keys};
     use crate::metrics::ExecutionPlanMetricsSet;
 
     #[test]
@@ -1013,6 +1040,30 @@ mod tests {
         assert_eq!(int32_values(&output.next_batch(2)?.unwrap(), 0), vec![5]);
         assert!(output.next_batch(2)?.is_none());
         assert!(output.is_exhausted());
+
+        Ok(())
+    }
+
+    #[test]
+    fn next_batch_rows_limits_key_bytes() -> Result<()> {
+        let output_schema =
+            Schema::new(vec![Field::new("group_col", DataType::Binary, false)]);
+        let stored_schema = Arc::new(Schema::new(vec![Field::new(
+            "group_col",
+            DataType::LargeBinary,
+            false,
+        )]));
+        // The first two keys hold one byte more than `i32::MAX`.
+        let keys = zeroed_group_keys(&[(DataType::LargeBinary, &[GIB, GIB, 1, 1, 1])]);
+        let batch = RecordBatch::try_new(stored_schema, keys)?;
+        let mut output = MaterializedAggregateOutput::new(batch);
+
+        let mut rows = vec![];
+        while !output.is_exhausted() {
+            let next_rows = output.next_batch_rows(&output_schema, 8192);
+            rows.push(output.next_batch(next_rows)?.unwrap().num_rows());
+        }
+        assert_eq!(rows, vec![1, 4]);
 
         Ok(())
     }

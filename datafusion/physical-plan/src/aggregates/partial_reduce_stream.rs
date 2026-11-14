@@ -16,6 +16,7 @@ use futures::stream::{Stream, StreamExt};
 use super::AggregateExec;
 use super::GroupClusteringMode;
 use super::aggregate_hash_table::{AggregateHashTable, PartialReduceMarker};
+use super::restore_group_key_stream;
 use crate::SendableRecordBatchStream;
 use crate::metrics::{BaselineMetrics, Count, MetricBuilder, RecordOutput, SpillMetrics};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
@@ -145,8 +146,12 @@ impl PartialReduceHashAggregateStream {
 
     pub(crate) fn into_stream(self) -> SendableRecordBatchStream {
         let schema = Arc::clone(&self.schema);
+        let batch_size = self.batch_size;
 
-        Box::pin(RecordBatchStreamAdapter::new(schema, self.create_stream()))
+        restore_group_key_stream(
+            Box::pin(RecordBatchStreamAdapter::new(schema, self.create_stream())),
+            batch_size,
+        )
     }
 
     /// Entry point for the partial reduce hash aggregate.
