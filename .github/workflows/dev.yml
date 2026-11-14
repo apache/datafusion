@@ -6,7 +6,6 @@ name: Dev
 on:
   push:
     branches-ignore:
-      - 'db/ci-opts' # Temporary CI optimization experiments.
       # Commits reach main through the merge queue, which runs this workflow at
       # the same SHA, so do not repeat the jobs after the merge. Release
       # branches and every other branch keep their post-push runs.

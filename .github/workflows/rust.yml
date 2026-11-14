@@ -56,7 +56,6 @@ concurrency:
 on:
   push:
     branches-ignore:
-      - 'db/ci-opts' # Temporary: ci-opts.yml runs only the jobs being measured.
       - 'gh-readonly-queue/**'
       - 'dependabot/**'
     paths-ignore:
@@ -713,7 +712,6 @@ jobs:
         if: ${{ always() && steps.sccache.outcome == 'success' }}
         run: sccache --show-stats
 
-
   sqllogictest-substrait:
     name: "Run sqllogictest in Substrait round-trip mode"
     needs: linux-build-lib
@@ -747,7 +745,6 @@ jobs:
       - name: Report compiler cache statistics
         if: ${{ always() && steps.sccache.outcome == 'success' }}
         run: sccache --show-stats
-
 
   #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
   #  Waiting for new Windows 2025 github runner
@@ -907,16 +904,15 @@ jobs:
         run: |
           ./ci/scripts/check_generated_docs.sh
           git diff --exit-code
+      - name: Report compiler cache statistics
+        if: ${{ always() && steps.sccache.outcome == 'success' }}
+        run: sccache --show-stats
 
 # This job ensures `datafusion-examples/README.md` stays in sync with the source code:
 # 1. Generates README automatically using the Rust examples docs generator
 #    (parsing documentation from `examples/<group>/main.rs`)
 # 2. Formats the generated Markdown using DataFusion's standard Prettier setup
 # 3. Compares the result against the committed README.md and fails if out-of-date
-      - name: Report compiler cache statistics
-        if: ${{ always() && steps.sccache.outcome == 'success' }}
-        run: sccache --show-stats
-
   examples-docs-check:
     name: check example README is up-to-date
     needs: linux-build-lib
