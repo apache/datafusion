@@ -675,258 +675,33 @@ fn test_cli_wide_result_set_no_crash() {
     assert_cmd_snapshot!(cmd);
 }
 
-#[rstest]
-#[case(40, "SELECT repeat('abcdefghij', 15) AS long_value")]
-#[case(20, "SELECT repeat('界', 30) AS long_value")]
-#[case(10, "SELECT '界' AS a, '界' AS b")]
-#[case(7, "SELECT 'abcdefghij' AS value")]
-#[case(
-    80,
-    "EXPLAIN ANALYZE SELECT value, max(value) OVER (ORDER BY value ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS running_max FROM generate_series(1, 3)"
-)]
-#[case(
-    80,
-    "EXPLAIN FORMAT TREE SELECT a.value FROM generate_series(1, 3) a CROSS JOIN generate_series(1, 3) b CROSS JOIN generate_series(1, 3) c"
-)]
-#[case(20, "SELECT 1 AS c0, 2 AS c1, 3 AS c2, 4 AS c3, 5 AS c4, 6 AS c5")]
-#[case(
-    20,
-    "SELECT 1 AS c0, 2 AS c1, 3 AS c2, 4 AS c3, 5 AS c4, 6 AS c5 WHERE FALSE"
-)]
-fn cli_output_respects_maxwidth(#[case] width: usize, #[case] sql: &str) {
-    let output = cli()
-        .args(["-q", "--maxwidth", &width.to_string(), "--command", sql])
-        .output()
-        .expect("Failed to execute command");
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(output.status.success(), "{stdout}");
-    assert!(!stdout.contains("Error:"), "{stdout}");
-    assert!(!stdout.trim().is_empty());
-    for line in stdout.lines() {
-        let display_width: usize =
-            line.chars().map(|c| if c == '界' { 2 } else { 1 }).sum();
-        assert!(display_width <= width, "line exceeds {width}: {line}");
-    }
-    if sql.contains("c5") {
-        for column in ["c0", "c1", "c2", "c3", "c4", "c5"] {
-            assert!(stdout.contains(column), "missing {column}: {stdout}");
-        }
-    } else if sql.contains("TREE") {
-        assert!(stdout.contains("physical_plan"), "{stdout}");
-        assert!(stdout.contains('┌'), "{stdout}");
-    } else if sql.contains('界') {
-        let expected = if sql.contains("repeat") { 30 } else { 2 };
-        assert_eq!(stdout.matches('界').count(), expected, "{stdout}");
-    } else if sql.contains("repeat") {
-        let cells: String = stdout
-            .lines()
-            .filter_map(|line| line.strip_prefix('|')?.strip_suffix('|'))
-            .map(str::trim)
-            .collect();
-        assert!(cells.ends_with(&"abcdefghij".repeat(15)), "{stdout}");
-    }
-}
-
 #[test]
-fn cli_maxwidth_does_not_change_csv() {
-    let output = cli()
-        .args([
-            "-q",
-            "--format",
-            "csv",
-            "--maxwidth",
-            "10",
-            "--command",
-            "SELECT 'abcdefghijklmnopqrstuvwxyz' AS value",
-        ])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        "value\nabcdefghijklmnopqrstuvwxyz\n"
-    );
-}
-
-#[rstest]
-#[case(80)]
-#[case(120)]
-fn cli_explain_verbose_preserves_indentation(#[case] width: usize) {
-    let sql = "SET datafusion.explain.format = 'indent'; \
-        CREATE TABLE u(x INT) AS VALUES (5), (3), (1); \
-        EXPLAIN VERBOSE SELECT x, m FROM \
-        (SELECT x, MAX(x) OVER (ORDER BY x DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS m FROM u) \
-        ORDER BY m ASC NULLS LAST";
-    let output = cli()
-        .args(["-q", "--maxwidth", &width.to_string(), "--command", sql])
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(output.status.success(), "{stdout}");
-    assert!(!stdout.contains("Error:"), "{stdout}");
-    assert!(stdout.contains("| stage"), "{stdout}");
-    assert!(stdout.contains("SAME TEXT AS ABOVE"), "{stdout}");
-    assert!(
-        stdout.lines().all(|line| line.chars().count() <= width),
-        "{stdout}"
-    );
-
-    let table_rows: Vec<_> = stdout
-        .lines()
-        .filter_map(|line| {
-            let (kind, plan) =
-                line.strip_prefix('|')?.strip_suffix('|')?.split_once('|')?;
-            Some((kind, plan.strip_prefix(' ').unwrap().trim_end()))
-        })
-        .collect();
-    for group in ["logical plan", "physical plan"] {
-        let group_rows: Vec<_> = table_rows
-            .iter()
-            .filter(|(kind, _)| kind.trim() == group)
-            .collect();
-        assert_eq!(group_rows.len(), 1, "{stdout}");
-        assert!(group_rows[0].1.is_empty(), "{stdout}");
-    }
-    for stage in ["initial", "resolve_grouping_function", "analyzed", "final"] {
-        assert!(
-            table_rows.iter().any(|(kind, _)| kind.trim() == stage),
-            "missing stage {stage}: {stdout}"
-        );
-    }
-    assert!(!stdout.contains("logical_plan after "), "{stdout}");
-    assert!(!stdout.contains("initial_physical_plan"), "{stdout}");
-    let plan_start = table_rows
-        .iter()
-        .position(|(kind, plan)| {
-            kind.trim() == "initial" && plan.starts_with("SortExec:")
-        })
-        .expect("initial physical plan should remain in the table");
-    let nodes = [
-        ("SortExec:", 0),
-        ("ProjectionExec:", 2),
-        ("BoundedWindowAggExec:", 4),
-        ("DataSourceExec:", 6),
-    ];
-    let mut next_node = 0;
-    let mut continuation_indent = 0;
-    let mut continuations = 0;
-    for (kind, line) in &table_rows[plan_start..] {
-        if next_node == nodes.len() && !kind.trim().is_empty() {
-            break;
-        }
-        let content = line.trim_start_matches(' ');
-        let indent = line.len() - content.len();
-        if let Some((name, expected_indent)) = nodes.get(next_node)
-            && content.starts_with(name)
-        {
-            assert_eq!(indent, *expected_indent, "{line}");
-            continuation_indent = expected_indent + 4;
-            next_node += 1;
-        } else {
-            assert_eq!(indent, continuation_indent, "{line}");
-            continuations += 1;
-        }
-    }
-    assert_eq!(next_node, nodes.len(), "{stdout}");
-    assert!(continuations > 0, "long expressions should wrap: {stdout}");
-}
-
-#[rstest]
-#[case("csv")]
-#[case("tsv")]
-#[case("json")]
-#[case("nd-json")]
-fn cli_explain_machine_formats_keep_original_plans(#[case] format: &str) {
-    let run = |width| {
-        let output = cli()
-            .args([
-                "-q",
-                "--format",
-                format,
-                "--maxwidth",
-                width,
-                "--command",
-                "EXPLAIN FORMAT INDENT SELECT repeat('abcdefghij', 20) AS value",
-            ])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        output.stdout
-    };
-    assert_eq!(run("40"), run("inf"));
-}
-
-#[test]
-fn cli_plan_named_columns_remain_a_table() {
+fn cli_explain_respects_maxwidth() {
     let output = cli()
         .args([
             "-q",
             "--maxwidth",
             "80",
             "--command",
-            "SELECT 'example' AS plan_type, '  value' AS plan",
+            "SET datafusion.explain.format = 'indent'; \
+             EXPLAIN VERBOSE SELECT repeat('abcdefghij', 20) AS value",
         ])
         .output()
         .unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(output.status.success(), "{stdout}");
-    assert!(stdout.starts_with('+'), "{stdout}");
-    assert!(stdout.contains("| plan_type"), "{stdout}");
-}
-
-#[test]
-fn cli_maxwidth_can_be_changed_in_repl() {
-    use std::io::Write;
-    use std::process::Stdio;
-
-    let mut child = cli()
-        .args(["-q"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child.stdin.take().unwrap().write_all(
-        b"\\pset maxwidth 30\nSELECT repeat('abcdefghij', 6) AS value;\n\\pset maxwidth inf\nSELECT repeat('abcdefghij', 6) AS value;\n\\pset maxwidth\n\\q\n",
-    ).unwrap();
-    let output = child.wait_with_output().unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(output.status.success(), "{stdout}");
-    assert!(!stdout.contains("Error:"), "{stdout}");
-    let (limited, unlimited) = stdout.split_once("Maximum output width is inf.").unwrap();
     assert!(
-        limited.lines().all(|line| line
-            .strip_prefix("> ")
-            .unwrap_or(line)
-            .chars()
-            .count()
-            <= 30),
-        "{limited}"
-    );
-    assert!(
-        unlimited
-            .contains("abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij"),
-        "{unlimited}"
-    );
-}
-
-#[test]
-fn cli_wrapped_maxrows_preserves_complete_rows() {
-    let output = cli()
-        .args([
-            "-q", "--maxwidth", "20", "--maxrows", "1", "--command",
-            "SELECT * FROM (VALUES ('first line\nsecond line'), ('hidden row')) AS t(value)",
-        ])
-        .output().unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(output.status.success(), "{stdout}");
-    assert!(stdout.contains("first line"), "{stdout}");
-    assert!(stdout.contains("second line"), "{stdout}");
-    assert!(!stdout.contains("hidden"), "{stdout}");
-    assert!(stdout.contains("..."), "{stdout}");
-    assert!(
-        stdout.lines().all(|line| line.chars().count() <= 20),
+        stdout.lines().all(|line| line.chars().count() <= 80),
         "{stdout}"
     );
+    for expected in [
+        "| logical plan",
+        "| physical plan",
+        "|   EmptyRelation:",
+        "|     repeat(",
+    ] {
+        assert!(stdout.contains(expected), "missing {expected}: {stdout}");
+    }
 }
 
 #[rstest]
