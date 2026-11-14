@@ -1404,12 +1404,15 @@ message CsvScanExecNode {
   bool truncate_rows = 8;
   // Custom one-byte line terminator. Absent means the default newline terminator.
   optional bytes terminator = 9;
+  bool match_columns_by_header = 10;
 }
 
 message JsonScanExecNode {
   FileScanExecConf base_conf = 1;
   // Absent means newline-delimited JSON for compatibility with older payloads.
   optional bool newline_delimited = 2;
+  // Absent means false: a JSON number or boolean in a string column is an error.
+  optional bool coerce_primitive = 3;
 }
 
 message AvroScanExecNode {

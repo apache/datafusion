@@ -570,7 +570,7 @@ dependencies = [
  "fastrand",
  "hex",
  "http",
- "sha1 0.10.6",
+ "sha1",
  "time",
  "tokio",
  "tracing",
@@ -1886,7 +1886,6 @@ dependencies = [
  "ctor",
  "datafusion",
  "datafusion-common",
- "datafusion-spark",
  "dirs",
  "env_logger",
  "futures",
@@ -2039,16 +2038,19 @@ dependencies = [
  "arrow",
  "async-trait",
  "bytes",
+ "csv-core",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-proto-models",
  "datafusion-session",
  "futures",
+ "log",
  "object_store",
  "regex",
  "tokio",
@@ -2072,7 +2074,9 @@ dependencies = [
  "datafusion-session",
  "futures",
  "object_store",
+ "rstest",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
 ]
@@ -2692,37 +2696,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "datafusion-spark"
-version = "57.0.0-dev"
-dependencies = [
- "arrow",
- "base64 0.23.1",
- "bigdecimal",
- "chrono",
- "crc32fast",
- "criterion",
- "datafusion",
- "datafusion-common",
- "datafusion-expr",
- "datafusion-functions",
- "datafusion-functions-aggregate",
- "datafusion-functions-aggregate-common",
- "datafusion-functions-nested",
- "datafusion-physical-expr-common",
- "datafusion-session",
- "log",
- "num-traits",
- "percent-encoding",
- "rand 0.9.4",
- "serde_json",
- "sha1 0.11.0",
- "sha2",
- "tokio",
- "twox-hash",
- "url",
-]
-
-[[package]]
 name = "datafusion-sql"
 version = "57.0.0-dev"
 dependencies = [
@@ -2761,7 +2734,6 @@ dependencies = [
  "chrono",
  "clap",
  "datafusion",
- "datafusion-spark",
  "datafusion-substrait",
  "env_logger",
  "futures",
@@ -5958,17 +5930,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sha1"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.3.0",
- "digest 0.11.2",
-]
-
-[[package]]
 name = "sha2"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6834,9 +6795,6 @@ name = "twox-hash"
 version = "2.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
-dependencies = [
- "rand 0.10.1",
-]
 
 [[package]]
 name = "typenum"

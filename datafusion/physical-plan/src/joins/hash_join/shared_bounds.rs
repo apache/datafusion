@@ -18,7 +18,7 @@ use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::not_in::NotIn;
 use crate::joins::hash_join::partitioned_hash_eval::{
-    HashExpr, HashTableLookupExpr, PartitionRouter, SeededRandomState,
+    HashTableLookupExpr, PartitionRouter, SeededRandomState,
 };
 use crate::joins::join_hash_map::{JoinHashMapType, JoinHashMapU32};
 use crate::joins::key_range_bitmap::{KeyRangeBitmap, KeyRangePart};
@@ -35,7 +35,7 @@ use datafusion_common::{
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, IsNullExpr, lit,
+    BinaryExpr, DynamicFilterPhysicalExpr, InListExpr, IsNullExpr, lit,
 };
 use datafusion_physical_expr::{
     PhysicalExpr, PhysicalExprRef, RangePartitioning, ScalarFunctionExpr,
@@ -222,7 +222,7 @@ fn create_bounds_predicate(
 /// Combines a membership predicate and a bounds predicate with logical AND.
 ///
 /// Returns `None` when neither is available; callers decide the fallback (e.g.
-/// skip updating the filter vs. emit a `lit(true)` branch inside a CASE).
+/// skip updating the filter or use `lit(true)`).
 fn combine_membership_and_bounds(
     membership_expr: Option<Arc<dyn PhysicalExpr>>,
     bounds_expr: Option<Arc<dyn PhysicalExpr>>,
@@ -371,6 +371,17 @@ struct AccumulatorState {
 enum PartitionStatus {
     Pending,
     Reported(PartitionData),
+    /// A parent operator dropped this partition's stream before the stream
+    /// reported its build side. The build keys of this partition are unknown.
+    ///
+    /// The filter does not wait for this partition. Without this status, the
+    /// other partitions wait forever for a report that never comes.
+    ///
+    /// The filter may keep or reject the probe rows routed to this partition.
+    /// Both choices are correct, because the dropped stream never joins those
+    /// rows and never produces output.
+    ///
+    /// `BuildReportHandle` explains when a parent operator drops a stream.
     CanceledUnknown,
 }
 
@@ -484,7 +495,7 @@ impl SharedBuildAccumulator {
     /// This unified method handles both CollectLeft and Partitioned modes. When all partitions
     /// have reported (barrier wait), the leader builds the appropriate filter expression:
     /// - CollectLeft: Simple conjunction of bounds and membership check
-    /// - Partitioned: CASE expression routing to per-partition filters
+    /// - Partitioned: one lookup that routes each probe row to its partition's keys
     ///
     /// # Arguments
     /// * `data` - Build data including hash map, pushdown strategy, and bounds
@@ -505,6 +516,11 @@ impl SharedBuildAccumulator {
         self.wait_for_completion().await
     }
 
+    /// Tells the filter that `partition_id` never reports its build side, so the
+    /// other partitions stop waiting for it. See
+    /// [`PartitionStatus::CanceledUnknown`].
+    ///
+    /// The call does nothing if the partition has already reported.
     pub(crate) fn report_canceled_partition(&self, partition_id: usize) {
         let finalize_input = {
             let mut guard = self.inner.lock();
@@ -692,167 +708,62 @@ impl SharedBuildAccumulator {
         }
     }
 
-    /// Builds one routed probe-side filter from finalized partitioned build data.
-    /// Empty partitions reject their routed rows, while canceled partitions stay
-    /// permissive because their build contents are unknown.
+    /// Builds one probe-side filter from finalized partitioned build data.
+    /// Empty and canceled partitions contribute no key.
     fn build_partitioned_filter(&self, partitions: Vec<PartitionStatus>) -> Result<()> {
-        let mut partition_filters = Vec::with_capacity(partitions.len());
-        let mut real_partition_ids = Vec::new();
-        let mut empty_partition_ids = Vec::new();
-        let mut has_canceled_unknown = false;
-        let mut keys_have_null = false;
-        // Every non-empty partition's membership strategy and bounds, merged into
-        // one membership filter below; `None` once a partition cannot be merged.
-        let mut members = Some(Vec::with_capacity(partitions.len()));
+        let num_partitions = partitions.len();
+        let mut members = Vec::with_capacity(num_partitions);
         let mut merged_bounds: Option<PartitionBounds> = None;
+        let mut keys_have_null = false;
 
         for (partition_id, partition) in partitions.into_iter().enumerate() {
             match partition {
-                PartitionStatus::Reported(PartitionData {
+                // A canceled partition's stream never probes, so no key of its
+                // build side can matter.
+                PartitionStatus::CanceledUnknown
+                | PartitionStatus::Reported(PartitionData {
                     pushdown: PushdownStrategy::Empty,
                     ..
-                }) => {
-                    empty_partition_ids.push(partition_id);
-                    partition_filters.push(lit(false));
-                }
+                }) => {}
                 PartitionStatus::Reported(PartitionData {
                     bounds,
                     pushdown,
                     keys_have_null: partition_keys_have_null,
                 }) => {
-                    real_partition_ids.push(partition_id);
                     keys_have_null |= partition_keys_have_null;
-                    members = members.map(|mut members| {
-                        members.push((partition_id, pushdown.clone(), bounds.clone()));
-                        members
-                    });
                     merged_bounds = Some(match merged_bounds {
                         None => bounds.clone(),
                         Some(merged) => merged.union(&bounds),
                     });
-
-                    let membership_expr = create_membership_predicate(
-                        &self.on_right,
-                        pushdown,
-                        &HASH_JOIN_SEED,
-                        self.probe_schema.as_ref(),
-                    )?;
-                    let bounds_expr = create_bounds_predicate(&self.on_right, &bounds);
-                    let then_expr =
-                        combine_membership_and_bounds(membership_expr, bounds_expr)
-                            .unwrap_or_else(|| lit(true));
-                    partition_filters.push(then_expr);
-                }
-                PartitionStatus::CanceledUnknown => {
-                    has_canceled_unknown = true;
-                    partition_filters.push(lit(true));
-                    // Rows routed here must pass, which a merged filter cannot express.
-                    members = None;
-                    // A canceled partition's build content is unknown, so it
-                    // may hold a NULL key.
-                    keys_have_null = true;
+                    members.push((partition_id, pushdown, bounds));
                 }
                 PartitionStatus::Pending => {
-                    return datafusion_common::internal_err!(
+                    return internal_err!(
                         "attempted to finalize dynamic filter with pending partition"
                     );
                 }
             }
         }
 
-        let all_partitions_canceled = has_canceled_unknown
-            && real_partition_ids.is_empty()
-            && empty_partition_ids.is_empty();
-        let all_partitions_empty = !has_canceled_unknown && real_partition_ids.is_empty();
-        let one_non_empty_partition =
-            !has_canceled_unknown && real_partition_ids.len() == 1;
-
-        let filter_expr = if all_partitions_canceled {
-            // No build data is known, so filtering any probe row could discard a match.
-            lit(true)
-        } else if all_partitions_empty {
+        let filter_expr = match members.as_slice() {
             // No build row exists, so no probe row can match.
-            lit(false)
-        } else if one_non_empty_partition {
-            // Only one build partition contains rows, so its filter covers every
-            // possible probe match without routing.
-            Arc::clone(&partition_filters[real_partition_ids[0]])
-        } else if let Some(members) = members {
-            self.merged_membership_filter(
-                &members,
-                merged_bounds,
-                partition_filters.len(),
-            )?
-        } else {
-            // Builds the shared sparse `CASE` for partition filter routing.
-            // Without cancellation, omitted branches are known empty and safely fall
-            // through to `ELSE false`. With cancellation, omitted canceled partitions
-            // have unknown contents and must fall through to `ELSE true`, so known-empty
-            // partitions are emitted explicitly as false branches.
-            let mut branches = if has_canceled_unknown {
-                empty_partition_ids
-                    .iter()
-                    .map(|&partition_id| (lit(partition_id as u64), lit(false)))
-                    .collect::<Vec<_>>()
-            } else {
-                vec![]
-            };
-            branches.extend(real_partition_ids.iter().map(|&partition_id| {
-                (
-                    lit(partition_id as u64),
-                    Arc::clone(&partition_filters[partition_id]),
-                )
-            }));
-
-            let routing_expr = if let Some(range_partitioning) =
-                &self.probe_range_partitioning
-            {
-                // Routes probe rows with the partition id selected by [`RangeExpr`].
-                // CASE range_partition(keys)
-                //   WHEN empty_partition_id THEN false  -- only when cancellation exists
-                //   WHEN real_partition_id THEN F(real_partition_id)
-                //   ...
-                //   ELSE has_canceled_unknown
-                // END
-                assert_or_internal_err!(
-                    partition_filters.len() == range_partitioning.partition_count(),
-                    "Dynamic filter partition count {} does not match Range partition count {}",
-                    partition_filters.len(),
-                    range_partitioning.partition_count()
-                );
-                Arc::new(RangeExpr::try_new_with_schema(
-                    self.on_right.clone(),
-                    range_partitioning,
-                    &self.probe_schema,
-                )?) as Arc<dyn PhysicalExpr>
-            } else {
-                // Routes probe rows with the same `hash(keys) % partition_count` expression used
-                // by Hash repartitioning.
-                // CASE hash(keys) % partition_count
-                //   WHEN empty_partition_id THEN false  -- only when cancellation exists
-                //   WHEN real_partition_id THEN F(real_partition_id)
-                //   ...
-                //   ELSE has_canceled_unknown
-                // END
-                let routing_hash_expr = Arc::new(HashExpr::new(
-                    self.on_right.clone(),
-                    self.repartition_random_state.clone(),
-                    "hash_repartition".to_string(),
-                )) as Arc<dyn PhysicalExpr>;
-                Arc::new(BinaryExpr::new(
-                    routing_hash_expr,
-                    Operator::Modulo,
-                    lit(partition_filters.len() as u64),
-                )) as Arc<dyn PhysicalExpr>
-            };
-
-            Arc::new(CaseExpr::try_new(
-                Some(routing_expr),
-                branches,
-                Some(lit(has_canceled_unknown)),
-            )?)
+            [] => lit(false),
+            // Only one build partition holds rows, so its own filter covers every
+            // probe match without routing, and an IN list keeps its pruning.
+            [(_, pushdown, bounds)] => combine_membership_and_bounds(
+                create_membership_predicate(
+                    &self.on_right,
+                    pushdown.clone(),
+                    &HASH_JOIN_SEED,
+                    self.probe_schema.as_ref(),
+                )?,
+                create_bounds_predicate(&self.on_right, bounds),
+            )
+            .expect("membership predicate is always present"),
+            _ => {
+                self.merged_membership_filter(&members, merged_bounds, num_partitions)?
+            }
         };
-
         self.dynamic_filter
             .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?)
     }
@@ -1113,13 +1024,12 @@ mod tests {
     use crate::joins::hash_join::not_in::{NotInOutput, NotInScope};
 
     use crate::joins::join_hash_map::JoinHashMapU32;
-    use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int32Array};
-    use arrow::compute::SortOptions;
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::SplitPoint;
-    use datafusion_physical_expr::{
-        PhysicalSortExpr,
-        expressions::{Column, Literal},
+    use arrow::array::{ArrayRef, Int32Array};
+    use datafusion_physical_expr::expressions::{Column, Literal};
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use {
+        arrow::array::BooleanArray, arrow::record_batch::RecordBatch,
+        datafusion_common::SplitPoint, datafusion_physical_expr::PhysicalSortExpr,
     };
 
     fn test_on_right() -> Vec<PhysicalExprRef> {
@@ -1255,11 +1165,6 @@ mod tests {
             .expect("expected BinaryExpr dynamic filter")
     }
 
-    fn case_expr(expr: &PhysicalExprRef) -> &CaseExpr {
-        expr.downcast_ref::<CaseExpr>()
-            .expect("expected CaseExpr dynamic filter")
-    }
-
     fn assert_literal_bool(expr: &PhysicalExprRef, expected: bool) {
         let literal = expr
             .downcast_ref::<Literal>()
@@ -1337,7 +1242,7 @@ mod tests {
     }
 
     #[test]
-    fn partitioned_hash_map_partitions_route_without_case() {
+    fn partitioned_hash_map_partitions_merge_into_one_lookup() {
         let acc = make_partitioned_expr_accumulator_for_test(3);
 
         acc.build_filter(FinalizeInput::Partitioned(vec![
@@ -1348,7 +1253,6 @@ mod tests {
         .unwrap();
 
         let expr = current_expr(&acc);
-        assert!(expr.downcast_ref::<CaseExpr>().is_none());
         assert_eq!(
             expr.to_string(),
             "probe_key@0 >= 1 AND probe_key@0 <= 10 AND hash_lookup"
@@ -1404,7 +1308,7 @@ mod tests {
     }
 
     /// Partitions that chose an IN list and partitions that chose a hash table
-    /// merge into one lookup without a `CASE`: a probe row passes exactly when
+    /// merge into one lookup: a probe row passes exactly when
     /// the partition its key routes to holds the key.
     #[test]
     #[cfg(not(feature = "force_hash_collisions"))]
@@ -1426,11 +1330,6 @@ mod tests {
         )))
         .unwrap();
 
-        assert!(
-            current_expr(&acc).downcast_ref::<CaseExpr>().is_none(),
-            "expected a merged lookup, got: {}",
-            current_expr(&acc)
-        );
         let probe: Vec<i32> = (0..40).collect();
         let expected: Vec<bool> = probe.iter().map(|key| key % 2 == 0).collect();
         assert_matches(&acc, &probe, &expected);
@@ -1456,8 +1355,7 @@ mod tests {
 
         let expr = current_expr(&acc);
         assert!(
-            expr.downcast_ref::<CaseExpr>().is_none()
-                && expr.downcast_ref::<InListExpr>().is_none(),
+            expr.downcast_ref::<InListExpr>().is_none(),
             "expected a hash lookup, got: {expr}"
         );
         let probe: Vec<i32> = (0..20).collect();
@@ -1517,11 +1415,6 @@ mod tests {
         )))
         .unwrap();
 
-        assert!(
-            current_expr(&acc).downcast_ref::<CaseExpr>().is_none(),
-            "expected a merged lookup, got: {}",
-            current_expr(&acc)
-        );
         let probe: Vec<i32> = (0..40).collect();
         let expected: Vec<bool> = probe.iter().map(|key| key % 2 == 0).collect();
         assert_matches(&acc, &probe, &expected);
@@ -1552,7 +1445,6 @@ mod tests {
             reported(array_map_of(&[37, 38, 39]), bounds(37, 39)),
         ]))?;
 
-        assert!(current_expr(&acc).downcast_ref::<CaseExpr>().is_none());
         let probe: Vec<i32> = (0..50).collect();
         let expected: Vec<bool> = probe
             .iter()
@@ -1580,7 +1472,7 @@ mod tests {
     }
 
     #[test]
-    fn partitioned_one_real_partition_with_rest_empty_skips_case() {
+    fn partitioned_one_real_partition_with_rest_empty_keeps_its_in_list() {
         let acc = make_partitioned_expr_accumulator_for_test(3);
 
         acc.build_filter(FinalizeInput::Partitioned(vec![
@@ -1592,11 +1484,62 @@ mod tests {
 
         let expr = current_expr(&acc);
         in_list_expr(&expr);
-        assert!(expr.downcast_ref::<CaseExpr>().is_none());
+    }
+
+    /// One non-empty partition keeps its own filter: no routing, and an IN list
+    /// stays an IN list even when its duplicate rows exceed the merged list limit.
+    #[test]
+    fn partitioned_one_non_empty_partition_keeps_its_own_filter() {
+        let empty = || reported(PushdownStrategy::Empty, no_bounds());
+        let mut acc = make_partitioned_expr_accumulator_for_test(3);
+        acc.in_list_max_values = 150;
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            empty(),
+            reported(in_list(&[2; 1000]), no_bounds()),
+            PartitionStatus::CanceledUnknown,
+        ]))
+        .unwrap();
+        in_list_expr(&current_expr(&acc));
+
+        let acc = make_partitioned_expr_accumulator_for_test(3);
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            empty(),
+            reported(hash_map(), bounds(1, 7)),
+            PartitionStatus::CanceledUnknown,
+        ]))
+        .unwrap();
+        let expr = format!("{:?}", current_expr(&acc));
+        assert!(!expr.contains("routed by"), "{expr}");
+    }
+
+    /// A canceled partition rejects the rows routed to it, and only those: the
+    /// live partitions keep their matches.
+    #[cfg(not(feature = "force_hash_collisions"))]
+    #[test]
+    fn partitioned_canceled_partition_rejects_only_its_routed_rows() {
+        let acc = make_partitioned_expr_accumulator_for_test(4);
+        let keys: Vec<i32> = (0..40).collect();
+        let mut partitions =
+            routed_partitions(&acc, 4, &keys, |_, held| hash_map_of(held));
+        partitions[0] = PartitionStatus::CanceledUnknown;
+        acc.build_filter(FinalizeInput::Partitioned(partitions))
+            .unwrap();
+
+        let array: ArrayRef = Arc::new(Int32Array::from(keys.clone()));
+        let mut hashes = vec![0; keys.len()];
+        create_hashes(
+            [&array],
+            acc.repartition_random_state.random_state(),
+            &mut hashes,
+        )
+        .unwrap();
+        let expected: Vec<bool> = hashes.iter().map(|hash| *hash % 4 != 0).collect();
+        assert!(expected.contains(&true) && expected.contains(&false));
+        assert_matches(&acc, &keys, &expected);
     }
 
     #[test]
-    fn partitioned_canceled_unknown_partitions_keep_unknown_routes_permissive() {
+    fn partitioned_canceled_and_empty_partitions_reject_every_row() {
         let acc = make_partitioned_expr_accumulator_for_test(2);
 
         acc.build_filter(FinalizeInput::Partitioned(vec![
@@ -1605,16 +1548,12 @@ mod tests {
         ]))
         .unwrap();
 
-        let expr = current_expr(&acc);
-        let case = case_expr(&expr);
-        assert_eq!(case.when_then_expr().len(), 1);
-        assert_literal_bool(&case.when_then_expr()[0].1, false);
-        assert_literal_bool(
-            case.else_expr().expect("expected permissive fallback"),
-            true,
-        );
+        assert_literal_bool(&current_expr(&acc), false);
     }
 
+    // The routed hash lookup matches on the hash alone, so forced collisions make
+    // every key match its partition's table.
+    #[cfg(not(feature = "force_hash_collisions"))]
     #[test]
     fn partitioned_range_dynamic_filter_routes_with_range_expr() -> Result<()> {
         let mut acc = make_partitioned_expr_accumulator_for_test(4);
@@ -1631,26 +1570,20 @@ mod tests {
             ],
         )?);
 
+        // No combined IN list, so each probe row is routed to its partition.
+        acc.in_list_max_values = 0;
+
         acc.build_filter(FinalizeInput::Partitioned(vec![
             reported(PushdownStrategy::Empty, no_bounds()),
-            PartitionStatus::CanceledUnknown,
+            reported(in_list(&[10, 19]), no_bounds()),
             reported(in_list(&[20, 29]), no_bounds()),
             reported(in_list(&[30]), no_bounds()),
         ]))?;
 
         let expr = current_expr(&acc);
-        let case = case_expr(&expr);
         assert!(
-            case.expr()
-                .and_then(|expr| expr.downcast_ref::<RangeExpr>())
-                .is_some(),
-            "Range routing must use RangeExpr"
-        );
-        assert_eq!(case.when_then_expr().len(), 3);
-        assert_literal_bool(&case.when_then_expr()[0].1, false);
-        assert_literal_bool(
-            case.else_expr().expect("expected permissive fallback"),
-            true,
+            format!("{expr:?}").contains("routed by range over 4 partitions"),
+            "{expr:?}"
         );
 
         let batch = RecordBatch::try_new(
@@ -1668,150 +1601,6 @@ mod tests {
             result,
             &BooleanArray::from(vec![false, true, true, true, false, true, true, false,])
         );
-
-        Ok(())
-    }
-
-    #[test]
-    fn partitioned_range_dynamic_filter_routes_compound_nullable_keys() -> Result<()> {
-        let probe_schema = Arc::new(Schema::new(vec![
-            Field::new("probe_key", DataType::Int32, true),
-            Field::new("probe_tie", DataType::Int32, true),
-        ]));
-        let on_right: Vec<PhysicalExprRef> = vec![
-            Arc::new(Column::new("probe_key", 0)),
-            Arc::new(Column::new("probe_tie", 1)),
-        ];
-        let mut acc = make_accumulator_for_test(
-            AccumulatedBuildData::Partitioned {
-                partitions: vec![PartitionStatus::Pending; 4],
-                completed_partitions: 0,
-            },
-            on_right,
-        );
-        acc.probe_schema = Arc::clone(&probe_schema);
-        acc.probe_range_partitioning = Some(RangePartitioning::try_new(
-            [
-                PhysicalSortExpr::new(
-                    Arc::clone(&acc.on_right[0]),
-                    SortOptions::new(false, true),
-                ),
-                PhysicalSortExpr::new(
-                    Arc::clone(&acc.on_right[1]),
-                    SortOptions::new(false, false),
-                ),
-            ]
-            .into(),
-            vec![
-                SplitPoint::new(vec![
-                    ScalarValue::Int32(None),
-                    ScalarValue::Int32(Some(10)),
-                ]),
-                SplitPoint::new(vec![ScalarValue::Int32(None), ScalarValue::Int32(None)]),
-                SplitPoint::new(vec![
-                    ScalarValue::Int32(Some(10)),
-                    ScalarValue::Int32(None),
-                ]),
-            ],
-        )?);
-
-        acc.build_filter(FinalizeInput::Partitioned(vec![
-            reported(PushdownStrategy::Empty, no_bounds()),
-            PartitionStatus::CanceledUnknown,
-            reported(PushdownStrategy::Empty, no_bounds()),
-            PartitionStatus::CanceledUnknown,
-        ]))?;
-
-        let expr = current_expr(&acc);
-        let case = case_expr(&expr);
-        assert!(case.expr().is_some());
-        assert_eq!(case.when_then_expr().len(), 2);
-        assert_literal_bool(
-            case.else_expr().expect("expected permissive fallback"),
-            true,
-        );
-
-        let batch = RecordBatch::try_new(
-            probe_schema,
-            vec![
-                Arc::new(Int32Array::from(vec![
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some(9),
-                    Some(10),
-                    Some(10),
-                    Some(11),
-                ])),
-                Arc::new(Int32Array::from(vec![
-                    Some(9),
-                    Some(10),
-                    Some(11),
-                    None,
-                    None,
-                    Some(9),
-                    None,
-                    None,
-                ])),
-            ],
-        )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-        let result = result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("dynamic filter should evaluate to BooleanArray");
-        assert_eq!(
-            result,
-            &BooleanArray::from(
-                vec![false, true, true, false, false, false, true, true,]
-            )
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn partitioned_range_dynamic_filter_preserves_signed_zero_routing() -> Result<()> {
-        let probe_schema = Arc::new(Schema::new(vec![Field::new(
-            "probe_key",
-            DataType::Float64,
-            false,
-        )]));
-        let on_right: Vec<PhysicalExprRef> = vec![Arc::new(Column::new("probe_key", 0))];
-        let mut acc = make_accumulator_for_test(
-            AccumulatedBuildData::Partitioned {
-                partitions: vec![PartitionStatus::Pending; 2],
-                completed_partitions: 0,
-            },
-            on_right,
-        );
-        acc.probe_schema = Arc::clone(&probe_schema);
-        acc.probe_range_partitioning = Some(RangePartitioning::try_new(
-            [PhysicalSortExpr::new(
-                Arc::clone(&acc.on_right[0]),
-                SortOptions::default(),
-            )]
-            .into(),
-            vec![SplitPoint::new(vec![ScalarValue::Float64(Some(0.0))])],
-        )?);
-
-        acc.build_filter(FinalizeInput::Partitioned(vec![
-            PartitionStatus::CanceledUnknown,
-            reported(PushdownStrategy::Empty, no_bounds()),
-        ]))?;
-
-        let expr = current_expr(&acc);
-        let batch = RecordBatch::try_new(
-            probe_schema,
-            vec![Arc::new(Float64Array::from(vec![-0.0, 0.0]))],
-        )?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-        let result = result
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("dynamic filter should evaluate to BooleanArray");
-        assert_eq!(result, &BooleanArray::from(vec![true, false]));
 
         Ok(())
     }
@@ -1976,10 +1765,10 @@ mod tests {
         );
     }
 
-    /// A canceled partition's build content is unknown, so it may hold a NULL key:
-    /// the aggregated flag must be permissive even when no partition reported one.
+    /// A canceled partition holds no key, so it cannot add a NULL key that
+    /// would make a null-equal join keep probe-side NULL rows.
     #[test]
-    fn partitioned_canceled_partition_widens_routed_filter() {
+    fn partitioned_canceled_partition_does_not_widen_filter() {
         let acc = null_equal_partitioned_accumulator(2);
 
         acc.build_filter(FinalizeInput::Partitioned(vec![
@@ -1989,13 +1778,7 @@ mod tests {
         .unwrap();
 
         let expr = current_expr(&acc);
-        assert_top_binary_op(&expr, Operator::Or);
-        assert!(
-            binary_expr(&expr)
-                .left()
-                .downcast_ref::<IsNullExpr>()
-                .is_some()
-        );
+        assert_eq!(format!("{expr}").matches("IS NULL").count(), 0, "{expr}");
     }
 
     #[test]

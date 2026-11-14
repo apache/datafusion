@@ -432,7 +432,9 @@ fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
     let file_source = Arc::new(
-        JsonSource::new(TableSchema::from(&file_schema)).with_newline_delimited(false),
+        JsonSource::new(TableSchema::from(&file_schema))
+            .with_newline_delimited(false)
+            .with_coerce_primitive(true),
     );
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
@@ -461,14 +463,16 @@ fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
         .downcast_ref::<JsonSource>()
         .ok_or_else(|| internal_datafusion_err!("Expected JsonSource"))?;
     assert!(!json_source.is_newline_delimited());
+    assert!(json_source.coerce_primitive());
     assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
 
     // Payloads written before these fields existed must keep their historical
-    // defaults: newline-delimited JSON without compression.
+    // defaults: newline-delimited JSON without compression or primitive coercion.
     let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
     match node.physical_plan_type.as_mut() {
         Some(protobuf::physical_plan_node::PhysicalPlanType::JsonScan(scan)) => {
             scan.newline_delimited = None;
+            scan.coerce_primitive = None;
             scan.base_conf
                 .as_mut()
                 .expect("JSON scan has a base config")
@@ -486,6 +490,7 @@ fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
         .downcast_ref::<JsonSource>()
         .ok_or_else(|| internal_datafusion_err!("Expected JsonSource"))?;
     assert!(json_source.is_newline_delimited());
+    assert!(!json_source.coerce_primitive());
     assert_eq!(
         file_scan.file_compression_type,
         FileCompressionType::UNCOMPRESSED
@@ -651,6 +656,44 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+#[test]
+fn roundtrip_csv_scan_preserves_match_columns_by_header() -> Result<()> {
+    use datafusion::common::config::CsvOptions;
+
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, true)]));
+    let file_source = Arc::new(
+        CsvSource::new(TableSchema::from(&file_schema)).with_csv_options(
+            CsvOptions::default()
+                .with_has_header(true)
+                .with_match_columns_by_header(true),
+        ),
+    );
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.csv".to_string(),
+                1024,
+            )])])
+            .build();
+
+    let ctx = SessionContext::new();
+    let roundtripped = roundtrip_test_and_return(
+        DataSourceExec::from_data_source(scan_config),
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let csv_source = roundtripped
+        .downcast_ref::<DataSourceExec>()
+        .and_then(|exec| exec.data_source().downcast_ref::<FileScanConfig>())
+        .and_then(|scan| scan.file_source().downcast_ref::<CsvSource>())
+        .ok_or_else(|| internal_datafusion_err!("Expected CsvSource"))?;
+
+    assert!(csv_source.match_columns_by_header());
     Ok(())
 }
 

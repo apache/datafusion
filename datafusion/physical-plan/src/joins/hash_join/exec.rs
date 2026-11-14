@@ -10542,8 +10542,8 @@ mod tests {
     /// Here the build-side logical NULL lives in exactly one build partition, so
     /// the `keys_have_null` flag has to survive the per-partition aggregation in
     /// `build_partitioned_filter` and widen the *routed* filter as a whole: the
-    /// probe NULL is routed to a single `CASE` branch, and OR-ing `IS NULL` into
-    /// that one branch would still drop it for every other route.
+    /// probe NULL is routed to a single partition, and OR-ing `IS NULL` into
+    /// that one partition's check would still drop it for every other route.
     #[tokio::test]
     async fn test_partitioned_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null()
     -> Result<()> {

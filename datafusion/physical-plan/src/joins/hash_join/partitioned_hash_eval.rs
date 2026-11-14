@@ -4,7 +4,7 @@
 
 //! Hash computation and hash table lookup expressions for dynamic filtering
 
-use std::{fmt::Display, hash::Hash, sync::Arc};
+use std::{fmt::Display, hash::Hash, ops::Range, sync::Arc};
 
 use arrow::{
     array::{ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array, UInt64Array},
@@ -19,6 +19,7 @@ use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::dyn_eq::DynHash;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
 
+use crate::joins::array_map::ArrayMap;
 use crate::joins::key_range_bitmap::KeyRangeBitmap;
 use crate::joins::{Map, ReservedMap};
 use crate::repartition::RangeExpr;
@@ -58,9 +59,8 @@ impl SeededRandomState {
 /// This expression computes the hash of join key columns using a specific RandomState.
 /// It returns a UInt64Array containing the hash values.
 ///
-/// This is used for:
-/// - Computing routing hashes (with RepartitionExec's 0,0,0,0 seeds)
-/// - Computing lookup hashes (with HashJoin's 'J','O','I','N' seeds)
+/// The hash join does not build this expression. It exists so that
+/// `datafusion-proto` can still decode serialized plans that contain it.
 pub struct HashExpr {
     /// Columns to hash
     on_columns: Vec<PhysicalExprRef>,
@@ -353,8 +353,9 @@ impl HashTableLookupExpr {
     /// * `pruning_bitmap` - key-range summary covering every partition's keys
     ///   for pruning only, or `None`
     ///
-    /// A single non-empty map is probed directly without routing, so it may be
-    /// any [`Map`] and `router` is ignored. Otherwise `router` is required.
+    /// When `maps` has exactly one entry, that map is probed directly without
+    /// routing and `router` is ignored. Otherwise `router` is required, even if
+    /// only one entry is non-empty.
     ///
     /// # Public Only for Internal Use:
     /// `datafusion-proto` tests require this constructor, but it is not part of
@@ -430,53 +431,98 @@ impl HashTableLookupExpr {
         let mut partition_ids = Vec::with_capacity(num_rows);
         router.route(keys, maps.len(), &mut partition_ids)?;
 
-        with_hashes(keys, self.random_state.random_state(), |hashes| {
-            // Counting sort of the rows by partition, so each table is probed
-            // once per batch over a contiguous run of its rows' hashes.
-            let mut starts = vec![0usize; maps.len() + 1];
-            for &id in &partition_ids {
-                starts[id as usize + 1] += 1;
-            }
-            for i in 0..maps.len() {
-                starts[i + 1] += starts[i];
-            }
-            let mut next = starts.clone();
-            let mut rows = vec![0u32; num_rows];
-            let mut sorted_hashes = vec![0u64; num_rows];
-            for (row, (&id, &hash)) in partition_ids.iter().zip(hashes).enumerate() {
-                let slot = &mut next[id as usize];
-                rows[*slot] = row as u32;
-                sorted_hashes[*slot] = hash;
-                *slot += 1;
-            }
+        let (starts, rows) = sort_rows_by_partition(&partition_ids, maps.len());
+        let probe_array_map = |map: &ArrayMap, run: Range<usize>| {
+            // An array map is keyed by value, not hash, so it probes the
+            // run's own key values.
+            let indices = UInt32Array::from(rows[run].to_vec());
+            map.contain_keys(&take_arrays(keys, &indices, None)?)
+        };
 
-            let mut matched = BooleanBufferBuilder::new(num_rows);
-            matched.append_n(num_rows, false);
-            for (partition, map) in maps.iter().enumerate() {
-                // An empty partition holds no key, so its rows stay unmatched.
-                let Some(map) = map else { continue };
-                let run = starts[partition]..starts[partition + 1];
-                if run.is_empty() {
-                    continue;
-                }
-                let map: &Map = map;
-                let hits = match map {
-                    Map::HashMap(map) => map.contain_hashes(&sorted_hashes[run.clone()]),
-                    // An array map is keyed by value, not hash, so it probes
-                    // the run's own key values.
-                    Map::ArrayMap(map) => {
-                        let indices = UInt32Array::from(rows[run.clone()].to_vec());
-                        map.contain_keys(&take_arrays(keys, &indices, None)?)?
-                    }
-                };
-                for hit in hits.values().set_indices() {
-                    matched.set_bit(rows[run.start + hit] as usize, true);
-                }
-            }
-            Ok(BooleanArray::new(matched.finish(), None))
+        // `Some` only when every map is an array map. Only a hash map probes
+        // by hash, so this path skips hashing the keys.
+        let array_maps: Option<Vec<Option<&ArrayMap>>> = maps
+            .iter()
+            .map(|map| match map.as_deref().map(|map| -> &Map { map }) {
+                None => Some(None),
+                Some(Map::ArrayMap(map)) => Some(Some(map)),
+                Some(Map::HashMap(_)) => None,
+            })
+            .collect();
+        if let Some(array_maps) = array_maps {
+            return probe_runs(&array_maps, &starts, &rows, |map, run| {
+                probe_array_map(map, run)
+            });
+        }
+
+        with_hashes(keys, self.random_state.random_state(), |hashes| {
+            let sorted_hashes: Vec<u64> =
+                rows.iter().map(|&row| hashes[row as usize]).collect();
+            let maps: Vec<Option<&Map>> = maps
+                .iter()
+                .map(|map| map.as_deref().map(|map| -> &Map { map }))
+                .collect();
+            probe_runs(&maps, &starts, &rows, |map, run| match map {
+                Map::HashMap(map) => Ok(map.contain_hashes(&sorted_hashes[run])),
+                Map::ArrayMap(map) => probe_array_map(map, run),
+            })
         })
     }
 }
+
+/// Counting sort of the row indices by partition, so each table is probed once
+/// per batch over a contiguous run of its rows.
+///
+/// Returns `(starts, rows)`. The rows of partition `p` are
+/// `rows[starts[p]..starts[p + 1]]`.
+fn sort_rows_by_partition(
+    partition_ids: &[u64],
+    num_partitions: usize,
+) -> (Vec<usize>, Vec<u32>) {
+    let mut starts = vec![0usize; num_partitions + 1];
+    for &id in partition_ids {
+        starts[id as usize + 1] += 1;
+    }
+    for i in 0..num_partitions {
+        starts[i + 1] += starts[i];
+    }
+    let mut next = starts.clone();
+    let mut rows = vec![0u32; partition_ids.len()];
+    for (row, &id) in partition_ids.iter().enumerate() {
+        let slot = &mut next[id as usize];
+        rows[*slot] = row as u32;
+        *slot += 1;
+    }
+    (starts, rows)
+}
+
+/// Probes each partition's map over its run of sorted rows and scatters the
+/// hits back to the original row order.
+///
+/// `probe` returns one membership bit per row of the run it receives.
+fn probe_runs<M: Copy>(
+    maps: &[Option<M>],
+    starts: &[usize],
+    rows: &[u32],
+    mut probe: impl FnMut(M, Range<usize>) -> Result<BooleanArray>,
+) -> Result<BooleanArray> {
+    let mut matched = BooleanBufferBuilder::new(rows.len());
+    matched.append_n(rows.len(), false);
+    for (partition, map) in maps.iter().enumerate() {
+        // An empty partition holds no key, so its rows stay unmatched.
+        let Some(map) = *map else { continue };
+        let run = starts[partition]..starts[partition + 1];
+        if run.is_empty() {
+            continue;
+        }
+        let hits = probe(map, run.clone())?;
+        for hit in hits.values().set_indices() {
+            matched.set_bit(rows[run.start + hit] as usize, true);
+        }
+    }
+    Ok(BooleanArray::new(matched.finish(), None))
+}
+
 impl std::fmt::Debug for HashTableLookupExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let cols = self
@@ -1159,6 +1205,60 @@ mod tests {
         let min = key(arrow::compute::min(values));
         let max = key(arrow::compute::max(values));
         Ok(Arc::new(Map::ArrayMap(ArrayMap::try_new(keys, min, max)?)))
+    }
+
+    /// With every partition built as an array map, the routed lookup skips
+    /// hashing and still matches each probe row against its own partition.
+    #[test]
+    fn routed_lookup_all_array_maps() -> Result<()> {
+        use crate::repartition::{BatchPartitioner, REPARTITION_RANDOM_STATE};
+
+        let column: PhysicalExprRef = Arc::new(Column::new("a", 0));
+        let schema = Arc::new(Schema::new(vec![arrow::datatypes::Field::new(
+            "a",
+            DataType::Int32,
+            false,
+        )]));
+        let build: ArrayRef =
+            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3, 5, 8, 13, 21]));
+        let num_partitions = 4;
+        let mut maps = vec![None; num_partitions];
+        BatchPartitioner::new_hash_partitioner(
+            vec![Arc::clone(&column)],
+            num_partitions,
+            crate::metrics::Time::new(),
+        )?
+        .partition(
+            RecordBatch::try_new(schema, vec![build])?,
+            |partition, batch| {
+                maps[partition] = Some(array_map(batch.column(0))?);
+                Ok(())
+            },
+        )?;
+        let routed = HashTableLookupExpr::new(
+            vec![column],
+            SeededRandomState::with_seed(1),
+            Some(PartitionRouter::Hash(REPARTITION_RANDOM_STATE)),
+            maps,
+            "routed".to_string(),
+            None,
+        )?;
+
+        let probe: ArrayRef = Arc::new(arrow::array::Int32Array::from(vec![
+            Some(0),
+            Some(1),
+            None,
+            Some(4),
+            Some(5),
+            Some(13),
+            Some(20),
+            Some(21),
+        ]));
+        assert_eq!(
+            lookup(&routed, &probe)?,
+            BooleanArray::from(vec![false, true, false, false, true, true, false, true])
+        );
+        Ok(())
     }
 
     /// One randomly generated scenario, see [`routed_lookup_fuzz`].

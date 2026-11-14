@@ -7,9 +7,10 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 # Spark Compatible Functions
 
 The [`datafusion-spark`] crate provides Apache Spark-compatible expressions for
-use with DataFusion.
+use with DataFusion. It is developed in the [apache/datafusion-spark] repository.
 
 [`datafusion-spark`]: https://crates.io/crates/datafusion-spark
+[apache/datafusion-spark]: https://github.com/apache/datafusion-spark
 
 Please see the documentation for the [`datafusion-spark` crate] for more details.
 
