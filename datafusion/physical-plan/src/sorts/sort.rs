@@ -31,6 +31,7 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::IncrementalSortIterator;
+use crate::sorts::multi_level_merge::MIN_SPILL_MERGE_FAN_IN;
 use crate::sorts::streaming_merge::{
     SortedSpillFile, StreamingMergeBuilder, merges_in_row_format,
 };
@@ -357,7 +358,8 @@ impl ExternalSorter {
             metrics.spill_metrics.clone(),
             Arc::clone(&schema),
         )
-        .with_compression_type(spill_compression);
+        .with_compression_type(spill_compression)
+        .with_max_batch_bytes(Some(spill_max_batch_bytes(sort_spill_reservation_bytes)));
 
         let in_mem_batches_counter = (!schema
             .fields()
@@ -465,6 +467,9 @@ impl ExternalSorter {
                 .with_expressions(&self.expr.clone())
                 .with_metrics(self.metrics.baseline.clone())
                 .with_batch_size(self.batch_size)
+                // A merge pass whose output is spilled again ends its batches at the
+                // bound of the spill files. The output keeps `batch_size` rows.
+                .with_spill_max_batch_bytes(self.spill_manager.max_batch_bytes())
                 .with_fetch(None)
                 .with_reservation(self.merge_reservation.take())
                 .with_merge_pool(Arc::clone(&self.merge_pool))
@@ -1282,6 +1287,27 @@ impl ExternalSorter {
         stream
     }
 }
+
+/// The bound on the in-memory size of each batch of a sorted spill run, such that the
+/// smallest merge of the runs fits in `merge_memory`.
+///
+/// The merge reads at least [`MIN_SPILL_MERGE_FAN_IN`] files, and reserves
+/// [`get_reserved_bytes_for_record_batch_size`] of the largest batch for each, with
+/// read-ahead reduced to one batch under pressure. The bound is the largest batch size for
+/// which that minimum merge fits in `merge_memory`, found from the same formula.
+/// [`ExternalSorter`] passes `sort_spill_reservation_bytes`, the headroom its merge starts
+/// with. An aggregate passes part of the memory it held when it first spilled.
+///
+/// The bound is at least [`MIN_SPILL_MAX_BATCH_BYTES`], so that a small or zero headroom
+/// does not write, read and merge tiny batches. Below that headroom the merge cannot fit
+/// in it anyway, and takes the rest from the memory pool, as it does without a bound.
+pub(crate) fn spill_max_batch_bytes(merge_memory: usize) -> usize {
+    // Each batch reserves `get_reserved_bytes_for_record_batch_size(b, b)`, which is `2 * b`.
+    (merge_memory / (2 * MIN_SPILL_MERGE_FAN_IN)).max(MIN_SPILL_MAX_BATCH_BYTES)
+}
+
+/// The smallest bound [`spill_max_batch_bytes`] returns.
+const MIN_SPILL_MAX_BATCH_BYTES: usize = 64 * 1024;
 
 /// Estimate how much memory is needed to sort a `RecordBatch`.
 ///
@@ -3090,6 +3116,31 @@ mod tests {
             let array_ref: ArrayRef = Arc::new(array);
             RecordBatch::try_new(schema, vec![array_ref]).unwrap()
         }
+    }
+
+    #[test]
+    fn test_spill_max_batch_bytes_fits_minimum_merge() {
+        let minimum_merge = |bound| {
+            MIN_SPILL_MERGE_FAN_IN
+                * get_reserved_bytes_for_record_batch_size(bound, bound)
+        };
+        for headroom in [1024 * 1024, 10 * 1024 * 1024, 10 * 1024 * 1024 + 7] {
+            let bound = spill_max_batch_bytes(headroom);
+            // The largest bound whose minimum merge fits in the headroom.
+            assert!(minimum_merge(bound) <= headroom, "headroom {headroom}");
+            assert!(minimum_merge(bound + 1) > headroom, "headroom {headroom}");
+        }
+        // A small or zero headroom gets the floor.
+        assert_eq!(spill_max_batch_bytes(0), MIN_SPILL_MAX_BATCH_BYTES);
+        assert_eq!(spill_max_batch_bytes(1024), MIN_SPILL_MAX_BATCH_BYTES);
+        // The largest headroom does not overflow.
+        let bound = spill_max_batch_bytes(usize::MAX);
+        assert_eq!(bound, usize::MAX / (2 * MIN_SPILL_MERGE_FAN_IN));
+        assert!(
+            MIN_SPILL_MERGE_FAN_IN
+                .checked_mul(get_reserved_bytes_for_record_batch_size(bound, bound))
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -5047,6 +5098,176 @@ mod tests {
         let _reset = Arc::clone(&sort).reset_state()?;
         assert_snapshot!(pushed_down.to_string(), @"DynamicFilter [ true ]");
 
+        Ok(())
+    }
+
+    /// Sorts `batches` by `id` descending, with a `FairSpillPool` of `pool` bytes, or
+    /// no limit. Returns the output and the spill metrics.
+    async fn sort_with_pool(
+        batches: &[RecordBatch],
+        pool: Option<usize>,
+        sort_spill_reservation_bytes: usize,
+        batch_size: usize,
+    ) -> Result<(Vec<RecordBatch>, MetricsSet)> {
+        let schema = batches[0].schema();
+        let mut runtime = RuntimeEnvBuilder::new();
+        if let Some(pool) = pool {
+            runtime = runtime.with_memory_pool(Arc::new(
+                datafusion_execution::memory_pool::FairSpillPool::new(pool),
+            ));
+        }
+        let config = SessionConfig::new()
+            .with_batch_size(batch_size)
+            .with_sort_spill_reservation_bytes(sort_spill_reservation_bytes);
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(config)
+                .with_runtime(runtime.build_arc()?),
+        );
+        let input =
+            TestMemoryExec::try_new_exec(&[batches.to_vec()], Arc::clone(&schema), None)?;
+        let sort = Arc::new(SortExec::new(
+            [PhysicalSortExpr {
+                expr: col("id", &schema)?,
+                options: SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            }]
+            .into(),
+            input,
+        ));
+        let output = collect(Arc::clone(&sort) as _, task_ctx).await?;
+        Ok((output, sort.metrics().unwrap()))
+    }
+
+    fn wide_value(i: usize, width: usize) -> String {
+        format!("{i:08}{}", "x".repeat(width))
+    }
+
+    /// A dictionary value can be null. The rows whose valid key references it stay null
+    /// when the sort splits its spilled batches.
+    #[tokio::test]
+    async fn test_sort_spill_keeps_null_dictionary_values() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new(
+                "d",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
+        ]));
+        // 66 rows over 33 values of 64 KiB, the first of them null. Each key is used
+        // twice, so the dictionary is compacted when the batch is split.
+        let batches = (0..16)
+            .map(|b| {
+                let ids =
+                    Int64Array::from_iter_values((0..66).map(|r| (b * 66 + r) as i64));
+                let values = StringArray::from_iter(
+                    (0..33).map(|v| (v != 0).then(|| wide_value(b * 33 + v, 64 * 1024))),
+                );
+                let keys = Int32Array::from_iter_values((0..66).map(|r| r % 33));
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(ids),
+                        Arc::new(DictionaryArray::new(keys, Arc::new(values))),
+                    ],
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let (expected, _) = sort_with_pool(&batches, None, 1024 * 1024, 66).await?;
+        let (output, metrics) =
+            sort_with_pool(&batches, Some(16 * 1024 * 1024), 1024 * 1024, 66).await?;
+        assert!(metrics.spill_count().unwrap() > 0);
+        let flatten = |batches: &[RecordBatch]| -> Result<ArrayRef> {
+            let batch = concat_batches(&schema, batches)?;
+            Ok(arrow::compute::cast(batch.column(1), &DataType::Utf8)?)
+        };
+        let (expected, output) = (flatten(&expected)?, flatten(&output)?);
+        assert_eq!(expected.null_count(), 32);
+        assert_eq!(output.as_ref(), expected.as_ref());
+        Ok(())
+    }
+
+    /// The byte bound of the spill files applies to the merge passes that spill again,
+    /// not to the output, which keeps `batch_size` rows.
+    #[tokio::test]
+    async fn test_sort_spill_output_keeps_batch_size() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("s", DataType::Utf8, false),
+        ]));
+        let batches = (0..25)
+            .map(|b| {
+                let ids = Int64Array::from_iter_values(
+                    (0..8192).map(|r| ((b * 8192 + r) * 7919 % 1_000_003) as i64),
+                );
+                let strings =
+                    StringArray::from_iter_values((0..8192).map(|r| wide_value(r, 92)));
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(ids), Arc::new(strings)],
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for sort_spill_reservation_bytes in [0, 1024 * 1024] {
+            let (output, metrics) = sort_with_pool(
+                &batches,
+                Some(8 * 1024 * 1024),
+                sort_spill_reservation_bytes,
+                8192,
+            )
+            .await?;
+            assert!(metrics.spill_count().unwrap() > 0);
+            let rows = output.iter().map(|b| b.num_rows()).collect::<Vec<_>>();
+            assert_eq!(rows, vec![8192; 25], "{sort_spill_reservation_bytes}");
+        }
+        Ok(())
+    }
+
+    /// Rows that share view bytes spill about as many bytes as they hold. Splitting the
+    /// batches would copy the shared values once per row, so they are written whole, and
+    /// the merge needs about the memory it needs without a bound.
+    #[tokio::test]
+    async fn test_sort_spill_of_views_that_share_values() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("c", DataType::Utf8View, true),
+        ]));
+        // Each batch has 256 rows over three values of 1 MiB.
+        let batches = (0..6)
+            .map(|b| {
+                let values = StringViewArray::from_iter_values(
+                    (0..3).map(|i| wide_value(b * 3 + i, 1024 * 1024)),
+                );
+                let indices = UInt32Array::from_iter_values((0..256).map(|i| i % 3));
+                let ids =
+                    Int64Array::from_iter_values((0..256).map(|r| (b * 256 + r) as i64));
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(ids),
+                        arrow::compute::take(&values, &indices, None)?,
+                    ],
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let input: usize = batches.iter().map(get_record_batch_memory_size).sum();
+        let (expected, _) = sort_with_pool(&batches, None, 4 * 1024 * 1024, 256).await?;
+        let (output, metrics) =
+            sort_with_pool(&batches, Some(24 * 1024 * 1024), 4 * 1024 * 1024, 256)
+                .await?;
+        assert!(metrics.spill_count().unwrap() > 0);
+        assert_eq!(
+            concat_batches(&schema, &output)?,
+            concat_batches(&schema, &expected)?
+        );
+        let spilled = metrics.spilled_bytes().unwrap();
+        assert!(
+            spilled < 4 * input,
+            "spilled {spilled} bytes of {input} bytes"
+        );
         Ok(())
     }
 }

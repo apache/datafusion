@@ -32,6 +32,8 @@ pub struct SpillManager {
     batch_read_buffer_capacity: usize,
     /// general-purpose compression options
     pub(crate) compression: SpillCompression,
+    /// See [`Self::with_max_batch_bytes`]
+    max_batch_bytes: Option<usize>,
 }
 
 impl SpillManager {
@@ -42,6 +44,7 @@ impl SpillManager {
             schema,
             batch_read_buffer_capacity: 2,
             compression: SpillCompression::default(),
+            max_batch_bytes: None,
         }
     }
 
@@ -56,6 +59,62 @@ impl SpillManager {
     pub fn with_compression_type(mut self, spill_compression: SpillCompression) -> Self {
         self.compression = spill_compression;
         self
+    }
+
+    /// Bounds the in-memory size of each batch written through this manager, or `None`
+    /// for no bound.
+    ///
+    /// A batch is bounded by `batch_size` rows, so with wide rows it can be very large in
+    /// bytes. A reader must decode each spilled batch whole, and a merge of spill files
+    /// reserves memory for the largest batch of each file (`max_record_batch_memory`).
+    /// With a bound, a larger batch is split into row ranges of at most this size (best
+    /// effort: one row, or rows that share data, can be larger), and each range is written
+    /// as its own IPC message.
+    /// Row order is kept, but one appended batch can come back as several batches, so a
+    /// reader that expects one batch per append (such as [`crate::spill::spill_pool`])
+    /// must not use a bounded manager.
+    pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
+        self.max_batch_bytes = max_batch_bytes;
+        self
+    }
+
+    /// See [`Self::with_max_batch_bytes`]
+    pub(crate) fn max_batch_bytes(&self) -> Option<usize> {
+        self.max_batch_bytes
+    }
+
+    /// The size this manager records for a written `batch`, to compare a batch read back
+    /// with `max_record_batch_memory`. A bounded manager counts the IPC padding too (see
+    /// [`super::spill_pieces::recorded_size`]).
+    pub(crate) fn recorded_size(&self, batch: &RecordBatch) -> Result<usize> {
+        if self.max_batch_bytes.is_some() {
+            super::spill_pieces::recorded_size(
+                batch,
+                self.compression != SpillCompression::Uncompressed,
+            )
+        } else {
+            batch.get_sliced_size()
+        }
+    }
+
+    /// The size recorded for a piece of `size` bytes (see [`Self::recorded_size`]) that
+    /// was written as `written` bytes.
+    ///
+    /// The compressed IPC writer writes a buffer that does not get smaller as it is. The
+    /// reader keeps such a buffer as a slice of the whole message, so the decoded batch
+    /// also holds the message, which is at most `written` bytes. For example, the offsets
+    /// of a list of compressible strings stay uncompressed. A bounded manager adds
+    /// `written` for a compressed file, so that the recorded size stays an upper bound.
+    /// It is too large by the uncompressed buffers, at most twice the decoded size.
+    /// An unbounded manager records `size`.
+    pub(crate) fn read_back_size(&self, size: usize, written: usize) -> usize {
+        if self.max_batch_bytes.is_some()
+            && self.compression != SpillCompression::Uncompressed
+        {
+            size + written
+        } else {
+            size
+        }
     }
 
     /// Returns the schema for batches managed by this SpillManager
@@ -144,10 +203,12 @@ impl SpillManager {
 
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
-                let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
+                let stats = in_progress_file
+                    .append_batch_async_with_stats(&batch)
+                    .await?;
 
-                max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
-                max_batch_rows = max_batch_rows.max(batch.num_rows());
+                max_record_batch_size = max_record_batch_size.max(stats.memory_size);
+                max_batch_rows = max_batch_rows.max(stats.rows);
             }
 
             let file = in_progress_file.finish_async().await?;

@@ -996,6 +996,11 @@ config_namespace! {
         ///
         /// Note: This setting is irrelevant if the sort operation cannot spill
         /// (i.e., if there's no `DiskManager` configured).
+        ///
+        /// This setting also bounds the size of spilled batches. A sort writes
+        /// spill batches of at most a quarter of this value (at least 64 KiB), so
+        /// that the merge of two spill files fits in it. An aggregate writes
+        /// spill batches of at most the smaller of 1 MiB and that size.
         pub sort_spill_reservation_bytes: usize, default = 10 * 1024 * 1024
 
         /// When sorting, below what size should data be concatenated

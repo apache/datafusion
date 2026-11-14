@@ -4,6 +4,8 @@
 
 //! Per-row sizes of a batch once it is written to a spill file.
 
+use std::collections::HashSet;
+
 use arrow::array::{
     AnyDictionaryArray, Array, ArrayRef, AsArray, RecordBatch, downcast_integer_array,
     make_array,
@@ -38,11 +40,23 @@ pub(crate) struct SpilledRowSizes {
 
 impl SpilledRowSizes {
     pub(crate) fn new(batch: &RecordBatch) -> Self {
+        Self::new_inner(batch, false)
+    }
+
+    /// Like [`Self::new`], but for a batch whose pieces copy the bytes that views share
+    /// once per piece (see [`super::compact::compact_batch`]). Only the first view of
+    /// each value counts its bytes. A later range of rows that shares a value with an
+    /// earlier range is then sized too small, and the caller must measure each piece.
+    pub(crate) fn new_with_shared_views_once(batch: &RecordBatch) -> Self {
+        Self::new_inner(batch, true)
+    }
+
+    fn new_inner(batch: &RecordBatch, views_once: bool) -> Self {
         let mut fixed = 0;
         let mut variable = vec![];
         let mut compacted_columns = vec![];
         for (index, column) in batch.columns().iter().enumerate() {
-            let column = ColumnSize::new(column.as_ref());
+            let column = ColumnSize::new(column.as_ref(), views_once);
             if column.compacted() {
                 compacted_columns.push(index);
             }
@@ -67,6 +81,15 @@ impl SpilledRowSizes {
         self.variable.iter().fold(self.fixed, |bytes, column| {
             bytes + column.rows(row, row + 1)
         })
+    }
+
+    /// Returns the size in bytes of rows `start..end`.
+    pub(crate) fn rows(&self, start: usize, end: usize) -> usize {
+        self.variable
+            .iter()
+            .fold(self.fixed * (end - start), |bytes, column| {
+                bytes + column.rows(start, end)
+            })
     }
 
     /// Returns the size in bytes of every row, if they all have the same size.
@@ -115,7 +138,7 @@ enum ColumnSize {
 }
 
 impl ColumnSize {
-    fn new(array: &dyn Array) -> Self {
+    fn new(array: &dyn Array, views_once: bool) -> Self {
         match array.data_type() {
             DataType::Utf8 => Self::Bytes(array.as_string::<i32>().offsets().into()),
             DataType::LargeUtf8 => Self::Bytes(array.as_string::<i64>().offsets().into()),
@@ -123,30 +146,40 @@ impl ColumnSize {
             DataType::LargeBinary => {
                 Self::Bytes(array.as_binary::<i64>().offsets().into())
             }
-            DataType::Utf8View => Self::Views(array.as_string_view().views().clone()),
-            DataType::BinaryView => Self::Views(array.as_binary_view().views().clone()),
+            DataType::Utf8View | DataType::BinaryView => {
+                Self::Views(views(array, views_once))
+            }
             DataType::List(_) => {
                 let list = array.as_list::<i32>();
-                Self::List(list.offsets().into(), Box::new(Self::new(list.values())))
+                Self::List(
+                    list.offsets().into(),
+                    Box::new(Self::new(list.values(), views_once)),
+                )
             }
             DataType::LargeList(_) => {
                 let list = array.as_list::<i64>();
-                Self::List(list.offsets().into(), Box::new(Self::new(list.values())))
+                Self::List(
+                    list.offsets().into(),
+                    Box::new(Self::new(list.values(), views_once)),
+                )
             }
             DataType::Map(_, _) => {
                 let map = array.as_map();
-                Self::List(map.offsets().into(), Box::new(Self::new(map.entries())))
+                Self::List(
+                    map.offsets().into(),
+                    Box::new(Self::new(map.entries(), views_once)),
+                )
             }
             DataType::FixedSizeList(_, size) => Self::FixedSizeList(
                 *size as usize,
-                Box::new(Self::new(array.as_fixed_size_list().values())),
+                Box::new(Self::new(array.as_fixed_size_list().values(), views_once)),
             ),
             DataType::Struct(_) => Self::Struct(
                 array
                     .as_struct()
                     .columns()
                     .iter()
-                    .map(|field| Self::new(field.as_ref()))
+                    .map(|field| Self::new(field.as_ref(), views_once))
                     .collect(),
             ),
             DataType::Dictionary(key, _) => {
@@ -156,7 +189,7 @@ impl ColumnSize {
                     Self::Dictionary(
                         width,
                         make_array(dictionary.keys().to_data()),
-                        Box::new(Self::new(dictionary.values().as_ref())),
+                        Box::new(Self::new(dictionary.values().as_ref(), views_once)),
                     )
                 } else {
                     Self::Fixed(width)
@@ -257,6 +290,30 @@ impl ColumnSize {
 fn should_compact(dictionary: &dyn AnyDictionaryArray) -> bool {
     let keys = dictionary.keys();
     keys.len() - keys.null_count() < 2 * dictionary.values().len()
+}
+
+/// The views of a view array. With `once`, a view that repeats an earlier view of the
+/// same bytes is replaced by an empty view, which counts no bytes.
+fn views(array: &dyn Array, once: bool) -> ScalarBuffer<u128> {
+    let views = match array.data_type() {
+        DataType::Utf8View => array.as_string_view().views(),
+        _ => array.as_binary_view().views(),
+    };
+    if !once {
+        return views.clone();
+    }
+    let mut seen = HashSet::new();
+    views
+        .iter()
+        .map(|&view| {
+            // A long view holds the length, buffer index and offset of its bytes.
+            if view as u32 > MAX_INLINE_VIEW_LEN && !seen.insert(view) {
+                0
+            } else {
+                view
+            }
+        })
+        .collect()
 }
 
 /// Returns the size in bytes of a view, plus its value unless it is inlined.
