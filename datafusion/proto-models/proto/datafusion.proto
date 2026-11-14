@@ -1176,6 +1176,9 @@ message PhysicalWindowExprNode {
   optional bytes fun_definition = 9;
   bool ignore_nulls = 11;
   bool distinct = 12;
+  PhysicalExprNode filter = 13;
+  bool is_reversed = 14;
+  repeated PhysicalSortExprNode ordering_req = 15;
 }
 
 message PhysicalIsNull {

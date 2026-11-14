@@ -7,6 +7,8 @@
 mod bounded_window_agg_exec;
 #[cfg(feature = "proto")]
 mod proto;
+#[cfg(feature = "proto")]
+pub use proto::{decode_physical_window_expr, encode_physical_window_expr};
 mod utils;
 mod window_agg_exec;
 
@@ -161,6 +163,17 @@ pub fn create_udwf_window_expr(
     name: String,
     ignore_nulls: bool,
 ) -> Result<Arc<dyn StandardWindowFunctionExpr>> {
+    new_udwf_window_expr(fun, args, input_schema, name, ignore_nulls, false)
+}
+
+fn new_udwf_window_expr(
+    fun: &Arc<WindowUDF>,
+    args: &[Arc<dyn PhysicalExpr>],
+    input_schema: &Schema,
+    name: String,
+    ignore_nulls: bool,
+    is_reversed: bool,
+) -> Result<Arc<dyn StandardWindowFunctionExpr>> {
     // need to get the types into an owned vec for some reason
     let input_fields: Vec<_> = args
         .iter()
@@ -172,7 +185,7 @@ pub fn create_udwf_window_expr(
         args: args.to_vec(),
         input_fields,
         name,
-        is_reversed: false,
+        is_reversed,
         ignore_nulls,
     });
 
@@ -224,6 +237,14 @@ impl WindowUDFExpr {
     /// protobuf round-trip.
     pub fn args(&self) -> &[Arc<dyn PhysicalExpr>] {
         &self.args
+    }
+
+    pub fn is_reversed(&self) -> bool {
+        self.is_reversed
+    }
+
+    pub fn ignore_nulls(&self) -> bool {
+        self.ignore_nulls
     }
 }
 
