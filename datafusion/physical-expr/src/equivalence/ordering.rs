@@ -15,8 +15,9 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
-/// An `OrderingEquivalenceClass` keeps track of distinct alternative orderings
-/// than can describe a table. For example, consider the following table:
+/// Tracks distinct alternative orderings that describe a table.
+///
+/// For example, consider the following table:
 ///
 /// ```text
 /// ┌───┬───┬───┬───┐
@@ -30,16 +31,25 @@ use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 /// ```
 ///
 /// Here, both `[a ASC, b ASC]` and `[c DESC, d ASC]` describe the table
-/// ordering. In this case, we say that these orderings are equivalent.
+/// ordering, so these orderings are equivalent. See [Equivalent sort
+/// expressions] for more details.
 ///
-/// An `OrderingEquivalenceClass` is a set of such equivalent orderings, which
-/// is represented by a vector of `LexOrdering`s. The set does not store any
-/// redundant information by enforcing the invariant that no suffix of an
-/// ordering in the equivalence class is a prefix of another ordering in the
-/// equivalence class. The set can be empty, which means that there are no
-/// orderings that describe the table.
+/// An `OrderingEquivalenceClass` is a set of such equivalent orderings.
+///
+/// [`GroupingEquivalenceClass`] is used when groups of equal values are
+/// contiguous, but not in order.
+///
+/// [Equivalent sort expressions]: crate::equivalence::EquivalenceProperties#equivalent-sort-expressions
+/// [`GroupingEquivalenceClass`]: crate::equivalence::GroupingEquivalenceClass
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct OrderingEquivalenceClass {
+    /// Set of equivalent orderings
+    ///
+    /// Invariant: no suffix of an ordering in the equivalence class is a prefix
+    /// of another ordering in the equivalence class. This avoids redundant
+    /// information.
+    ///
+    /// If empty, means the table is unordered
     orderings: Vec<LexOrdering>,
 }
 
@@ -216,18 +226,11 @@ impl OrderingEquivalenceClass {
     /// `ASC NULLS LAST` and `DESC NULLS FIRST`. Rows sorted both ways all have
     /// the same value (or are all null).
     ///
-    /// This is how a value that is constant only within groups of rows is
-    /// recorded, since a `ConstExpr` is constant across all rows. For example,
-    /// `SUM(x) OVER (PARTITION BY k)` has one value per `k`, so the window adds
-    /// `[k, w]` once for each of the four directions of `w`.
+    /// This is how a whole-partition window aggregate records that its value
+    /// is constant within each window partition. See
+    /// [Per-partition constants from window functions].
     ///
-    /// ### Future Improvements
-    ///
-    /// This function may become unnecessary if any of the following improvements
-    /// are implemented:
-    /// 1. `SortOptions` supports encoding constantness information.
-    /// 2. `EquivalenceProperties` gains `FunctionalDependency` awareness, eliminating
-    ///    the need for `Constant` and `Constraints`.
+    /// [Per-partition constants from window functions]: crate::equivalence::EquivalenceProperties#example-window-functions-with-partition-by
     pub fn is_expr_partial_const(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
         is_partial_const(self.iter().map(|ordering| ordering.first()), expr)
     }

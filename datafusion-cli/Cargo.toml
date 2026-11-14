@@ -43,7 +43,6 @@ datafusion = { workspace = true, features = [
     "unicode_expressions",
 ] }
 datafusion-common = { workspace = true }
-datafusion-spark = { workspace = true, features = ["core"] }
 dirs = "7.0.0"
 env_logger = { workspace = true }
 futures = { workspace = true }

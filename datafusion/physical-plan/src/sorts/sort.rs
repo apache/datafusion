@@ -9,6 +9,7 @@
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::RwLock;
@@ -30,10 +31,12 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::IncrementalSortIterator;
-use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::get_record_batch_memory_size;
+use crate::sorts::streaming_merge::{
+    SortedSpillFile, StreamingMergeBuilder, merges_in_row_format,
+};
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
+use crate::spill::{gc_view_arrays, get_record_batch_memory_size, views_share_bytes};
 use crate::statistics::{ChildStats, StatisticsArgs, with_per_partition_fetch};
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
@@ -59,12 +62,12 @@ use datafusion_common::{
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{
-    MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool,
+    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation, MergeMemoryPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
 
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -308,6 +311,13 @@ struct ExternalSorter {
     /// How much memory to reserve for performing in-memory sort/merges
     /// prior to spilling.
     sort_spill_reservation_bytes: usize,
+    /// Partitions of the owning `SortExec`, this one included, still reading
+    /// their input. Each one will need memory from the pool this sort shares.
+    partitions_reading_input: Arc<AtomicUsize>,
+    /// Whether this partition is still counted in `partitions_reading_input`.
+    /// It leaves the count when it starts its final sort, or when it is
+    /// dropped before that (its stream dropped early, or its input failed).
+    reading_input: bool,
     /// Shared by the owning SortExec's partitions. Initialized on the runtime
     /// that polls the sort, which may differ from the one calling `execute`.
     sort_concurrency: Arc<OnceLock<SortConcurrency>>,
@@ -371,8 +381,35 @@ impl ExternalSorter {
             batch_size,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
+            partitions_reading_input: Arc::new(AtomicUsize::new(1)),
+            reading_input: true,
             sort_concurrency: Arc::new(OnceLock::new()),
         })
+    }
+
+    /// Share the count of partitions still reading their input with the
+    /// other partitions of this sort. It must include this partition.
+    fn with_partitions_reading_input(mut self, reading: Arc<AtomicUsize>) -> Self {
+        self.partitions_reading_input = reading;
+        self
+    }
+
+    /// Records that this partition has read all its input, and returns whether
+    /// another partition still reads its own. Executing partitions again
+    /// without `reset_state` finds the count already at zero and keeps it
+    /// there, so those partitions keep headroom only for other consumers of
+    /// the pool; their output is the same.
+    fn finish_reading_input(&mut self) -> bool {
+        if !std::mem::replace(&mut self.reading_input, false) {
+            return false;
+        }
+        let before = self
+            .partitions_reading_input
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |reading| {
+                Some(reading.saturating_sub(1))
+            })
+            .unwrap_or_else(|reading| reading);
+        before > 1
     }
 
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
@@ -405,6 +442,7 @@ impl ExternalSorter {
     /// 2. A combined streaming merge incorporating both in-memory
     ///    batches and data from spill files on disk.
     async fn sort(&mut self) -> Result<SendableRecordBatchStream> {
+        let other_partitions_reading = self.finish_reading_input();
         if self.spilled_before() {
             // Sort `in_mem_batches` and spill it first. If there are many
             // `in_mem_batches` and the memory limit is almost reached, merging
@@ -430,6 +468,21 @@ impl ExternalSorter {
                 .with_fetch(None)
                 .with_reservation(self.merge_reservation.take())
                 .with_merge_pool(Arc::clone(&self.merge_pool))
+                // Other partitions of this sort, still buffering input, share
+                // the pool with this merge, and may hold nothing at the moment
+                // it seats its runs. Seating every run the pool admits would
+                // leave them nothing, so keep headroom while any of them is
+                // still reading or anyone else holds memory in the pool;
+                // partitions already merging hold memory, so the second check
+                // covers them. A lone partition, or the last one to finish
+                // reading, with the pool to itself seats every run that fits:
+                // the operator consuming its output reserves nothing before
+                // its first batch, and keeping headroom for it would cost an
+                // extra merge pass whether or not it ever needs the memory.
+                .with_fan_in_headroom(
+                    Arc::clone(&self.runtime.memory_pool),
+                    other_partitions_reading,
+                )
                 .build()
         } else {
             // Final output needs no reserve for future spills. Return unused
@@ -707,7 +760,8 @@ impl ExternalSorter {
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation, None)?;
+            let sorted_stream =
+                self.sort_batch_stream(batch, reservation, None, self.batch_size)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -724,7 +778,8 @@ impl ExternalSorter {
                 .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation, None)?;
+            let sorted_stream =
+                self.sort_batch_stream(batch, reservation, None, self.batch_size)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -786,7 +841,13 @@ impl ExternalSorter {
                 .enumerate()
                 .map(move |(index, (batch, size))| {
                     let reservation = self.reservation.split(size);
-                    let sort = self.sort_run(batch, reservation, shared_input.clone())?;
+                    let batch_size = self.merge_run_batch_size(&batch)?;
+                    let sort = self.sort_run(
+                        batch,
+                        reservation,
+                        shared_input.clone(),
+                        batch_size,
+                    )?;
                     let permits = Arc::clone(&concurrency.permits);
                     Ok::<_, DataFusionError>(async move {
                         let stream = Self::prepare_sort_run(sort, permits).await?;
@@ -972,7 +1033,8 @@ impl ExternalSorter {
             .zip(sizes)
             .map(|(run, size)| {
                 let reservation = self.reservation.split(size);
-                self.sort_batch_stream(run, reservation, shared_input.clone())
+                let batch_size = self.merge_run_batch_size(&run)?;
+                self.sort_batch_stream(run, reservation, shared_input.clone(), batch_size)
             })
             .collect()
     }
@@ -995,11 +1057,11 @@ impl ExternalSorter {
         batch: RecordBatch,
         reservation: MemoryReservation,
         shared_input: Option<Arc<MemoryReservation>>,
+        batch_size: usize,
     ) -> Result<SendableRecordBatchStream> {
         let schema = batch.schema();
-        let stream =
-            futures::stream::once(self.sort_run(batch, reservation, shared_input)?)
-                .try_flatten();
+        let sort = self.sort_run(batch, reservation, shared_input, batch_size)?;
+        let stream = futures::stream::once(sort).try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 
@@ -1012,6 +1074,7 @@ impl ExternalSorter {
         batch: RecordBatch,
         reservation: MemoryReservation,
         shared_input: Option<Arc<MemoryReservation>>,
+        batch_size: usize,
     ) -> Result<impl Future<Output = Result<SendableRecordBatchStream>> + Send + use<>>
     {
         let reserved_bytes = get_reserved_bytes_for_record_batch(&batch)?;
@@ -1024,9 +1087,10 @@ impl ExternalSorter {
         }
 
         let expressions = self.expr.clone();
-        let batch_size = self.batch_size;
         let merge_pool = Arc::clone(&self.merge_pool);
         let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+        // Set when `merge_run_batch_size` split this run
+        let split = batch_size < self.batch_size;
 
         Ok(async move {
             // Held until `batch` is sorted, when this block ends. The last run to
@@ -1037,7 +1101,16 @@ impl ExternalSorter {
             let schema = batch.schema();
 
             // Sort the batch immediately and get all output batches
-            let sorted_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
+            let mut sorted_batches =
+                sort_batch_chunked(&batch, &expressions, batch_size)?;
+            // `take` keeps the data buffers of view arrays, so splitting would
+            // charge every batch for all of them.
+            if split && sorted_batches.len() > 1 {
+                sorted_batches = sorted_batches
+                    .iter()
+                    .map(gc_view_arrays)
+                    .collect::<Result<_>>()?;
+            }
 
             // Chunked output can retain shared buffers in every batch and
             // exceed the input estimate. Borrow only already-reserved spill
@@ -1066,6 +1139,67 @@ impl ExternalSorter {
                 futures::stream::iter(batches),
             )) as SendableRecordBatchStream)
         })
+    }
+
+    /// Batch size of the sorted run `run` when it feeds a merge. A merge in the
+    /// row format holds the keys of every run's current batch at once. The sort
+    /// reserves about twice the run, so the keys fit next to the sorted copy if
+    /// they are at most as large as the run. Otherwise, with a memory limit, the
+    /// run uses an eighth of `batch_size`, but at least 1024 rows to keep the
+    /// per-batch merge cost small. The merge output still uses `batch_size`.
+    ///
+    /// Runs keep `batch_size` when their batches would share buffers other than
+    /// the data of top-level view columns, such as dictionary values, or when the
+    /// views of `run` share bytes, since every batch is charged for them.
+    fn merge_run_batch_size(&self, run: &RecordBatch) -> Result<usize> {
+        let limited = !matches!(
+            self.runtime.memory_pool.memory_limit(),
+            MemoryLimit::Infinite
+        );
+        let shares_buffers = self.schema.fields().iter().any(|field| {
+            let data_type = field.data_type();
+            sorted_copy_keeps_buffers(data_type)
+                && !matches!(data_type, DataType::Utf8View | DataType::BinaryView)
+        });
+        if limited
+            && !shares_buffers
+            && merges_in_row_format(&self.expr, &self.schema)
+            && self.encoded_keys_may_exceed(run)?
+            && !views_share_bytes(run)
+        {
+            Ok((self.batch_size / 8).max(1024).min(self.batch_size))
+        } else {
+            Ok(self.batch_size)
+        }
+    }
+
+    /// Returns whether the row-format keys of `run` may be larger than `run`. A
+    /// computed key is sized from its type if that has a fixed width, and
+    /// otherwise counts as larger, since sizing it would evaluate it again.
+    fn encoded_keys_may_exceed(&self, run: &RecordBatch) -> Result<bool> {
+        // An 8-byte offset per row, then a null byte and the bytes of each key
+        let mut encoded = run.num_rows() * size_of::<usize>();
+        for sort_expr in self.expr.iter() {
+            let key_bytes = match sort_expr.expr.downcast_ref::<Column>() {
+                Some(column) => run
+                    .column(column.index())
+                    .to_data()
+                    .get_slice_memory_size()?,
+                None => {
+                    let width = sort_expr
+                        .expr
+                        .data_type(self.schema.as_ref())
+                        .ok()
+                        .and_then(|data_type| data_type.primitive_width());
+                    let Some(width) = width else {
+                        return Ok(true);
+                    };
+                    run.num_rows() * width
+                }
+            };
+            encoded += run.num_rows() + key_bytes;
+        }
+        Ok(encoded > run.get_sliced_size()?)
     }
 
     /// If this sort may spill, pre-allocates
@@ -1234,6 +1368,14 @@ fn sorted_copy_keeps_buffers(data_type: &DataType) -> bool {
     }
 }
 
+impl Drop for ExternalSorter {
+    /// A partition dropped before its final sort no longer reads its input,
+    /// so it must not keep its siblings' merges holding headroom for it.
+    fn drop(&mut self) {
+        self.finish_reading_input();
+    }
+}
+
 impl Debug for ExternalSorter {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("ExternalSorter")
@@ -1314,6 +1456,10 @@ pub struct SortExec {
     /// Batch-sort limit shared by partitions and clones.
     /// `reset_state` returns a new plan with a fresh limit.
     sort_concurrency: Arc<OnceLock<SortConcurrency>>,
+    /// Partitions still reading their input, shared with their sorters. Set
+    /// on the first `execute`, once the input can no longer change.
+    /// `reset_state` returns a new plan with a fresh count.
+    partitions_reading_input: Arc<OnceLock<Arc<AtomicUsize>>>,
 }
 
 impl SortExec {
@@ -1334,6 +1480,7 @@ impl SortExec {
             cache: Arc::new(cache),
             filter: None,
             sort_concurrency: Arc::new(OnceLock::new()),
+            partitions_reading_input: Arc::new(OnceLock::new()),
         }
     }
 
@@ -1411,6 +1558,7 @@ impl SortExec {
             cache: Arc::clone(&self.cache),
             filter: self.filter.clone(),
             sort_concurrency: Arc::clone(&self.sort_concurrency),
+            partitions_reading_input: Arc::clone(&self.partitions_reading_input),
         }
     }
 
@@ -1741,14 +1889,15 @@ impl ExecutionPlan for SortExec {
             .downcast_ref::<SortExec>()
             .expect("rebuilt SortExec with new children")
             .clone();
-        // Our dynamic filter, execution metrics and sort concurrency are the state
-        // we need to reset.
+        // Our dynamic filter, execution metrics, sort concurrency and count of
+        // partitions reading input are the state we need to reset.
         if let Some(filter) = &new_sort.filter {
             filter.read().expr().reset();
             new_sort.filter = Some(new_sort.create_filter());
         }
         new_sort.metrics_set = ExecutionPlanMetricsSet::new();
         new_sort.sort_concurrency = Arc::new(OnceLock::new());
+        new_sort.partitions_reading_input = Arc::new(OnceLock::new());
 
         Ok(Arc::new(new_sort))
     }
@@ -1829,7 +1978,14 @@ impl ExecutionPlan for SortExec {
                     context.session_config().spill_compression(),
                     &self.metrics_set,
                     context.runtime_env(),
-                )?;
+                )?
+                .with_partitions_reading_input(Arc::clone(
+                    self.partitions_reading_input.get_or_init(|| {
+                        Arc::new(AtomicUsize::new(
+                            self.input.output_partitioning().partition_count(),
+                        ))
+                    }),
+                ));
                 sorter.sort_concurrency = Arc::clone(&self.sort_concurrency);
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
@@ -2032,6 +2188,7 @@ impl ExecutionPlan for SortExec {
             filter,
             // Execution state, initialized on the runtime polling the decoded plan.
             sort_concurrency: _,
+            partitions_reading_input: _,
         } = self;
         let input = ctx.encode_child(input)?;
         let expr = expr
@@ -2601,7 +2758,8 @@ mod tests {
             let reservation = sorter.reservation.new_empty();
             reservation.try_grow(get_reserved_bytes_for_record_batch(&batch)?)?;
             let before = elapsed_compute.value();
-            let sort = sorter.sort_run(batch.clone(), reservation, None)?;
+            let sort =
+                sorter.sort_run(batch.clone(), reservation, None, sorter.batch_size)?;
             assert_eq!(elapsed_compute.value(), before);
 
             let stream = if spawned {
