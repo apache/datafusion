@@ -111,6 +111,21 @@ pub struct PullUpCorrelatedExpr {
     /// `f_down`'s `Limit` arm reads it: a `Limit` is only dropped from an
     /// `EXISTS` subquery when this holds for every node above it.
     depends_only_on_input_having_rows_above: Vec<bool>,
+    /// For each node on that same path, how many plans [`Self::alias_order`]
+    /// held when `f_down` reached the node. Pushed and popped with
+    /// [`Self::column_refs_above`].
+    aliases_before: Vec<usize>,
+    /// Each `SubqueryAlias` plan `f_up` has returned so far, in the order it
+    /// first did, and whether it has had facts in
+    /// `correlated_subquery_cols_map` or `collected_count_expr_map`.
+    ///
+    /// Both maps are keyed by the plan value, so two equal `SubqueryAlias`
+    /// nodes at different places in the subquery share one entry, and one of
+    /// them reads or replaces the facts of the other. When a node returns a
+    /// `SubqueryAlias` plan that some node outside its own subtree returned
+    /// first, and either of them has facts, the pull up stops. See
+    /// <https://github.com/apache/datafusion/issues/26692>.
+    alias_order: HashMap<LogicalPlan, (usize, bool)>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -137,6 +152,8 @@ impl PullUpCorrelatedExpr {
             correlated_filters: Vec::new(),
             column_refs_above: Vec::new(),
             depends_only_on_input_having_rows_above: Vec::new(),
+            aliases_before: Vec::new(),
+            alias_order: HashMap::new(),
         }
     }
 
@@ -201,6 +218,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
         self.column_refs_above.push(column_refs);
         self.depends_only_on_input_having_rows_above
             .push(depends_only_on_input_having_rows(&plan));
+        self.aliases_before.push(self.alias_order.len());
 
         // This match is exhaustive on purpose. A correlated filter moves above
         // a node only when the node is known to keep the result the same. Add
@@ -321,6 +339,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         // is gone, so only one entry must remain pushed.
                         self.column_refs_above.pop();
                         self.depends_only_on_input_having_rows_above.pop();
+                        self.aliases_before.pop();
                         let mut t = self.f_down((*limit.input).clone())?;
                         t.transformed = true;
                         Ok(t)
@@ -397,7 +416,43 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
         // `column_refs_above` holds only the nodes strictly above `plan`.
         self.column_refs_above.pop();
         self.depends_only_on_input_having_rows_above.pop();
+        let aliases_before = self.aliases_before.pop().unwrap_or(0);
 
+        let transformed = self.pull_up(plan)?;
+        if matches!(transformed.data, LogicalPlan::SubqueryAlias(_)) {
+            let has_facts = self.has_facts(&transformed.data);
+            let next_order = self.alias_order.len();
+            match self.alias_order.get_mut(&transformed.data) {
+                Some((order, had_facts)) => {
+                    if *order < aliases_before && (*had_facts || has_facts) {
+                        self.can_pull_up = false;
+                    }
+                    *had_facts |= has_facts;
+                }
+                None => {
+                    self.alias_order
+                        .insert(transformed.data.clone(), (next_order, has_facts));
+                }
+            }
+        }
+        Ok(transformed)
+    }
+}
+
+impl PullUpCorrelatedExpr {
+    /// Whether `plan` has an entry with something in it in either map.
+    fn has_facts(&self, plan: &LogicalPlan) -> bool {
+        self.correlated_subquery_cols_map
+            .get(plan)
+            .is_some_and(|cols| !cols.is_empty())
+            || self
+                .collected_count_expr_map
+                .get(plan)
+                .is_some_and(|exprs| !exprs.is_empty())
+    }
+
+    /// The `f_up` step for one node, after its children.
+    fn pull_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         // A node that null-extends or regroups rows can put a NULL back into
         // a column that a correlated filter below it rejected, so the filters
         // recorded so far no longer bound what the subquery returns.
