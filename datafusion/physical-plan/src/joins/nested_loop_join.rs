@@ -811,6 +811,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             NullEquality::NullEqualsNothing,
             &self.join_type,
             &self.join_schema,
+            self.filter.as_ref(),
         )?;
 
         Ok(Arc::new(stats.project(self.projection.as_ref())))

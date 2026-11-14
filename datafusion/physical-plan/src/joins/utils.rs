@@ -62,10 +62,11 @@ use datafusion_common::stats::Precision;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
-    internal_datafusion_err, not_impl_err, plan_err,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
-use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_expr::Operator;
+use datafusion_expr::interval_arithmetic::{Interval, comparison_selectivity};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalExpr, PhysicalExprRef, add_offset_to_expr,
@@ -449,9 +450,9 @@ struct PartialJoinStatistics {
 ///
 /// # Limitations
 ///
-/// - Does not account for selectivity of arbitrary join filter expressions
-///   (e.g., `(t1.v1 + t2.v1) % 2 = 0`). Such filters, common in NestedLoopJoinExec,
-///   are not factored into the cardinality estimation.
+/// - Accounts only for direct column-to-column ordered comparisons in inner join
+///   filters. Arbitrary expressions (e.g., `(t1.v1 + t2.v1) % 2 = 0`) are not
+///   factored into the cardinality estimation.
 /// - Apart from null counts, column statistics for inner/outer joins are simply
 ///   combined from inputs without adjusting for join selectivity (acknowledged in
 ///   the code as needing "filter selectivity analysis").
@@ -462,15 +463,28 @@ pub(crate) fn estimate_join_statistics(
     null_equality: NullEquality,
     join_type: &JoinType,
     schema: &Schema,
+    filter: Option<&JoinFilter>,
 ) -> Result<Statistics> {
+    let filter_selectivity = if *join_type == JoinType::Inner {
+        filter
+            .map(|filter| {
+                estimate_join_filter_selectivity(filter, &left_stats, &right_stats)
+            })
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
     let join_stats =
         estimate_join_cardinality(join_type, left_stats, right_stats, on, null_equality);
     let (num_rows, total_byte_size, column_statistics) = match join_stats {
-        Some(stats) => (
-            Precision::Inexact(stats.num_rows),
-            stats.total_byte_size,
-            stats.column_statistics,
-        ),
+        Some(stats) => {
+            let num_rows = Precision::Inexact(stats.num_rows);
+            let num_rows = filter_selectivity
+                .map(|selectivity| num_rows.with_estimated_selectivity(selectivity))
+                .unwrap_or(num_rows);
+            (num_rows, stats.total_byte_size, stats.column_statistics)
+        }
         None => (
             Precision::Absent,
             Precision::Absent,
@@ -482,6 +496,113 @@ pub(crate) fn estimate_join_statistics(
         total_byte_size,
         column_statistics,
     })
+}
+
+fn estimate_join_filter_selectivity(
+    filter: &JoinFilter,
+    left_stats: &Statistics,
+    right_stats: &Statistics,
+) -> Result<Option<f64>> {
+    let Some(comparison) = filter.expression().downcast_ref::<BinaryExpr>() else {
+        return Ok(None);
+    };
+    let Some(left_column) = comparison.left().downcast_ref::<Column>() else {
+        return Ok(None);
+    };
+    let Some(right_column) = comparison.right().downcast_ref::<Column>() else {
+        return Ok(None);
+    };
+
+    if filter.schema().fields().len() != filter.column_indices().len() {
+        return internal_err!(
+            "JoinFilter schema has {} fields but {} column mappings",
+            filter.schema().fields().len(),
+            filter.column_indices().len()
+        );
+    }
+
+    let (left_column_stats, left_field) =
+        join_filter_column_statistics(filter, left_column, left_stats, right_stats)?;
+    let (right_column_stats, right_field) =
+        join_filter_column_statistics(filter, right_column, left_stats, right_stats)?;
+
+    if !matches!(
+        comparison.op(),
+        Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+    ) {
+        return Ok(None);
+    }
+
+    let Some(left_interval) = column_statistics_interval(left_column_stats, left_field)?
+    else {
+        return Ok(None);
+    };
+    let Some(right_interval) =
+        column_statistics_interval(right_column_stats, right_field)?
+    else {
+        return Ok(None);
+    };
+
+    comparison_selectivity(comparison.op(), &left_interval, &right_interval)
+}
+
+fn join_filter_column_statistics<'a>(
+    filter: &'a JoinFilter,
+    column: &Column,
+    left_stats: &'a Statistics,
+    right_stats: &'a Statistics,
+) -> Result<(&'a ColumnStatistics, &'a Field)> {
+    let compact_index = column.index();
+    let Some(column_index) = filter.column_indices().get(compact_index) else {
+        return internal_err!(
+            "JoinFilter expression column index {compact_index} is outside its {} column mappings",
+            filter.column_indices().len()
+        );
+    };
+    let Some(field) = filter.schema().fields().get(compact_index) else {
+        return internal_err!(
+            "JoinFilter expression column index {compact_index} is outside its {} schema fields",
+            filter.schema().fields().len()
+        );
+    };
+    let input_column_stats = match column_index.side {
+        JoinSide::Left => left_stats.column_statistics.get(column_index.index),
+        JoinSide::Right => right_stats.column_statistics.get(column_index.index),
+        JoinSide::None => {
+            return internal_err!("JoinFilter column mapping has no input side");
+        }
+    };
+    let Some(input_column_stats) = input_column_stats else {
+        return internal_err!(
+            "JoinFilter {:?} column index {} is outside the input statistics",
+            column_index.side,
+            column_index.index
+        );
+    };
+
+    Ok((input_column_stats, field))
+}
+
+fn column_statistics_interval(
+    column_stats: &ColumnStatistics,
+    field: &Field,
+) -> Result<Option<Interval>> {
+    let (Some(min), Some(max)) = (
+        column_stats.min_value.get_value(),
+        column_stats.max_value.get_value(),
+    ) else {
+        return Ok(None);
+    };
+    if min.is_null()
+        || max.is_null()
+        || min.data_type() != max.data_type()
+        || min.data_type() != *field.data_type()
+        || min > max
+    {
+        return Ok(None);
+    }
+
+    Interval::try_new(min.clone(), max.clone()).map(Some)
 }
 
 // Estimate the cardinality for the given join with input statistics.
@@ -2895,11 +3016,13 @@ mod tests {
     use super::*;
     use crate::metrics::MetricValue;
 
-    use arrow::datatypes::{DataType, Fields};
+    use arrow::datatypes::{DataType, Fields, SchemaRef};
     use arrow::error::{ArrowError, Result as ArrowResult};
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{ScalarValue, SplitPoint, arrow_datafusion_err, arrow_err};
+    use datafusion_expr::Operator;
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_expr::expressions::CastExpr;
 
     use crate::joins::join_hash_map::ProbeOffset::AtRow;
     use rstest::rstest;
@@ -3362,6 +3485,271 @@ mod tests {
             null_count,
             byte_size: Absent,
         }
+    }
+
+    fn residual_join_test_inputs() -> (
+        Statistics,
+        Statistics,
+        JoinOn,
+        Schema,
+        Vec<ColumnIndex>,
+        SchemaRef,
+    ) {
+        let left_schema = Schema::new(vec![
+            Field::new("left_key", DataType::Int64, false),
+            Field::new("left_value", DataType::Int64, false),
+        ]);
+        let right_schema = Schema::new(vec![
+            Field::new("right_key", DataType::Int64, false),
+            Field::new("right_value", DataType::Int64, false),
+        ]);
+        let (join_schema, _) =
+            build_join_schema(&left_schema, &right_schema, &JoinType::Inner);
+        let key_stats = create_column_stats(Exact(1), Exact(100), Exact(100), Exact(0));
+        let value_stats = create_column_stats(Exact(1), Exact(50), Exact(50), Exact(0));
+        let left_stats = create_stats(
+            Some(100),
+            vec![key_stats.clone(), value_stats.clone()],
+            true,
+        );
+        let right_stats = create_stats(Some(100), vec![key_stats, value_stats], true);
+        let on = vec![(
+            Arc::new(Column::new("left_key", 0)) as PhysicalExprRef,
+            Arc::new(Column::new("right_key", 0)) as PhysicalExprRef,
+        )];
+        let column_indices = vec![
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+        ];
+        let filter_schema = Arc::new(Schema::new(vec![
+            Field::new("left_value", DataType::Int64, false),
+            Field::new("right_value", DataType::Int64, false),
+        ]));
+        (
+            left_stats,
+            right_stats,
+            on,
+            join_schema,
+            column_indices,
+            filter_schema,
+        )
+    }
+
+    fn direct_residual_filter(op: Operator) -> JoinFilter {
+        let (_, _, _, _, column_indices, filter_schema) = residual_join_test_inputs();
+        JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("left_value", 0)),
+                op,
+                Arc::new(Column::new("right_value", 1)),
+            )),
+            column_indices,
+            filter_schema,
+        )
+    }
+
+    #[test]
+    fn test_residual_join_comparison_selectivity() -> Result<()> {
+        let (left_stats, right_stats, on, join_schema, _, _) =
+            residual_join_test_inputs();
+        let without_filter = estimate_join_statistics(
+            left_stats.clone(),
+            right_stats.clone(),
+            &on,
+            NullEquality::NullEqualsNothing,
+            &JoinType::Inner,
+            &join_schema,
+            None,
+        )?;
+        assert_eq!(without_filter.num_rows, Inexact(100));
+
+        let filter = direct_residual_filter(Operator::Lt);
+        let with_filter = estimate_join_statistics(
+            left_stats,
+            right_stats,
+            &on,
+            NullEquality::NullEqualsNothing,
+            &JoinType::Inner,
+            &join_schema,
+            Some(&filter),
+        )?;
+        assert_eq!(with_filter.num_rows, Inexact(49));
+        Ok(())
+    }
+
+    #[test]
+    fn test_residual_join_selectivity_fallbacks() -> Result<()> {
+        let (left_stats, right_stats, on, join_schema, column_indices, filter_schema) =
+            residual_join_test_inputs();
+        let unsupported = JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("left_value", 0)),
+                Operator::Plus,
+                Arc::new(Column::new("right_value", 1)),
+            )),
+            column_indices.clone(),
+            Arc::clone(&filter_schema),
+        );
+        let cast = JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("left_value", 0)),
+                Operator::Lt,
+                Arc::new(CastExpr::new(
+                    Arc::new(Column::new("right_value", 1)),
+                    DataType::Int64,
+                    None,
+                )),
+            )),
+            column_indices,
+            filter_schema,
+        );
+
+        for filter in [&unsupported, &cast] {
+            let stats = estimate_join_statistics(
+                left_stats.clone(),
+                right_stats.clone(),
+                &on,
+                NullEquality::NullEqualsNothing,
+                &JoinType::Inner,
+                &join_schema,
+                Some(filter),
+            )?;
+            assert_eq!(stats.num_rows, Inexact(100));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_tpch_residual_cast_falls_back() -> Result<()> {
+        let left_schema = Schema::new(vec![
+            Field::new("left_key", DataType::Int64, false),
+            Field::new("l_quantity", DataType::Decimal128(15, 2), false),
+        ]);
+        let right_schema = Schema::new(vec![
+            Field::new("right_key", DataType::Int64, false),
+            Field::new("p_size", DataType::Int32, false),
+        ]);
+        let (join_schema, _) =
+            build_join_schema(&left_schema, &right_schema, &JoinType::Inner);
+        let key_stats = create_column_stats(Exact(1), Exact(100), Exact(100), Exact(0));
+        let decimal_stats = ColumnStatistics {
+            min_value: Exact(ScalarValue::Decimal128(Some(100), 15, 2)),
+            max_value: Exact(ScalarValue::Decimal128(Some(5000), 15, 2)),
+            distinct_count: Exact(50),
+            null_count: Exact(0),
+            sum_value: Absent,
+            byte_size: Absent,
+        };
+        let integer_stats = ColumnStatistics {
+            min_value: Exact(ScalarValue::Int32(Some(1))),
+            max_value: Exact(ScalarValue::Int32(Some(50))),
+            distinct_count: Exact(50),
+            null_count: Exact(0),
+            sum_value: Absent,
+            byte_size: Absent,
+        };
+        let left_stats =
+            create_stats(Some(100), vec![key_stats.clone(), decimal_stats], true);
+        let right_stats = create_stats(Some(100), vec![key_stats, integer_stats], true);
+        let on = vec![(
+            Arc::new(Column::new("left_key", 0)) as PhysicalExprRef,
+            Arc::new(Column::new("right_key", 0)) as PhysicalExprRef,
+        )];
+        let filter = JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("l_quantity", 0)),
+                Operator::Lt,
+                Arc::new(CastExpr::new(
+                    Arc::new(Column::new("p_size", 1)),
+                    DataType::Decimal128(15, 2),
+                    None,
+                )),
+            )),
+            vec![
+                ColumnIndex {
+                    index: 1,
+                    side: JoinSide::Left,
+                },
+                ColumnIndex {
+                    index: 1,
+                    side: JoinSide::Right,
+                },
+            ],
+            Arc::new(Schema::new(vec![
+                Field::new("l_quantity", DataType::Decimal128(15, 2), false),
+                Field::new("p_size", DataType::Int32, false),
+            ])),
+        );
+
+        let stats = estimate_join_statistics(
+            left_stats,
+            right_stats,
+            &on,
+            NullEquality::NullEqualsNothing,
+            &JoinType::Inner,
+            &join_schema,
+            Some(&filter),
+        )?;
+
+        // Physical planning casts p_size to Decimal128, so this first implementation
+        // deliberately retains the equality-only estimate for the TPC-H expression.
+        assert_eq!(stats.num_rows, Inexact(100));
+        Ok(())
+    }
+
+    #[test]
+    fn test_residual_join_selectivity_non_inner_joins() -> Result<()> {
+        let (left_stats, right_stats, on, _, _, _) = residual_join_test_inputs();
+        let filter = direct_residual_filter(Operator::Lt);
+        let join_types = [
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::RightSemi,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::LeftMark,
+            JoinType::RightMark,
+        ];
+        for join_type in join_types {
+            let left_schema = Schema::new(vec![
+                Field::new("left_key", DataType::Int64, false),
+                Field::new("left_value", DataType::Int64, false),
+            ]);
+            let right_schema = Schema::new(vec![
+                Field::new("right_key", DataType::Int64, false),
+                Field::new("right_value", DataType::Int64, false),
+            ]);
+            let (join_schema, _) =
+                build_join_schema(&left_schema, &right_schema, &join_type);
+            let baseline = estimate_join_statistics(
+                left_stats.clone(),
+                right_stats.clone(),
+                &on,
+                NullEquality::NullEqualsNothing,
+                &join_type,
+                &join_schema,
+                None,
+            )?;
+            let filtered = estimate_join_statistics(
+                left_stats.clone(),
+                right_stats.clone(),
+                &on,
+                NullEquality::NullEqualsNothing,
+                &join_type,
+                &join_schema,
+                Some(&filter),
+            )?;
+            assert_eq!(filtered, baseline, "join type {join_type:?}");
+        }
+        Ok(())
     }
 
     type PartialStats = (
