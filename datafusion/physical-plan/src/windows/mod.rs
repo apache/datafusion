@@ -386,50 +386,51 @@ pub(crate) fn window_equivalence_properties(
             continue;
         }
 
-        let window_col = Column::new(expr.name(), i + input_schema_len);
+        let window_col_idx = i + input_schema_len;
         let frame = expr.get_window_frame();
-        if let Some(std_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>() {
-            if frame.is_ever_expanding()
-                && frame.end_bound.is_unbounded()
-                && std_expr
-                    .get_standard_func_expr()
-                    .as_any()
-                    .downcast_ref::<WindowUDFExpr>()
-                    .is_some_and(|expr| expr.fun().inner().is_constant_for_frame())
-            {
-                add_constant_window_orderings(
-                    &mut window_eq_properties,
-                    Arc::new(window_col),
-                    &partition_ordering,
-                )?;
-            } else {
-                std_expr.add_equal_orderings(&mut window_eq_properties)?;
-            }
-        } else if let Some(plain_expr) =
-            expr.as_any().downcast_ref::<PlainAggregateWindowExpr>()
+        let std_expr = expr.as_any().downcast_ref::<StandardWindowExpr>();
+        let aggregate = aggregate_and_filter(expr.as_ref());
+        if frame.is_ever_expanding()
+            && frame.end_bound.is_unbounded()
+            && (aggregate.is_some()
+                || std_expr.is_some_and(|expr| {
+                    expr.get_standard_func_expr()
+                        .as_any()
+                        .downcast_ref::<WindowUDFExpr>()
+                        .is_some_and(|expr| expr.fun().inner().is_constant_for_frame())
+                }))
+        {
+            add_constant_window_orderings(
+                &mut window_eq_properties,
+                Arc::new(Column::new(expr.name(), window_col_idx)),
+                &partition_ordering,
+            )?;
+        } else if let Some((aggregate, has_filter)) = aggregate
+            && let Some(growing) = aggregate.get_result_ordering(window_col_idx)
         {
             add_aggregate_window_orderings(
                 &mut window_eq_properties,
-                plain_expr.get_aggregate_expr(),
+                aggregate,
                 frame,
-                plain_expr.has_filter(),
-                window_col,
+                has_filter,
+                growing,
                 &partition_ordering,
             )?;
-        } else if let Some(sliding_expr) =
-            expr.as_any().downcast_ref::<SlidingAggregateWindowExpr>()
-        {
-            add_aggregate_window_orderings(
-                &mut window_eq_properties,
-                sliding_expr.get_aggregate_expr(),
-                frame,
-                sliding_expr.has_filter(),
-                window_col,
-                &partition_ordering,
-            )?;
+        } else if let Some(std_expr) = std_expr {
+            std_expr.add_equal_orderings(&mut window_eq_properties)?;
         }
     }
     Ok(window_eq_properties)
+}
+
+fn aggregate_and_filter(expr: &dyn WindowExpr) -> Option<(&AggregateFunctionExpr, bool)> {
+    if let Some(expr) = expr.as_any().downcast_ref::<PlainAggregateWindowExpr>() {
+        Some((expr.get_aggregate_expr(), expr.has_filter()))
+    } else {
+        expr.as_any()
+            .downcast_ref::<SlidingAggregateWindowExpr>()
+            .map(|expr| (expr.get_aggregate_expr(), expr.has_filter()))
+    }
 }
 
 fn add_constant_window_orderings(
@@ -451,20 +452,17 @@ fn add_constant_window_orderings(
 
 fn add_window_ordering(
     eq_properties: &mut EquivalenceProperties,
-    window_col: Arc<dyn PhysicalExpr>,
+    mut sort_expr: PhysicalSortExpr,
     partition_ordering: &[PhysicalSortExpr],
-    options: SortOptions,
     result_never_null: bool,
 ) {
     let mut ordering = partition_ordering.to_vec();
-    ordering.push(PhysicalSortExpr::new(Arc::clone(&window_col), options));
+    ordering.push(sort_expr.clone());
     eq_properties.add_ordering(ordering);
     if result_never_null {
+        sort_expr.options.nulls_first = !sort_expr.options.nulls_first;
         let mut ordering = partition_ordering.to_vec();
-        ordering.push(PhysicalSortExpr::new(
-            window_col,
-            SortOptions::new(options.descending, !options.nulls_first),
-        ));
+        ordering.push(sort_expr);
         eq_properties.add_ordering(ordering);
     }
 }
@@ -484,56 +482,38 @@ fn add_aggregate_window_orderings(
     aggregate: &AggregateFunctionExpr,
     frame: &WindowFrame,
     has_filter: bool,
-    window_col: Column,
+    growing: PhysicalSortExpr,
     partition_ordering: &[PhysicalSortExpr],
 ) -> Result<()> {
-    let result_ordering = aggregate.get_result_ordering(window_col.index());
-    let window_col = Arc::new(window_col) as Arc<dyn PhysicalExpr>;
-    if frame.is_ever_expanding() && frame.end_bound.is_unbounded() {
-        return add_constant_window_orderings(
-            eq_properties,
-            window_col,
-            partition_ordering,
-        );
-    }
-
-    let Some(result_ordering) = result_ordering else {
-        return Ok(());
-    };
-
     let arguments = aggregate.expressions();
+    let frame_never_empty = !has_filter && frame_contains_current_row(frame);
     let mut result_never_null = !aggregate.is_nullable();
-    if !result_never_null && !has_filter && frame_contains_current_row(frame) {
+    if !result_never_null && frame_never_empty {
         result_never_null = !arguments.is_empty();
         for argument in &arguments {
             result_never_null &= !argument.nullable(eq_properties.schema())?;
         }
     }
 
-    let options = if frame.is_ever_expanding() {
-        Some(result_ordering.options)
-    } else if frame.end_bound.is_unbounded() {
-        Some(SortOptions::new(
-            !result_ordering.options.descending,
-            !result_ordering.options.nulls_first,
-        ))
-    } else {
-        None
-    };
-    if let Some(options) = options {
-        add_window_ordering(
+    match (frame.is_ever_expanding(), frame.end_bound.is_unbounded()) {
+        (true, false) => add_window_ordering(
             eq_properties,
-            Arc::clone(&window_col),
+            growing.clone(),
             partition_ordering,
-            options,
             result_never_null,
-        );
+        ),
+        (false, true) => add_window_ordering(
+            eq_properties,
+            growing.reverse(),
+            partition_ordering,
+            result_never_null,
+        ),
+        _ => {}
     }
 
     // Set monotonicity does not order a frame that both gains and loses rows.
     if aggregate.get_minmax_desc().is_some()
-        && !has_filter
-        && frame_contains_current_row(frame)
+        && frame_never_empty
         && let [argument] = arguments.as_slice()
     {
         for sort_expr in sort_options_resolving_constant(Arc::clone(argument)) {
@@ -543,9 +523,8 @@ fn add_aggregate_window_orderings(
             if eq_properties.ordering_satisfy(candidate)? {
                 add_window_ordering(
                     eq_properties,
-                    window_col,
+                    PhysicalSortExpr { options, ..growing },
                     partition_ordering,
-                    options,
                     result_never_null,
                 );
                 break;
