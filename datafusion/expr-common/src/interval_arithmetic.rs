@@ -901,10 +901,28 @@ impl Interval {
             _ => Self::new(prev_value(zero.clone()), next_value(zero.clone())),
         };
 
+        // Integer division by zero has no result. If an integer divisor only
+        // touches zero at an endpoint, move that endpoint to the nearest
+        // defined integer before choosing the sign case. [0, 0] is left as it
+        // is. Floats are not adjusted here, because a float divisor can get
+        // arbitrarily close to zero and the quotient really can be unbounded.
+        let mut divisor_lower = rhs_ref.lower.clone();
+        let mut divisor_upper = rhs_ref.upper.clone();
+        if dt.is_integer() && !(divisor_lower == zero && divisor_upper == zero) {
+            if divisor_lower == zero {
+                divisor_lower = next_value(zero.clone());
+            }
+            if divisor_upper == zero {
+                divisor_upper = prev_value(zero.clone());
+            }
+        }
+        let adjusted_rhs = Interval::new(divisor_lower, divisor_upper);
+
         // The helpers treat intervals with a finite upper bound <= 0 as non-positive.
         // Exit early with an unbounded interval if zero is strictly inside the
         // right hand side:
-        if rhs_ref.contains(&zero_point)? == Self::TRUE && !dt.is_unsigned_integer() {
+        if adjusted_rhs.contains(&zero_point)? == Self::TRUE && !dt.is_unsigned_integer()
+        {
             Self::make_unbounded(&dt)
         }
         // At this point, we know that only one endpoint of the right hand side
@@ -912,9 +930,19 @@ impl Interval {
         else if lhs_ref.contains(&zero_point)? == Self::TRUE
             && !dt.is_unsigned_integer()
         {
-            Ok(div_helper_lhs_zero_inclusive(&dt, lhs_ref, rhs_ref, &zero))
+            Ok(div_helper_lhs_zero_inclusive(
+                &dt,
+                lhs_ref,
+                &adjusted_rhs,
+                &zero,
+            ))
         } else {
-            Ok(div_helper_zero_exclusive(&dt, lhs_ref, rhs_ref, &zero))
+            Ok(div_helper_zero_exclusive(
+                &dt,
+                lhs_ref,
+                &adjusted_rhs,
+                &zero,
+            ))
         }
     }
 
@@ -4158,32 +4186,32 @@ mod tests {
             (
                 Interval::make(Some(-3_i64), Some(-1_i64))?,
                 Interval::make(Some(-3_i64), Some(0_i64))?,
-                Interval::make(Some(0_i64), None)?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
             ),
             (
                 Interval::make(Some(1_i64), Some(3_i64))?,
                 Interval::make(Some(-3_i64), Some(0_i64))?,
-                Interval::make(None, Some(0_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
             ),
             (
                 Interval::make(Some(-3_i64), Some(-1_i64))?,
                 Interval::make(Some(0_i64), Some(3_i64))?,
-                Interval::make(None, Some(0_i64))?,
+                Interval::make(Some(-3_i64), Some(0_i64))?,
             ),
             (
                 Interval::make(Some(1_i64), Some(3_i64))?,
                 Interval::make(Some(0_i64), Some(3_i64))?,
-                Interval::make(Some(0_i64), None)?,
+                Interval::make(Some(0_i64), Some(3_i64))?,
             ),
             (
                 Interval::make(Some(-6_i64), Some(6_i64))?,
                 Interval::make(Some(-3_i64), Some(0_i64))?,
-                Interval::make::<i64>(None, None)?,
+                Interval::make(Some(-6_i64), Some(6_i64))?,
             ),
             (
                 Interval::make(Some(-6_i64), Some(6_i64))?,
                 Interval::make(Some(0_i64), Some(3_i64))?,
-                Interval::make::<i64>(None, None)?,
+                Interval::make(Some(-6_i64), Some(6_i64))?,
             ),
             (
                 Interval::make(Some(0_i64), Some(0_i64))?,
@@ -4203,12 +4231,12 @@ mod tests {
             (
                 Interval::make(Some(0_u32), Some(5_u32))?,
                 Interval::make(Some(0_u32), Some(5_u32))?,
-                Interval::make(Some(0_u32), None)?,
+                Interval::make(Some(0_u32), Some(5_u32))?,
             ),
             (
                 Interval::make(Some(1_u32), Some(5_u32))?,
                 Interval::make(Some(0_u32), Some(5_u32))?,
-                Interval::make(Some(0_u32), None)?,
+                Interval::make(Some(0_u32), Some(5_u32))?,
             ),
             (
                 Interval::make(Some(0_u64), Some(0_u64))?,
@@ -4268,12 +4296,12 @@ mod tests {
             (
                 Interval::make(Some(100_i64), Some(200_i64))?,
                 Interval::make(Some(0_i64), Some(1_i64))?,
-                Interval::make(Some(100_i64), None)?,
+                Interval::make(Some(100_i64), Some(200_i64))?,
             ),
             (
                 Interval::make(Some(100_i64), Some(200_i64))?,
                 Interval::make(None, Some(0_i64))?,
-                Interval::make(None, Some(0_i64))?,
+                Interval::make(Some(-200_i64), Some(0_i64))?,
             ),
             (
                 Interval::make(Some(100_i64), Some(200_i64))?,
@@ -4298,12 +4326,12 @@ mod tests {
             (
                 Interval::make(Some(10_u32), Some(20_u32))?,
                 Interval::make(None, Some(2_u32))?,
-                Interval::make(Some(5_u32), None)?,
+                Interval::make(Some(5_u32), Some(20_u32))?,
             ),
             (
                 Interval::make(Some(10_u32), Some(20_u32))?,
                 Interval::make(Some(0_u32), Some(2_u32))?,
-                Interval::make(Some(5_u32), None)?,
+                Interval::make(Some(5_u32), Some(20_u32))?,
             ),
             (
                 Interval::make(Some(10_u32), Some(20_u32))?,
@@ -4318,17 +4346,17 @@ mod tests {
             (
                 Interval::make(Some(12_u64), Some(48_u64))?,
                 Interval::make(None, Some(2_u64))?,
-                Interval::make(Some(6_u64), None)?,
+                Interval::make(Some(6_u64), Some(48_u64))?,
             ),
             (
                 Interval::make(Some(12_u64), Some(48_u64))?,
                 Interval::make(Some(0_u64), Some(2_u64))?,
-                Interval::make(Some(6_u64), None)?,
+                Interval::make(Some(6_u64), Some(48_u64))?,
             ),
             (
                 Interval::make(None, Some(48_u64))?,
                 Interval::make(Some(0_u64), Some(2_u64))?,
-                Interval::make::<u64>(None, None)?,
+                Interval::make(Some(0_u64), Some(48_u64))?,
             ),
             (
                 Interval::make(Some(f32::MAX), Some(f32::MAX))?,
