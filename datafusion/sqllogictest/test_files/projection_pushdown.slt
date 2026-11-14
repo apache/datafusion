@@ -1949,6 +1949,51 @@ ORDER BY simple_struct.id;
 # (https://github.com/apache/datafusion/issues/20430)
 # =========================================================================
 
+# A prefix alone does not make an alias an extraction. In particular, moving
+# this division below the filter would evaluate it on the zero row as well.
+statement ok
+CREATE TABLE extracted_alias_names AS
+SELECT * FROM (VALUES (0), (1)) AS v(id);
+
+query I
+SELECT 10 / id AS __datafusion_extracted_manual
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+query I
+SELECT 10 / id AS __datafusion_extracted
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+query I
+SELECT 10 / id AS __datafusion_extracted_1x
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+query I
+SELECT 10 / id AS "__datafusion_extracted_+1"
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+query I
+SELECT 10 / id AS __datafusion_extracted_0
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+query I
+SELECT 10 / id AS __datafusion_extracted_01
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+statement ok
+DROP TABLE extracted_alias_names;
+
 statement ok
 COPY ( select {f1: 1, f2: 2} as s
 ) TO 'test_files/scratch/projection_pushdown/test.parquet'
