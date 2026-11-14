@@ -67,6 +67,7 @@ impl Display for MaxRows {
 ///
 /// assert_eq!("auto".parse::<MaxWidth>().unwrap(), MaxWidth::Auto);
 /// assert_eq!("100".parse::<MaxWidth>().unwrap(), MaxWidth::Limited(100));
+/// assert_eq!("0".parse::<MaxWidth>().unwrap(), MaxWidth::Unlimited);
 /// ```
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum MaxWidth {
@@ -92,7 +93,9 @@ impl FromStr for MaxWidth {
                 .filter(|width| *width > 0)
                 .map(Self::Limited)
                 .ok_or_else(|| {
-                    format!("Invalid maxwidth {value}. Expected auto, 1..65535, or inf.")
+                    format!(
+                        "Invalid maxwidth {value}. Expected auto, 1..65535, or 0/inf for no limit."
+                    )
                 }),
         }
     }

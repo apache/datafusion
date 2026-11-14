@@ -130,7 +130,7 @@ struct Args {
 
     #[clap(
         long,
-        help = "The maximum width of tables and explain plans (auto, 1..65535, inf)",
+        help = "The maximum width of tables and explain plans (auto, 1..65535, 0 or inf for no limit)",
         default_value = "auto"
     )]
     maxwidth: MaxWidth,

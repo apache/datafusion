@@ -38,7 +38,7 @@ Options:
           The max number of rows to display for 'Table' format
           [possible values: numbers(0/10/...), inf(no limit)] [default: 40]
       --maxwidth <MAXWIDTH>
-          The maximum width of tables and explain plans (auto, 1..65535, inf) [default: auto]
+          The maximum width of tables and explain plans (auto, 1..65535, 0 or inf for no limit) [default: auto]
       --color
           Enables console syntax highlighting
   -d, --disk-limit <DISK_LIMIT>
@@ -54,36 +54,11 @@ Options:
 
 ## Output width
 
-The default `--maxwidth auto` uses the current width of the output terminal for
-each query. Tables wrap their cells to fit. If there are too many columns to fit
-side by side, rows are displayed as column/value tables.
-Text explain plans preserve the indentation of each plan node and indent wrapped
-continuation lines by four additional spaces. Explain tables group stages under
-`logical plan` and `physical plan` rows, with an empty cell on the right. The
-`stage` column shows short labels such as `initial`, the rule name, `analyzed`,
-and `final`. Without a width limit, explain tables are printed without wrapping.
+`--maxwidth auto` (default) fits tables and explain plans to the terminal width.
+Use `--maxwidth 100` for a fixed width, or `--maxwidth 0` / `--maxwidth inf` for
+no limit. Change it in the CLI with `\pset maxwidth <value>`.
 
-With a width limit, tree explain plans use the available width as their rendering
-limit and are printed without an outer table. Tree nodes retain their fixed width of 29
-characters, so narrower terminals cannot fit a complete node.
-
-Use `--maxwidth 100` to set a fixed width, or `--maxwidth inf` to disable the width
-limit. These options apply to table output, including the default `automatic`
-format; CSV, TSV, and JSON output retain their original values. When stdout is
-not a terminal or its width cannot be determined, `auto` leaves output width
-unrestricted and keeps the configured
-`datafusion.explain.tree_maximum_render_width`.
-An explicit CLI width overrides that setting for tree rendering.
-
-The width can also be changed inside the CLI, or in `~/.datafusionrc`:
-
-```text
-\pset maxwidth auto
-\pset maxwidth 100
-\pset maxwidth inf
-```
-
-Run `\pset maxwidth` to display the current setting.
+With `auto`, redirected output is unlimited. CSV, TSV, and JSON output is unchanged.
 
 ## Commands
 
