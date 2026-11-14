@@ -16,10 +16,8 @@ const CI_COMMAND: &str = "cargo xtask ci step";
 const CI_SHORTCUT: &str = "cargo ci-step";
 const TPCH_DATA_DIR: &str = "datafusion/sqllogictest/test_files/tpch/data";
 /// Physical-plan fuzzers awaiting migration to the centralized driver.
-const LEGACY_FUZZ_TESTS: &[&str] = &[
-    "joins::hash_join::partitioned_hash_eval::tests::routed_lookup_fuzz",
-    "joins::key_range_bitmap::tests::union_fuzz",
-];
+const LEGACY_FUZZ_TESTS: &[&str] =
+    &["joins::hash_join::partitioned_hash_eval::tests::routed_lookup_fuzz"];
 
 /// Metadata and implementation for one CI step.
 ///
@@ -498,8 +496,7 @@ impl StepContext {
                     ])
                     .args(LEGACY_FUZZ_TESTS)
                     .env("RUST_BACKTRACE", "1")
-                    .env("DATAFUSION_ROUTED_LOOKUP_FUZZ_ITERATIONS", "10000")
-                    .env("DATAFUSION_KEY_RANGE_UNION_FUZZ_ITERATIONS", "10000");
+                    .env("DATAFUSION_ROUTED_LOOKUP_FUZZ_ITERATIONS", "10000");
             }
             "hash-collisions" => {
                 cmd_builder.doc(
@@ -990,14 +987,13 @@ cargo test \
 # Run unmigrated physical-plan fuzz tests with more iterations.
 
 cd /workspace && \
-DATAFUSION_KEY_RANGE_UNION_FUZZ_ITERATIONS=10000 \
 DATAFUSION_ROUTED_LOOKUP_FUZZ_ITERATIONS=10000 \
 RUST_BACKTRACE=1 \
 cargo test \
 --profile ci \
 -p datafusion-physical-plan \
 --lib \
--- --exact joins::hash_join::partitioned_hash_eval::tests::routed_lookup_fuzz joins::key_range_bitmap::tests::union_fuzz
+-- --exact joins::hash_join::partitioned_hash_eval::tests::routed_lookup_fuzz
 ")
                 },
             },

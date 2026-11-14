@@ -493,6 +493,8 @@ message CsvOptions {
   bytes ignore_leading_whitespace = 21;
   // Whether to ignore trailing whitespace in string values
   bytes ignore_trailing_whitespace = 22;
+  // Whether to map file columns to the table schema by header name
+  bytes match_columns_by_header = 23;
 }
 
 // Options controlling CSV format

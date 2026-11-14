@@ -4,6 +4,7 @@
 
 //! Test for CSV schema inference with different column counts (GitHub issue #17516)
 
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::test_util::batches_to_sort_string;
@@ -105,5 +106,42 @@ async fn test_csv_schema_inference_different_column_counts() -> Result<()> {
     +------------+------------+-----------+----------------------+-----------------------+----------------------+
     ");
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_csv_read_options_match_columns_by_header() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    fs::write(temp_dir.path().join("full.csv"), "a,b,c\n1,x,10\n")?;
+    fs::write(
+        temp_dir.path().join("reordered.csv"),
+        "c,extra,a\n20,ignored,2\n",
+    )?;
+
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Utf8, true),
+        Field::new("c", DataType::Int32, true),
+    ]);
+    let ctx = SessionContext::new();
+    let batches = ctx
+        .read_csv(
+            temp_dir.path().to_str().unwrap(),
+            CsvReadOptions::new()
+                .schema(&schema)
+                .match_columns_by_header(true),
+        )
+        .await?
+        .collect()
+        .await?;
+
+    assert_snapshot!(batches_to_sort_string(&batches), @r"
+    +---+---+----+
+    | a | b | c  |
+    +---+---+----+
+    | 1 | x | 10 |
+    | 2 |   | 20 |
+    +---+---+----+
+    ");
     Ok(())
 }

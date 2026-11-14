@@ -41,7 +41,6 @@ members = [
     "datafusion/proto-models",
     "datafusion/proto-models/gen",
     "datafusion/session",
-    "datafusion/spark",
     "datafusion/sql",
     "datafusion/sqllogictest",
     "datafusion/substrait",
@@ -146,7 +145,6 @@ datafusion-proto-common = { path = "datafusion/proto-common", version = "57.0.0-
 datafusion-proto-models = { path = "datafusion/proto-models", version = "57.0.0-dev" }
 datafusion-pruning = { path = "datafusion/pruning", version = "57.0.0-dev" }
 datafusion-session = { path = "datafusion/session", version = "57.0.0-dev" }
-datafusion-spark = { path = "datafusion/spark", version = "57.0.0-dev" }
 datafusion-sql = { path = "datafusion/sql", version = "57.0.0-dev" }
 datafusion-substrait = { path = "datafusion/substrait", version = "57.0.0-dev" }
 

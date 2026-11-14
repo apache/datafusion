@@ -1,0 +1,185 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Grouped first_value / last_value take a typed accumulator for a single
+# primitive ORDER BY column, and the generic one for more columns. Each query
+# checks that `ORDER BY k` returns the same rows as `ORDER BY k, u`: `u` is
+# unique and no group has two rows with the same `k`, so `u` never decides.
+
+# Small batches spread each group over several batches and partitions
+statement ok
+set datafusion.execution.batch_size = 16;
+
+# Group `g` has 1 + g % 8 rows. Its j-th row has `p = j * 3 % 8`, unique in
+# the group, and every key `k_*` increases with `p`. In every third group, `p`
+# and the keys are NULL in the first row. Values are NULL in every fifth row.
+# Groups 0 to 210 arrive interleaved, the others one after another.
+statement ok
+CREATE TABLE src AS
+SELECT
+  g, u, p,
+  arrow_cast(p * 30 - 100, 'Int8') AS k_i8,
+  arrow_cast(p, 'UInt64') * arrow_cast(2600000000000000000, 'UInt64') AS k_u64,
+  arrow_cast(f, 'Float16') AS k_f16,
+  f AS k_f64,
+  arrow_cast(p * 25 - 87, 'Decimal128(10, 2)') AS k_dec128,
+  arrow_cast(p * 25 - 87, 'Decimal256(40, 2)') AS k_dec256,
+  arrow_cast(p * 1000000000000 - 3000000000000, 'Timestamp(Nanosecond, Some("+05:00"))') AS k_ts,
+  arrow_cast(arrow_cast(p - 3, 'Utf8') || ' days', 'Interval(MonthDayNano)') AS k_interval,
+  CASE WHEN u % 5 = 2 THEN NULL ELSE u END AS v_i64,
+  CASE WHEN u % 5 = 2 THEN NULL ELSE 'v' || u END AS v_str,
+  CASE WHEN u % 5 = 2 THEN NULL ELSE named_struct('u', u) END AS v_struct
+FROM (
+  SELECT g, u, p,
+    CASE p
+      WHEN 0 THEN -CAST('NaN' AS DOUBLE)
+      WHEN 1 THEN -CAST('inf' AS DOUBLE)
+      WHEN 2 THEN -1.5
+      WHEN 3 THEN -0.0
+      WHEN 4 THEN 0.0
+      WHEN 5 THEN 1.5
+      WHEN 6 THEN CAST('inf' AS DOUBLE)
+      WHEN 7 THEN CAST('NaN' AS DOUBLE)
+    END AS f
+  FROM (
+    SELECT g, u, CASE WHEN j = 0 AND g % 3 = 1 THEN NULL ELSE j * 3 % 8 END AS p
+    FROM (
+      SELECT value AS u,
+        CASE WHEN value < 1688 THEN value % 211 ELSE 211 + (value - 1688) / 8 END AS g,
+        CASE WHEN value < 1688 THEN value / 211 ELSE (value - 1688) % 8 END AS j
+      FROM range(3376)
+    )
+    WHERE j <= g % 8
+  )
+);
+
+query III
+SELECT count(*), count(DISTINCT g), count(p) FROM src;
+----
+1893 422 1752
+
+# Group 215 has the floats -NaN, -inf, -1.5, -0.0, 0.0, 1.5, inf and NaN, in
+# that order. Group 7 has a NULL key, which sorts last.
+query IIIII
+SELECT g, first_value(p ORDER BY k_f64), last_value(p ORDER BY k_f64),
+  first_value(p ORDER BY k_f64) FILTER (WHERE p >= 3),
+  last_value(p ORDER BY k_f64) FILTER (WHERE p <= 4)
+FROM src WHERE g IN (7, 215) GROUP BY g ORDER BY g;
+----
+7 1 NULL 3 4
+215 0 7 3 4
+
+# Key types with their own comparison or data type
+query I
+SELECT count(*) FROM (
+  SELECT g,
+    first_value(u ORDER BY k_i8), last_value(u ORDER BY k_i8),
+    first_value(u ORDER BY k_u64), last_value(u ORDER BY k_u64),
+    first_value(u ORDER BY k_f16), last_value(u ORDER BY k_f16),
+    first_value(u ORDER BY k_f64), last_value(u ORDER BY k_f64),
+    first_value(u ORDER BY k_dec128), last_value(u ORDER BY k_dec128),
+    first_value(u ORDER BY k_dec256), last_value(u ORDER BY k_dec256),
+    first_value(u ORDER BY k_ts), last_value(u ORDER BY k_ts),
+    first_value(u ORDER BY k_interval), last_value(u ORDER BY k_interval)
+  FROM src GROUP BY g
+  EXCEPT
+  SELECT g,
+    first_value(u ORDER BY k_i8, u), last_value(u ORDER BY k_i8, u),
+    first_value(u ORDER BY k_u64, u), last_value(u ORDER BY k_u64, u),
+    first_value(u ORDER BY k_f16, u), last_value(u ORDER BY k_f16, u),
+    first_value(u ORDER BY k_f64, u), last_value(u ORDER BY k_f64, u),
+    first_value(u ORDER BY k_dec128, u), last_value(u ORDER BY k_dec128, u),
+    first_value(u ORDER BY k_dec256, u), last_value(u ORDER BY k_dec256, u),
+    first_value(u ORDER BY k_ts, u), last_value(u ORDER BY k_ts, u),
+    first_value(u ORDER BY k_interval, u), last_value(u ORDER BY k_interval, u)
+  FROM src GROUP BY g
+);
+----
+0
+
+# Every ASC / DESC and NULLS FIRST / LAST combination
+query I
+SELECT count(*) FROM (
+  SELECT g,
+    first_value(u ORDER BY k_f64 ASC NULLS FIRST),
+    first_value(u ORDER BY k_f64 ASC NULLS LAST),
+    first_value(u ORDER BY k_f64 DESC NULLS FIRST),
+    first_value(u ORDER BY k_f64 DESC NULLS LAST),
+    last_value(u ORDER BY k_f64 ASC NULLS FIRST),
+    last_value(u ORDER BY k_f64 ASC NULLS LAST),
+    last_value(u ORDER BY k_f64 DESC NULLS FIRST),
+    last_value(u ORDER BY k_f64 DESC NULLS LAST)
+  FROM src GROUP BY g
+  EXCEPT
+  SELECT g,
+    first_value(u ORDER BY k_f64 ASC NULLS FIRST, u),
+    first_value(u ORDER BY k_f64 ASC NULLS LAST, u),
+    first_value(u ORDER BY k_f64 DESC NULLS FIRST, u),
+    first_value(u ORDER BY k_f64 DESC NULLS LAST, u),
+    last_value(u ORDER BY k_f64 ASC NULLS FIRST, u),
+    last_value(u ORDER BY k_f64 ASC NULLS LAST, u),
+    last_value(u ORDER BY k_f64 DESC NULLS FIRST, u),
+    last_value(u ORDER BY k_f64 DESC NULLS LAST, u)
+  FROM src GROUP BY g
+);
+----
+0
+
+# Primitive, string and struct values, with NULL values, IGNORE NULLS and a
+# FILTER that is NULL for some rows
+statement ok
+CREATE VIEW value_diff AS
+SELECT count(*) AS mismatches FROM (
+  SELECT g,
+    first_value(v_i64 ORDER BY k_i8), last_value(v_i64 ORDER BY k_i8) IGNORE NULLS,
+    first_value(v_str ORDER BY k_i8 DESC) IGNORE NULLS, last_value(v_str ORDER BY k_i8),
+    first_value(v_struct ORDER BY k_i8) IGNORE NULLS,
+    last_value(v_struct ORDER BY k_i8 NULLS FIRST),
+    first_value(v_i64 ORDER BY k_i8) FILTER (WHERE nullif(u % 7, 3) > 1),
+    last_value(v_str ORDER BY k_i8) FILTER (WHERE nullif(u % 7, 3) > 1),
+    first_value(v_struct ORDER BY k_i8 DESC) FILTER (WHERE nullif(u % 7, 3) > 1)
+  FROM src GROUP BY g
+  EXCEPT
+  SELECT g,
+    first_value(v_i64 ORDER BY k_i8, u), last_value(v_i64 ORDER BY k_i8, u) IGNORE NULLS,
+    first_value(v_str ORDER BY k_i8 DESC, u) IGNORE NULLS, last_value(v_str ORDER BY k_i8, u),
+    first_value(v_struct ORDER BY k_i8, u) IGNORE NULLS,
+    last_value(v_struct ORDER BY k_i8 NULLS FIRST, u),
+    first_value(v_i64 ORDER BY k_i8, u) FILTER (WHERE nullif(u % 7, 3) > 1),
+    last_value(v_str ORDER BY k_i8, u) FILTER (WHERE nullif(u % 7, 3) > 1),
+    first_value(v_struct ORDER BY k_i8 DESC, u) FILTER (WHERE nullif(u % 7, 3) > 1)
+  FROM src GROUP BY g
+);
+
+query I
+SELECT mismatches FROM value_diff;
+----
+0
+
+# Again with partial aggregation skipped, which merges `convert_to_state` rows
+statement ok
+set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0;
+
+statement ok
+set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
+
+query I
+SELECT mismatches FROM value_diff;
+----
+0
+
+statement ok
+reset datafusion.execution.skip_partial_aggregation_probe_ratio_threshold;
+
+statement ok
+reset datafusion.execution.skip_partial_aggregation_probe_rows_threshold;
+
+statement ok
+reset datafusion.execution.batch_size;
+
+statement ok
+DROP VIEW value_diff;
+
+statement ok
+DROP TABLE src;

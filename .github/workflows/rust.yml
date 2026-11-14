@@ -385,39 +385,6 @@ jobs:
       - name: Check datafusion-functions (unicode_expressions)
         run: cargo xtask ci step check datafusion-functions unicode_expressions
 
-  # Check datafusion-spark crate features
-  #
-  # Ensure via `cargo check` that the crate can be built with a
-  # subset of the features packages enabled.
-  # See https://github.com/apache/datafusion/issues/24474
-  linux-cargo-check-datafusion-spark:
-    name: cargo check datafusion-spark features
-    needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
-        with:
-          save-if: false # The workspace and functions checks save this cache on main.
-          shared-key: "amd-ci-check"
-      - name: Check datafusion-spark (default features)
-        run: cargo xtask ci step check datafusion-spark default
-      #
-      # Note: Only check libraries (not --all-targets) to cover end user APIs
-      #
-      - name: Check datafusion-spark (no-default-features)
-        run: cargo xtask ci step check datafusion-spark no-default
-      - name: Check datafusion-spark (core)
-        run: cargo xtask ci step check datafusion-spark core
-
   # Library and integration tests
   linux-test:
     name: cargo test (amd64)
