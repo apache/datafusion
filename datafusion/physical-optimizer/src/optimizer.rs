@@ -15,6 +15,7 @@ use crate::eliminate_constant_join::EliminateConstantJoin;
 use crate::ensure_coop::EnsureCooperative;
 use crate::ensure_requirements::EnsureRequirements;
 use crate::filter_pushdown::FilterPushdown;
+use crate::join_enumeration::JoinEnumeration;
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
@@ -183,6 +184,7 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 /// | `OutputRequirements`           | [`OutputRequirements`]           | Adds helper nodes so output requirements survive later rewrites (add mode).                   |
 /// | `aggregate_statistics`         | [`AggregateStatistics`]          | Answers some aggregates from exact statistics without scanning data.                          |
 /// | `EliminateConstantJoin`        | [`EliminateConstantJoin`]        | Replaces inner joins against a single row of literals with a filter.                          |
+/// | `join_enumeration`             | [`JoinEnumeration`]              | Chooses the join tree shape by costing alternative orders from statistics.                    |
 /// | `join_selection`               | [`JoinSelection`]                | Chooses the join implementation, build side, and partition mode.                              |
 /// | `LimitedDistinctAggregation`   | [`LimitedDistinctAggregation`]   | Pushes limit hints into grouped distinct-style aggregations.                                  |
 /// | `FilterPushdown`               | [`FilterPushdown`]               | Pushes static filters toward data sources (pre-optimization phase).                           |
@@ -231,6 +233,9 @@ impl PhysicalOptimizer {
             // row of literals, and before EnsureRequirements, so that the filter
             // replacing a join against such a row keeps the other input's ordering.
             Arc::new(EliminateConstantJoin::new()),
+            // Must run before JoinSelection, which decides each join's build side and
+            // partition mode.
+            Arc::new(JoinEnumeration::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will influence the
             // EnsureRequirements rule as it decides whether to add additional repartitioning and
