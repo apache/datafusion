@@ -506,14 +506,11 @@ SELECT x.a, x.d, (SELECT count(*) FROM (VALUES (1)) AS y(c) WHERE y.c = x.d HAVI
 
 # https://github.com/apache/datafusion/issues/26505
 # correlated_sum_with_having_true_for_empty_input
-# Wrong today. Expected (DuckDB):
+# Fails today. Expected (DuckDB):
 # 1 NULL
 # 2 NULL
-query II
+query error Physical plan does not support logical expression ScalarSubquery
 SELECT x.a, (SELECT sum(y.b) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING sum(y.b) IS NULL) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
-----
-1 10
-2 NULL
 
 # https://github.com/apache/datafusion/issues/26508
 # aggregate_over_correlated_groupless_aggregate
