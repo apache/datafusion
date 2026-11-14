@@ -1500,7 +1500,7 @@ impl CaseExpr {
     }
 }
 
-/// Uses three-valued bounds when input columns prevent constant evaluation.
+/// Uses three-valued bounds when the predicate does not evaluate to a constant.
 fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<NullableInterval> {
     // Create a dummy record with no columns and one row
     let batch = RecordBatch::try_new_with_options(
@@ -1509,9 +1509,14 @@ fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<NullableInter
         &RecordBatchOptions::new().with_row_count(Some(1)),
     )?;
 
+    // Only a deterministic expression over literals has a value without input rows
+    let constant = !predicate.exists(|e| {
+        Ok(e.is_volatile_node() || (e.children().is_empty() && !e.is::<Literal>()))
+    })?;
+
     // Evaluate the predicate and interpret the result as a boolean
-    let result = match predicate.evaluate(&batch) {
-        Err(_) => {
+    let result = match constant.then(|| predicate.evaluate(&batch)) {
+        None | Some(Err(_)) => {
             if let Some(expr) = predicate.downcast_ref::<BinaryExpr>()
                 && matches!(expr.op(), Operator::And | Operator::Or)
             {
@@ -1523,10 +1528,10 @@ fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<NullableInter
             }
             return Ok(NullableInterval::ANY_TRUTH_VALUE);
         }
-        Ok(ColumnarValue::Array(array)) => {
+        Some(Ok(ColumnarValue::Array(array))) => {
             ScalarValue::try_from_array(array.as_ref(), 0)?
         }
-        Ok(ColumnarValue::Scalar(scalar)) => scalar,
+        Some(Ok(ColumnarValue::Scalar(scalar))) => scalar,
     };
     Ok(result.cast_to(&DataType::Boolean)?.into())
 }
@@ -2920,6 +2925,22 @@ mod tests {
             .expect_err("invalid predicates must fail nullability inference");
         assert!(error.to_string().contains("invalid"), "{error}");
         assert!(expr.evaluate(&batch).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_case_expression_nullability_with_non_literal_leaf() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let pi: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            datafusion_functions::math::pi(),
+            vec![],
+            &schema,
+            Arc::new(ConfigOptions::default()),
+        )?);
+        let when = binary(pi, Operator::Gt, lit(4.0f64), &schema)?;
+        let expr =
+            when_then_else(&when, &lit(ScalarValue::Int32(None)), &col("a", &schema)?)?;
+        assert_nullable(expr, &schema);
         Ok(())
     }
 
