@@ -375,6 +375,60 @@ physical_plan
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 06)----------StreamingTableExec: partition_sizes=1, projection=[a, b, c], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
 
+# A partitioned mark join on a struct field, under an aggregate grouped by the
+# same field. The join output is already hash partitioned on the field, so the
+# aggregate needs no repartition. Projection pushdown then moves the field
+# access into the scan and drops the join key from the join output. The join
+# must still know its partitioning through the equivalent field access, or the
+# plan fails the sanity check.
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 0;
+
+statement ok
+COPY (SELECT named_struct('k', 'a') AS s)
+TO 'test_files/scratch/equivalence_properties/mark_join/1.parquet';
+
+statement ok
+COPY (SELECT named_struct('k', 'b') AS s)
+TO 'test_files/scratch/equivalence_properties/mark_join/2.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE mark_join STORED AS PARQUET
+LOCATION 'test_files/scratch/equivalence_properties/mark_join/';
+
+query T rowsort
+SELECT s['k'] FROM mark_join
+WHERE s['k'] = 'a' OR s['k'] IN (SELECT s['k'] FROM mark_join)
+GROUP BY 1;
+----
+a
+b
+
+query TT
+EXPLAIN SELECT s['k'] FROM mark_join
+WHERE s['k'] = 'a' OR s['k'] IN (SELECT s['k'] FROM mark_join)
+GROUP BY 1;
+----
+physical_plan
+01)ProjectionExec: expr=[__datafusion_extracted_2@0 as mark_join.s[k]]
+02)--AggregateExec: mode=SinglePartitioned, gby=[__datafusion_extracted_2@0 as __datafusion_extracted_2], aggr=[]
+03)----FilterExec: __datafusion_extracted_3@1 = a OR mark@0, projection=[__datafusion_extracted_2@2]
+04)------ProjectionExec: expr=[mark@0 as mark, get_field(s@1, k) as __datafusion_extracted_3, get_field(s@1, k) as __datafusion_extracted_2]
+05)--------HashJoinExec: mode=Partitioned, join_type=LeftMark, on=[(__datafusion_extracted_4@0, mark_join.s[k]@0)], projection=[mark@2, s@1]
+06)----------RepartitionExec: partitioning=Hash([__datafusion_extracted_4@0], 2), input_partitions=2
+07)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/mark_join/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/mark_join/2.parquet]]}, projection=[get_field(s@0, k) as __datafusion_extracted_4, s], file_type=parquet
+08)----------RepartitionExec: partitioning=Hash([mark_join.s[k]@0], 2), input_partitions=2
+09)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/mark_join/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/mark_join/2.parquet]]}, projection=[get_field(s@0, k) as mark_join.s[k]], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+statement ok
+DROP TABLE mark_join;
+
+statement ok
+RESET datafusion.optimizer.hash_join_single_partition_threshold_rows;
+
 statement ok
 set datafusion.execution.target_partitions = 4;
 
