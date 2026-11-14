@@ -228,7 +228,7 @@ fn benchmark_expression_layer(c: &mut Criterion) {
             "encode",
             datafusion_functions::encoding::encode(),
             true,
-            false,
+            true,
         ),
         (
             "reverse",

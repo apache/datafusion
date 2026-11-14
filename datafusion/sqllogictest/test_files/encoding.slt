@@ -95,6 +95,18 @@ SELECT encode(bin_field, 'hex') FROM test ORDER BY num;
 NULL
 8f50d3f60eae370ddbf85c86219c55108a350165
 
+# Dictionary inputs are transformed once per value and retain their keys.
+query TT rowsort
+SELECT
+  encode(arrow_cast(bin_field, 'Dictionary(Int8, Binary)'), 'hex'),
+  arrow_typeof(encode(arrow_cast(bin_field, 'Dictionary(Int8, Binary)'), 'hex'))
+FROM test;
+----
+616263 Dictionary(Int8, Utf8)
+7177657177 Dictionary(Int8, Utf8)
+8f50d3f60eae370ddbf85c86219c55108a350165 Dictionary(Int8, Utf8)
+NULL Dictionary(Int8, Utf8)
+
 query TTTTTT
 SELECT
   arrow_cast(decode(arrow_cast(base64_field, 'Utf8'), 'base64'), 'Utf8'),

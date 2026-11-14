@@ -4,6 +4,7 @@
 
 //! Encoding expressions
 
+use crate::utils::transform_leaf_type_preserving_encoding;
 use arrow::{
     array::{
         Array, ArrayRef, AsArray, BinaryArrayType, GenericBinaryArray,
@@ -22,12 +23,12 @@ use datafusion_common::{
     types::{NativeType, logical_string},
     utils::{
         hex::{HexCase, encode_bytes, encode_bytes_to_slice},
-        offset_span_len, take_function_args,
+        map_dictionary_values, offset_span_len, take_function_args,
     },
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::fmt;
@@ -81,7 +82,8 @@ impl EncodeFunc {
                         TypeSignatureClass::Binary,
                         vec![TypeSignatureClass::Native(logical_string())],
                         NativeType::Binary,
-                    ),
+                    )
+                    .with_encoding_preservation(EncodingPreservation::dictionary()),
                     Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
                 ],
                 Volatility::Immutable,
@@ -100,10 +102,12 @@ impl ScalarUDFImpl for EncodeFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::LargeBinary => Ok(DataType::LargeUtf8),
-            _ => Ok(DataType::Utf8),
-        }
+        transform_leaf_type_preserving_encoding(&arg_types[0], &|data_type| {
+            Ok(match data_type {
+                DataType::LargeBinary => DataType::LargeUtf8,
+                _ => DataType::Utf8,
+            })
+        })
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -198,6 +202,15 @@ impl ScalarUDFImpl for DecodeFunc {
 
 fn encode_scalar(value: &ScalarValue, encoding: Encoding) -> Result<ColumnarValue> {
     match value {
+        ScalarValue::Dictionary(key_type, value) => {
+            let ColumnarValue::Scalar(encoded) = encode_scalar(value, encoding)? else {
+                unreachable!("encoding a scalar returns a scalar")
+            };
+            Ok(ColumnarValue::Scalar(ScalarValue::Dictionary(
+                key_type.clone(),
+                Box::new(encoded),
+            )))
+        }
         ScalarValue::Binary(maybe_bytes)
         | ScalarValue::BinaryView(maybe_bytes)
         | ScalarValue::FixedSizeBinary(_, maybe_bytes) => {
@@ -219,6 +232,12 @@ fn encode_scalar(value: &ScalarValue, encoding: Encoding) -> Result<ColumnarValu
 }
 
 fn encode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
+    if matches!(array.data_type(), DataType::Dictionary(_, _)) {
+        let encoded = map_dictionary_values(array, |values| {
+            encode_array(values, encoding)?.into_array(values.len())
+        })?;
+        return Ok(ColumnarValue::Array(encoded));
+    }
     let array = match array.data_type() {
         DataType::Binary => encoding.encode_array::<_, i32>(&array.as_binary::<i32>()),
         DataType::BinaryView => encoding.encode_array::<_, i32>(&array.as_binary_view()),
@@ -509,7 +528,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{ArrayBuilder, BinaryArray, BinaryViewBuilder};
+    use arrow::array::{
+        ArrayBuilder, BinaryArray, BinaryViewBuilder, DictionaryArray, Int8Array,
+        StringArray,
+    };
+    use arrow::datatypes::Int8Type;
     use arrow_buffer::OffsetBuffer;
 
     use super::*;
@@ -543,5 +566,84 @@ mod tests {
         }
         let arr = ArrayBuilder::finish(&mut builder);
         decode_array(&arr, Encoding::Base64).unwrap();
+    }
+
+    #[test]
+    fn encode_dictionary_values_once() -> Result<()> {
+        let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(0)]);
+        let values: ArrayRef = Arc::new(BinaryArray::from(vec![
+            Some(b"abc".as_slice()),
+            Some(b"xy".as_slice()),
+        ]));
+        let input: ArrayRef =
+            Arc::new(DictionaryArray::<Int8Type>::try_new(keys.clone(), values)?);
+
+        let ColumnarValue::Array(output) = encode_array(&input, Encoding::Hex)? else {
+            unreachable!("encoding an array returns an array")
+        };
+        let output = output
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .unwrap();
+        assert_eq!(output.keys(), &keys);
+        assert_eq!(
+            output.values().as_string::<i32>(),
+            &StringArray::from(vec![Some("616263"), Some("7879")])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn encode_dictionary_scalar_preserves_key_type() -> Result<()> {
+        let input = ScalarValue::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(ScalarValue::Binary(Some(b"abc".to_vec()))),
+        );
+        let ColumnarValue::Scalar(output) = encode_scalar(&input, Encoding::Hex)? else {
+            unreachable!("encoding a scalar returns a scalar")
+        };
+        assert_eq!(
+            output,
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(ScalarValue::Utf8(Some("616263".to_string())))
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn encode_compacts_oversized_dictionary() -> Result<()> {
+        let values: ArrayRef = Arc::new(BinaryArray::from_iter_values(
+            (0..100).map(|i| format!("{i:08x}")),
+        ));
+        let input: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![42]),
+            values,
+        )?);
+
+        let ColumnarValue::Array(output) = encode_array(&input, Encoding::Hex)? else {
+            unreachable!("encoding an array returns an array")
+        };
+        let output = output
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .unwrap();
+        assert_eq!(output.values().len(), 1);
+        assert_eq!(output.keys().value(0), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn encode_dictionary_return_type_preserves_keys() -> Result<()> {
+        let input = DataType::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(DataType::LargeBinary),
+        );
+        assert_eq!(
+            EncodeFunc::new().return_type(&[input])?,
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::LargeUtf8))
+        );
+        Ok(())
     }
 }
