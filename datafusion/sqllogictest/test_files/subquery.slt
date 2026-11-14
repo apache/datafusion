@@ -4833,6 +4833,26 @@ SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
 ----
 1
 
+# A column literally named `k:1` after two `k` columns: the alias renames the
+# second `k` to `k:1`, so it renames this column too.
+statement ok
+CREATE TABLE c26234("k:1" INT) AS VALUES (1), (2);
+
+statement error Unsupported correlated subquery: correlated column c.k:1 has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT * FROM t26234 one, t26234 two, c26234 c
+    WHERE c."k:1" = t_outer.k AND two.k = 1
+);
+
+statement error Unsupported correlated subquery: correlated column c.k:1 has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE NOT EXISTS (
+    SELECT * FROM t26234 one, t26234 two, c26234 c
+    WHERE c."k:1" = t_outer.k AND two.k = 1
+);
+
+statement ok
+DROP TABLE c26234;
+
 statement ok
 DROP TABLE t26234;
 

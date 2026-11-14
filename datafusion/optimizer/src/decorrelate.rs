@@ -22,6 +22,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
+use datafusion_expr::logical_plan::builder::unique_field_aliases;
 use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{collect_subquery_cols, conjunction, split_conjunction};
@@ -1226,11 +1227,11 @@ pub(crate) fn find_join_exprs(exprs: Vec<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
     (joins, others)
 }
 
-/// Returns an error if `col` is not the first field of `schema` with its name.
+/// Returns an error if `col` would be renamed when `schema` is wrapped in a `SubqueryAlias`.
 ///
-/// Wrapping `schema` in a `SubqueryAlias` keeps the first field with a given
-/// name and renames later ones (`k:1`, ...), so qualifying `col` as
-/// `<alias>.<name>` refers to `col` only when it is that first field.
+/// Wrapping `schema` in a `SubqueryAlias` renames fields that collide with
+/// earlier field names or aliases (`k:1`, ...), so qualifying `col` as
+/// `<alias>.<name>` refers to `col` only when its original name is preserved.
 /// See <https://github.com/apache/datafusion/issues/26234>.
 pub(crate) fn check_alias_keeps_column_name(
     schema: &DFSchema,
@@ -1239,8 +1240,7 @@ pub(crate) fn check_alias_keeps_column_name(
     let Some(index) = schema.maybe_index_of_column(col) else {
         return Ok(());
     };
-    let first = schema.fields().iter().position(|f| f.name() == &col.name);
-    if first != Some(index) {
+    if unique_field_aliases(schema.fields())[index].is_some() {
         return plan_err!(
             "Unsupported correlated subquery: correlated column {col} has the same name as an earlier column of the subquery output"
         );
