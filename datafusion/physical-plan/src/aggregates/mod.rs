@@ -3932,7 +3932,7 @@ mod tests {
         // checks each reservation against the fair share on its own, so the two
         // together can exceed the share by what the first one holds (16 bytes
         // here). That is a pool bug, not a spill bug, so the test allows it.
-        const SIBLING_RESERVATION_SLACK: usize = 1024;
+        const SIBLING_RESERVATION_SLACK: usize = 16;
         assert!(pool.peak_reserved() <= MEMORY_LIMIT + SIBLING_RESERVATION_SLACK);
         let metrics = aggregate.metrics().unwrap();
         assert!(metrics.spill_count().unwrap() > 1);

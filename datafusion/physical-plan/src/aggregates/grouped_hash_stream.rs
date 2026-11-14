@@ -26,6 +26,7 @@ use super::order::GroupClustering;
 use super::skip_partial::SkipAggregationProbe;
 use super::spill::{
     bound_spill_batches_by_first_spill, configured_spill_max_batch_bytes,
+    memory_pool_limit,
 };
 use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{
@@ -105,6 +106,9 @@ struct SpillState {
 
     /// Manages the process of spilling and reading back intermediate data
     spill_manager: SpillManager,
+
+    /// The limit of the memory pool, see [`bound_spill_batches_by_first_spill`]
+    memory_limit: Option<usize>,
 
     // ========================================================================
     // STATES:
@@ -576,6 +580,7 @@ impl GroupedHashAggregateStream {
             peak_mem_used: MetricBuilder::new(&agg.metrics)
                 .peak_memory_usage("peak_mem_used", partition),
             spill_manager,
+            memory_limit: memory_pool_limit(context),
         };
 
         // Skip aggregation is supported if:
@@ -1258,6 +1263,7 @@ impl GroupedHashAggregateStream {
             self.spill_state.spill_manager = bound_spill_batches_by_first_spill(
                 &self.spill_state.spill_manager,
                 &emit,
+                self.spill_state.memory_limit,
             )?;
         }
         let sorted_iter = IncrementalSortIterator::new(

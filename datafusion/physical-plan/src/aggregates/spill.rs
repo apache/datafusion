@@ -10,7 +10,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_execution::memory_pool::{MemoryLimit, MemoryReservation};
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -226,8 +226,11 @@ impl AggregateSpill {
             return Ok(());
         };
         if self.spills.is_empty() {
-            self.spill_manager =
-                bound_spill_batches_by_first_spill(&self.spill_manager, &state_batch)?;
+            self.spill_manager = bound_spill_batches_by_first_spill(
+                &self.spill_manager,
+                &state_batch,
+                memory_pool_limit(&self.context),
+            )?;
         }
 
         let sorted_iter = IncrementalSortIterator::new(
@@ -357,20 +360,42 @@ pub(super) fn configured_spill_max_batch_bytes(context: &TaskContext) -> usize {
     SPILL_BATCH_TARGET_BYTES.min(spill_max_batch_bytes(reservation))
 }
 
+/// The memory limit of the pool of `context`, if it has one. See
+/// [`bound_spill_batches_by_first_spill`].
+pub(super) fn memory_pool_limit(context: &TaskContext) -> Option<usize> {
+    match context.memory_pool().memory_limit() {
+        MemoryLimit::Finite(limit) => Some(limit),
+        MemoryLimit::Infinite | MemoryLimit::Unknown => None,
+    }
+}
+
 /// Lowers the bound on the batches of an aggregate's sorted spill runs (see
 /// [`SpillManager::with_max_batch_bytes`]) to fit the state of its first spill.
 ///
 /// Unlike the sort, the merge of an aggregate's runs holds no workspace of its
 /// own. The batches are bounded so that the smallest merge, plus as much again
-/// for the replay, fits in what the aggregate held when memory first ran out.
+/// for the replay, fits in half of what the aggregate held when memory first ran
+/// out. The other half is slack for the replay's group table, and lets a merge
+/// read more than the smallest number of runs at once.
+///
+/// The aggregate checks its memory after it aggregates an input batch, so the first
+/// spill holds at least one input batch of state, which can be larger than the pool.
+/// What it held is therefore capped by `memory_limit`, the limit of the pool.
 /// Later spills, such as the remainder spilled at the end of the input, can
 /// hold much less, so they do not lower the bound.
+///
+/// The partitions of a query share the pool, and each derives its bound from its own
+/// first spill. Their bounds together can exceed the pool.
 pub(super) fn bound_spill_batches_by_first_spill(
     spill_manager: &SpillManager,
     first_spill: &RecordBatch,
+    memory_limit: Option<usize>,
 ) -> Result<SpillManager> {
-    let held = first_spill.get_sliced_size()?;
-    let bound = spill_max_batch_bytes(held / 2)
+    let held = first_spill
+        .get_sliced_size()?
+        .min(memory_limit.unwrap_or(usize::MAX));
+    // `spill_max_batch_bytes(h)` fits the smallest merge in `h`.
+    let bound = spill_max_batch_bytes(held / 4)
         .min(spill_manager.max_batch_bytes().unwrap_or(usize::MAX));
     Ok(spill_manager.clone().with_max_batch_bytes(Some(bound)))
 }
