@@ -247,6 +247,10 @@ fn get_nth_value_doc() -> &'static Documentation {
 }
 
 impl WindowUDFImpl for NthValue {
+    fn is_constant_for_frame(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &str {
         self.kind.name()
     }

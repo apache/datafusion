@@ -326,6 +326,17 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>>;
 
+    /// Whether identical window frames produce identical results within a partition.
+    ///
+    /// Returning `true` lets the optimizer treat the result as constant when the
+    /// frame covers the entire partition. Functions whose results also depend
+    /// on the current row or evaluation state must return `false` (the default).
+    /// This property is inspected during planning without creating a
+    /// [`PartitionEvaluator`].
+    fn is_constant_for_frame(&self) -> bool {
+        false
+    }
+
     /// Returns an optional hook for simplifying this user-defined window
     /// function.
     ///
@@ -523,6 +534,10 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
         self.inner.partition_evaluator(partition_evaluator_args)
+    }
+
+    fn is_constant_for_frame(&self) -> bool {
+        self.inner.is_constant_for_frame()
     }
 
     fn aliases(&self) -> &[String] {

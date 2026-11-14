@@ -389,7 +389,22 @@ pub(crate) fn window_equivalence_properties(
         let window_col = Column::new(expr.name(), i + input_schema_len);
         let frame = expr.get_window_frame();
         if let Some(std_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>() {
-            std_expr.add_equal_orderings(&mut window_eq_properties)?;
+            if frame.is_ever_expanding()
+                && frame.end_bound.is_unbounded()
+                && std_expr
+                    .get_standard_func_expr()
+                    .as_any()
+                    .downcast_ref::<WindowUDFExpr>()
+                    .is_some_and(|expr| expr.fun().inner().is_constant_for_frame())
+            {
+                add_constant_window_orderings(
+                    &mut window_eq_properties,
+                    Arc::new(window_col),
+                    &partition_ordering,
+                )?;
+            } else {
+                std_expr.add_equal_orderings(&mut window_eq_properties)?;
+            }
         } else if let Some(plain_expr) =
             expr.as_any().downcast_ref::<PlainAggregateWindowExpr>()
         {
