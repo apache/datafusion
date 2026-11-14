@@ -4,9 +4,7 @@
 
 //! Stream and channel implementations for window function expressions.
 
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 #[cfg(feature = "proto")]
 use super::proto::{decode_physical_window_expr, encode_physical_window_expr};
@@ -14,7 +12,7 @@ use super::utils::create_schema;
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::statistics::{ChildStats, StatisticsArgs};
-use crate::stream::EmptyRecordBatchStream;
+use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
     window_equivalence_properties,
@@ -22,8 +20,8 @@ use crate::windows::{
 use crate::{
     ChildrenPropertiesMode, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
     ExecutionPlan, ExecutionPlanProperties, InputDistributionRequirements, PhysicalExpr,
-    PlanProperties, RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
-    Statistics, WindowExpr, validate_child_count,
+    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, Statistics,
+    WindowExpr, validate_child_count,
 };
 
 use arrow::array::ArrayRef;
@@ -35,12 +33,12 @@ use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{Result, assert_eq_or_internal_err};
-use datafusion_execution::TaskContext;
+use datafusion_execution::{TaskContext, async_try_stream};
 use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
 };
 
-use futures::{Stream, StreamExt, ready};
+use futures::StreamExt;
 
 /// Window execution plan
 #[derive(Debug, Clone)]
@@ -294,15 +292,18 @@ impl ExecutionPlan for WindowAggExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, context)?;
-        let stream = Box::pin(WindowAggStream::new(
+        let stream = WindowAggStream::new(
             Arc::clone(&self.schema),
             self.window_expr.clone(),
             input,
             BaselineMetrics::new(&self.metrics, partition),
             self.partition_by_sort_keys()?,
             self.ordered_partition_by_indices.clone(),
-        )?);
+            batch_size,
+        )?
+        .into_stream();
         Ok(stream)
     }
 
@@ -490,11 +491,12 @@ pub struct WindowAggStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     batches: Vec<RecordBatch>,
-    finished: bool,
     window_expr: Vec<Arc<dyn WindowExpr>>,
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
     ordered_partition_by_indices: Vec<usize>,
+    /// Maximum number of rows emitted in a single output batch.
+    batch_size: usize,
 }
 
 impl WindowAggStream {
@@ -506,6 +508,7 @@ impl WindowAggStream {
         baseline_metrics: BaselineMetrics,
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
         ordered_partition_by_indices: Vec<usize>,
+        batch_size: usize,
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.
         assert_eq_or_internal_err!(
@@ -517,11 +520,11 @@ impl WindowAggStream {
             schema,
             input,
             batches: vec![],
-            finished: false,
             window_expr,
             baseline_metrics,
             partition_by_sort_keys,
             ordered_partition_by_indices,
+            batch_size,
         })
     }
 
@@ -569,58 +572,30 @@ impl WindowAggStream {
     }
 }
 
-impl Stream for WindowAggStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let poll = self.poll_next_inner(cx);
-        self.baseline_metrics.record_poll(poll)
-    }
-}
-
 impl WindowAggStream {
-    #[inline]
-    fn poll_next_inner(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<RecordBatch>>> {
-        if self.finished {
-            return Poll::Ready(None);
-        }
-
-        loop {
-            return Poll::Ready(Some(match ready!(self.input.poll_next_unpin(cx)) {
-                Some(Ok(batch)) => {
-                    self.batches.push(batch);
-                    continue;
+    fn into_stream(mut self) -> SendableRecordBatchStream {
+        let schema = Arc::clone(&self.schema);
+        let metrics = self.baseline_metrics.clone();
+        let stream = async_try_stream(|mut emitter| async move {
+            while let Some(batch) = self.input.next().await.transpose()? {
+                self.batches.push(batch);
+            }
+            let input_schema = self.input.schema();
+            drop(std::mem::replace(
+                &mut self.input,
+                Box::pin(EmptyRecordBatchStream::new(input_schema)),
+            ));
+            if let Some(output) = self.compute_aggregates()? {
+                debug_assert!(output.num_rows() > 0);
+                for offset in (0..output.num_rows()).step_by(self.batch_size) {
+                    let len = self.batch_size.min(output.num_rows() - offset);
+                    emitter.emit(output.slice(offset, len)).await;
                 }
-                Some(Err(e)) => Err(e),
-                None => {
-                    // Release the input pipeline's resources before computing
-                    // the final aggregates.
-                    let input_schema = self.input.schema();
-                    self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-                    let Some(result) = self.compute_aggregates()? else {
-                        return Poll::Ready(None);
-                    };
-                    self.finished = true;
-                    // Empty record batches should not be emitted.
-                    // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
-                    debug_assert!(result.num_rows() > 0);
-                    Ok(result)
-                }
-            }));
-        }
-    }
-}
-
-impl RecordBatchStream for WindowAggStream {
-    /// Get the schema
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+            }
+            Ok(())
+        });
+        let stream = Box::pin(RecordBatchStreamAdapter::new(schema, stream));
+        Box::pin(ObservedStream::new(stream, metrics, None))
     }
 }
 
@@ -635,6 +610,63 @@ mod tests {
         WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::count::count_udaf;
+
+    #[tokio::test]
+    async fn output_respects_batch_size() -> Result<()> {
+        use crate::collect;
+        use arrow::array::{ArrayRef, AsArray, Int64Array};
+        use datafusion_execution::config::SessionConfig;
+        use datafusion_physical_expr_common::metrics::MetricValue;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let values: ArrayRef = Arc::new(Int64Array::from_iter_values(0..10));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![values])?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let args = vec![crate::expressions::col("a", &schema)?];
+        let window_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count(a)".to_string(),
+            &args,
+            &[],
+            &[],
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+        let window = Arc::new(WindowAggExec::try_new(vec![window_expr], input, true)?);
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(4)),
+        );
+
+        let batches = collect(Arc::clone(&window) as _, context).await?;
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![4, 4, 2]
+        );
+        let combined = concat_batches(&window.schema(), &batches)?;
+        let counts = combined
+            .column(1)
+            .as_primitive::<arrow::datatypes::Int64Type>();
+        assert_eq!(counts.values(), &(1..=10).collect::<Vec<_>>());
+        let metrics = window.metrics().expect("window metrics");
+        assert_eq!(metrics.output_rows(), Some(10));
+        let output_batches = metrics
+            .sum(|m| matches!(m.value(), MetricValue::OutputBatches(_)))
+            .expect("output batch metric");
+        assert_eq!(output_batches.as_usize(), 3);
+        Ok(())
+    }
 
     #[test]
     fn test_window_agg_cardinality_effect() -> Result<()> {
