@@ -56,8 +56,12 @@ SELECT COUNT(*) FROM nonexistentschema.aggregate_test_100
 statement error Error during planning: table 'nonexistentcatalog\.public\.aggregate_test_100' not found
 SELECT COUNT(*) FROM nonexistentcatalog.public.aggregate_test_100
 
-statement error DataFusion error: Error during planning: Unsupported compound identifier 'way\.too\.many\.namespaces\.as\.ident\.prefixes\.aggregate_test_100'\. Expected 1, 2 or 3 parts, got 8
+statement error
 SELECT COUNT(*) FROM way.too.many.namespaces.as.ident.prefixes.aggregate_test_100
+----
+DataFusion error: Error during planning: Unsupported compound identifier 'way.too.many.namespaces.as.ident.prefixes.aggregate_test_100'. Expected 1, 2 or 3 parts, got 8
+
+
 
 
 # fetch_clause_not_supported
@@ -166,14 +170,29 @@ SELECT DISTINCT - 84 FROM tab0 AS cor0 WHERE NOT + 96 / + col1 <= NULL GROUP BY 
 statement ok
 create table a(timestamp int, birthday int, ts int, tokens int, amp int, staamp int);
 
-query error DataFusion error: Schema error: No field named timetamp\. Did you mean 'a\.timestamp'\?\nValid fields are a\.timestamp, a\.birthday, a\.ts, a\.tokens, a\.amp, a\.staamp\.
+query error
 select timetamp from a;
+----
+DataFusion error: Schema error: No field named timetamp. Did you mean 'a.timestamp'?
+Valid fields are a.timestamp, a.birthday, a.ts, a.tokens, a.amp, a.staamp.
 
-query error DataFusion error: Schema error: No field named dadsada\.\nValid fields are a\.timestamp, a\.birthday, a\.ts, a\.tokens, a\.amp, a\.staamp\.
+
+
+query error
 select dadsada from a;
+----
+DataFusion error: Schema error: No field named dadsada.
+Valid fields are a.timestamp, a.birthday, a.ts, a.tokens, a.amp, a.staamp.
 
-query error DataFusion error: Schema error: No field named ammp\. Did you mean 'a\.amp'\?\nValid fields are a\.timestamp, a\.birthday, a\.ts, a\.tokens, a\.amp, a\.staamp\.
+
+
+query error
 select ammp from a;
+----
+DataFusion error: Schema error: No field named ammp. Did you mean 'a.amp'?
+Valid fields are a.timestamp, a.birthday, a.ts, a.tokens, a.amp, a.staamp.
+
+
 
 statement ok
 drop table a;

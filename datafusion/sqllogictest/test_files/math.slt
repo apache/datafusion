@@ -555,20 +555,36 @@ select abs(c1), abs(c2), abs(c3), abs(c4) from test_nullable_integer where datas
 NULL NULL NULL NULL
 
 # abs: Int8 overlow
-statement error DataFusion error: Arrow error: Compute error: Int8Array overflow on abs\(-128\)
+statement error
 select abs(c1) from test_nullable_integer where dataset = 'mins'
+----
+DataFusion error: Arrow error: Compute error: Int8Array overflow on abs(-128)
+
+
 
 # abs: Int16 overlow
-statement error DataFusion error: Arrow error: Compute error: Int16Array overflow on abs\(-32768\)
+statement error
 select abs(c2) from test_nullable_integer where dataset = 'mins'
+----
+DataFusion error: Arrow error: Compute error: Int16Array overflow on abs(-32768)
+
+
 
 # abs: Int32 overlow
-statement error DataFusion error: Arrow error: Compute error: Int32Array overflow on abs\(-2147483648\)
+statement error
 select abs(c3) from test_nullable_integer where dataset = 'mins'
+----
+DataFusion error: Arrow error: Compute error: Int32Array overflow on abs(-2147483648)
+
+
 
 # abs: Int64 overlow
-statement error DataFusion error: Arrow error: Compute error: Int64Array overflow on abs\(-9223372036854775808\)
+statement error
 select abs(c4) from test_nullable_integer where dataset = 'mins'
+----
+DataFusion error: Arrow error: Compute error: Int64Array overflow on abs(-9223372036854775808)
+
+
 
 statement ok
 drop table test_nullable_integer
@@ -970,16 +986,28 @@ select gcd(a, b), gcd(c*d + 1, abs(e)) + f from signed_integers;
 NULL NULL
 
 # gcd(i64::MIN, i64::MIN)
-query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(\-9223372036854775808, \-9223372036854775808\)
+query error
 select gcd(-9223372036854775808, -9223372036854775808);
+----
+DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD(-9223372036854775808, -9223372036854775808)
+
+
 
 # gcd(i64::MIN, 0)
-query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(\-9223372036854775808, 0\)
+query error
 select gcd(-9223372036854775808, 0);
+----
+DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD(-9223372036854775808, 0)
+
+
 
 # gcd(0, i64::MIN)
-query error DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD\(0, \-9223372036854775808\)
+query error
 select gcd(0, -9223372036854775808);
+----
+DataFusion error: Arrow error: Compute error: Signed integer overflow in GCD(0, -9223372036854775808)
+
+
 
 # gcd decimal
 query RT
@@ -1044,15 +1072,27 @@ select lcm(a, b), lcm(c, d), lcm(e, f) from signed_integers;
 NULL NULL NULL
 
 # Result cannot fit in i64
-query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(\-9223372036854775808, \-9223372036854775808\)
+query error
 select lcm(-9223372036854775808, -9223372036854775808);
+----
+DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM(-9223372036854775808, -9223372036854775808)
 
-query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(1, \-9223372036854775808\)
+
+
+query error
 select lcm(1, -9223372036854775808);
+----
+DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM(1, -9223372036854775808)
+
+
 
 # Overflow on multiplication
-query error DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM\(2, 9223372036854775803\)
+query error
 select lcm(2, 9223372036854775803);
+----
+DataFusion error: Arrow error: Compute error: Signed integer overflow in LCM(2, 9223372036854775803)
+
+
 
 # lcm decimal
 query R
@@ -1200,8 +1240,12 @@ query error DataFusion error: Execution error: factorial of a negative number is
 select factorial(-1);
 
 # factorial overflow
-query error DataFusion error: Execution error: Overflow happened on FACTORIAL\(350943270\)
+query error
 select FACTORIAL(350943270);
+----
+DataFusion error: Execution error: Overflow happened on FACTORIAL(350943270)
+
+
 
 statement ok
 drop table signed_integers
