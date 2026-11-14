@@ -31,7 +31,7 @@ use object_store::{ObjectMeta, ObjectStore};
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_to_arrow_schema;
-use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
+use parquet::basic::{ColumnOrder, LogicalType, SortOrder, Type as PhysicalType};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
     RowGroupMetaData, SortingColumn,
@@ -46,11 +46,22 @@ use std::sync::Arc;
 /// would be too unreliable otherwise.
 const PARTIAL_NDV_THRESHOLD: f64 = 0.75;
 
+pub(crate) fn is_parquet_float(column: &ColumnDescriptor) -> bool {
+    // Float16 uses byte-array storage, so identify it by its logical type.
+    matches!(
+        column.physical_type(),
+        PhysicalType::FLOAT | PhysicalType::DOUBLE
+    ) || column.logical_type_ref() == Some(&LogicalType::Float16)
+}
+
 fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
+    // Byte arrays can also store decimals (signed numeric order) and Float16
+    // (IEEE float order), so their bounds must bypass the unsigned byte check.
     matches!(
         column.physical_type(),
         PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY
     ) && column.sort_order() != SortOrder::SIGNED
+        && !is_parquet_float(column)
 }
 
 /// Whether a column's min/max bounds lack a comparison order matching Arrow's.
@@ -62,12 +73,32 @@ fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
 /// Columns with undefined sort orders, such as `INT96`, never have usable
 /// min/max bounds regardless of their physical type. The `INT96` check is
 /// defensive because parquet-rs does not currently expose those bounds.
+/// Float bounds require IEEE total order and a matching Arrow value type.
 pub(crate) fn has_untrusted_min_max_order(
     parquet_schema: &SchemaDescriptor,
     column_orders: Option<&[ColumnOrder]>,
     parquet_column_index: usize,
+    arrow_type: &DataType,
 ) -> bool {
     let column = parquet_schema.column(parquet_column_index);
+    let arrow_type = min_max_aggregate_data_type(arrow_type);
+    if is_parquet_float(&column) {
+        // TYPE_ORDER may report min=-0.0 for a column containing only +0.0.
+        // That is a bound, but not an exact minimum under IEEE total order.
+        // Casts can change values: Float64 1.00000001 becomes Float32 1.0.
+        // Reusing stored bounds after a cast needs validation and conversion.
+        // For now, require IEEE ordering and matching stored/output float types.
+        return !matches!(
+            (column.physical_type(), arrow_type),
+            (PhysicalType::FLOAT, DataType::Float32)
+                | (PhysicalType::DOUBLE, DataType::Float64)
+                | (PhysicalType::FIXED_LEN_BYTE_ARRAY, DataType::Float16)
+        ) || column_orders.and_then(|orders| orders.get(parquet_column_index))
+            != Some(&ColumnOrder::IEEE_754_TOTAL_ORDER);
+    }
+    if arrow_type.is_floating() {
+        return true;
+    }
     // As of arrow 60, INT96 columns report `SortOrder::INT96_TIMESTAMP`
     // rather than `UNDEFINED`; keep treating their min/max as untrusted.
     // until <https://github.com/apache/datafusion/issues/25484>
@@ -85,15 +116,23 @@ pub(crate) fn has_untrusted_min_max_order(
                 != Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)))
 }
 
-/// Whether any row group provides byte-array bounds in the deprecated signed
-/// order, or the column's logical order is undefined.
-pub(crate) fn has_untrusted_byte_array_stats<'a>(
+/// Whether any row group's bounds use a legacy byte-array order or omit
+/// possible NaNs. A missing NaN count is not proof of zero NaNs.
+pub(crate) fn has_untrusted_min_max_stats<'a>(
     parquet_schema: &SchemaDescriptor,
     parquet_column_index: Option<usize>,
     row_groups: impl IntoIterator<Item = &'a RowGroupMetaData>,
 ) -> bool {
     parquet_column_index.is_some_and(|index| {
         let column = parquet_schema.column(index);
+        if is_parquet_float(&column) {
+            return row_groups.into_iter().any(|group| {
+                group.num_rows() != 0
+                    && group.column(index).statistics().is_none_or(|stats| {
+                        stats.nan_count_opt() != Some(0) || stats.is_min_max_deprecated()
+                    })
+            });
+        }
         requires_unsigned_byte_array_order(&column)
             && (column.sort_order() != SortOrder::UNSIGNED
                 || row_groups.into_iter().any(|group| {
@@ -631,8 +670,9 @@ impl<'a> DFParquetMetadata<'a> {
                                     file_metadata.schema_descr(),
                                     file_metadata.column_orders().map(Vec::as_slice),
                                     index,
+                                    field.data_type(),
                                 )
-                            }) || has_untrusted_byte_array_stats(
+                            }) || has_untrusted_min_max_stats(
                                 file_metadata.schema_descr(),
                                 parquet_index,
                                 row_groups_metadata,

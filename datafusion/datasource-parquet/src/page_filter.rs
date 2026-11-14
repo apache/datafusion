@@ -8,11 +8,12 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::metrics::ParquetFileMetrics;
-use crate::metadata::has_untrusted_min_max_order;
+use crate::metadata::{has_untrusted_min_max_order, is_parquet_float};
 use crate::pruning::build_inverted_predicate;
 use crate::{ParquetAccessPlan, RowGroupAccess};
 
-use arrow::array::BooleanArray;
+use arrow::array::{BooleanArray, UInt64Array};
+use arrow::compute::nullif;
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
@@ -706,6 +707,7 @@ struct PagesPruningStatistics<'a> {
     page_index: &'a dyn PageIndexProvider,
     page_offsets: &'a Vec<PageLocation>,
     trusted_min_max: bool,
+    untrusted_nan_counts: Option<BooleanArray>,
 }
 
 impl<'a> PagesPruningStatistics<'a> {
@@ -748,7 +750,30 @@ impl<'a> PagesPruningStatistics<'a> {
             file_metadata.schema_descr(),
             file_metadata.column_orders().map(Vec::as_slice),
             parquet_column_index,
+            converter.arrow_field().data_type(),
         );
+        let untrusted_nan_counts = if trusted_min_max
+            && is_parquet_float(
+                &file_metadata.schema_descr().column(parquet_column_index),
+            ) {
+            let group_count = row_group_metadatas[row_group_index]
+                .column(parquet_column_index)
+                .statistics()
+                .and_then(|stats| stats.nan_count_opt());
+            let counts = converter
+                .data_page_nan_counts(page_index, [&row_group_index])
+                .ok()
+                .filter(|counts| counts.len() == page_offsets.len())
+                .unwrap_or_else(|| UInt64Array::new_null(page_offsets.len()));
+            // A known-zero group count also covers pages with no count.
+            // Nullable iteration preserves the distinction between unknown and zero.
+            let mask = BooleanArray::from_iter(
+                counts.iter().map(|count| count.or(group_count) != Some(0)),
+            );
+            (mask.true_count() != 0).then_some(mask)
+        } else {
+            None
+        };
 
         Some(Self {
             row_group_index,
@@ -757,7 +782,15 @@ impl<'a> PagesPruningStatistics<'a> {
             page_index,
             page_offsets,
             trusted_min_max,
+            untrusted_nan_counts,
         })
+    }
+
+    fn mask_untrusted_nan_counts(&self, values: ArrayRef) -> Option<ArrayRef> {
+        match &self.untrusted_nan_counts {
+            Some(mask) => nullif(values.as_ref(), mask).ok(),
+            None => Some(values),
+        }
     }
 
     /// return the row counts in each data page, if possible.
@@ -790,7 +823,7 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
             .converter
             .data_page_mins(self.page_index, [&self.row_group_index])
         {
-            Ok(min_values) => Some(min_values),
+            Ok(min_values) => self.mask_untrusted_nan_counts(min_values),
             Err(e) => {
                 debug!("Error evaluating data page min values {e}");
                 None
@@ -806,7 +839,7 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
             .converter
             .data_page_maxes(self.page_index, [&self.row_group_index])
         {
-            Ok(min_values) => Some(min_values),
+            Ok(max_values) => self.mask_untrusted_nan_counts(max_values),
             Err(e) => {
                 debug!("Error evaluating data page max values {e}");
                 None

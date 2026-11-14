@@ -3,8 +3,10 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fs;
+use std::io::Write;
 use std::sync::Arc;
 
+use arrow::array::{Array, Float64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::TableProvider;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -33,7 +35,129 @@ use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+use parquet::arrow::ArrowWriter;
+use parquet::basic::{ColumnOrder, SortOrder};
+use parquet::file::metadata::{
+    ParquetMetaData, ParquetMetaDataReader, ParquetMetaDataWriter,
+};
+use parquet::file::properties::{EnabledStatistics, WriterProperties};
+use parquet::file::statistics::{Statistics, ValueStatistics};
+use parquet::file::writer::TrackedWrite;
 use tempfile::tempdir;
+
+#[tokio::test]
+async fn min_max_preserve_signed_zero_with_type_order() {
+    for zero in [0.0_f64, -0.0_f64] {
+        // Arrange
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("zeros.parquet");
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("x", DataType::Float64, false)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Float64Array::from(vec![zero; 3]))],
+        )
+        .unwrap();
+        let properties = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .build();
+        let mut original = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut original, batch.schema(), Some(properties))
+                .unwrap();
+        writer.write(&batch).unwrap();
+        let metadata = writer.close().unwrap();
+
+        // TYPE_ORDER can normalize zero bounds even when only one sign occurs.
+        // A zero NaN count keeps the NaN guard from masking the order check.
+        let column = metadata
+            .row_group(0)
+            .column(0)
+            .clone()
+            .into_builder()
+            .set_statistics(Statistics::Double(
+                ValueStatistics::new(Some(-0.0), Some(0.0), None, Some(0), false)
+                    .with_nan_count(Some(0)),
+            ))
+            .build()
+            .unwrap();
+        let row_group = metadata
+            .row_group(0)
+            .clone()
+            .into_builder()
+            .set_column_metadata(vec![column])
+            .build()
+            .unwrap();
+        let metadata =
+            ParquetMetaData::new(metadata.file_metadata().clone(), vec![row_group]);
+        let footer_len = u32::from_le_bytes(
+            original[original.len() - 8..original.len() - 4]
+                .try_into()
+                .unwrap(),
+        );
+        original.truncate(original.len() - 8 - footer_len as usize);
+        let mut bytes = Vec::new();
+        let mut output = TrackedWrite::new(&mut bytes);
+        output.write_all(&original).unwrap();
+        ParquetMetaDataWriter::new_with_tracked(output, &metadata)
+            .finish()
+            .unwrap();
+
+        // parquet-rs writes IEEE order for floats. Change only the final
+        // column_orders union tag from field 2 (IEEE) to field 1 (TYPE_ORDER).
+        let end = bytes.len() - 8;
+        let encoded_orders = [0x19, 0x1c, 0x2c, 0, 0, 0];
+        let start = end - encoded_orders.len();
+        assert_eq!(&bytes[start..end], &encoded_orders);
+        bytes[start + 2] = 0x1c;
+        assert_eq!(&bytes[..4], b"PAR1");
+        assert_eq!(&bytes[bytes.len() - 4..], b"PAR1");
+        fs::write(&path, bytes).unwrap();
+
+        let metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&fs::File::open(&path).unwrap())
+            .unwrap();
+        assert_eq!(metadata.num_row_groups(), 1);
+        assert_eq!(
+            metadata.file_metadata().column_order(0),
+            ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)
+        );
+        let stats = metadata.row_group(0).column(0).statistics().unwrap();
+        assert!(!stats.is_min_max_deprecated());
+        assert_eq!(stats.nan_count_opt(), Some(0));
+        let Statistics::Double(stats) = stats else {
+            panic!("expected Float64 statistics");
+        };
+        assert_eq!(stats.min_opt().unwrap().to_bits(), (-0.0_f64).to_bits());
+        assert_eq!(stats.max_opt().unwrap().to_bits(), 0.0_f64.to_bits());
+
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_collect_statistics(true),
+        );
+        ctx.register_parquet("t", path.to_str().unwrap(), ParquetReadOptions::default())
+            .await
+            .unwrap();
+
+        // Act
+        let batches = ctx
+            .sql("SELECT MIN(x), MAX(x) FROM t")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        // Assert
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 1);
+        assert_eq!(batches[0].num_columns(), 2);
+        for column in batches[0].columns() {
+            let result = column.as_any().downcast_ref::<Float64Array>().unwrap();
+            assert!(!result.is_null(0));
+            assert_eq!(result.value(0).to_bits(), zero.to_bits());
+        }
+    }
+}
 
 #[tokio::test]
 async fn check_stats_precision_with_filter_pushdown() {
