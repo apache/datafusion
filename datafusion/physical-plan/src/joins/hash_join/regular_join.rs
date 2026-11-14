@@ -27,8 +27,9 @@ use crate::metrics::BaselineMetrics;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
 /// Implementation for regular (Inner/Left/Right/Full) hash join.
-///
-/// See [`Self::into_stream`] for execution stages and transitions.
+/// 
+/// See [`super`] documentations for the high-level architecture.
+/// See [`Self::into_stream`] is the entry point for execution.
 pub(super) struct RegularHashJoinStream {
     schema: SchemaRef,
     metrics: BaselineMetrics,

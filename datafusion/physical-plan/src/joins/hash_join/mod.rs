@@ -2,7 +2,21 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! [`HashJoinExec`]: build a key index, enumerate matching rows, apply join semantics.
+//! [`HashJoinExec`]: implementation for hash join.
+//!
+//! # Regular(inner/left/right/full) Hash Join implementation
+//!
+//! There are three major layers during execution
+//!
+//! 1. [`RegularHashJoinStream::into_stream`]: the state machine entry point,
+//!    driving the build, probe, and final output stages.
+//! 2. [`BatchedJoinProcessor`]: probes the raw index, evaluates the residual filter,
+//!    and coalesces output. Each lookup returns up to `batch_size` candidate pairs.
+//! 3. [`Map`]: the raw build-side index (hash table or integer-key array map).
+//!
+//! [`RegularHashJoinStream::into_stream`]: regular_join::RegularHashJoinStream::into_stream
+//! [`BatchedJoinProcessor`]: batched_join_processor::BatchedJoinProcessor
+//! [`Map`]: crate::joins::Map
 
 pub use exec::{HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild};
 /// # Public Only for Internal Use:
