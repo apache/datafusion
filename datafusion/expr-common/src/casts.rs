@@ -934,6 +934,9 @@ fn try_cast_dictionary(
 ) -> Option<ScalarValue> {
     let lit_value_type = lit_value.data_type();
     let result_scalar = match (lit_value, target_type) {
+        (ScalarValue::Dictionary(_, _), _) if lit_value_type == *target_type => {
+            lit_value.clone()
+        }
         // Unwrap dictionary when inner type matches target type
         (ScalarValue::Dictionary(_, inner_value), _)
             if inner_value.data_type() == *target_type =>
@@ -993,6 +996,26 @@ mod tests {
     use arrow::compute::{CastOptions, cast_with_options};
     use arrow::datatypes::{Field, Fields};
     use std::sync::Arc;
+
+    #[test]
+    fn test_try_cast_dictionary_identity() {
+        for key_type in [DataType::Int8, DataType::Int32, DataType::Int64] {
+            for value in [
+                ScalarValue::Utf8(Some("label".to_owned())),
+                ScalarValue::Utf8(None),
+                ScalarValue::LargeUtf8(Some("label".to_owned())),
+                ScalarValue::Int32(Some(42)),
+            ] {
+                let literal =
+                    ScalarValue::Dictionary(Box::new(key_type.clone()), Box::new(value));
+                expect_cast(
+                    literal.clone(),
+                    literal.data_type(),
+                    ExpectedCast::Value(literal),
+                );
+            }
+        }
+    }
 
     #[derive(Debug, Clone)]
     enum ExpectedCast {

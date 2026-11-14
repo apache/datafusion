@@ -3537,6 +3537,77 @@ mod test {
         assert_eq!(num_rows, 0);
     }
 
+    #[tokio::test]
+    async fn dictionary_bloom_pruning_with_nullable_table_schema() {
+        use arrow::array::StringDictionaryBuilder;
+        use datafusion_expr::Operator;
+        use datafusion_physical_expr::expressions::BinaryExpr;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let mut labels = StringDictionaryBuilder::<Int32Type>::new();
+        labels.append("a").unwrap();
+        labels.append("z").unwrap();
+        let labels = labels.finish();
+        let field = Field::new("label", labels.data_type().clone(), false);
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![field.clone()])),
+            vec![Arc::new(labels)],
+        )
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_bloom_filter_enabled(true)
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+        let size = write_parquet_batches(
+            Arc::clone(&store),
+            "labels.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new("labels.parquet", size as u64);
+
+        for nullable in [false, true] {
+            let schema =
+                Arc::new(Schema::new(vec![field.clone().with_nullable(nullable)]));
+            for (value, expected_rows, expected_pruned) in [("a", 1, 0), ("m", 0, 1)] {
+                let predicate = Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("label", 0)),
+                    Operator::Eq,
+                    Arc::new(Literal::new(ScalarValue::Dictionary(
+                        Box::new(DataType::Int32),
+                        Box::new(ScalarValue::from(value)),
+                    ))),
+                ));
+                let metrics = ExecutionPlanMetricsSet::new();
+                let morselizer = ParquetMorselizerBuilder::new()
+                    .with_store(Arc::clone(&store))
+                    .with_schema(Arc::clone(&schema))
+                    .with_predicate(predicate)
+                    .with_pushdown_filters(true)
+                    .with_enable_bloom_filter(true)
+                    .with_metrics(metrics.clone())
+                    .build();
+                let batches: Vec<RecordBatch> = open_file(&morselizer, file.clone())
+                    .await
+                    .unwrap()
+                    .try_collect()
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                    expected_rows,
+                );
+                assert!(batches.iter().all(|batch| batch.schema() == schema));
+                assert_eq!(
+                    bloom_filter_pruning_metrics(&metrics),
+                    (expected_pruned, 1 - expected_pruned),
+                    "nullable={nullable}, value={value}",
+                );
+            }
+        }
+    }
+
     /// Row groups this scan skipped through statistics pruning.
     ///
     /// The row count alone cannot tell "pruned" from "scanned, then
