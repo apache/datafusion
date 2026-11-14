@@ -623,8 +623,12 @@ impl FinalHashAggregateStream {
             .execution
             .hash_aggregate_bucket_threshold;
         // A soft limit stops reading input early, which bucketing cannot do.
+        // Buckets that cannot be spilled hold more memory than one table, the
+        // rows waiting for their next compaction, and release none of it under
+        // memory pressure, so bucketing also needs spilling.
         let bucketing = (bucket_threshold > 0
             && group_values_soft_limit.is_none()
+            && spill_context.is_some()
             && BucketedAggregation::supports_state(&input_schema))
         .then(|| {
             Arc::new(BucketedAggregation::new(
@@ -1000,6 +1004,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
     };
@@ -1320,6 +1325,23 @@ mod tests {
         bucket_threshold: usize,
         memory_limit: Option<usize>,
     ) -> Result<(Vec<(i32, i64)>, usize, usize)> {
+        run_final_hash_aggregate_with_disk(
+            num_groups,
+            num_partitions,
+            bucket_threshold,
+            memory_limit,
+            true,
+        )
+        .await
+    }
+
+    async fn run_final_hash_aggregate_with_disk(
+        num_groups: usize,
+        num_partitions: usize,
+        bucket_threshold: usize,
+        memory_limit: Option<usize>,
+        can_spill: bool,
+    ) -> Result<(Vec<(i32, i64)>, usize, usize)> {
         use datafusion_common::ScalarValue;
 
         let batch_size = 1024;
@@ -1331,6 +1353,11 @@ mod tests {
         let mut runtime = RuntimeEnvBuilder::default();
         if let Some(memory_limit) = memory_limit {
             runtime = runtime.with_memory_limit(memory_limit, 1.0);
+        }
+        if !can_spill {
+            runtime = runtime.with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            );
         }
         let task_ctx = TaskContext::default().with_runtime(runtime.build_arc()?);
         let session_config = task_ctx
@@ -1496,6 +1523,19 @@ mod tests {
         let (rows, splits, _) = run_final_hash_aggregate(50_000, 1, 60_000, None).await?;
         assert_eq!(rows, expected);
         assert_eq!(splits, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn final_hash_aggregate_keeps_one_table_when_it_cannot_spill() -> Result<()> {
+        let (expected, _, _) = run_final_hash_aggregate(50_000, 2, 0, None).await?;
+
+        // With spilling, the same input and threshold split buckets more than
+        // once, see `final_hash_aggregate_splits_large_buckets_again`
+        let (rows, splits, _) =
+            run_final_hash_aggregate_with_disk(50_000, 2, 100, None, false).await?;
+        assert_eq!(rows, expected);
+        assert_eq!(splits, 0);
         Ok(())
     }
 
