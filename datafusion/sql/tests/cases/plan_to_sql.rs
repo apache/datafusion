@@ -6,7 +6,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference,
+    Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
     assert_contains,
 };
 use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
@@ -466,6 +466,26 @@ fn unparse_preserves_derived_aggregate_output_name() -> Result<()> {
         sql,
         @r#"SELECT `sum_40j1_46j1_id_41` FROM (SELECT sum(`j1`.`j1_id`) AS `visible`, sum(`j1`.`j1_id`) AS `sum_40j1_46j1_id_41` FROM `j1`)"#
     );
+    Ok(())
+}
+
+#[test]
+fn unparse_null_list_literal() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+    let list_type =
+        DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+    let plan = table_scan(Some("t"), &schema, None)?
+        .project(vec![
+            col("t.a"),
+            Expr::Literal(ScalarValue::try_new_null(&list_type)?, None).alias("l"),
+        ])?
+        .build()?;
+
+    assert_snapshot!(
+        plan_to_sql(&plan)?.to_string(),
+        @"SELECT t.a, NULL AS l FROM t"
+    );
+
     Ok(())
 }
 
