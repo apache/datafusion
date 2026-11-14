@@ -130,8 +130,11 @@ ff0102 000102 false false
 
 
 # Comparison to different sized field
-query error DataFusion error: Error during planning: Cannot infer common argument type for comparison operation FixedSizeBinary\(3\) = FixedSizeBinary\(2\)
+query error
 SELECT column1, column1 = arrow_cast(X'0102', 'FixedSizeBinary(2)') FROM t
+----
+DataFusion error: Error during planning: Cannot infer common argument type for comparison operation FixedSizeBinary(3) = FixedSizeBinary(2)
+
 
 # Comparison to different sized Binary
 query ?B

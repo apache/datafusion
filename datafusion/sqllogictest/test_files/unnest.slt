@@ -83,12 +83,17 @@ select * from unnest(struct(1,2,3)),unnest([4,5,6]);
 
 
 ## Unnest null in select list
-query error DataFusion error: This feature is not implemented: unnest\(\) does not support null yet
+query error
 select unnest(null);
+----
+DataFusion error: This feature is not implemented: unnest() does not support null yet
+
 
 ## Unnest null in from clause
-query error DataFusion error: This feature is not implemented: unnest\(\) does not support null yet
+query error
 select * from unnest(null);
+----
+DataFusion error: This feature is not implemented: unnest() does not support null yet
 
 
 ## Unnest empty array in select list
@@ -222,8 +227,11 @@ NULL 12
 NULL 42
 NULL NULL
 
-query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
+query error
 select unnest('foo');
+----
+DataFusion error: Error during planning: unnest() can only be applied to array, struct and null
+
 
 query ?II
 select array_remove(column1, 4), unnest(column2), column3 * 10 from unnest_table;
@@ -240,8 +248,11 @@ select array_remove(column1, 4), unnest(column2), column3 * 10 from unnest_table
 
 
 ## Unnest doesn't work with untyped nulls
-query error DataFusion error: This feature is not implemented: unnest\(\) does not support null yet
+query error
 select unnest(null) from unnest_table;
+----
+DataFusion error: This feature is not implemented: unnest() does not support null yet
+
 
 ## Multiple unnest functions in selection
 query ?I
@@ -283,26 +294,39 @@ NULL 44 NULL NULL
 NULL NULL NULL NULL
 
 ## Unnest scalar in select list
-query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
+query error
 select unnest(1);
+----
+DataFusion error: Error during planning: unnest() can only be applied to array, struct and null
+
 
 ## Unnest scalar in from clause
-query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
+query error
 select * from unnest(1);
+----
+DataFusion error: Error during planning: unnest() can only be applied to array, struct and null
 
 
 ## Unnest empty expression in select list
-query error DataFusion error: Error during planning: unnest\(\) requires exactly one argument
+query error
 select unnest();
+----
+DataFusion error: Error during planning: unnest() requires exactly one argument
+
 
 ## Unnest empty expression in from clause
-query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 22"\)
+query error
 select * from unnest();
+----
+DataFusion error: SQL error: ParserError("Expected: an expression, found: ) at Line: 1, Column: 22")
 
 
 ## Unnest multiple expressions in select list. This form is only allowed in a query's FROM clause.
-query error DataFusion error: Error during planning: unnest\(\) requires exactly one argument
+query error
 select unnest([1,2], [2,3]);
+----
+DataFusion error: Error during planning: unnest() requires exactly one argument
+
 
 ## Unnest multiple expressions in from clause
 query ITII
@@ -534,8 +558,11 @@ select unnest(column1) from (select * from (values([1,2,3]), ([4,5,6])) limit 1 
 5
 6
 
-query error DataFusion error: Error during planning: Projections require unique expression names but the expression "UNNEST\(unnest_table.column1\)" at position 0 and "UNNEST\(unnest_table.column1\)" at position 1 have the same name. Consider aliasing \("AS"\) one of them.
+query error
 select unnest(column1), unnest(column1) from unnest_table;
+----
+DataFusion error: Error during planning: Projections require unique expression names but the expression "UNNEST(unnest_table.column1)" at position 0 and "UNNEST(unnest_table.column1)" at position 1 have the same name. Consider aliasing ("AS") one of them.
+
 
 query II
 select unnest(column1), unnest(column1) u1 from unnest_table;
@@ -798,8 +825,11 @@ select unnest(unnest(column2)) c2, count(column3) from recursive_unnest_table gr
 [NULL, 6] 1
 NULL 1
 
-query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "nested_unnest_table\.column1" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "UNNEST\(nested_unnest_table\.column1\)\[c0\]" appears in the SELECT clause satisfies this requirement
+query error
 select unnest(column1) c1 from nested_unnest_table group by c1.c0;
+----
+DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "nested_unnest_table.column1" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "UNNEST(nested_unnest_table.column1)[c0]" appears in the SELECT clause satisfies this requirement
+
 
 ## Unnest struct with alias - alias is ignored (same as DuckDB behavior)
 ## See: https://github.com/apache/datafusion/issues/12794
@@ -878,12 +908,18 @@ select count(*) from (select unnest(range(0, 100000)) id) t inner join (select u
 # Test implicit LATERAL support for UNNEST
 # Issue: https://github.com/apache/datafusion/issues/13659
 # TODO: https://github.com/apache/datafusion/issues/10048
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(Field \{ name: "column1", data_type: List\(Field \{ data_type: Int64, nullable: true \}\), nullable: true \}, Column \{ relation: Some\(Bare \{ table: "u" \}\), name: "column1" \}\)
+query error
 select * from unnest_table u, unnest(u.column1);
+----
+DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "column1", data_type: List(Field { data_type: Int64, nullable: true }), nullable: true }, Column { relation: Some(Bare { table: "u" }), name: "column1" })
+
 
 # Test implicit LATERAL support for UNNEST (INNER JOIN)
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(Field \{ name: "column1", data_type: List\(Field \{ data_type: Int64, nullable: true \}\), nullable: true \}, Column \{ relation: Some\(Bare \{ table: "u" \}\), name: "column1" \}\)
+query error
 select * from unnest_table u INNER JOIN unnest(u.column1) AS t(column1) ON u.column3 = t.column1;
+----
+DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "column1", data_type: List(Field { data_type: Int64, nullable: true }), nullable: true }, Column { relation: Some(Bare { table: "u" }), name: "column1" })
+
 
 # Test implicit LATERAL planning for UNNEST
 query TT

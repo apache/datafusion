@@ -1111,17 +1111,29 @@ SELECT extract(month from arrow_cast('20 months', 'Interval(YearMonth)'))
 ----
 8
 
-query error DataFusion error: Arrow error: Compute error: YearISO does not support: Interval\(YearMonth\)
+query error
 SELECT extract(isoyear from arrow_cast('10 years', 'Interval(YearMonth)'))
+----
+DataFusion error: Arrow error: Compute error: YearISO does not support: Interval(YearMonth)
 
-query error DataFusion error: Arrow error: Compute error: Year does not support: Interval\(DayTime\)
+
+query error
 SELECT extract(year from arrow_cast('10 days', 'Interval(DayTime)'))
+----
+DataFusion error: Arrow error: Compute error: Year does not support: Interval(DayTime)
 
-query error DataFusion error: Arrow error: Compute error: YearISO does not support: Interval\(DayTime\)
+
+query error
 SELECT extract(isoyear from arrow_cast('10 days', 'Interval(DayTime)'))
+----
+DataFusion error: Arrow error: Compute error: YearISO does not support: Interval(DayTime)
 
-query error DataFusion error: Arrow error: Compute error: Month does not support: Interval\(DayTime\)
+
+query error
 SELECT extract(month from arrow_cast('10 days', 'Interval(DayTime)'))
+----
+DataFusion error: Arrow error: Compute error: Month does not support: Interval(DayTime)
+
 
 query I
 SELECT extract(day from arrow_cast('10 days', 'Interval(DayTime)'))
@@ -1402,8 +1414,11 @@ SELECT date_part('microseconds', interval '1 hour'),
 ----
 0 0 0
 
-query error DataFusion error: Arrow error: Compute error: Nanosecond does not support: Interval\(YearMonth\)
+query error
 SELECT extract(nanosecond from arrow_cast('10 months', 'Interval(YearMonth)'))
+----
+DataFusion error: Arrow error: Compute error: Nanosecond does not support: Interval(YearMonth)
+
 
 # test_extract_duration
 
@@ -1519,14 +1534,23 @@ SELECT extract(day from arrow_cast(864000, 'Duration(Second)'))
 ----
 10
 
-query error DataFusion error: Arrow error: Compute error: Month does not support: Duration\(s\)
+query error
 SELECT extract(month from arrow_cast(864000, 'Duration(Second)'))
+----
+DataFusion error: Arrow error: Compute error: Month does not support: Duration(s)
 
-query error DataFusion error: Arrow error: Compute error: Year does not support: Duration\(s\)
+
+query error
 SELECT extract(year from arrow_cast(864000, 'Duration(Second)'))
+----
+DataFusion error: Arrow error: Compute error: Year does not support: Duration(s)
 
-query error DataFusion error: Arrow error: Compute error: YearISO does not support: Duration\(s\)
+
+query error
 SELECT extract(isoyear from arrow_cast(864000, 'Duration(Second)'))
+----
+DataFusion error: Arrow error: Compute error: YearISO does not support: Duration(s)
+
 
 query I
 SELECT extract(day from arrow_cast(NULL, 'Duration(Second)'))
@@ -2546,14 +2570,24 @@ statement ok
 DROP TABLE tz_offsets;
 
 # These parts are only defined for timestamps that carry a timezone
-query error DataFusion error: Execution error: Date part 'timezone' is not supported for timezone\-naive timestamps, got Timestamp\(ns\)
+query error
 SELECT date_part('timezone', TIMESTAMP '2024-07-01T12:00:00')
+----
+DataFusion error: Execution error: Date part 'timezone' is not supported for timezone-naive timestamps, got Timestamp(ns)
 
-query error DataFusion error: Execution error: Date part 'timezone_hour' is not supported for timezone\-naive timestamps, got Timestamp\(ns\)
+
+query error
 SELECT EXTRACT(TIMEZONE_HOUR FROM TIMESTAMP '2024-07-01T12:00:00')
+----
+DataFusion error: Execution error: Date part 'timezone_hour' is not supported for timezone-naive timestamps, got Timestamp(ns)
+
 
 query error DataFusion error: Execution error: Date part 'timezone' is only supported for timestamps with a timezone, got Date32
 SELECT date_part('timezone', DATE '2024-07-01')
 
-query error DataFusion error: Execution error: Date part 'timezone_minute' is only supported for timestamps with a timezone, got Interval\(MonthDayNano\)
+query error
 SELECT date_part('timezone_minute', INTERVAL '1' DAY)
+----
+DataFusion error: Execution error: Date part 'timezone_minute' is only supported for timestamps with a timezone, got Interval(MonthDayNano)
+
+

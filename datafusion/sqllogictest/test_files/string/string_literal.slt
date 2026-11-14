@@ -1293,15 +1293,18 @@ SELECT
 false false true false true false
 
 # Only \ is currently supported as an explicit escape character
-query error DataFusion error: Execution error: LIKE does not support escape_char other than the backslash \(\\\)
+query error
 SELECT
     'a' LIKE '$%' ESCAPE '$',
     '\a' LIKE '$%' ESCAPE '$',
     '%' LIKE '$%' ESCAPE '$',
     '\%' LIKE '$%' ESCAPE '$'
+----
+DataFusion error: Execution error: LIKE does not support escape_char other than the backslash (\)
+
 
 # Only \ is currently supported as an explicit escape character
-query error DataFusion error: Execution error: LIKE does not support escape_char other than the backslash \(\\\)
+query error
 SELECT
     'a' LIKE '$_' ESCAPE '$',
     '\a' LIKE '$_' ESCAPE '$',
@@ -1309,6 +1312,9 @@ SELECT
     '\_' LIKE '$_' ESCAPE '$',
     'abc' LIKE 'a_c' ESCAPE '$',
     'abc' LIKE 'a$_c' ESCAPE '$'
+----
+DataFusion error: Execution error: LIKE does not support escape_char other than the backslash (\)
+
 
 # a LIKE pattern containing escape can never match an empty string
 query BBBBB

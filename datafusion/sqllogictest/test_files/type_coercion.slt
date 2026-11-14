@@ -30,12 +30,18 @@ SELECT '2023-05-01 12:30:00'::timestamp - interval '1 month';
 2023-04-01T12:30:00
 
 # interval - date
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Date32 to valid types
+query error
 select interval '1 month' - '2023-05-01'::date;
+----
+DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval(MonthDayNano) - Date32 to valid types
+
 
 # interval - timestamp
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(ns\) to valid types
+query error
 SELECT interval '1 month' - '2023-05-01 12:30:00'::timestamp;
+----
+DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval(MonthDayNano) - Timestamp(ns) to valid types
+
 
 # dictionary(int32, utf8) -> utf8
 query T

@@ -188,11 +188,17 @@ logical_plan
 04)------TableScan: l projection=[id, g, x]
 05)------TableScan: r projection=[id]
 
-statement error DataFusion error: This feature is not implemented: REGR_COUNT\(DISTINCT\) aggregations are not available
+statement error
 SELECT REGR_COUNT(DISTINCT l.x, l.g) FROM l JOIN r ON l.id = r.id;
+----
+DataFusion error: This feature is not implemented: REGR_COUNT(DISTINCT) aggregations are not available
 
-statement error DataFusion error: This feature is not implemented: REGR_COUNT\(DISTINCT\) aggregations are not available
+
+statement error
 SELECT REGR_COUNT(DISTINCT l.x, l.g) FROM l LEFT JOIN r ON l.id = r.id;
+----
+DataFusion error: This feature is not implemented: REGR_COUNT(DISTINCT) aggregations are not available
+
 
 # A limit below the aggregate still observes repeated join rows.
 query I

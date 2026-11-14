@@ -157,8 +157,11 @@ SELECT MIN(c) WITHIN GROUP (ORDER BY c) FROM (VALUES (1),(2)) as t(c);
 
 
 # https://github.com/apache/datafusion/issues/3353
-statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "approx_distinct\(aggregate_test_100\.c9\)"
+statement error
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
+----
+DataFusion error: Schema error: Schema contains duplicate unqualified field name "approx_distinct(aggregate_test_100.c9)"
+
 
 # csv_query_approx_percentile_cont_with_weight
 statement error Function 'approx_percentile_cont_with_weight' failed to match any signature
@@ -171,8 +174,11 @@ statement error Function 'approx_percentile_cont_with_weight' failed to match an
 SELECT approx_percentile_cont_with_weight(c2, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
-statement error DataFusion error: Error during planning: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
+statement error
 SELECT c1, approx_percentile_cont(0.95, -1000) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+DataFusion error: Error during planning: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal (got data type Int64).
+
 
 statement error Function 'approx_percentile_cont' failed to match any signature
 SELECT approx_percentile_cont(0.95, c1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
@@ -183,11 +189,17 @@ SELECT approx_percentile_cont(c12) WITHIN GROUP (ORDER BY c12) FROM aggregate_te
 statement error DataFusion error: Error during planning: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be a literal
 SELECT approx_percentile_cont(0.95, c5) WITHIN GROUP (ORDER BY c12) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for approx_percentile_cont
+statement error
 SELECT approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c5) IGNORE NULLS FROM aggregate_test_100
+----
+DataFusion error: Error during planning: [IGNORE | RESPECT] NULLS are not permitted for approx_percentile_cont
 
-statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for approx_percentile_cont
+
+statement error
 SELECT approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c5) RESPECT NULLS FROM aggregate_test_100
+----
+DataFusion error: Error during planning: [IGNORE | RESPECT] NULLS are not permitted for approx_percentile_cont
+
 
 statement error DataFusion error: This feature is not implemented: Only a single ordering expression is permitted in a WITHIN GROUP clause
 SELECT approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c5, c12) FROM aggregate_test_100
@@ -421,28 +433,49 @@ GROUP BY g
 
 # With two different arguments there is no single field to group by, so
 # DISTINCT reaches the accumulator, which does not implement it.
-statement error DataFusion error: This feature is not implemented: CORR\(DISTINCT\) aggregations are not available
+statement error
 SELECT corr(DISTINCT x, y) FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+----
+DataFusion error: This feature is not implemented: CORR(DISTINCT) aggregations are not available
 
-statement error DataFusion error: This feature is not implemented: CORR\(DISTINCT\) aggregations are not available
+
+statement error
 SELECT g, corr(DISTINCT x, y) FROM (VALUES (1, 1.0, 1.0), (1, 1.0, 1.0), (1, 2.0, 3.0)) t(g, x, y) GROUP BY g
+----
+DataFusion error: This feature is not implemented: CORR(DISTINCT) aggregations are not available
 
-statement error DataFusion error: This feature is not implemented: COVAR_SAMP\(DISTINCT\) aggregations are not available
+
+statement error
 SELECT covar_samp(DISTINCT x, y) FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+----
+DataFusion error: This feature is not implemented: COVAR_SAMP(DISTINCT) aggregations are not available
 
-statement error DataFusion error: This feature is not implemented: COVAR_POP\(DISTINCT\) aggregations are not available
+
+statement error
 SELECT covar_pop(x, y), covar_pop(DISTINCT x, y) FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+----
+DataFusion error: This feature is not implemented: COVAR_POP(DISTINCT) aggregations are not available
 
-statement error DataFusion error: This feature is not implemented: REGR_COUNT\(DISTINCT\) aggregations are not available
+
+statement error
 SELECT regr_count(x, y), regr_count(DISTINCT x, y) FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+----
+DataFusion error: This feature is not implemented: REGR_COUNT(DISTINCT) aggregations are not available
+
 
 # Window functions build the accumulator through `create_sliding_accumulator`,
 # which must reject DISTINCT too.
-statement error DataFusion error: This feature is not implemented: CORR\(DISTINCT\) aggregations are not available
+statement error
 SELECT corr(DISTINCT x, y) OVER () FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+----
+DataFusion error: This feature is not implemented: CORR(DISTINCT) aggregations are not available
 
-statement error DataFusion error: This feature is not implemented: REGR_SLOPE\(DISTINCT\) aggregations are not available
+
+statement error
 SELECT regr_slope(DISTINCT x, y) OVER () FROM (VALUES (1.0, 1.0), (1.0, 1.0), (2.0, 3.0)) t(x, y)
+----
+DataFusion error: This feature is not implemented: REGR_SLOPE(DISTINCT) aggregations are not available
+
 
 # all_nulls_query_correlation
 query R
@@ -800,15 +833,24 @@ SELECT approx_median(distinct col_i8) FROM median_table
 ----
 100
 
-statement error DataFusion error: This feature is not implemented: APPROX_MEDIAN\(DISTINCT\) aggregations are not available
+statement error
 SELECT approx_median(col_i8), approx_median(distinct col_i8) FROM median_table
+----
+DataFusion error: This feature is not implemented: APPROX_MEDIAN(DISTINCT) aggregations are not available
+
 
 # null handling clauses not supported
-query error DataFusion error: Error during planning: \[IGNORE \| RESPECT\] NULLS are not permitted for median
+query error
 SELECT median(c2) IGNORE NULLS FROM aggregate_test_100
+----
+DataFusion error: Error during planning: [IGNORE | RESPECT] NULLS are not permitted for median
 
-query error DataFusion error: Error during planning: \[IGNORE \| RESPECT\] NULLS are not permitted for median
+
+query error
 SELECT median(c2) RESPECT NULLS FROM aggregate_test_100
+----
+DataFusion error: Error during planning: [IGNORE | RESPECT] NULLS are not permitted for median
+
 
 # median_i16
 query R
@@ -1896,11 +1938,17 @@ SELECT g, approx_distinct(arrow_cast(arrow_cast(i, 'Int8'), 'Dictionary(Int32, I
 statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Float64 is not implemented
 SELECT approx_distinct(arrow_cast(i, 'Float64')) FROM approx_distinct_group_test;
 
-statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Dictionary\(Int32, Float64\) is not implemented
+statement error
 SELECT approx_distinct(arrow_cast(i, 'Dictionary(Int32, Float64)')) FROM approx_distinct_group_test;
+----
+DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Dictionary(Int32, Float64) is not implemented
 
-statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Dictionary\(Int32, Float64\) is not implemented
+
+statement error
 SELECT g, approx_distinct(arrow_cast(i, 'Dictionary(Int32, Float64)')) FROM approx_distinct_group_test GROUP BY g;
+----
+DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type Dictionary(Int32, Float64) is not implemented
+
 
 # RunEndEncoded: run-end encoded values must hash identically to the plain
 # values, so the counts below match the Utf8 / Int32 cases above.
@@ -2523,8 +2571,11 @@ SELECT APPROX_PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(
 ----
 NULL
 
-query error DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 \(got null\)
+query error
 SELECT APPROX_PERCENTILE_CONT(NULL) WITHIN GROUP (ORDER BY v) FROM (VALUES (CAST(NULL as INT))) as t (v);
+----
+DataFusion error: Error during planning: Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 (got null)
+
 
 # percentile_cont_with_weight_with_nulls
 query R
@@ -2914,23 +2965,41 @@ SELECT g, percentile_cont(y, m) AS median FROM (SELECT t.x % 3 as g, t.x + 1 as 
 1 56
 2 66
 
-query error DataFusion error: Execution error: Percentile value must be between 0\.0 and 1\.0 inclusive, NaN is invalid
+query error
 SELECT approx_percentile_cont(x, m) FROM (VALUES (10,'NaN'::FLOAT),(20,'NaN'::FLOAT),(30,'NaN'::FLOAT),(40,'NaN'::FLOAT)) AS t(x,m)
+----
+DataFusion error: Execution error: Percentile value must be between 0.0 and 1.0 inclusive, NaN is invalid
 
-query error DataFusion error: Execution error: Percentile value must be between 0\.0 and 1\.0 inclusive, NaN is invalid
+
+query error
 SELECT percentile_cont(x, m) FROM (VALUES (10,'NaN'::FLOAT),(20,'NaN'::FLOAT),(30,'NaN'::FLOAT),(40,'NaN'::FLOAT)) AS t(x,m)
+----
+DataFusion error: Execution error: Percentile value must be between 0.0 and 1.0 inclusive, NaN is invalid
 
-query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0\.0 and 1\.0 inclusive, inf is invalid
+
+query error
 SELECT approx_percentile_cont(x, m) FROM (VALUES (10,'+Inf'::FLOAT),(20,'+Inf'::FLOAT),(30,'+Inf'::FLOAT),(40,'+Inf'::FLOAT)) AS t(x,m)
+----
+DataFusion error: Execution error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive, inf is invalid
 
-query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0\.0 and 1\.0 inclusive, inf is invalid
+
+query error
 SELECT percentile_cont(x, m) FROM (VALUES (10,'+Inf'::FLOAT),(20,'+Inf'::FLOAT),(30,'+Inf'::FLOAT),(40,'+Inf'::FLOAT)) AS t(x,m)
+----
+DataFusion error: Execution error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive, inf is invalid
 
-query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0\.0 and 1\.0 inclusive, \-inf is invalid
+
+query error
 SELECT approx_percentile_cont(x, m) FROM (VALUES (10,'-Inf'::FLOAT),(20,'-Inf'::FLOAT),(30,'-Inf'::FLOAT),(40,'-Inf'::FLOAT)) AS t(x,m)
+----
+DataFusion error: Execution error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive, -inf is invalid
 
-query error DataFusion error: Execution error: Error during planning: Percentile value must be between 0\.0 and 1\.0 inclusive, \-inf is invalid
+
+query error
 SELECT percentile_cont(x, m) FROM (VALUES (10,'-Inf'::FLOAT),(20,'-Inf'::FLOAT),(30,'-Inf'::FLOAT),(40,'-Inf'::FLOAT)) AS t(x,m)
+----
+DataFusion error: Execution error: Error during planning: Percentile value must be between 0.0 and 1.0 inclusive, -inf is invalid
+
 
 # the percentile only has to be constant within a group, not across groups
 query IR
@@ -4618,11 +4687,17 @@ SELECT percentile_cont(-0.1) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 statement error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 1 and 5
 SELECT percentile_cont(c2) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for percentile_cont
+statement error
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) IGNORE NULLS FROM aggregate_test_100
+----
+DataFusion error: Error during planning: [IGNORE | RESPECT] NULLS are not permitted for percentile_cont
 
-statement error DataFusion error: Error during planning: \[IGNORE | RESPECT\] NULLS are not permitted for percentile_cont
+
+statement error
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3) RESPECT NULLS FROM aggregate_test_100
+----
+DataFusion error: Error during planning: [IGNORE | RESPECT] NULLS are not permitted for percentile_cont
+
 
 statement error DataFusion error: This feature is not implemented: Only a single ordering expression is permitted in a WITHIN GROUP clause
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c3, c2) FROM aggregate_test_100
@@ -9134,8 +9209,11 @@ logical_plan
 03)----TableScan: employee_csv projection=[state, salary]
 
 # fail if there is duplicate name
-query error DataFusion error: Schema error: Schema contains qualified field name employee_csv\.state and unqualified field name state which would be ambiguous
+query error
 select state, sum(salary) as state from employee_csv group by state;
+----
+DataFusion error: Schema error: Schema contains qualified field name employee_csv.state and unqualified field name state which would be ambiguous
+
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
@@ -9295,13 +9373,19 @@ physical_plan
 07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # a volatile alias and an aggregate in the same conjunct cannot be split
-query error DataFusion error: Error during planning: HAVING clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions\. Add the function to the SELECT list and reference it by alias, or use a subquery
+query error
 select v1, random() as r from having_test group by v1 having r > max(v2)
+----
+DataFusion error: Error during planning: HAVING clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions. Add the function to the SELECT list and reference it by alias, or use a subquery
+
 
 # an OR predicate is planned as one filter. The volatile alias forces that
 # filter above the projection, but max(v2) is not available there
-query error DataFusion error: Error during planning: HAVING clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions\. Add the function to the SELECT list and reference it by alias, or use a subquery
+query error
 select v1, random() as r from having_test group by v1 having r > 0.5 or max(v2) > 0
+----
+DataFusion error: Error during planning: HAVING clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions. Add the function to the SELECT list and reference it by alias, or use a subquery
+
 
 # a group-by column conjunct splits off and plans below the projection even
 # when it is not in the SELECT list
@@ -9312,16 +9396,25 @@ select count(*) from (select v1, random() as r from having_test group by v1, v2 
 
 # a column that is not in the SELECT list cannot appear in the same conjunct
 # as a volatile alias reference
-query error DataFusion error: Error during planning: HAVING clauses that reference an alias of a volatile expression can only reference columns from the SELECT list, but having_test\.v2 is not in the SELECT list\. Use a subquery instead
+query error
 select v1, random() as r from having_test group by v1, v2 having r > 0.5 or v2 > 0
+----
+DataFusion error: Error during planning: HAVING clauses that reference an alias of a volatile expression can only reference columns from the SELECT list, but having_test.v2 is not in the SELECT list. Use a subquery instead
+
 
 # volatile alias in HAVING still requires aggregation
-query error DataFusion error: Error during planning: HAVING clause references: r > Float64\(0\.5\) must appear in the GROUP BY clause or be used in an aggregate function
+query error
 select random() as r from having_test having r > 0.5
+----
+DataFusion error: Error during planning: HAVING clause references: r > Float64(0.5) must appear in the GROUP BY clause or be used in an aggregate function
+
 
 # volatile alias in HAVING is not supported with DISTINCT ON
-query error DataFusion error: Error during planning: HAVING and QUALIFY expressions that reference aliases of volatile expressions are not supported with DISTINCT ON\. Use a subquery instead
+query error
 select distinct on (v1) v1, random() as r from having_test group by v1 having r > 0.5
+----
+DataFusion error: Error during planning: HAVING and QUALIFY expressions that reference aliases of volatile expressions are not supported with DISTINCT ON. Use a subquery instead
+
 
 statement ok
 drop table having_test
@@ -10546,11 +10639,17 @@ DROP TABLE hits_raw;
 statement ok
 CREATE TABLE nested_agg_t AS VALUES (1, 10.0), (1, 20.0), (2, 30.0);
 
-statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested: 'sum\(nested_agg_t\.column2\)' is nested inside 'sum\(sum\(nested_agg_t\.column2\)\)'
+statement error
 SELECT column1, sum(sum(column2)) FROM nested_agg_t GROUP BY column1;
+----
+DataFusion error: Error during planning: Aggregate function calls cannot be nested: 'sum(nested_agg_t.column2)' is nested inside 'sum(sum(nested_agg_t.column2))'
 
-statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested: 'count\(nested_agg_t\.column2\)' is nested inside 'sum\(count\(nested_agg_t\.column2\)\)'
+
+statement error
 SELECT column1, sum(count(column2)) FROM nested_agg_t GROUP BY column1;
+----
+DataFusion error: Error during planning: Aggregate function calls cannot be nested: 'count(nested_agg_t.column2)' is nested inside 'sum(count(nested_agg_t.column2))'
+
 
 statement error DataFusion error: Error during planning: Aggregate function calls cannot be nested
 SELECT sum(sum(column2)) FROM nested_agg_t;
