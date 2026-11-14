@@ -824,6 +824,23 @@ fn update_column_does_not_exist(#[case] sql: &str) {
     assert_field_not_found(err, "doesnotexist");
 }
 
+#[rstest]
+#[case::adjacent_duplicates("UPDATE person SET last_name='Kay', last_name='Lee'")]
+#[case::duplicate_after_other_column(
+    "UPDATE person SET last_name='Kay', age=1, last_name='Lee'"
+)]
+#[case::qualified_and_unqualified(
+    "UPDATE person SET person.last_name='Kay', last_name='Lee'"
+)]
+#[test]
+fn update_rejects_duplicate_assignment(#[case] sql: &str) {
+    let err = logical_plan(sql).expect_err("duplicate SET column should fail planning");
+    assert_eq!(
+        err.strip_backtrace(),
+        "Error during planning: multiple assignments to same column \"last_name\""
+    );
+}
+
 #[test]
 fn plan_delete() {
     let sql = "delete from person where id=1";
