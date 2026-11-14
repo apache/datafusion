@@ -1490,6 +1490,63 @@ fn test_table_scan_with_empty_projection_and_filter_default_dialect() {
     );
 }
 
+/// A `Projection` node with no expressions, as `optimize_projections`
+/// leaves under `count(*)` when the filter column isn't otherwise needed.
+///
+/// For `select count(*) from t where id > 10`, the optimized plan is:
+///
+/// ```text
+/// Projection: count(Int64(1)) AS count(*)
+///   Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+///     Projection:                          <-- empty
+///       Filter: t.id > Int32(10)
+///         TableScan: t projection=[id]
+/// ```
+///
+/// See also `optimized_count_over_filter_empty_projection` in
+/// `datafusion/core/tests/sql/unparser.rs`.
+fn filter_with_empty_projection_helper() -> LogicalPlanBuilder {
+    table_scan(Some("table"), &test_schema(), None)
+        .unwrap()
+        .filter(col("id").gt(lit(10)))
+        .unwrap()
+        .project(Vec::<Expr>::new())
+        .unwrap()
+}
+
+#[test]
+fn test_empty_projection_node_default_dialect() {
+    let plan = filter_with_empty_projection_helper().build().unwrap();
+    let unparser = Unparser::new(&UnparserDefaultDialect {});
+    let sql = unparser.plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT 1 FROM "table" WHERE ("table".id > 10)"#
+    );
+}
+
+#[test]
+fn test_empty_projection_node_postgres() {
+    let plan = filter_with_empty_projection_helper().build().unwrap();
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT FROM "table" WHERE ("table"."id" > 10)"#
+    );
+}
+
+#[test]
+fn test_empty_projection_node_bigquery() {
+    let plan = filter_with_empty_projection_helper().build().unwrap();
+    let unparser = Unparser::new(&BigQueryDialect {});
+    let sql = unparser.plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @"SELECT 1 FROM `table` WHERE (`table`.`id` > 10)"
+    );
+}
+
 fn table_scan_with_empty_projection_and_none_projection_helper(
     table_name: &str,
     table_schema: Schema,
