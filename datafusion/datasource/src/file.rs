@@ -18,6 +18,7 @@ use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, not_impl_err};
+use datafusion_execution::memory_pool::MemoryPool;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::DisplayFormatType;
@@ -93,6 +94,18 @@ pub trait FileSource: Any + Send + Sync {
 
     /// Initialize new type with batch size configuration
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource>;
+
+    /// Returns a copy of this source that charges the memory it buffers
+    /// while scanning to `pool`, or `None` (the default) when the source
+    /// keeps nothing worth accounting for between the batches it emits.
+    ///
+    /// Called with the task's memory pool before the scan is opened.
+    fn with_memory_pool(
+        &self,
+        _memory_pool: &Arc<dyn MemoryPool>,
+    ) -> Option<Arc<dyn FileSource>> {
+        None
+    }
 
     /// Returns the filter expression that will be applied *during* the file scan.
     ///

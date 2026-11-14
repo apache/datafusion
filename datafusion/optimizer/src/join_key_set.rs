@@ -105,6 +105,7 @@ impl JoinKeySet {
     }
 
     /// returns true if this set is empty
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }

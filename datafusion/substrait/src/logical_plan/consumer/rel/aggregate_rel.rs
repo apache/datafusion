@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::logical_plan::consumer::SubstraitConsumerContext;
+
 use crate::logical_plan::consumer::{NameTracker, SubstraitConsumer};
 use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
 use datafusion::common::{Column, DFSchemaRef, internal_err, not_impl_err};
@@ -16,13 +18,16 @@ use substrait::proto::aggregate_rel::Grouping;
 pub async fn from_aggregate_rel(
     consumer: &impl SubstraitConsumer,
     agg: &AggregateRel,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
     if let Some(input) = agg.input.as_ref() {
-        let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
+        let input = LogicalPlanBuilder::from(consumer.consume_rel(input, context).await?);
         let mut ref_group_exprs = Vec::with_capacity(agg.grouping_expressions.len());
 
         for e in &agg.grouping_expressions {
-            let x = consumer.consume_expression(e, input.schema()).await?;
+            let x = consumer
+                .consume_expression(e, input.schema(), context)
+                .await?;
             ref_group_exprs.push(x);
         }
 
@@ -38,6 +43,7 @@ pub async fn from_aggregate_rel(
                         &agg.groupings[0],
                         &ref_group_exprs,
                         input.schema(),
+                        context,
                     )
                     .await?,
                 );
@@ -50,6 +56,7 @@ pub async fn from_aggregate_rel(
                         grouping,
                         &ref_group_exprs,
                         input.schema(),
+                        context,
                     )
                     .await?;
                     grouping_sets.push(grouping_set);
@@ -66,7 +73,9 @@ pub async fn from_aggregate_rel(
         for m in &agg.measures {
             let filter = match &m.filter {
                 Some(fil) => Some(Box::new(
-                    consumer.consume_expression(fil, input.schema()).await?,
+                    consumer
+                        .consume_expression(fil, input.schema(), context)
+                        .await?,
                 )),
                 None => None,
             };
@@ -80,7 +89,8 @@ pub async fn from_aggregate_rel(
                         _ => false,
                     };
                     let order_by =
-                        from_substrait_sorts(consumer, &f.sorts, input.schema()).await?;
+                        from_substrait_sorts(consumer, &f.sorts, input.schema(), context)
+                            .await?;
 
                     from_substrait_agg_func(
                         consumer,
@@ -89,6 +99,7 @@ pub async fn from_aggregate_rel(
                         filter,
                         order_by,
                         distinct,
+                        context,
                     )
                     .await
                 }
@@ -163,11 +174,14 @@ async fn from_substrait_grouping(
     grouping: &Grouping,
     expressions: &[Expr],
     input_schema: &DFSchemaRef,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Vec<Expr>> {
     let mut group_exprs = vec![];
     if !grouping.grouping_expressions.is_empty() {
         for e in &grouping.grouping_expressions {
-            let expr = consumer.consume_expression(e, input_schema).await?;
+            let expr = consumer
+                .consume_expression(e, input_schema, context)
+                .await?;
             group_exprs.push(expr);
         }
         return Ok(group_exprs);

@@ -3093,7 +3093,9 @@ SELECT g, percentile_cont(x, m) FROM (SELECT value % 4 AS g, value AS x, 0.25 AS
 2 26
 3 27
 
-query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 0.5 and 0.9
+# The partial states are merged in whichever order the partitions finish,
+# so the two differing values can be reported in either order
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values (0\.5 and 0\.9|0\.9 and 0\.5)
 SELECT g, percentile_cont(x, m) FROM (SELECT value % 4 AS g, value AS x, CASE WHEN value <= 50 THEN 0.5 ELSE 0.9 END AS m FROM generate_series(1, 100)) GROUP BY g
 
 query IR
@@ -8850,6 +8852,46 @@ select distinct count() from empty;
 
 statement ok
 DROP TABLE empty;
+
+# rule `aggregate_statistics` should not use the statistics of an aggregate
+# inside a subquery to replace an outer aggregate with a FILTER
+# https://github.com/apache/datafusion/issues/27220
+
+statement ok
+CREATE TABLE t AS VALUES (1), (2), (3), (4), (5);
+
+query I
+SELECT count(*) FILTER (WHERE c > 0) AS n FROM (SELECT count(*) AS c FROM t);
+----
+1
+
+query I
+SELECT count(1) FILTER (WHERE c > 0) FROM (SELECT count(1) AS c FROM t);
+----
+1
+
+query I
+SELECT count(*) AS n FROM (SELECT count(*) AS c FROM t);
+----
+1
+
+query TT
+EXPLAIN SELECT count(*) FILTER (WHERE c > 0) AS n FROM (SELECT count(*) AS c FROM t);
+----
+logical_plan
+01)Projection: count(Int64(1)) FILTER (WHERE c > Int64(0)) AS count(*) FILTER (WHERE c > Int64(0)) AS n
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) FILTER (WHERE c > Int64(0))]]
+03)----Projection: count(Int64(1)) AS count(*) AS c
+04)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+05)--------TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1)) FILTER (WHERE c > Int64(0))@0 as n]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)) FILTER (WHERE c > Int64(0))]
+03)----ProjectionExec: expr=[5 as c]
+04)------PlaceholderRowExec
+
+statement ok
+DROP TABLE t;
 
 statement ok
 CREATE TABLE t(col0 INTEGER) as VALUES(2);
