@@ -60,7 +60,7 @@ pub(super) struct BatchedJoinProcessorConfig {
     pub(super) fetch: Option<usize>,
 }
 
-/// Joins probe batches directly against the build map, in bounded chunks.
+/// Joins probe batches directly against the build map.
 ///
 /// Each lookup chunk contains at most `batch_size` candidate pairs, even if one
 /// key has millions of matches. The lookup offset resumes that key in the next
@@ -103,6 +103,7 @@ pub(super) struct BatchedJoinProcessor {
     build_indices_buffer: Vec<u64>,
     /// Materialized output retained across probe batches and join phases.
     output: BatchCoalescer,
+    /// Tracker for a total limit pushed into hash join
     remaining_fetch: Option<usize>,
 }
 

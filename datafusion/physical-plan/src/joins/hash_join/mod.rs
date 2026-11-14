@@ -3,7 +3,6 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`HashJoinExec`]: build a key index, enumerate matching rows, apply join semantics.
-//!
 
 pub use exec::{HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild};
 /// # Public Only for Internal Use:

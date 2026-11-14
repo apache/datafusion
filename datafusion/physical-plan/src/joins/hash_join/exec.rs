@@ -1857,8 +1857,7 @@ impl ExecutionPlan for HashJoinExec {
             .flatten()
             .flatten();
 
-        // A prepared build chooses its executor when it is created. Ordinary
-        // builds choose here, before collection constructs the physical index.
+        // See comments at `enable_migration_hash_join` for details
         let use_regular = if let Some(prepared) = &self.prepared_build {
             // Public join fields can change after builder validation.
             prepared.validate(self)?;
@@ -1922,6 +1921,8 @@ impl ExecutionPlan for HashJoinExec {
             .map(|(_, right_expr)| Arc::clone(right_expr))
             .collect::<Vec<_>>();
 
+        // For `RegularHashJoinStream` path, prepare for build-side data, and construct
+        // the final stream.
         if let Some(kind) = regular_join {
             let left_fut = match (&self.prepared_build, self.mode) {
                 (Some(prepared), _) => {
