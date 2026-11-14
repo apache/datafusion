@@ -707,5 +707,27 @@ drop table table_with_metadata;
 # Test that metadata on conflicting values raises an error.
 # The larger_table has 10 values, smaller_tables 1 value and the fields of each table
 # have conflicting metadata, same key different values See test:context.rs register_conflicting_metadata_tables
-statement error DataFusion error: PhysicalOptimizer rule 'join_selection' failed\. Schema mismatch\.\ncaused by\nInternal error: Schema metadata mismatch: Expected original metadata: \{"metadata_key": "right"\}, got metadata: \{"metadata_key": "left"\}
+statement error DataFusion error: PhysicalOptimizer rule 'join_selection' failed\. Schema mismatch\.\ncaused by\nInternal error: Schema metadata mismatch: Expected original metadata: \{"metadata_key": "left"\}, got metadata: \{"metadata_key": "right"\}
 select * from larger_table cross join smaller_table;
+
+# CrossJoinExec has to merge conflicting schema metadata the same way the logical
+# plan does, or the aggregate's logical-vs-physical schema check rejects the plan.
+# The input with fewer rows is on the left, so `join_selection` keeps the join as
+# written. See https://github.com/apache/datafusion/issues/23434
+query I
+select count(distinct b) from smaller_table, larger_table;
+----
+1
+
+# Same check for the opposite input order, which would be swapped if reordering
+# were left on.
+statement ok
+set datafusion.optimizer.join_reordering = false;
+
+query I
+select count(distinct a) from larger_table, smaller_table;
+----
+10
+
+statement ok
+set datafusion.optimizer.join_reordering = true;
