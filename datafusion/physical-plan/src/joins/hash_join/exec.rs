@@ -3262,6 +3262,17 @@ fn build_in_memory(
     };
     let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
 
+    // Join keys that are plain columns share the buffers of `batch`, any other
+    // expression evaluates to new arrays that are kept for the whole join.
+    let mut key_counter = RecordBatchMemoryCounter::new();
+    key_counter.count_batch(&batch);
+    let left_keys_size = left_values
+        .iter()
+        .map(|values| key_counter.count_array(values.as_ref()))
+        .sum::<usize>();
+    reservation.try_grow(left_keys_size)?;
+    metrics.build_mem_used.add(left_keys_size);
+
     let join_hash_map = if let Some((min_val, max_val)) = array_map_key_range(
         bounds.as_ref(),
         &left_values,
@@ -3341,18 +3352,13 @@ fn build_in_memory(
         .map(|values| float_semantics::normalize(Arc::clone(values)))
         .collect();
 
-    // Join keys that are plain columns share the buffers of `batch`, any other
-    // expression evaluates to new arrays that are kept for the whole join.
-    // The same goes for normalized keys: only a rewritten copy adds memory.
-    let mut key_counter = RecordBatchMemoryCounter::new();
-    key_counter.count_batch(&batch);
-    let keys_size = left_values
+    // Only a rewritten copy adds memory.
+    let normalized_keys_size = normalized_values
         .iter()
-        .chain(&normalized_values)
         .map(|values| key_counter.count_array(values.as_ref()))
         .sum::<usize>();
-    reservation.try_grow(keys_size)?;
-    metrics.build_mem_used.add(keys_size);
+    reservation.try_grow(normalized_keys_size)?;
+    metrics.build_mem_used.add(normalized_keys_size);
 
     let allocate_bitmap = || -> Result<BooleanBufferBuilder> {
         let bitmap_size = bit_util::ceil(batch.num_rows(), 8);
@@ -8965,6 +8971,74 @@ mod tests {
                 );
             }
         }
+        Ok(())
+    }
+
+    /// The evaluated key arrays are reserved before the map is allocated: with
+    /// room for the inputs only, the first failing request is the keys.
+    #[rstest]
+    #[tokio::test]
+    async fn join_build_key_arrays_are_reserved_before_map(
+        #[values(false, true)] use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let values = (0..16000).collect::<Vec<i32>>();
+        let batch = build_table_i32(("a1", &values), ("b1", &values), ("c1", &values));
+        let left_schema = batch.schema();
+        let left_key: PhysicalExprRef = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new_with_schema("a1", &left_schema)?),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+        ));
+        let key_array = left_key.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let mut counter = RecordBatchMemoryCounter::new();
+        let inputs = counter.count_batch(&batch);
+        let key_bytes = counter.count_array(key_array.as_ref());
+        assert!(key_bytes > 0);
+
+        let right = build_table(
+            ("a2", &vec![10, 11]),
+            ("b2", &vec![12, 13]),
+            ("c2", &vec![14, 15]),
+        );
+        let on = vec![(
+            left_key,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+        let left =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&left_schema), None)?;
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(inputs + key_bytes - 1, 1.0)
+            .build_arc()?;
+        let task_ctx = prepare_task_ctx(8192, use_perfect_hash_join_as_possible);
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(task_ctx.session_config().clone())
+                .with_runtime(runtime),
+        );
+
+        let err = common::collect(join.execute(0, task_ctx)?)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_contains!(
+            err,
+            format!(
+                "Failed to allocate additional {} for HashJoinInput",
+                datafusion_common::human_readable_size(key_bytes)
+            )
+        );
         Ok(())
     }
 
