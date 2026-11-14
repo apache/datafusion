@@ -80,6 +80,13 @@ SELECT strings['not_found'], arrow_field(strings)['nullable'], arrow_field(strin
 ----
 NULL false true
 
+# map_entries on a map whose values are not nullable
+query ?
+SELECT map_entries(ints) FROM data ORDER BY ints['bytes'] DESC LIMIT 2;
+----
+[{key: bytes, value: 49960}]
+[{key: bytes, value: 49689}]
+
 # Select non existent key, expect NULL for each row
 query I
 SELECT COUNT(CASE WHEN strings['not_found'] IS NULL THEN 1 ELSE 0 END) FROM data;
@@ -852,6 +859,23 @@ SELECT map_entries(column1) from map_array_table_1;
 [{key: 4, value: [1, NULL, 3]}, {key: 5, value: [4, NULL, 6]}, {key: 6, value: [7, 8, 9]}]
 [{key: 7, value: [1, NULL, 3]}, {key: 8, value: [9, NULL, 6]}, {key: 9, value: [7, 8, 9]}]
 NULL
+
+# map_entries on maps whose entry fields differ from the `key` and `value`
+# fields of its result: non-nullable values, or other field names
+query ?
+SELECT map_entries(arrow_cast(MAP {'a': 1, 'b': 2}, 'Map("entries": non-null Struct("key": non-null Utf8, "value": non-null Int64), unsorted)'));
+----
+[{key: a, value: 1}, {key: b, value: 2}]
+
+query ?
+SELECT map_entries(arrow_cast(MAP {'a': 1, 'b': NULL}, 'Map("entries": non-null Struct("keys": non-null Utf8, "values": Int64), unsorted)'));
+----
+[{key: a, value: 1}, {key: b, value: NULL}]
+
+query T
+SELECT arrow_typeof(map_entries(arrow_cast(MAP {'a': 1}, 'Map("entries": non-null Struct("keys": non-null Utf8, "values": non-null Int64), unsorted)')));
+----
+List(non-null Struct("key": non-null Utf8, "value": Int64))
 
 # Tests for map_keys
 
