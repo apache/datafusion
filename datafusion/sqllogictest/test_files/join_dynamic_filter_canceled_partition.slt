@@ -1,0 +1,141 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Reproducer for https://github.com/apache/datafusion/issues/21625
+# (fixed by https://github.com/apache/datafusion/pull/21666).
+#
+# A partitioned hash join's dynamic filter waits until every build partition
+# reports to a shared coordinator. A parent join can drop a child partition
+# before that child reports, and the coordinator must not wait for it.
+#
+# The plan is a partitioned parent join with a partitioned child join on its
+# probe side. Both joins use the same key, so no repartition sits between them.
+# `s` holds only k = 1, so 3 of the 4 parent build partitions are empty:
+#
+#   parent P0/P2/P3: empty build, Inner join -> Completed, probe never polled
+#                    -> child P0/P2/P3 dropped before they report
+#   parent P1:       non-empty build -> polls child P1
+#                    -> child P1 waits for the reports of P0, P2 and P3
+#
+# Without the fix, child P1 waits forever and the query hangs. With the fix,
+# a dropped child partition reports itself as canceled and the query returns.
+# The hang does not depend on timing: hash routing of k = 1 is fixed, and a
+# child partition reports only when its parent partition polls it.
+
+# The test runner also uses 4. The explicit setting keeps the test independent
+# of that default, because the partition count decides which partitions are empty.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+# Force both joins into Partitioned mode.
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 0;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 0;
+
+# Keep `s` on the parent build side and the child join on its probe side.
+statement ok
+set datafusion.optimizer.join_reordering = false;
+
+# Two files per table give two scan partitions, so the planner hash-repartitions
+# each join input from 2 to 4 partitions.
+query I
+COPY (SELECT 1 AS k) TO 'test_files/scratch/join_dynamic_filter_canceled_partition/s/0.parquet' STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT 1 AS k) TO 'test_files/scratch/join_dynamic_filter_canceled_partition/s/1.parquet' STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT column1 AS k, column1 AS v FROM (VALUES (1), (2), (3), (4))) TO 'test_files/scratch/join_dynamic_filter_canceled_partition/a/0.parquet' STORED AS PARQUET;
+----
+4
+
+query I
+COPY (SELECT column1 AS k, column1 AS v FROM (VALUES (5), (6), (7), (8))) TO 'test_files/scratch/join_dynamic_filter_canceled_partition/a/1.parquet' STORED AS PARQUET;
+----
+4
+
+query I
+COPY (SELECT column1 AS k FROM (VALUES (1), (2), (3), (4))) TO 'test_files/scratch/join_dynamic_filter_canceled_partition/b/0.parquet' STORED AS PARQUET;
+----
+4
+
+query I
+COPY (SELECT column1 AS k FROM (VALUES (5), (6), (7), (8))) TO 'test_files/scratch/join_dynamic_filter_canceled_partition/b/1.parquet' STORED AS PARQUET;
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE s(k INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/join_dynamic_filter_canceled_partition/s/';
+
+statement ok
+CREATE EXTERNAL TABLE a(k INT, v INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/join_dynamic_filter_canceled_partition/a/';
+
+statement ok
+CREATE EXTERNAL TABLE b(k INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/join_dynamic_filter_canceled_partition/b/';
+
+# The reproducer needs this exact shape: both joins Partitioned, `s` on the
+# parent build side, and the child join directly on the parent probe side.
+query TT
+EXPLAIN SELECT s.k, ab.v
+FROM s
+JOIN (SELECT a.k, a.v FROM a JOIN b ON a.k = b.k) ab ON s.k = ab.k;
+----
+logical_plan
+01)Projection: s.k, ab.v
+02)--Inner Join: s.k = ab.k
+03)----TableScan: s projection=[k]
+04)----SubqueryAlias: ab
+05)------Projection: a.k, a.v
+06)--------Inner Join: a.k = b.k
+07)----------TableScan: a projection=[k, v]
+08)----------TableScan: b projection=[k]
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(k@0, k@0)], projection=[k@0, v@2]
+02)--RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=2
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_canceled_partition/s/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_canceled_partition/s/1.parquet]]}, projection=[k], file_type=parquet
+04)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(k@0, k@0)], projection=[k@0, v@1]
+05)----RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=2
+06)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_canceled_partition/a/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_canceled_partition/a/1.parquet]]}, projection=[k, v], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+07)----RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=2
+08)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_canceled_partition/b/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_canceled_partition/b/1.parquet]]}, projection=[k], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+# Reproducer for https://github.com/apache/datafusion/issues/21625.
+# This query hangs if a dropped child partition blocks the dynamic filter.
+query II rowsort
+SELECT s.k, ab.v
+FROM s
+JOIN (SELECT a.k, a.v FROM a JOIN b ON a.k = b.k) ab ON s.k = ab.k;
+----
+1 1
+1 1
+
+statement ok
+DROP TABLE s;
+
+statement ok
+DROP TABLE a;
+
+statement ok
+DROP TABLE b;
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold;
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold_rows;
+
+statement ok
+reset datafusion.optimizer.join_reordering;
