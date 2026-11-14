@@ -1468,6 +1468,7 @@ fn test_window_partial_constant_and_set_monotonicity_47() {
 // BoundedWindowAggExec + Sliding(bounded preceding, bounded following) + no partition_by + on ordered column
 
 // Case 48:
+// Trailing NULLs can make the bounded COUNT fall as non-NULL rows leave its frame.
 #[test]
 fn test_window_partial_constant_and_set_monotonicity_48() {
     assert_snapshot!(TestWindowCase {

@@ -1739,7 +1739,8 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
 ///
 /// A set-monotonic aggregate may return NULL for an empty input or an input
 /// containing only NULLs. Once a non-NULL input is present, its result must be
-/// non-NULL, so growing window frames can only have a prefix of NULL results.
+/// non-NULL. Adding inputs must never change a non-NULL result back to NULL,
+/// so growing window frames can only have a prefix of NULL results.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SetMonotonicity {
     /// Aggregate value increases or stays the same as the input set grows.

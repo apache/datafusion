@@ -168,14 +168,7 @@ pub struct WindowPhysicalExpressions {
     pub order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
 }
 
-/// Shared evaluation and inspection of aggregate window expressions.
-///
-/// # Public Only for Internal Use:
-///
-/// This is not a public API and is for internal use only; see [API policy] for details.
-///
-/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
-#[doc(hidden)]
+/// Extension trait that adds common functionality to [`AggregateWindowExpr`]s
 pub trait AggregateWindowExpr: WindowExpr {
     /// Get the accumulator for the window expression. Note that distinct
     /// window expressions may return distinct accumulators; e.g. sliding

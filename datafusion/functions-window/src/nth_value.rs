@@ -518,10 +518,6 @@ impl PartitionEvaluator for NthValueEvaluator {
     fn uses_window_frame(&self) -> bool {
         true
     }
-
-    fn is_constant_for_frame(&self) -> bool {
-        true
-    }
 }
 
 impl NthValueEvaluator {

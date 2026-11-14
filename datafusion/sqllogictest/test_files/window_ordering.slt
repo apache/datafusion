@@ -554,10 +554,11 @@ query TT
 EXPLAIN SELECT g, FIRST_VALUE(x) OVER (PARTITION BY g ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS f FROM part ORDER BY g ASC NULLS LAST, f ASC NULLS LAST;
 ----
 physical_plan
-01)ProjectionExec: expr=[g@0 as g, first_value(part.x) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as f]
-02)--WindowAggExec: wdw=[first_value(part.x) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "first_value(part.x) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-03)----SortExec: expr=[g@0 ASC NULLS LAST, x@1 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[g@0 ASC NULLS LAST, f@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[g@0 as g, first_value(part.x) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as f]
+03)----WindowAggExec: wdw=[first_value(part.x) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "first_value(part.x) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+04)------SortExec: expr=[g@0 ASC NULLS LAST, x@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # OPT-FULL-GLOBAL-LAST: A value function over the entire input has a globally constant result
 query I
@@ -573,10 +574,11 @@ query TT
 EXPLAIN SELECT LAST_VALUE(x) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS f FROM v ORDER BY f ASC NULLS LAST;
 ----
 physical_plan
-01)ProjectionExec: expr=[last_value(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as f]
-02)--WindowAggExec: wdw=[last_value(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "last_value(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-03)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[f@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[last_value(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as f]
+03)----WindowAggExec: wdw=[last_value(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "last_value(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+04)------SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # OPT-FULL-PARTITION-NTH: A full-partition value function has one value within each partition
 query II
@@ -593,10 +595,11 @@ query TT
 EXPLAIN SELECT g, NTH_VALUE(x, 2) OVER (PARTITION BY g ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS f FROM part ORDER BY g ASC NULLS LAST, f ASC NULLS LAST;
 ----
 physical_plan
-01)ProjectionExec: expr=[g@0 as g, nth_value(part.x,Int64(2)) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as f]
-02)--WindowAggExec: wdw=[nth_value(part.x,Int64(2)) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "nth_value(part.x,Int64(2)) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-03)----SortExec: expr=[g@0 ASC NULLS LAST, x@1 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[g@0 ASC NULLS LAST, f@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[g@0 as g, nth_value(part.x,Int64(2)) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as f]
+03)----WindowAggExec: wdw=[nth_value(part.x,Int64(2)) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "nth_value(part.x,Int64(2)) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+04)------SortExec: expr=[g@0 ASC NULLS LAST, x@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # CONTROL-MAX-ASC: Sliding MAX with non-NULL ascending input already avoids the final sort
 query I
@@ -615,7 +618,8 @@ physical_plan
 03)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
-# CONTROL-COUNT-NOT-NULL: An unpartitioned fixed-width COUNT fills and then remains constant
+# PLAN-REGRESSION-COUNT-NOT-NULL: A monotonic fixed-width COUNT now retains the final sort.
+# Generic set monotonicity cannot prove this bounded-frame ordering (see COUNT DISTINCT below).
 query I
 SELECT COUNT(x) OVER (ORDER BY x ASC ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS c FROM v ORDER BY c ASC;
 ----
