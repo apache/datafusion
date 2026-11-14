@@ -341,6 +341,38 @@ fn roundtrip_explain() -> Result<()> {
 }
 
 #[test]
+fn decode_explain_exec_node_without_plan_type() -> Result<()> {
+    let codec = DefaultPhysicalExtensionCodec {};
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("plan_type", DataType::Utf8, false),
+        Field::new("plan", DataType::Utf8, false),
+    ]));
+    let explain = Arc::new(ExplainExec::new(
+        schema,
+        vec![StringifiedPlan::new(PlanType::FinalPhysicalPlan, "final")],
+        false,
+    ));
+    let node = PhysicalPlanNode::try_from_physical_plan(explain, &codec)?;
+
+    for plan_type in [None, Some(protobuf::PlanType::default())] {
+        let mut node = node.clone();
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::Explain(explain)) =
+            node.physical_plan_type.as_mut()
+        else {
+            unreachable!("expected ExplainExecNode")
+        };
+        explain.stringified_plans[0].plan_type = plan_type;
+        let error = node
+            .try_into_physical_plan(&ctx.task_ctx(), &codec)
+            .unwrap_err();
+        assert!(error.strip_backtrace().contains("'plan_type'"));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn roundtrip_union() -> Result<()> {
     let field_a = Field::new("col", DataType::Int64, false);
     let schema_left = Schema::new(vec![field_a.clone()]);
@@ -658,6 +690,55 @@ fn roundtrip_unnest() -> Result<()> {
         roundtrip_test_and_return(Arc::new(unnest), &ctx, &codec, &proto_converter)?;
     let result = result.downcast_ref::<UnnestExec>().unwrap();
     assert_eq!(result.options(), &options);
+
+    Ok(())
+}
+
+#[test]
+fn decode_unnest_exec_node_without_recursion_columns() -> Result<()> {
+    let codec = DefaultPhysicalExtensionCodec {};
+    let ctx = SessionContext::new();
+    let item = Field::new_list_field(DataType::Utf8, true);
+    let input_schema =
+        Arc::new(Schema::new(vec![Field::new_list("b", item.clone(), false)]));
+    let output_schema = Arc::new(Schema::new(vec![item.with_name("b")]));
+    let column = datafusion_common::Column::new_unqualified("b");
+    let unnest = UnnestExec::new(
+        Arc::new(EmptyExec::new(input_schema)),
+        vec![ListUnnest {
+            index_in_input_schema: 0,
+            depth: 1,
+        }],
+        vec![],
+        output_schema,
+        UnnestOptions {
+            null_handling: datafusion_common::NullHandling::Preserve,
+            recursions: vec![datafusion_common::RecursionUnnestOption {
+                input_column: column.clone(),
+                output_column: column,
+                depth: 1,
+            }],
+        },
+    )?;
+    let node = PhysicalPlanNode::try_from_physical_plan(Arc::new(unnest), &codec)?;
+
+    for field in ["input_column", "output_column"] {
+        let mut node = node.clone();
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::Unnest(unnest)) =
+            node.physical_plan_type.as_mut()
+        else {
+            unreachable!("expected UnnestExecNode")
+        };
+        let recursion = &mut unnest.options.as_mut().unwrap().recursions[0];
+        match field {
+            "input_column" => recursion.input_column = None,
+            _ => recursion.output_column = None,
+        }
+        let error = node
+            .try_into_physical_plan(&ctx.task_ctx(), &codec)
+            .unwrap_err();
+        assert!(error.strip_backtrace().contains(&format!("'{field}'")));
+    }
 
     Ok(())
 }

@@ -464,12 +464,24 @@ impl UnnestExec {
             recursions: options
                 .recursions
                 .iter()
-                .map(|recursion| datafusion_common::RecursionUnnestOption {
-                    input_column: recursion.input_column.as_ref().unwrap().into(),
-                    output_column: recursion.output_column.as_ref().unwrap().into(),
-                    depth: recursion.depth as _,
+                .map(|recursion| {
+                    let input_column = recursion.input_column.as_ref().ok_or_else(|| {
+                        datafusion_common::internal_datafusion_err!(
+                            "UnnestExec is missing required field 'input_column' of an 'options.recursions' entry"
+                        )
+                    })?;
+                    let output_column = recursion.output_column.as_ref().ok_or_else(|| {
+                        datafusion_common::internal_datafusion_err!(
+                            "UnnestExec is missing required field 'output_column' of an 'options.recursions' entry"
+                        )
+                    })?;
+                    Ok(datafusion_common::RecursionUnnestOption {
+                        input_column: input_column.into(),
+                        output_column: output_column.into(),
+                        depth: recursion.depth as _,
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>>>()?,
         };
 
         Ok(Arc::new(UnnestExec::new(
