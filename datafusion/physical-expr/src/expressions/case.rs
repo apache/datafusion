@@ -385,6 +385,96 @@ fn filter_record_batch(
     }
 }
 
+fn take_case_rows<'a>(
+    batch: &'a RecordBatch,
+    indices: &dyn Array,
+) -> std::result::Result<Cow<'a, RecordBatch>, ArrowError> {
+    // These indices are an ordered subset of the original batch's rows.
+    if indices.len() == batch.num_rows() {
+        debug_assert_eq!(indices.null_count(), 0);
+        debug_assert!(
+            indices
+                .as_primitive::<UInt32Type>()
+                .values()
+                .iter()
+                .copied()
+                .eq(0..batch.num_rows() as u32)
+        );
+        return Ok(Cow::Borrowed(batch));
+    }
+    Ok(Cow::Owned(arrow::compute::take_record_batch(
+        batch, indices,
+    )?))
+}
+
+/// Tracks remaining rows in either the original or a filtered batch.
+enum CaseRemainder<'a> {
+    Deferred {
+        original: &'a RecordBatch,
+        rows: ArrayRef,
+    },
+    Materialized {
+        batch: Cow<'a, RecordBatch>,
+        rows: ArrayRef,
+    },
+}
+
+impl CaseRemainder<'_> {
+    fn rows(&self) -> &ArrayRef {
+        match self {
+            Self::Deferred { rows, .. } | Self::Materialized { rows, .. } => rows,
+        }
+    }
+
+    fn evaluate_when(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<ColumnarValue> {
+        match self {
+            Self::Deferred { .. } => {
+                // Only literal WHEN expressions use deferred row selection.
+                let literal = expr.downcast_ref::<Literal>().ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Deferred CASE selection requires literal WHEN expressions"
+                    )
+                })?;
+                Ok(ColumnarValue::Scalar(literal.value().clone()))
+            }
+            Self::Materialized { batch, .. } => expr.evaluate(batch),
+        }
+    }
+
+    fn batch(&self) -> Result<Cow<'_, RecordBatch>> {
+        match self {
+            Self::Deferred { original, rows } => Ok(take_case_rows(original, rows)?),
+            Self::Materialized { batch, .. } => Ok(Cow::Borrowed(batch.as_ref())),
+        }
+    }
+
+    fn select(
+        &self,
+        filter: &FilterPredicate,
+    ) -> Result<(ArrayRef, Cow<'_, RecordBatch>)> {
+        let rows = filter_array(self.rows(), filter)?;
+        let batch = match self {
+            Self::Deferred { original, .. } => take_case_rows(original, &rows)?,
+            Self::Materialized { batch, .. } => {
+                Cow::Owned(filter_record_batch(batch, filter)?)
+            }
+        };
+        Ok((rows, batch))
+    }
+
+    fn retain(&mut self, filter: &FilterPredicate) -> Result<()> {
+        let selected_rows = filter_array(self.rows(), filter)?;
+        match self {
+            Self::Deferred { rows, .. } => *rows = selected_rows,
+            Self::Materialized { batch, rows } => {
+                *batch = Cow::Owned(filter_record_batch(batch, filter)?);
+                *rows = selected_rows;
+            }
+        }
+        Ok(())
+    }
+}
+
 // This function exists purely to be able to use the same call style
 // for `filter_record_batch` and `filter_array` at the point of use.
 // When https://github.com/apache/arrow-rs/pull/8693 is available, replace
@@ -771,12 +861,26 @@ impl CaseBody {
         return_type: &DataType,
     ) -> Result<ColumnarValue> {
         let mut result_builder = ResultBuilder::new(return_type, batch.num_rows());
+        // Literal WHEN expressions do not read rows. Keep indices between branches
+        // instead of repeatedly copying the unselected columns.
+        let defer_remainder = self
+            .when_then_expr
+            .iter()
+            .all(|(when, _)| when.is::<Literal>());
 
-        // `remainder_rows` contains the indices of the rows that need to be evaluated
-        let mut remainder_rows: ArrayRef =
+        let rows: ArrayRef =
             Arc::new(UInt32Array::from_iter_values(0..batch.num_rows() as u32));
-        // `remainder_batch` contains the rows themselves that need to be evaluated
-        let mut remainder_batch = Cow::Borrowed(batch);
+        let mut remainder = if defer_remainder {
+            CaseRemainder::Deferred {
+                original: batch,
+                rows,
+            }
+        } else {
+            CaseRemainder::Materialized {
+                batch: Cow::Borrowed(batch),
+                rows,
+            }
+        };
 
         // evaluate the base expression
         let mut base_values = self
@@ -796,7 +900,7 @@ impl CaseBody {
             // We already checked there are nulls, so we can be sure a new buffer will not be
             // created.
             let base_not_nulls = is_not_null(base_values.as_ref())?;
-            let base_all_null = base_null_count == remainder_batch.num_rows();
+            let base_all_null = base_null_count == batch.num_rows();
 
             // If there is an else expression, use that as the default value for the null rows
             // Otherwise the default `null` value from the result builder will be used.
@@ -805,14 +909,12 @@ impl CaseBody {
 
                 if base_all_null {
                     // All base values were null, so no need to filter
-                    let nulls_value = expr.evaluate(&remainder_batch)?;
-                    result_builder.add_branch_result(&remainder_rows, nulls_value)?;
+                    let nulls_value = expr.evaluate(batch)?;
+                    result_builder.add_branch_result(remainder.rows(), nulls_value)?;
                 } else {
                     // Filter out the null rows and evaluate the else expression for those
                     let nulls_filter = create_filter(&not(&base_not_nulls)?, true);
-                    let nulls_batch =
-                        filter_record_batch(&remainder_batch, &nulls_filter)?;
-                    let nulls_rows = filter_array(&remainder_rows, &nulls_filter)?;
+                    let (nulls_rows, nulls_batch) = remainder.select(&nulls_filter)?;
                     let nulls_value = expr.evaluate(&nulls_batch)?;
                     result_builder.add_branch_result(&nulls_rows, nulls_value)?;
                 }
@@ -823,11 +925,9 @@ impl CaseBody {
                 return result_builder.finish();
             }
 
-            // Remove the null rows from the remainder batch
+            // Remove null rows from the remaining selection.
             let not_null_filter = create_filter(&base_not_nulls, true);
-            remainder_batch =
-                Cow::Owned(filter_record_batch(&remainder_batch, &not_null_filter)?);
-            remainder_rows = filter_array(&remainder_rows, &not_null_filter)?;
+            remainder.retain(&not_null_filter)?;
             base_values = filter_array(&base_values, &not_null_filter)?;
         }
 
@@ -839,7 +939,7 @@ impl CaseBody {
             // Evaluate the 'when' predicate for the remainder batch
             // This results in a boolean array with the same length as the remaining number of rows
             let when_expr = &self.when_then_expr[i].0;
-            let when_value = match when_expr.evaluate(&remainder_batch)? {
+            let when_value = match remainder.evaluate_when(when_expr)? {
                 ColumnarValue::Array(a) => {
                     compare_with_eq(&a, &base_values, base_value_is_nested)
                 }
@@ -855,26 +955,25 @@ impl CaseBody {
                 continue;
             }
 
-            // If the 'when' predicate matched all remaining rows, there is no need to filter
+            // No later branch can match if this branch selects every remaining row.
             if when_value.null_count() == 0 && !when_value.has_false() {
                 let then_expression = &self.when_then_expr[i].1;
-                let then_value = then_expression.evaluate(&remainder_batch)?;
-                result_builder.add_branch_result(&remainder_rows, then_value)?;
+                let then_batch = remainder.batch()?;
+                let then_value = then_expression.evaluate(&then_batch)?;
+                result_builder.add_branch_result(remainder.rows(), then_value)?;
                 return result_builder.finish();
             }
 
-            // Filter the remainder batch based on the 'when' value
-            // This results in a batch containing only the rows that need to be evaluated
-            // for the current branch
+            // Evaluate THEN on the selected rows.
             // Still no need to call `prep_null_mask_filter` since `create_filter` will already do
             // this unconditionally.
             let then_filter = create_filter(&when_value, true);
-            let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
-            let then_rows = filter_array(&remainder_rows, &then_filter)?;
+            let (then_rows, then_batch) = remainder.select(&then_filter)?;
 
             let then_expression = &self.when_then_expr[i].1;
             let then_value = then_expression.evaluate(&then_batch)?;
             result_builder.add_branch_result(&then_rows, then_value)?;
+            drop(then_batch);
 
             // If this is the last 'when' branch and there is no 'else' expression, there's no
             // point in calculating the remaining rows.
@@ -892,9 +991,7 @@ impl CaseBody {
                 }
             }?;
             let next_filter = create_filter(&next_selection, true);
-            remainder_batch =
-                Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
-            remainder_rows = filter_array(&remainder_rows, &next_filter)?;
+            remainder.retain(&next_filter)?;
             base_values = filter_array(&base_values, &next_filter)?;
         }
 
@@ -903,8 +1000,9 @@ impl CaseBody {
         if let Some(e) = &self.else_expr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
-            let else_value = expr.evaluate(&remainder_batch)?;
-            result_builder.add_branch_result(&remainder_rows, else_value)?;
+            let else_batch = remainder.batch()?;
+            let else_value = expr.evaluate(&else_batch)?;
+            result_builder.add_branch_result(remainder.rows(), else_value)?;
         }
 
         result_builder.finish()
@@ -1642,6 +1740,157 @@ mod tests {
         fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             self.inner.fmt_sql(f)
         }
+    }
+
+    #[test]
+    fn literal_when_preserves_rows_without_else() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "key",
+                Arc::new(Int32Array::from(vec![
+                    Some(2),
+                    None,
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                    Some(4),
+                    Some(0),
+                ])) as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(Int32Array::from(vec![20, 99, 10, 21, 30, 40, 0])) as ArrayRef,
+            ),
+        ])?;
+        let schema = batch.schema();
+        let invalid = binary(lit(1i32), Operator::Divide, lit(0i32), &schema)?;
+        let expr = case(
+            Some(col("key", &schema)?),
+            vec![
+                (lit(99i32), Arc::clone(&invalid)),
+                (lit(ScalarValue::Int32(None)), Arc::clone(&invalid)),
+                (lit(2i32), col("value", &schema)?),
+                (lit(1i32), col("value", &schema)?),
+                (lit(2i32), Arc::clone(&invalid)),
+                (lit(3i32), lit(300i32)),
+            ],
+            None,
+        )?;
+        let expected = [Some(20), None, Some(10), Some(21), Some(300), None, None];
+        // Four rows also exercise the branch that matches every remaining row.
+        for count in [4, 7] {
+            let result = expr.evaluate(&batch.slice(0, count))?.into_array(count)?;
+            assert_eq!(
+                as_int32_array(&result)?,
+                &Int32Array::from(expected[..count].to_vec())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn literal_when_preserves_rows_with_else() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "key",
+                Arc::new(Int32Array::from(vec![
+                    Some(2),
+                    None,
+                    Some(1),
+                    Some(2),
+                    Some(3),
+                    Some(4),
+                    Some(0),
+                ])) as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(Int32Array::from(vec![20, 99, 10, 21, 30, 40, 0])) as ArrayRef,
+            ),
+        ])?;
+        let schema = batch.schema();
+        let invalid = binary(lit(1i32), Operator::Divide, lit(0i32), &schema)?;
+        let expr = case(
+            Some(col("key", &schema)?),
+            vec![
+                (lit(99i32), Arc::clone(&invalid)),
+                (lit(ScalarValue::Int32(None)), Arc::clone(&invalid)),
+                (lit(2i32), col("value", &schema)?),
+                (lit(1i32), col("value", &schema)?),
+                (lit(2i32), Arc::clone(&invalid)),
+                (lit(3i32), lit(300i32)),
+            ],
+            Some(col("value", &schema)?),
+        )?;
+        let expected = [
+            Some(20),
+            Some(99),
+            Some(10),
+            Some(21),
+            Some(300),
+            Some(40),
+            Some(0),
+        ];
+        // Four rows also exercise the branch that matches every remaining row.
+        for count in [4, 7] {
+            let result = expr.evaluate(&batch.slice(0, count))?.into_array(count)?;
+            assert_eq!(
+                as_int32_array(&result)?,
+                &Int32Array::from(expected[..count].to_vec())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nonliteral_when_preserves_remaining_row_alignment() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "key",
+                Arc::new(Int32Array::from(vec![
+                    Some(2),
+                    None,
+                    Some(1),
+                    Some(3),
+                    Some(4),
+                ])) as ArrayRef,
+            ),
+            (
+                "match",
+                Arc::new(Int32Array::from(vec![9, 9, 1, 9, 4])) as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(Int32Array::from(vec![20, 99, 10, 30, 40])) as ArrayRef,
+            ),
+        ])?;
+        let schema = batch.schema();
+        let expr = case(
+            Some(col("key", &schema)?),
+            vec![
+                (lit(2i32), col("value", &schema)?),
+                (col("match", &schema)?, col("value", &schema)?),
+            ],
+            Some(lit(-1i32)),
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(5)?;
+        assert_eq!(
+            as_int32_array(&result)?,
+            &Int32Array::from(vec![20, -1, 10, -1, 40])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn taking_case_rows_preserves_zero_column_batch_length() -> Result<()> {
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(5)),
+        )?;
+        let selected = take_case_rows(&batch, &UInt32Array::from(vec![1, 3]))?;
+        assert_eq!(selected.num_rows(), 2);
+        Ok(())
     }
 
     #[test]
