@@ -4810,6 +4810,29 @@ SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
 1
 2
 
+# Same-named columns of a derived table inside the subquery
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT 1 FROM (
+        SELECT * FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+    ) d
+);
+
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE NOT EXISTS (
+    SELECT 1 FROM (
+        SELECT * FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+    ) d
+);
+
+# A derived table with one relation still works
+query I
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT 1 FROM (SELECT * FROM t26234 one WHERE one.k = t_outer.k + 1) d
+) ORDER BY t_outer.k;
+----
+1
+
 statement ok
 DROP TABLE t26234;
 

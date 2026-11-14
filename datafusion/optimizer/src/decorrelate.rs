@@ -709,6 +709,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 );
                 let mut new_correlated_cols = BTreeSet::new();
                 for col in local_correlated_cols.iter() {
+                    check_alias_keeps_column_name(alias.input.schema(), col)?;
                     new_correlated_cols
                         .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
                 }
