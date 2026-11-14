@@ -1121,3 +1121,55 @@ set datafusion.execution.parquet.pushdown_filters = false;
 
 statement ok
 DROP TABLE try_cast_narrowing_pq;
+
+##########
+# Regression test for https://github.com/apache/datafusion/issues/27253
+#
+# The Map key 'en' is a runtime lookup,
+# so pruning must retain *all* of common.
+##########
+
+statement ok
+COPY (
+  SELECT named_struct(
+    'primary', local_name,
+    'common', map(['en'], [english])
+  ) AS names
+  FROM (VALUES ('Local', 'English'), (NULL, 'Fallback'), ('', ''))
+    AS input(local_name, english)
+) TO 'test_files/scratch/parquet_filter_pushdown/struct_with_map.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE struct_with_map STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/struct_with_map.parquet';
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+query T rowsort
+SELECT names.primary FROM struct_with_map
+WHERE coalesce(names.primary, names.common['en']) <> '';
+----
+Local
+NULL
+
+query T rowsort
+SELECT names.common['en'] FROM struct_with_map;
+----
+(empty)
+English
+Fallback
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+query T rowsort
+SELECT names.primary FROM struct_with_map
+WHERE coalesce(names.primary, names.common['en']) <> '';
+----
+Local
+NULL
+
+statement ok
+DROP TABLE struct_with_map;

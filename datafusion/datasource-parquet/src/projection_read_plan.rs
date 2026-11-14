@@ -210,20 +210,20 @@ impl<'schema> PushdownChecker<'schema> {
     }
 
     /// Checks whether a struct's root column exists in the file schema and, if so,
-    /// records its index so the entire struct is decoded for filter evaluation.
+    /// records its index and accessed field path for filter evaluation.
     ///
     /// This is called when we see a `get_field` expression that resolves to a
-    /// primitive leaf type. We only need the *root* column index because the
-    /// Parquet reader decodes all leaves of a struct together.
+    /// primitive leaf type. Only the Struct field prefix is recorded; any
+    /// runtime lookups (e.g. Map keys) require that field's entire subtree.
     ///
     /// # Example
     ///
-    /// Given file schema `{a: Int32, s: Struct(foo: Utf8, bar: Int64)}` and the
-    /// expression `get_field(s, 'foo') = 'hello'`:
+    /// Given file schema `{a: Int32, s: Struct(foo: Map(Utf8, Utf8), bar: Int64)}`
+    /// and the expression `get_field(get_field(s, 'foo'), 'en') = 'hello'`:
     ///
     /// - `column_name` = `"s"` (the root struct column)
     /// - `file_schema.index_of("s")` returns `1`
-    /// - We push `1` into `required_columns`
+    /// - We record `1` and `["foo"]` in `struct_field_accesses`
     /// - Return `None` (no issue — traversal continues in the caller)
     ///
     /// If `"s"` is not in the file schema (e.g. a projected-away column), we set
@@ -231,12 +231,31 @@ impl<'schema> PushdownChecker<'schema> {
     fn check_struct_field_column(
         &mut self,
         column_name: &str,
-        field_path: Vec<String>,
+        mut field_path: Vec<String>,
     ) -> Option<TreeNodeRecursion> {
         let Ok(idx) = self.file_schema.index_of(column_name) else {
             self.projected_columns = true;
             return Some(TreeNodeRecursion::Jump);
         };
+
+        let root_type = self.file_schema.field(idx).data_type();
+        let struct_prefix_len = field_path
+            .iter()
+            .scan(root_type, |data_type, name| {
+                let DataType::Struct(fields) = *data_type else {
+                    return None;
+                };
+                let (_, field) = fields.find(name)?;
+                *data_type = field.data_type();
+                Some(())
+            })
+            .count();
+
+        // Drop runtime lookup keys.
+        // For example, ["foo", "en"] becomes ["foo"],
+        // selecting the Map's entire subtree
+        // so the key lookup can be evaluated at runtime.
+        field_path.truncate(struct_prefix_len);
 
         self.struct_field_accesses.push(StructFieldAccess {
             root_index: idx,
