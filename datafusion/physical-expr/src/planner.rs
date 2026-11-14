@@ -735,7 +735,7 @@ mod tests {
     use datafusion_expr::physical_planning_context::{
         ScalarSubqueryResults, SubqueryIndex,
     };
-    use datafusion_expr::{LogicalPlanBuilder, col, scalar_subquery};
+    use datafusion_expr::{LogicalPlanBuilder, case, col, scalar_subquery, when};
 
     use super::*;
 
@@ -1012,6 +1012,90 @@ mod tests {
                 physical.nullable(&schema)?,
                 "{cast_name}: should be nullable"
             );
+        }
+
+        Ok(())
+    }
+
+    /// The physical CASE reports the same field metadata as the logical CASE
+    #[test]
+    fn test_case_lowering_preserves_field_metadata() -> Result<()> {
+        let json = Metadata::new()
+            .with(EXTENSION_TYPE_NAME_KEY, "arrow.json")
+            .with(EXTENSION_TYPE_METADATA_KEY, "");
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("json", DataType::Utf8, true).with_metadata(json.clone()),
+            Field::new("name", DataType::Utf8, true)
+                .with_metadata(Metadata::new().with("source", "name")),
+            Field::new("plain", DataType::Utf8, true),
+            Field::new("large", DataType::LargeUtf8, true),
+        ]);
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        let null_with_metadata = Expr::Literal(
+            ScalarValue::Utf8(None),
+            Some(FieldMetadata::from(HashMap::from([(
+                "source".to_string(),
+                "null_else".to_string(),
+            )]))),
+        );
+
+        let cases = [
+            (
+                when(col("id").gt(lit(1)), col("json")).otherwise(col("plain"))?,
+                json.clone(),
+            ),
+            (
+                when(col("id").gt(lit(1)), col("name")).otherwise(col("json"))?,
+                json.clone().with("source", "name"),
+            ),
+            (
+                case(col("id")).when(lit(1), col("json")).end()?,
+                json.clone(),
+            ),
+            (
+                when(col("id").gt(lit(1)), col("plain")).otherwise(null_with_metadata)?,
+                Metadata::new().with("source", "null_else"),
+            ),
+            (
+                when(
+                    col("id").gt(lit(1)),
+                    when(col("id").gt(lit(2)), col("json")).end()?,
+                )
+                .otherwise(col("plain"))?,
+                json.clone(),
+            ),
+            // Type coercion casts a branch to the common type, which drops its
+            // extension type and keeps its other metadata
+            (
+                when(
+                    col("id").gt(lit(1)),
+                    Expr::Cast(Cast::new(Box::new(col("json")), DataType::LargeUtf8)),
+                )
+                .otherwise(col("large"))?,
+                Metadata::new(),
+            ),
+            (
+                when(
+                    col("id").gt(lit(1)),
+                    Expr::Cast(Cast::new(Box::new(col("name")), DataType::LargeUtf8)),
+                )
+                .otherwise(col("large"))?,
+                Metadata::new().with("source", "name"),
+            ),
+        ];
+
+        for (expr, expected) in cases {
+            let (_, logical) = expr.to_field(&df_schema)?;
+            let physical = create_physical_expr(
+                &expr,
+                &df_schema,
+                &ExecutionProps::new(),
+                &PhysicalPlanningContext::default(),
+            )?
+            .return_field(&schema)?;
+            assert_eq!(logical.metadata(), &expected, "logical field of {expr}");
+            assert_eq!(physical.metadata(), &expected, "physical field of {expr}");
         }
 
         Ok(())

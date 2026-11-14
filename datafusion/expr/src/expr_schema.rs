@@ -23,6 +23,7 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
     not_impl_err, plan_datafusion_err, plan_err,
@@ -524,6 +525,8 @@ impl ExprSchemable for Expr {
     /// - **Aliases**: Merge underlying expr metadata with alias-specific metadata, preferring the alias metadata
     /// - **List unnesting**: Preserve the element field metadata
     /// - **Binary expressions**: field metadata is empty
+    /// - **CASE expressions**: Merges the metadata of the THEN and ELSE branches; the operand
+    ///   and WHEN conditions do not contribute
     /// - **Boolean expressions**: field metadata is empty
     /// - **Cast expressions**: Type-only casts pass through source metadata (stripping extension
     ///   type keys); casts with explicit target fields use target metadata exactly
@@ -703,11 +706,35 @@ impl ExprSchemable for Expr {
                     ))),
                 }
             }
+            Expr::Case(case) => {
+                let fields = case
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, then)| then)
+                    .chain(case.else_expr.iter())
+                    .map(|expr| expr.to_field(schema).map(|(_, field)| field))
+                    .collect::<Result<Vec<_>>>()?;
+                let metadata =
+                    coerced_fields_metadata(fields.iter().map(|f| f.as_ref()))?;
+                // Same as `get_type`: the first non-NULL branch type. Reading it from
+                // `fields` avoids a second walk of the branches, which multiplies with
+                // the depth of nested CASE and function calls.
+                let data_type = fields
+                    .iter()
+                    .map(|f| f.data_type())
+                    .find(|t| !t.is_null())
+                    .cloned()
+                    .unwrap_or(DataType::Null);
+                Ok(Arc::new(metadata.add_to_field(Field::new(
+                    &schema_name,
+                    data_type,
+                    self.nullable(schema)?,
+                ))))
+            }
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
             | Expr::Between(_)
-            | Expr::Case(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
             | Expr::SetComparison(_)
