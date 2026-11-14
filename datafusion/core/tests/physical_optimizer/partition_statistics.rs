@@ -156,6 +156,7 @@ mod test {
             num_rows: Precision::Exact(num_rows),
             total_byte_size: Precision::Exact(total_byte_size),
             column_statistics: column_stats,
+            ..Default::default()
         }
     }
 
@@ -411,6 +412,7 @@ mod test {
                     byte_size: Precision::Exact(0),
                 },
             ],
+            ..Default::default()
         };
         assert_eq!(*full_statistics, expected_full_statistic);
 
@@ -444,6 +446,7 @@ mod test {
                     byte_size: Precision::Exact(0),
                 },
             ],
+            ..Default::default()
         };
         assert_eq!(*statistics[0], expected_partition_statistic);
         assert_eq!(*statistics[1], expected_partition_statistic);
@@ -541,6 +544,7 @@ mod test {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            ..Default::default()
         };
         assert_eq!(*stats[0], expected_stats);
         assert_eq!(*stats[1], expected_stats);
@@ -619,6 +623,7 @@ mod test {
                     byte_size: Precision::Absent,
                 },
             ],
+            ..Default::default()
         };
         let expected_statistic_partition_2 = Statistics {
             num_rows: Precision::Exact(8),
@@ -653,6 +658,7 @@ mod test {
                     byte_size: Precision::Absent,
                 },
             ],
+            ..Default::default()
         };
         assert_eq!(*statistics[0], expected_statistic_partition_1);
         assert_eq!(*statistics[1], expected_statistic_partition_2);
@@ -897,6 +903,7 @@ mod test {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            ..Default::default()
         };
 
         assert_eq!(*p0_statistics, expected_p0_statistics);
@@ -916,6 +923,7 @@ mod test {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            ..Default::default()
         };
 
         let p1_statistics = StatisticsContext::new().compute(
@@ -995,6 +1003,7 @@ mod test {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            ..Default::default()
         };
 
         assert_eq!(
@@ -1072,6 +1081,7 @@ mod test {
             num_rows: Precision::Exact(1),
             total_byte_size: Precision::Absent,
             column_statistics: vec![ColumnStatistics::new_unknown()],
+            ..Default::default()
         };
         assert_eq!(
             expect_partial_stat,
@@ -1092,6 +1102,7 @@ mod test {
             num_rows: Precision::Exact(2),
             total_byte_size: Precision::Absent,
             column_statistics: vec![ColumnStatistics::new_unknown()],
+            ..Default::default()
         };
         assert_eq!(
             expect_partial_overall_stat,
@@ -1127,6 +1138,7 @@ mod test {
             num_rows: Precision::Exact(1),
             total_byte_size: Precision::Absent,
             column_statistics: vec![ColumnStatistics::new_unknown()],
+            ..Default::default()
         };
 
         assert_eq!(
@@ -1211,6 +1223,7 @@ mod test {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            ..Default::default()
         };
 
         // All partitions should have the same statistics
@@ -1337,6 +1350,7 @@ mod test {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            ..Default::default()
         };
         assert_eq!(*stats[0], expected_stats);
         assert_eq!(*stats[1], expected_stats);
@@ -1421,6 +1435,7 @@ mod test {
                 },
                 ColumnStatistics::new_unknown(), // window column
             ],
+            ..Default::default()
         };
 
         let expected_statistic_partition_2 = Statistics {
@@ -1449,6 +1464,7 @@ mod test {
                 },
                 ColumnStatistics::new_unknown(), // window column
             ],
+            ..Default::default()
         };
 
         assert_eq!(*statistics[0], expected_statistic_partition_1);
@@ -1632,6 +1648,7 @@ mod test {
                     byte_size: Precision::Exact(8),
                 },
             ],
+            ..Default::default()
         };
         assert_eq!(*statistics[0], expected_p0_statistics);
 
@@ -1711,6 +1728,7 @@ mod test {
                     byte_size: Precision::Exact(8),
                 },
             ],
+            ..Default::default()
         };
         assert_eq!(*statistics[0], expected_p0_statistics);
 
@@ -1790,6 +1808,7 @@ mod test {
                     byte_size: Precision::Exact(16),
                 },
             ],
+            ..Default::default()
         };
         assert_eq!(*statistics[0], expected_p0_statistics);
         Ok(())

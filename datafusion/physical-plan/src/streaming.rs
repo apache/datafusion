@@ -16,6 +16,7 @@ use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
     ProjectionExec, all_alias_free_columns, new_projections_for_columns, update_ordering,
 };
+use crate::statistics::{StatisticsArgs, with_per_partition_fetch};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
     ChildrenPropertiesMode, ExecutionPlan, Partitioning, ReplaceChildrenOptions,
@@ -24,7 +25,7 @@ use crate::{
 
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{Result, internal_err, plan_err};
+use datafusion_common::{Result, Statistics, internal_err, plan_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::projection::ProjectionMapping;
@@ -59,6 +60,7 @@ pub struct StreamingTableExec {
     projected_output_ordering: Vec<LexOrdering>,
     infinite: bool,
     limit: Option<usize>,
+    statistics: Option<Statistics>,
     cache: Arc<PlanProperties>,
     metrics: ExecutionPlanMetricsSet,
 }
@@ -103,9 +105,43 @@ impl StreamingTableExec {
             projected_output_ordering,
             infinite,
             limit,
+            statistics: None,
             cache: Arc::new(cache),
             metrics: ExecutionPlanMetricsSet::new(),
         })
+    }
+
+    /// Declares overall [`Statistics`] for the unprojected source schema.
+    ///
+    /// Column indices in `statistics` refer to the unprojected `schema` passed
+    /// to [`Self::try_new`]; [`ExecutionPlan::statistics_from_inputs`] projects
+    /// and bounds them according to `projection` and `limit`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field, Schema};
+    /// # use datafusion_common::stats::Precision;
+    /// # use datafusion_common::Statistics;
+    /// # use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+    /// # use datafusion_physical_plan::streaming::StreamingTableExec;
+    /// let schema = Arc::new(Schema::new(vec![
+    ///     Field::new("a", DataType::Int32, false),
+    ///     Field::new("b", DataType::Int32, false),
+    /// ]));
+    /// let stats = Statistics::new_unknown(&schema).with_num_rows(Precision::Exact(42));
+    /// let exec = StreamingTableExec::try_new(schema, vec![], Some(&[1]), None, false, None)?
+    ///     .with_statistics(stats);
+    ///
+    /// let computed = StatisticsContext::new().compute(&exec, &StatisticsArgs::new())?;
+    /// assert_eq!(computed.num_rows, Precision::Exact(42));
+    /// assert_eq!(computed.column_statistics.len(), 1);
+    /// # Ok::<(), datafusion_common::DataFusionError>(())
+    /// ```
+    pub fn with_statistics(mut self, statistics: Statistics) -> Self {
+        self.statistics = Some(statistics);
+        self
     }
 
     /// Declares the output partitioning of this stream.
@@ -362,11 +398,31 @@ impl ExecutionPlan for StreamingTableExec {
             self.limit(),
         )
         .and_then(|exec| exec.with_output_partitioning(output_partitioning))
-        .map(|e| Some(Arc::new(e) as _))
+        .map(|mut exec| {
+            exec.statistics.clone_from(&self.statistics);
+            Some(Arc::new(exec) as _)
+        })
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        if args.partition().is_some() {
+            return Ok(Arc::new(Statistics::new_unknown(&self.projected_schema)));
+        }
+        let Some(stats) = &self.statistics else {
+            return Ok(Arc::new(Statistics::new_unknown(&self.projected_schema)));
+        };
+        let stats = stats.clone().project(self.projection.as_ref());
+        let stats =
+            with_per_partition_fetch(stats, self.limit, self.partitions.len(), args)?;
+        Ok(Arc::new(stats))
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -377,6 +433,7 @@ impl ExecutionPlan for StreamingTableExec {
             projected_output_ordering: self.projected_output_ordering.clone(),
             infinite: self.infinite,
             limit,
+            statistics: self.statistics.clone(),
             cache: Arc::clone(&self.cache),
             metrics: self.metrics.clone(),
         }))

@@ -277,14 +277,11 @@ mod tests {
         let col = datafusion::physical_plan::expressions::col("a", &schema)?;
         let ordering = LexOrdering::new([PhysicalSortExpr::new_default(col)])
             .expect("non-empty ordering");
-        let samples = vec![
-            SplitPoint::new(vec![ScalarValue::Int64(Some(10))]),
+        let split_points = vec![
             SplitPoint::new(vec![ScalarValue::Int64(Some(20))]),
-            SplitPoint::new(vec![ScalarValue::Int64(Some(30))]),
             SplitPoint::new(vec![ScalarValue::Int64(Some(40))]),
-            SplitPoint::new(vec![ScalarValue::Int64(Some(50))]),
         ];
-        let range = RangePartitioning::try_new_with_samples(ordering, samples, 3)?;
+        let range = RangePartitioning::try_new(ordering, split_points)?;
 
         Ok(PlanProperties::new(
             EquivalenceProperties::new(schema),
@@ -343,7 +340,7 @@ mod tests {
         let Partitioning::Range(range) = foreign_props.output_partitioning() else {
             panic!("expected range partitioning");
         };
-        assert_eq!(range.max_partition_count(), 6);
+        assert_eq!(range.partition_count(), 3);
 
         Ok(())
     }

@@ -128,6 +128,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
             num_rows: Precision::Inexact(100),
             total_byte_size: Precision::Inexact(1024),
             column_statistics: Statistics::unknown_column(&file_schema),
+            ..Default::default()
         })
         .build();
 
@@ -274,6 +275,7 @@ fn roundtrip_parquet_exec_attaches_cached_reader_factory_after_roundtrip() -> Re
                 num_rows: Precision::Inexact(100),
                 total_byte_size: Precision::Inexact(1024),
                 column_statistics: Statistics::unknown_column(&file_schema),
+                ..Default::default()
             })
             .build();
     let exec_plan = DataSourceExec::from_data_source(scan_config);
@@ -343,6 +345,7 @@ fn roundtrip_arrow_scan() -> Result<()> {
                 num_rows: Precision::Inexact(100),
                 total_byte_size: Precision::Inexact(1024),
                 column_statistics: Statistics::unknown_column(&file_schema),
+                ..Default::default()
             })
             .build();
 
@@ -749,6 +752,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
                 column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
                     vec![Field::new("col", DataType::Utf8, false)],
                 ))),
+                ..Default::default()
             })
             .build();
 
@@ -1188,15 +1192,13 @@ fn roundtrip_parquet_exec_range_output_partitioning() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, false)]));
     let file_source = Arc::new(ParquetSource::new(Arc::clone(&file_schema)));
-    let output_partitioning =
-        Partitioning::Range(RangePartitioning::try_new_with_samples(
-            LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
-                "col", 0,
-            )))])
-            .unwrap(),
-            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
-            2,
-        )?);
+    let output_partitioning = Partitioning::Range(RangePartitioning::try_new(
+        LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+            "col", 0,
+        )))])
+        .unwrap(),
+        vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+    )?);
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_file_groups(vec![

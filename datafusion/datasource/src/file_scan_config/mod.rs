@@ -996,6 +996,10 @@ impl DataSource for FileScanConfig {
         if let Some(partition) = partition {
             // Get statistics for a specific partition
             // Note: FileGroup statistics include partition columns (computed from partition_values)
+            // TODO(https://github.com/apache/datafusion/issues/26509): When `file_group.is_empty()`,
+            // report exact zero-row statistics (`num_rows = Exact(0)`, `total_byte_size = Exact(0)`,
+            // `null_count = Exact(0)`, `distinct_count = Exact(0)`) instead of falling back to
+            // `Statistics::new_unknown`, so downstream operators can elide known-empty partitions.
             if let Some(file_group) = self.file_groups.get(partition)
                 && let Some(stat) = file_group.file_statistics(None)
             {
@@ -2210,6 +2214,7 @@ mod tests {
                                 .unwrap_or_default()
                         })
                         .collect::<Vec<_>>(),
+                    ..Default::default()
                 });
                 PartitionedFile::new_from_meta(object_meta)
                     .with_partition_values(vec![ScalarValue::from(file.date)])
@@ -2872,6 +2877,7 @@ mod tests {
                     ..ColumnStatistics::new_unknown()
                 },
             ],
+            ..Default::default()
         };
 
         // Create a file group with statistics
@@ -3331,6 +3337,7 @@ mod tests {
                     max_value: Precision::Exact(ScalarValue::Float64(Some(max))),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
         ))
     }
@@ -4180,6 +4187,7 @@ mod tests {
                     max_value: Precision::Exact(ScalarValue::Float64(Some(max))),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
         ))
     }

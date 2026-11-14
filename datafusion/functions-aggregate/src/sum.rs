@@ -818,6 +818,7 @@ mod tests {
                 sum_value: Precision::Exact(ScalarValue::Int32(Some(10))),
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let return_type = DataType::Int64;
         let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
@@ -845,6 +846,7 @@ mod tests {
                 sum_value: Precision::Exact(ScalarValue::Decimal128(Some(12345), 5, 2)),
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let return_type = DataType::Decimal128(15, 2);
         let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =

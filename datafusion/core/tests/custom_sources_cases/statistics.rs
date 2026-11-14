@@ -107,6 +107,7 @@ impl TableProvider for StatisticsValidation {
                 column_statistics: proj_col_stats,
                 // TODO stats: knowing the type of the new columns we can guess the output size
                 total_byte_size: Precision::Absent,
+                ..Default::default()
             },
             projected_schema,
         )))
@@ -228,6 +229,7 @@ fn fully_defined() -> (Statistics, Schema) {
                     byte_size: Precision::Absent,
                 },
             ],
+            ..Default::default()
         },
         Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
@@ -285,6 +287,7 @@ fn string_filter_ctx(
                 distinct_count,
                 ..ColumnStatistics::new_unknown()
             }],
+            ..Default::default()
         },
         Schema::new(vec![Field::new("c1", data_type, true)]),
     )

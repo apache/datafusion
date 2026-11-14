@@ -2174,6 +2174,7 @@ mod tests {
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
                 }],
+                ..Default::default()
             }));
             pf
         }
@@ -2295,6 +2296,7 @@ mod tests {
                 num_rows: Precision::Absent,
                 total_byte_size: Precision::Absent,
                 column_statistics: vec![col(Some(min_a)), col(min_b)],
+                ..Default::default()
             }));
             pf
         }
