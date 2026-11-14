@@ -16,7 +16,6 @@ use crate::print_format::{PrintFormat, TableOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion::common::DataFusionError;
-use datafusion::common::format::ExplainFormat;
 use datafusion::common::instant::Instant;
 use datafusion::error::Result;
 use datafusion::physical_plan::RecordBatchStream;
@@ -168,119 +167,81 @@ impl PrintOptions {
         row_count: usize,
         format_options: &FormatOptions,
     ) -> Result<()> {
-        let stdout = io::stdout();
-        let mut writer = stdout.lock();
-        let width = self.maxwidth.resolve();
-        let format = if self.format == PrintFormat::Automatic && width.is_some() {
-            PrintFormat::Table
-        } else {
-            self.format
-        };
-
-        format.print_batches_with_options(
-            &mut writer,
+        self.print_batches_with_options(
             schema,
             batches,
+            query_start_time,
+            row_count,
+            format_options,
             TableOptions {
                 maxrows: self.maxrows,
-                width,
+                width: self.maxwidth.resolve(),
+                explain_format: None,
             },
-            true,
-            format_options,
-        )?;
-
-        let formatted_exec_details = get_execution_details_formatted(
-            row_count,
-            if format == PrintFormat::Table {
-                self.maxrows
-            } else {
-                MaxRows::Unlimited
-            },
-            query_start_time,
-        );
-
-        self.write_output(&mut writer, &formatted_exec_details)
+        )
     }
 
-    pub(crate) fn print_tree_batches(
+    pub(crate) fn print_batches_with_options(
         &self,
         schema: SchemaRef,
         batches: &[RecordBatch],
         query_start_time: Instant,
         row_count: usize,
         format_options: &FormatOptions,
-    ) -> Result<()> {
-        if self.format != PrintFormat::Table || self.maxwidth.resolve().is_none() {
-            return self.print_batches(
-                schema,
-                batches,
-                query_start_time,
-                row_count,
-                format_options,
-            );
-        }
-
-        let stdout = io::stdout();
-        let mut writer = stdout.lock();
-        crate::print_format::print_tree_batches(&mut writer, batches, format_options)?;
-        self.write_plan_details(
-            &mut writer,
-            query_start_time,
-            row_count,
-            MaxRows::Unlimited,
-        )
-    }
-
-    pub(crate) fn print_plan_batches(
-        &self,
-        batches: &[RecordBatch],
-        query_start_time: Instant,
-        row_count: usize,
-        format_options: &FormatOptions,
-        width: Option<u16>,
-        explain_format: &ExplainFormat,
+        table_options: TableOptions,
     ) -> Result<()> {
         let stdout = io::stdout();
         let mut writer = stdout.lock();
-        crate::print_format::print_plan_batches(
+        let width = table_options.width;
+        let format = if self.format == PrintFormat::Automatic && width.is_some() {
+            PrintFormat::Table
+        } else {
+            self.format
+        };
+        let maxrows = if format == PrintFormat::Table {
+            table_options.maxrows
+        } else {
+            MaxRows::Unlimited
+        };
+
+        format.print_batches_with_options(
             &mut writer,
+            schema,
             batches,
+            table_options,
+            true,
             format_options,
-            width,
-            explain_format,
-            self.maxrows,
         )?;
-        self.write_plan_details(
-            &mut writer,
-            query_start_time,
-            row_count,
-            if *explain_format == ExplainFormat::Indent {
-                MaxRows::Unlimited
-            } else {
-                self.maxrows
-            },
-        )
-    }
 
-    fn write_plan_details<W: io::Write>(
-        &self,
-        writer: &mut W,
-        query_start_time: Instant,
-        row_count: usize,
-        maxrows: MaxRows,
-    ) -> Result<()> {
         self.write_output(
-            writer,
+            &mut writer,
             &get_execution_details_formatted(row_count, maxrows, query_start_time),
+            width,
         )
     }
 
     /// Print the stream to stdout using the specified format
     pub async fn print_stream(
         &self,
+        stream: Pin<Box<dyn RecordBatchStream>>,
+        query_start_time: Instant,
+        format_options: &FormatOptions,
+    ) -> Result<()> {
+        self.print_stream_with_width(
+            stream,
+            query_start_time,
+            format_options,
+            self.maxwidth.resolve(),
+        )
+        .await
+    }
+
+    pub(crate) async fn print_stream_with_width(
+        &self,
         mut stream: Pin<Box<dyn RecordBatchStream>>,
         query_start_time: Instant,
         format_options: &FormatOptions,
+        width: Option<u16>,
     ) -> Result<()> {
         if self.format == PrintFormat::Table {
             return Err(DataFusionError::External(
@@ -314,13 +275,14 @@ impl PrintOptions {
             query_start_time,
         );
 
-        self.write_output(&mut writer, &formatted_exec_details)
+        self.write_output(&mut writer, &formatted_exec_details, width)
     }
 
     fn write_output<W: io::Write>(
         &self,
         writer: &mut W,
         formatted_exec_details: &str,
+        width: Option<u16>,
     ) -> Result<()> {
         if !self.quiet {
             writeln!(writer, "{formatted_exec_details}")?;
@@ -350,7 +312,8 @@ impl PrintOptions {
                             &[batch],
                             TableOptions {
                                 maxrows: MaxRows::Unlimited,
-                                width: self.maxwidth.resolve(),
+                                width,
+                                explain_format: None,
                             },
                             true,
                             &FormatOptions::default(),
@@ -384,11 +347,11 @@ mod tests {
 
         let mut print_output: Vec<u8> = Vec::new();
         let exec_out = String::from("Formatted Exec Output");
-        print_options.write_output(&mut print_output, &exec_out)?;
+        print_options.write_output(&mut print_output, &exec_out, None)?;
         assert!(print_output.is_empty());
 
         print_options.quiet = false;
-        print_options.write_output(&mut print_output, &exec_out)?;
+        print_options.write_output(&mut print_output, &exec_out, None)?;
         let out_str: String = print_output
             .clone()
             .try_into()
@@ -400,7 +363,7 @@ mod tests {
         print_options
             .instrumented_registry
             .set_instrument_mode(InstrumentedObjectStoreMode::Trace);
-        print_options.write_output(&mut print_output, &exec_out)?;
+        print_options.write_output(&mut print_output, &exec_out, None)?;
         let out_str: String = print_output
             .clone()
             .try_into()

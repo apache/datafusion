@@ -6,7 +6,7 @@
 
 use crate::cli_context::CliSessionContext;
 use crate::helper::split_from_semicolon;
-use crate::print_format::PrintFormat;
+use crate::print_format::{PrintFormat, TableOptions};
 use crate::{
     command::{Command, OutputFormat},
     helper::CliHelper,
@@ -250,33 +250,26 @@ impl StatementExecutor {
         let (df, adjusted) = self
             .create_and_execute_logical_plan(ctx, print_options)
             .await?;
-        let print_options = adjusted.into_inner();
-        let explain_format = match df.logical_plan() {
-            LogicalPlan::Explain(explain) => Some(explain.explain_format.clone()),
-            LogicalPlan::Analyze(analyze) => Some(analyze.format.clone()),
-            _ => None,
-        };
-        let is_tree = explain_format == Some(ExplainFormat::Tree);
-        let df = if is_tree && print_options.format == PrintFormat::Table {
+        let (print_options, table_options) = adjusted.into_options();
+        let df = if table_options.explain_format == Some(ExplainFormat::Tree)
+            && print_options.format == PrintFormat::Table
+        {
             let (mut state, plan) = df.into_parts();
-            match print_options.maxwidth {
-                MaxWidth::Limited(width) => {
+            let render_width = match (table_options.width, print_options.maxwidth) {
+                (Some(width), _) => {
                     // The renderer emits whole 29-column boxes, rounding its limit up.
-                    state
-                        .config_mut()
-                        .options_mut()
-                        .explain
-                        .tree_maximum_render_width =
-                        (usize::from(width) / 29 * 29).max(1);
+                    Some((usize::from(width) / 29 * 29).max(1))
                 }
-                MaxWidth::Unlimited => {
-                    state
-                        .config_mut()
-                        .options_mut()
-                        .explain
-                        .tree_maximum_render_width = 0;
-                }
-                MaxWidth::Auto => {}
+                (None, MaxWidth::Unlimited) => Some(0),
+                (None, MaxWidth::Limited(0)) => Some(1),
+                _ => None,
+            };
+            if let Some(width) = render_width {
+                state
+                    .config_mut()
+                    .options_mut()
+                    .explain
+                    .tree_maximum_render_width = width;
             }
             datafusion::dataframe::DataFrame::new(state, plan)
         } else {
@@ -301,7 +294,12 @@ impl StatementExecutor {
             // However, memory safety is not guaranteed.
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
             print_options
-                .print_stream(stream, now, &options.format)
+                .print_stream_with_width(
+                    stream,
+                    now,
+                    &options.format,
+                    table_options.width,
+                )
                 .await?;
         } else {
             // Non-table formats write every row, so only limit collection when the
@@ -326,36 +324,14 @@ impl StatementExecutor {
                 }
                 row_count += curr_num_rows;
             }
-            if print_options.format == PrintFormat::Table
-                && let Some(
-                    format @ (ExplainFormat::Indent | ExplainFormat::PostgresJSON),
-                ) = explain_format.as_ref()
-            {
-                print_options.print_plan_batches(
-                    &results,
-                    now,
-                    row_count,
-                    &options.format,
-                    print_options.maxwidth.resolve(),
-                    format,
-                )?;
-            } else if is_tree {
-                print_options.print_tree_batches(
-                    schema,
-                    &results,
-                    now,
-                    row_count,
-                    &options.format,
-                )?;
-            } else {
-                print_options.print_batches(
-                    schema,
-                    &results,
-                    now,
-                    row_count,
-                    &options.format,
-                )?;
-            }
+            print_options.print_batches_with_options(
+                schema,
+                &results,
+                now,
+                row_count,
+                &options.format,
+                table_options,
+            )?;
             reservation.free();
         }
 
@@ -398,16 +374,17 @@ impl StatementExecutor {
 #[derive(Debug)]
 struct AdjustedPrintOptions {
     inner: PrintOptions,
+    width: Option<u16>,
+    explain_format: Option<ExplainFormat>,
 }
 
 impl AdjustedPrintOptions {
-    fn new(mut inner: PrintOptions) -> Self {
-        if inner.maxwidth == MaxWidth::Auto
-            && let Some(width) = inner.maxwidth.resolve()
-        {
-            inner.maxwidth = MaxWidth::Limited(width);
+    fn new(inner: PrintOptions) -> Self {
+        Self {
+            width: inner.maxwidth.resolve(),
+            inner,
+            explain_format: None,
         }
-        Self { inner }
     }
     /// Adjust print options based on any statement specific requirements
     fn with_statement(mut self, statement: &Statement) -> Self {
@@ -422,6 +399,11 @@ impl AdjustedPrintOptions {
 
     /// Adjust print options based on any plan specific requirements
     fn with_plan(mut self, plan: &LogicalPlan) -> Self {
+        self.explain_format = match plan {
+            LogicalPlan::Explain(explain) => Some(explain.explain_format.clone()),
+            LogicalPlan::Analyze(analyze) => Some(analyze.format.clone()),
+            _ => None,
+        };
         // For plans like `Explain` ignore `MaxRows` option and always display
         // all rows
         if matches!(
@@ -433,13 +415,18 @@ impl AdjustedPrintOptions {
         self
     }
 
-    /// Finalize and return the inner `PrintOptions`
-    fn into_inner(mut self) -> PrintOptions {
+    /// Finalize the print options and table layout.
+    fn into_options(mut self) -> (PrintOptions, TableOptions) {
         if self.inner.format == PrintFormat::Automatic {
             self.inner.format = PrintFormat::Table;
         }
 
-        self.inner
+        let table_options = TableOptions {
+            maxrows: self.inner.maxrows,
+            width: self.width,
+            explain_format: self.explain_format,
+        };
+        (self.inner, table_options)
     }
 }
 

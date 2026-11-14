@@ -713,8 +713,8 @@ fn cli_output_respects_maxwidth() {
         "|       indented text",
         "| wrap",
         "|         \"Utf8(",
-        "| logical plan",
-        "| physical plan",
+        "| initial_logical_plan",
+        "| physical_plan",
         "|   EmptyRelation:",
         "|     repeat(",
     ] {

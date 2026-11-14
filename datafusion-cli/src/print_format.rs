@@ -19,7 +19,8 @@ use datafusion::error::Result;
 use tabled::builder::Builder;
 use tabled::grid::{config::Position, records::RecordsMut};
 use tabled::settings::{
-    Padding, Span, Style, Width, object::Cell, peaker::Priority, style::HorizontalLine,
+    Span, Style, Width, object::Cell, peaker::Priority, style::HorizontalLine,
+    width::Wrap,
 };
 
 /// Allow records to be printed in different formats
@@ -33,16 +34,29 @@ pub enum PrintFormat {
     Automatic,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct TableOptions {
     pub maxrows: MaxRows,
     pub width: Option<u16>,
+    pub explain_format: Option<ExplainFormat>,
 }
 
 #[derive(Clone, Copy)]
 struct PreserveIndent {
     column: usize,
     continuation_indent: usize,
+}
+
+const MIN_COLUMN_CONTENT_WIDTH: usize = 2;
+const COLUMN_PADDING_WIDTH: usize = 2;
+const TABLE_BORDER_WIDTH: usize = 1;
+
+fn minimum_table_width(columns: usize) -> usize {
+    columns
+        .saturating_mul(
+            MIN_COLUMN_CONTENT_WIDTH + COLUMN_PADDING_WIDTH + TABLE_BORDER_WIDTH,
+        )
+        .saturating_add(TABLE_BORDER_WIDTH)
 }
 
 impl FromStr for PrintFormat {
@@ -143,8 +157,18 @@ fn print_table_batches<W: std::io::Write>(
             rows.push(
                 formatters
                     .iter()
-                    .map(|formatter| formatter.value(row).try_to_string())
-                    .collect::<std::result::Result<Vec<_>, _>>()?,
+                    .enumerate()
+                    .map(|(column, formatter)| {
+                        let mut value = formatter.value(row).try_to_string()?;
+                        if width.is_some()
+                            && preserve_indent
+                                .is_some_and(|option| option.column == column)
+                        {
+                            value.truncate(value.trim_end_matches('\n').len());
+                        }
+                        Ok(value)
+                    })
+                    .collect::<Result<Vec<_>>>()?,
             );
         }
         if over_limit {
@@ -153,9 +177,7 @@ fn print_table_batches<W: std::io::Write>(
     }
 
     if let Some(width) = width
-        && (width < 11
-            || schema.fields().len().saturating_mul(5).saturating_add(1)
-                > usize::from(width))
+        && usize::from(width) < minimum_table_width(schema.fields().len().max(2))
     {
         let empty = rows.is_empty();
         if empty {
@@ -169,70 +191,71 @@ fn print_table_batches<W: std::io::Write>(
         }
         let visible_rows = rows.len();
         for (index, row) in rows.into_iter().enumerate() {
-            let vertical_rows: Vec<_> = if width < 11 {
-                headers
-                    .iter()
-                    .zip(row)
-                    .flat_map(|(header, value)| [vec![header.clone()], vec![value]])
-                    .collect()
-            } else {
-                headers
-                    .iter()
-                    .zip(row)
-                    .map(|(header, value)| vec![header.clone(), value])
-                    .collect()
-            };
+            if index > 0 {
+                writeln!(writer)?;
+            }
+            if usize::from(width) < minimum_table_width(2) {
+                for (column, (header, value)) in headers.iter().zip(row).enumerate() {
+                    print_wrapped(writer, header, width, None)?;
+                    print_wrapped(
+                        writer,
+                        &value,
+                        width,
+                        preserve_indent
+                            .filter(|option| option.column == column)
+                            .map(|option| option.continuation_indent),
+                    )?;
+                }
+                if over_limit && index + 1 == visible_rows {
+                    write!(writer, ".\n.\n.\n")?;
+                }
+                continue;
+            }
+            let vertical_rows: Vec<_> = headers
+                .iter()
+                .zip(row)
+                .map(|(header, value)| vec![header.clone(), value])
+                .collect();
             let vertical_header = [
                 "Column".to_owned(),
                 if empty { "Type" } else { "Value" }.to_owned(),
             ];
-            if index > 0 {
-                writeln!(writer)?;
-            }
             print_table(
                 writer,
-                (width >= 11).then_some(vertical_header.as_slice()),
+                &vertical_header,
                 &vertical_rows,
                 Some(width),
                 over_limit && index + 1 == visible_rows,
                 preserve_indent.map(|option| PreserveIndent {
-                    column: usize::from(width >= 11),
+                    column: 1,
                     ..option
                 }),
             )?;
         }
     } else {
-        print_table(
-            writer,
-            Some(&headers),
-            &rows,
-            width,
-            over_limit,
-            preserve_indent,
-        )?;
+        print_table(writer, &headers, &rows, width, over_limit, preserve_indent)?;
     }
     Ok(())
 }
 
 fn print_table<W: std::io::Write>(
     writer: &mut W,
-    headers: Option<&[String]>,
+    headers: &[String],
     rows: &[Vec<String>],
     width: Option<u16>,
     over_limit: bool,
     preserve_indent: Option<PreserveIndent>,
 ) -> Result<()> {
-    let borderless = width.is_some_and(|width| width < 11);
     let mut builder = Builder::default();
-    for row in headers.into_iter().chain(rows.iter().map(Vec::as_slice)) {
+    for row in std::iter::once(headers).chain(rows.iter().map(Vec::as_slice)) {
         builder.push_record(row);
     }
-    let marker_start = rows.len() + usize::from(headers.is_some());
+    let marker_start = rows.len() + 1;
     let column_count = builder.count_columns();
     if column_count == 0 {
         return Ok(());
     }
-    if over_limit && !borderless {
+    if over_limit {
         for _ in 0..3 {
             builder.push_record(
                 std::iter::once(".").chain(std::iter::repeat_n("", column_count - 1)),
@@ -240,18 +263,12 @@ fn print_table<W: std::io::Write>(
         }
     }
     let mut table = builder.build();
-    if borderless {
-        table.with(Style::empty()).with(Padding::zero());
-    } else if headers.is_some() {
-        table.with(
-            Style::ascii()
-                .remove_horizontal()
-                .horizontals([(1, HorizontalLine::full('-', '+', '+', '+'))]),
-        );
-    } else {
-        table.with(Style::ascii().remove_horizontal());
-    }
-    if over_limit && !borderless {
+    table.with(
+        Style::ascii()
+            .remove_horizontal()
+            .horizontals([(1, HorizontalLine::full('-', '+', '+', '+'))]),
+    );
+    if over_limit {
         for row in marker_start..marker_start + 3 {
             table.modify(Cell::new(row, 0), Span::column(0));
         }
@@ -261,163 +278,31 @@ fn print_table<W: std::io::Write>(
             .keep_words(true)
             .priority(Priority::max(false)),
     );
-    let widths = table
-        .get_dimension()
-        .get_widths()
-        .expect("Width::wrap estimates column widths")
-        .to_vec();
     if width.is_some()
         && let Some(option) = preserve_indent
     {
-        let padding = if borderless { 0 } else { 2 };
+        let widths = table
+            .get_dimension()
+            .get_widths()
+            .expect("Width::wrap estimates column widths")
+            .to_vec();
         for (row_index, row) in rows.iter().enumerate() {
             let text = wrap_indented(
                 &row[option.column],
-                widths[option.column].saturating_sub(padding),
+                widths[option.column].saturating_sub(COLUMN_PADDING_WIDTH),
                 option.continuation_indent,
             );
-            table.get_records_mut().set(
-                Position::new(row_index + usize::from(headers.is_some()), option.column),
-                text,
-            );
+            table
+                .get_records_mut()
+                .set(Position::new(row_index + 1, option.column), text);
         }
         table.get_dimension_mut().clear_height();
     }
     writeln!(writer, "{table}")?;
-    if rows.is_empty() && headers.is_some() && !borderless {
-        // Preserve Arrow's separate header separator and bottom border for empty results.
-        write!(writer, "+")?;
-        for width in widths {
-            write!(writer, "{}+", "-".repeat(width))?;
-        }
-        writeln!(writer)?;
-    }
-    if over_limit && borderless {
-        write!(writer, ".\n.\n.\n")?;
-    }
     Ok(())
 }
 
-pub(crate) fn print_plan_batches<W: std::io::Write>(
-    writer: &mut W,
-    batches: &[RecordBatch],
-    format_options: &FormatOptions,
-    width: Option<u16>,
-    explain_format: &ExplainFormat,
-    maxrows: MaxRows,
-) -> Result<()> {
-    if *explain_format == ExplainFormat::PostgresJSON {
-        return match batches.first() {
-            Some(batch) => print_table_batches(
-                writer,
-                batch.schema(),
-                batches,
-                maxrows,
-                width,
-                format_options,
-                Some(PreserveIndent {
-                    column: 1,
-                    continuation_indent: 0,
-                }),
-            ),
-            None => Ok(()),
-        };
-    }
-    let options = format_options.try_into()?;
-    let mut rows = Vec::new();
-    let mut group = None;
-    let mut grouped = false;
-    for batch in batches {
-        let kind = ArrayFormatter::try_new(batch.column(0).as_ref(), &options)?;
-        let plan = ArrayFormatter::try_new(batch.column(1).as_ref(), &options)?;
-        for row in 0..batch.num_rows() {
-            let kind = kind.value(row).try_to_string()?;
-            let (next_group, stage) = plan_group_and_stage(&kind);
-            if next_group != group {
-                if let Some(title) = next_group {
-                    rows.push((title.to_owned(), String::new()));
-                }
-                group = next_group;
-            }
-            grouped |= next_group.is_some();
-            rows.push((stage.to_owned(), plan.value(row).try_to_string()?));
-        }
-    }
-    let type_header = if grouped { "stage" } else { "plan_type" };
-    if let Some(width) = width.filter(|width| *width < 11) {
-        let rows: Vec<_> = rows
-            .into_iter()
-            .map(|(kind, plan)| {
-                vec![format!(
-                    "{type_header}\n{kind}\nplan\n{}",
-                    plan.trim_end_matches('\n')
-                )]
-            })
-            .collect();
-        print_table(
-            writer,
-            None,
-            &rows,
-            Some(width),
-            false,
-            Some(PreserveIndent {
-                column: 0,
-                continuation_indent: 4,
-            }),
-        )
-    } else {
-        let rows: Vec<_> = rows
-            .into_iter()
-            .map(|(kind, plan)| {
-                let plan = if width.is_some() {
-                    plan.trim_end_matches('\n').to_owned()
-                } else {
-                    plan
-                };
-                vec![kind, plan]
-            })
-            .collect();
-        let headers = [type_header.to_owned(), "plan".to_owned()];
-        print_table(
-            writer,
-            Some(&headers),
-            &rows,
-            width,
-            false,
-            Some(PreserveIndent {
-                column: 1,
-                continuation_indent: 4,
-            }),
-        )
-    }
-}
-
-fn plan_group_and_stage(kind: &str) -> (Option<&'static str>, &str) {
-    let (group, stage) = match kind {
-        "initial_logical_plan" => ("logical plan", "initial"),
-        "analyzed_logical_plan" => ("logical plan", "analyzed"),
-        "logical_plan" => ("logical plan", "final"),
-        "initial_physical_plan" => ("physical plan", "initial"),
-        "initial_physical_plan_with_stats" => ("physical plan", "initial_with_stats"),
-        "initial_physical_plan_with_schema" => ("physical plan", "initial_with_schema"),
-        "physical_plan" => ("physical plan", "final"),
-        "physical_plan_with_stats" => ("physical plan", "final_with_stats"),
-        "physical_plan_with_schema" => ("physical plan", "final_with_schema"),
-        "physical_plan_error" => ("physical plan", "error"),
-        _ => {
-            if let Some(stage) = kind.strip_prefix("logical_plan after ") {
-                ("logical plan", stage)
-            } else if let Some(stage) = kind.strip_prefix("physical_plan after ") {
-                ("physical plan", stage)
-            } else {
-                return (None, kind);
-            }
-        }
-    };
-    (Some(group), stage)
-}
-
-pub(crate) fn print_tree_batches<W: std::io::Write>(
+fn print_tree_batches<W: std::io::Write>(
     writer: &mut W,
     batches: &[RecordBatch],
     format_options: &FormatOptions,
@@ -431,6 +316,29 @@ pub(crate) fn print_tree_batches<W: std::io::Write>(
             writeln!(writer, "{}", plan.value(row).try_to_string()?)?;
         }
     }
+    Ok(())
+}
+
+fn print_wrapped<W: std::io::Write>(
+    writer: &mut W,
+    text: &str,
+    width: u16,
+    continuation_indent: Option<usize>,
+) -> Result<()> {
+    let width = usize::from(width);
+    if continuation_indent.is_none()
+        && text
+            .lines()
+            .all(|line| textwrap::core::display_width(line) <= width)
+    {
+        writeln!(writer, "{text}")?;
+        return Ok(());
+    }
+    let text = match continuation_indent {
+        Some(indent) => wrap_indented(text, width, indent),
+        None => Wrap::wrap(text, width, true),
+    };
+    writeln!(writer, "{text}")?;
     Ok(())
 }
 
@@ -491,6 +399,7 @@ impl PrintFormat {
             TableOptions {
                 maxrows,
                 width: None,
+                explain_format: None,
             },
             with_header,
             format_options,
@@ -506,8 +415,20 @@ impl PrintFormat {
         with_header: bool,
         format_options: &FormatOptions,
     ) -> Result<()> {
-        let TableOptions { maxrows, width } = table_options;
+        let TableOptions {
+            maxrows,
+            width,
+            explain_format,
+        } = table_options;
         if *self == Self::Table {
+            if explain_format == Some(ExplainFormat::Tree) && width.is_some() {
+                return print_tree_batches(writer, batches, format_options);
+            }
+            let continuation_indent = match explain_format {
+                Some(ExplainFormat::Indent) => Some(4),
+                Some(ExplainFormat::PostgresJSON) => Some(0),
+                _ => None,
+            };
             return print_table_batches(
                 writer,
                 schema,
@@ -515,7 +436,10 @@ impl PrintFormat {
                 maxrows,
                 width,
                 format_options,
-                None,
+                continuation_indent.map(|continuation_indent| PreserveIndent {
+                    column: 1,
+                    continuation_indent,
+                }),
             );
         }
         // filter out any empty batches
@@ -576,7 +500,6 @@ mod tests {
         assert_snapshot!(output, @r"
         +---+---+---+
         | a | b | c |
-        +---+---+---+
         +---+---+---+
         ");
     }
@@ -813,7 +736,6 @@ mod tests {
         assert_snapshot!(output, @r"
         +---+
         | a |
-        +---+
         +---+
         ");
 
