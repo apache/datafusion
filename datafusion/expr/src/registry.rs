@@ -16,9 +16,10 @@ use arrow_schema::extension::{
 };
 use datafusion_common::types::{
     DFBool8, DFExtensionTypeRef, DFFixedShapeTensor, DFJson, DFOpaque,
-    DFTimestampWithOffset, DFUuid, DFVariableShapeTensor,
+    DFTimestampWithOffset, DFUuid, DFVariableShapeTensor, DFVariant,
 };
 use datafusion_common::{HashMap, Result, not_impl_err, plan_datafusion_err};
+use parquet_variant_compute::VariantType;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, RwLock};
@@ -480,6 +481,15 @@ impl MemoryExtensionTypeRegistry {
                     Bool8::deserialize_metadata(metadata)?,
                 )?))
             }),
+            ExtensionTypeRegistration::new_arc(
+                VariantType::NAME,
+                |storage_type, metadata| {
+                    Ok(Arc::new(DFVariant::try_new(
+                        storage_type,
+                        VariantType::deserialize_metadata(metadata)?,
+                    )?))
+                },
+            ),
             ExtensionTypeRegistration::new_arc(
                 TimestampWithOffset::NAME,
                 |storage_type, metadata| {
