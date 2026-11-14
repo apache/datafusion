@@ -11,10 +11,13 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::metrics::MetricsSet;
+use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
 use datafusion_physical_plan::{
-    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-    ReplaceChildrenOptions, StatisticsArgs, StatisticsContext,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    InputDistributionRequirements, PlanProperties, ReplaceChildrenOptions,
+    StatisticsArgs, StatisticsContext,
 };
 use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
@@ -24,6 +27,8 @@ use crate::config::FFI_ConfigOptions;
 use crate::execution::FFI_TaskContext;
 use crate::physical_expr::FFI_PhysicalExpr;
 use crate::physical_expr::metrics::FFI_MetricsSet;
+use crate::physical_expr::partitioning::FFI_InputDistributionRequirements;
+use crate::physical_expr::sort::FFI_OrderingRequirements;
 use crate::plan_properties::FFI_PlanProperties;
 use crate::record_batch_stream::FFI_RecordBatchStream;
 use crate::statistics::{deserialize_statistics, serialize_statistics};
@@ -81,6 +86,24 @@ pub struct FFI_ExecutionPlan {
         plan: &Self,
         partition: FFI_Option<usize>,
     ) -> FFI_Result<SVec<u8>>,
+
+    /// Return the input distribution requirements. See
+    /// [`ExecutionPlan::input_distribution_requirements`].
+    pub input_distribution_requirements:
+        unsafe extern "C" fn(plan: &Self) -> FFI_InputDistributionRequirements,
+
+    /// Return the required ordering of each child. See
+    /// [`ExecutionPlan::required_input_ordering`].
+    pub required_input_ordering:
+        unsafe extern "C" fn(plan: &Self) -> SVec<FFI_Option<FFI_OrderingRequirements>>,
+
+    /// Return whether the plan maintains the order of each child. See
+    /// [`ExecutionPlan::maintains_input_order`].
+    pub maintains_input_order: unsafe extern "C" fn(plan: &Self) -> SVec<bool>,
+
+    /// Return whether the plan benefits from partitioning each child. See
+    /// [`ExecutionPlan::benefits_from_input_partitioning`].
+    pub benefits_from_input_partitioning: unsafe extern "C" fn(plan: &Self) -> SVec<bool>,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -244,6 +267,37 @@ unsafe extern "C" fn partition_statistics_fn_wrapper(
         .into()
 }
 
+unsafe extern "C" fn input_distribution_requirements_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> FFI_InputDistributionRequirements {
+    (&plan.inner().input_distribution_requirements()).into()
+}
+
+unsafe extern "C" fn required_input_ordering_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> SVec<FFI_Option<FFI_OrderingRequirements>> {
+    plan.inner()
+        .required_input_ordering()
+        .iter()
+        .map(|ordering| ordering.as_ref().map(FFI_OrderingRequirements::from).into())
+        .collect()
+}
+
+unsafe extern "C" fn maintains_input_order_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> SVec<bool> {
+    plan.inner().maintains_input_order().into_iter().collect()
+}
+
+unsafe extern "C" fn benefits_from_input_partitioning_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> SVec<bool> {
+    plan.inner()
+        .benefits_from_input_partitioning()
+        .into_iter()
+        .collect()
+}
+
 unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) {
     unsafe {
         debug_assert!(!plan.private_data.is_null());
@@ -357,6 +411,10 @@ impl FFI_ExecutionPlan {
             repartitioned: repartitioned_fn_wrapper,
             metrics: metrics_fn_wrapper,
             partition_statistics: partition_statistics_fn_wrapper,
+            input_distribution_requirements: input_distribution_requirements_fn_wrapper,
+            required_input_ordering: required_input_ordering_fn_wrapper,
+            maintains_input_order: maintains_input_order_fn_wrapper,
+            benefits_from_input_partitioning: benefits_from_input_partitioning_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: crate::version,
@@ -460,6 +518,46 @@ impl ExecutionPlan for ForeignExecutionPlan {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         self.children.iter().collect()
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        let ffi = unsafe { (self.plan.input_distribution_requirements)(&self.plan) };
+        (&ffi).into()
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        unsafe { (self.plan.required_input_ordering)(&self.plan) }
+            .iter()
+            .map(|ordering| match ordering {
+                FFI_Option::Some(ordering) => OrderingRequirements::try_from(ordering)
+                    .inspect_err(|e| {
+                        log::error!(
+                            "Invalid required input ordering from foreign plan {}: {e}",
+                            self.name
+                        )
+                    })
+                    .ok(),
+                FFI_Option::None => None,
+            })
+            .collect()
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        unsafe { (self.plan.maintains_input_order)(&self.plan) }
+            .iter()
+            .copied()
+            .collect()
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        unsafe { (self.plan.benefits_from_input_partitioning)(&self.plan) }
+            .iter()
+            .copied()
+            .collect()
     }
 
     fn replace_children(
@@ -573,6 +671,16 @@ pub mod tests {
         metrics: Option<MetricsSet>,
         statistics: Option<Statistics>,
         downcast_delegate: bool,
+        input_requirements: Option<TestInputRequirements>,
+    }
+
+    /// Non-default input requirements for an [`EmptyExec`], one entry per child.
+    #[derive(Debug, Clone)]
+    pub struct TestInputRequirements {
+        pub distribution: InputDistributionRequirements,
+        pub ordering: Vec<Option<OrderingRequirements>>,
+        pub maintains_input_order: Vec<bool>,
+        pub benefits_from_input_partitioning: Vec<bool>,
     }
 
     impl EmptyExec {
@@ -590,7 +698,21 @@ pub mod tests {
                 metrics: None,
                 statistics: None,
                 downcast_delegate: false,
+                input_requirements: None,
             }
+        }
+
+        pub fn with_children(mut self, children: Vec<Arc<dyn ExecutionPlan>>) -> Self {
+            self.children = children;
+            self
+        }
+
+        pub fn with_input_requirements(
+            mut self,
+            input_requirements: TestInputRequirements,
+        ) -> Self {
+            self.input_requirements = Some(input_requirements);
+            self
         }
 
         pub fn with_metrics(mut self, metrics: MetricsSet) -> Self {
@@ -669,6 +791,7 @@ pub mod tests {
                 metrics: self.metrics.clone(),
                 statistics: self.statistics.clone(),
                 downcast_delegate: self.downcast_delegate,
+                input_requirements: self.input_requirements.clone(),
             }))
         }
 
@@ -688,6 +811,41 @@ pub mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+
+        fn required_input_distribution(&self) -> Vec<Distribution> {
+            self.input_distribution_requirements().into_per_child()
+        }
+
+        fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+            match &self.input_requirements {
+                Some(reqs) => reqs.distribution.clone(),
+                None => InputDistributionRequirements::new(vec![
+                    Distribution::UnspecifiedDistribution;
+                    self.children.len()
+                ]),
+            }
+        }
+
+        fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+            match &self.input_requirements {
+                Some(reqs) => reqs.ordering.clone(),
+                None => vec![None; self.children.len()],
+            }
+        }
+
+        fn maintains_input_order(&self) -> Vec<bool> {
+            match &self.input_requirements {
+                Some(reqs) => reqs.maintains_input_order.clone(),
+                None => vec![false; self.children.len()],
+            }
+        }
+
+        fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+            match &self.input_requirements {
+                Some(reqs) => reqs.benefits_from_input_partitioning.clone(),
+                None => vec![true; self.children.len()],
+            }
         }
 
         fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
@@ -1001,6 +1159,161 @@ pub mod tests {
                 .as_ref(),
             &original_stats
         );
+
+        Ok(())
+    }
+
+    /// A foreign plan reports the same input requirements as the plan it wraps,
+    /// so optimizer rules on the other side of the boundary see them.
+    #[test]
+    fn test_ffi_execution_plan_input_requirements_round_trip() -> Result<()> {
+        use arrow::compute::SortOptions;
+        use datafusion_physical_expr::expressions::Column;
+        use datafusion_physical_expr_common::sort_expr::{
+            LexRequirement, PhysicalSortRequirement,
+        };
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Int32, false),
+        ]));
+        let a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let child =
+            || Arc::new(EmptyExec::new(Arc::clone(&schema))) as Arc<dyn ExecutionPlan>;
+        let foreign = |plan: EmptyExec| -> Result<Arc<dyn ExecutionPlan>> {
+            let mut ffi = FFI_ExecutionPlan::new(Arc::new(plan), None);
+            ffi.library_marker_id = crate::mock_foreign_marker_id;
+            (&ffi).try_into()
+        };
+
+        // Defaults survive unchanged.
+        let default_plan = foreign(
+            EmptyExec::new(Arc::clone(&schema)).with_children(vec![child(), child()]),
+        )?;
+        assert_eq!(
+            format!("{:?}", default_plan.input_distribution_requirements()),
+            format!(
+                "{:?}",
+                InputDistributionRequirements::new(vec![
+                    Distribution::UnspecifiedDistribution;
+                    2
+                ])
+            )
+        );
+        assert_eq!(default_plan.required_input_ordering(), vec![None, None]);
+        assert_eq!(default_plan.maintains_input_order(), vec![false, false]);
+        assert_eq!(
+            default_plan.benefits_from_input_partitioning(),
+            vec![true, true]
+        );
+
+        // Non-default requirements, including co-partitioning and soft
+        // ordering, survive unchanged.
+        let ordering = OrderingRequirements::new_soft(
+            LexRequirement::new([PhysicalSortRequirement::new(
+                Arc::clone(&a),
+                Some(SortOptions::new(true, false)),
+            )])
+            .expect("non-empty"),
+        );
+        let reqs = TestInputRequirements {
+            distribution: InputDistributionRequirements::co_partitioned(vec![
+                Distribution::KeyPartitioned(vec![Arc::clone(&a)]),
+                Distribution::KeyPartitioned(vec![Arc::clone(&a)]),
+            ]),
+            ordering: vec![Some(ordering.clone()), None],
+            maintains_input_order: vec![true, false],
+            benefits_from_input_partitioning: vec![false, true],
+        };
+        let plan = foreign(
+            EmptyExec::new(Arc::clone(&schema))
+                .with_children(vec![child(), child()])
+                .with_input_requirements(reqs.clone()),
+        )?;
+        assert!(plan.is::<ForeignExecutionPlan>());
+        assert_eq!(
+            format!("{:?}", plan.input_distribution_requirements()),
+            format!("{:?}", reqs.distribution)
+        );
+        #[expect(deprecated, reason = "the deprecated method must agree too")]
+        let per_child = plan.required_input_distribution();
+        assert_eq!(
+            format!("{per_child:?}"),
+            format!("{:?}", reqs.distribution.clone().into_per_child())
+        );
+        assert_eq!(plan.required_input_ordering(), vec![Some(ordering), None]);
+        assert_eq!(plan.maintains_input_order(), vec![true, false]);
+        assert_eq!(plan.benefits_from_input_partitioning(), vec![false, true]);
+
+        Ok(())
+    }
+
+    /// `EnsureRequirements` running on the consumer side of the boundary sees
+    /// that a foreign `FinalPartitioned` aggregate needs its input
+    /// hash-partitioned, and inserts the repartition. Without the requirement
+    /// crossing FFI it adds only a round-robin repartition, producing a plan
+    /// that groups the same key in several partitions.
+    #[cfg(test)]
+    #[tokio::test]
+    async fn test_ensure_requirements_sees_foreign_plan_requirements() -> Result<()> {
+        use datafusion::arrow::array::Int32Array;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::common::tree_node::{Transformed, TreeNode};
+        use datafusion::datasource::MemTable;
+        use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
+        use datafusion::physical_plan::displayable;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+        use datafusion::prelude::{SessionConfig, SessionContext};
+        use datafusion_physical_optimizer::PhysicalOptimizerRule;
+        use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+        use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]))],
+        )?;
+        let config = SessionConfig::new().with_target_partitions(4);
+        let ctx = SessionContext::new_with_config(config.clone());
+        ctx.register_table("t", Arc::new(MemTable::try_new(schema, vec![vec![batch]])?))?;
+        let plan = ctx
+            .sql("SELECT a % 2 AS parity, count(*) AS n FROM t GROUP BY 1")
+            .await?
+            .create_physical_plan()
+            .await?;
+
+        // Remove the hash repartition under the final aggregate and send that
+        // aggregate across the (mock) FFI boundary.
+        let plan = plan
+            .transform_up(|node| {
+                let Some(agg) = node.downcast_ref::<AggregateExec>() else {
+                    return Ok(Transformed::no(node));
+                };
+                if *agg.mode() != AggregateMode::FinalPartitioned {
+                    return Ok(Transformed::no(node));
+                }
+                let repartition = agg
+                    .input()
+                    .downcast_ref::<RepartitionExec>()
+                    .expect("hash repartition under the final aggregate");
+                let stripped = Arc::clone(&node).replace_children(
+                    vec![Arc::clone(repartition.input())],
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                )?;
+                let mut ffi = FFI_ExecutionPlan::new(stripped, None);
+                ffi.library_marker_id = crate::mock_foreign_marker_id;
+                let foreign: Arc<dyn ExecutionPlan> = (&ffi).try_into()?;
+                Ok(Transformed::yes(foreign))
+            })?
+            .data;
+
+        let optimized = EnsureRequirements::new().optimize(plan, config.options())?;
+        let display = displayable(optimized.as_ref()).indent(false).to_string();
+        assert!(
+            display.contains("RepartitionExec: partitioning=Hash("),
+            "expected a hash repartition under the foreign aggregate:\n{display}"
+        );
+        check_plan_tree_sanity(&optimized, &config.options().optimizer)?;
 
         Ok(())
     }
