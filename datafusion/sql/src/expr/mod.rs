@@ -878,7 +878,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         self.build_binary_expr(&op, left, right)
     }
 
-    fn try_plan_field_access(
+    pub(super) fn try_plan_field_access(
         &self,
         mut field_access_expr: RawFieldAccessExpr,
         schema: &DFSchema,
