@@ -588,8 +588,8 @@ impl ExternalSorter {
         self.in_progress_spill_file.take();
     }
 
-    /// Sorts the in-memory batches and merges them into a single sorted run, then writes
-    /// the result to spill files.
+    /// Sorts the in-memory batches and writes sorted runs to spill files.
+    /// Potentially expanding keys spill independently when merge workspace is limited.
     async fn sort_and_spill_in_mem_batches(&mut self) -> Result<()> {
         let result = self.try_sort_and_spill_in_mem_batches().await;
         if result.is_err() {
@@ -603,6 +603,63 @@ impl ExternalSorter {
             !self.in_mem_batches.is_empty(),
             "in_mem_batches must not be empty when attempting to sort and spill"
         );
+
+        let has_expanding_keys = self.expr.iter().try_fold(false, |found, expr| {
+            let data_type = expr.expr.data_type(&self.schema)?;
+            Ok::<_, DataFusionError>(
+                found
+                    || !(data_type.is_primitive()
+                        || matches!(
+                            data_type,
+                            DataType::Boolean
+                                | DataType::Null
+                                | DataType::FixedSizeBinary(_)
+                        )),
+            )
+        })?;
+        if has_expanding_keys
+            && self.expr.len() > 1
+            && self.in_mem_batches.len() > 1
+            && self.reservation.size() >= self.sort_in_place_threshold_bytes
+            && self.merge_reservation.size() < self.reservation.size()
+        {
+            // A row-format merge initializes keys for every buffered run before
+            // releasing any input. Dictionary keys can expand beyond the remaining
+            // pool capacity. Spill independent runs instead, retaining the input
+            // reservations and merge workspace while each run is written.
+            // Keep fixed-width keys and better-reserved merges on the existing
+            // path: independent runs lose parallel preparation and add merge I/O.
+            // This workspace comparison is a heuristic, not a bound on encoded keys.
+            let batches = std::mem::take(&mut self.in_mem_batches);
+            let (sizes, shared_input_size) = self.sort_run_sizes(&batches)?;
+            let _shared_input =
+                shared_input_size.map(|size| self.reservation.split(size));
+            self.in_mem_batches_counter = self.new_buffered_batches_counter();
+            let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+
+            for (batch, size) in batches.into_iter().zip(sizes) {
+                let _reservation = self.reservation.split(size);
+                self.in_progress_spill_file =
+                    Some((self.spill_manager.create_in_progress_file("Sorting")?, 0));
+                let mut sorted_batches = IncrementalSortIterator::new(
+                    batch,
+                    self.expr.clone(),
+                    self.batch_size,
+                );
+                while let Some(batch) = {
+                    let _timer = elapsed_compute.timer();
+                    sorted_batches.next()
+                } {
+                    let batch = batch?;
+                    let (file, max_record_batch_memory) =
+                        self.in_progress_spill_file.as_mut().unwrap();
+                    let size = file.append_batch_async(&batch).await?;
+                    *max_record_batch_memory = (*max_record_batch_memory).max(size);
+                }
+                self.spill_finish().await?;
+            }
+            return Ok(());
+        }
 
         // Reuse the pre-reserved workspace across cursor, encoded-row, and
         // batch reservations. Returning it to the execution pool here can
@@ -1432,6 +1489,8 @@ pub fn sort_batch_chunked(
 /// [`ExecutionPlan::reset_state`] starts with a fresh limit.
 /// Inputs sorted in a single pass, current-thread runtimes, execution outside
 /// Tokio, and TopK sorting continue sorting inline.
+/// Under memory pressure, multi-key spills with potentially expanding keys and
+/// limited reserved merge workspace sort and write one run at a time inline.
 #[derive(Debug, Clone)]
 pub struct SortExec {
     /// Input schema
@@ -2668,7 +2727,7 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::disk_manager::DiskManagerBuilder;
     use datafusion_execution::memory_pool::{
-        GreedyMemoryPool, MemoryConsumer, MemoryPool,
+        FairSpillPool, GreedyMemoryPool, MemoryConsumer, MemoryPool,
     };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::{
@@ -2886,26 +2945,46 @@ mod tests {
         Ok(())
     }
 
+    #[derive(Default)]
+    struct PendingWriteState {
+        write_started: Notify,
+        resume_write: Notify,
+        aborted: Notify,
+        abort_count: AtomicUsize,
+        files_created: AtomicUsize,
+        files_finished: AtomicUsize,
+        live_files: AtomicUsize,
+        pause_file: usize,
+        fail_write: bool,
+    }
+
     struct PendingWriteTempFileFactory {
-        write_started: Arc<Notify>,
-        aborted: Arc<Notify>,
-        abort_count: Arc<AtomicUsize>,
+        state: Arc<PendingWriteState>,
     }
 
     impl TempFileFactory for PendingWriteTempFileFactory {
         fn create_temp_file(&self, _description: &str) -> Result<Arc<dyn SpillFile>> {
+            self.state.live_files.fetch_add(1, AtomicOrdering::Relaxed);
             Ok(Arc::new(PendingWriteSpillFile {
-                write_started: Arc::clone(&self.write_started),
-                aborted: Arc::clone(&self.aborted),
-                abort_count: Arc::clone(&self.abort_count),
+                state: Arc::clone(&self.state),
+                pause: self
+                    .state
+                    .files_created
+                    .fetch_add(1, AtomicOrdering::Relaxed)
+                    == self.state.pause_file,
             }))
         }
     }
 
     struct PendingWriteSpillFile {
-        write_started: Arc<Notify>,
-        aborted: Arc<Notify>,
-        abort_count: Arc<AtomicUsize>,
+        state: Arc<PendingWriteState>,
+        pause: bool,
+    }
+
+    impl Drop for PendingWriteSpillFile {
+        fn drop(&mut self) {
+            self.state.live_files.fetch_sub(1, AtomicOrdering::Relaxed);
+        }
     }
 
     #[async_trait]
@@ -2932,33 +3011,40 @@ mod tests {
 
         async fn open_async_writer(&self) -> Result<Box<dyn AsyncSpillWriter>> {
             Ok(Box::new(PendingWriteWriter {
-                write_started: Arc::clone(&self.write_started),
-                aborted: Arc::clone(&self.aborted),
-                abort_count: Arc::clone(&self.abort_count),
+                state: Arc::clone(&self.state),
+                pause: self.pause,
             }))
         }
     }
 
     struct PendingWriteWriter {
-        write_started: Arc<Notify>,
-        aborted: Arc<Notify>,
-        abort_count: Arc<AtomicUsize>,
+        state: Arc<PendingWriteState>,
+        pause: bool,
     }
 
     #[async_trait]
     impl AsyncSpillWriter for PendingWriteWriter {
         async fn write_all(&mut self, _data: Bytes) -> Result<()> {
-            self.write_started.notify_one();
-            std::future::pending().await
+            if std::mem::take(&mut self.pause) {
+                self.state.write_started.notify_one();
+                self.state.resume_write.notified().await;
+                if self.state.fail_write {
+                    return datafusion_common::exec_err!("injected spill write failure");
+                }
+            }
+            Ok(())
         }
 
         async fn finish(&mut self) -> Result<()> {
+            self.state
+                .files_finished
+                .fetch_add(1, AtomicOrdering::Relaxed);
             Ok(())
         }
 
         async fn abort(&mut self) -> Result<()> {
-            self.abort_count.fetch_add(1, AtomicOrdering::Relaxed);
-            self.aborted.notify_one();
+            self.state.abort_count.fetch_add(1, AtomicOrdering::Relaxed);
+            self.state.aborted.notify_one();
             Ok(())
         }
     }
@@ -3118,6 +3204,122 @@ mod tests {
             "The sort should have returned all memory used back to the memory manager"
         );
 
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::no_headroom(0, 128)]
+    #[case::reserved_headroom_chunked(256 * 1024, 47)]
+    fn test_spill_wide_dictionary_keys(
+        #[case] merge_headroom: usize,
+        #[case] batch_size: usize,
+        #[values(false, true)] multithreaded: bool,
+    ) -> Result<()> {
+        const KEY_COLUMNS: usize = 32;
+        const VALUE_COUNT: usize = 32;
+        const ROWS_PER_BATCH: usize = 128;
+        const BATCH_COUNT: usize = 32;
+        // Row-format merge keys expand these compact dictionaries enough to
+        // exhaust the pool if all buffered runs are merged before spilling.
+        let values = (0..VALUE_COUNT)
+            .map(|i| format!("{i:04}{}", "x".repeat(64)))
+            .collect::<Vec<_>>();
+        let keys = (0..KEY_COLUMNS)
+            .map(|column| {
+                Arc::new(DictionaryArray::<UInt32Type>::from_iter(
+                    (0..ROWS_PER_BATCH)
+                        .map(|row| Some(values[(row + column) % VALUE_COUNT].as_str())),
+                )) as ArrayRef
+            })
+            .collect::<Vec<_>>();
+        let batches = (0..BATCH_COUNT)
+            .map(|batch| {
+                let start = batch * ROWS_PER_BATCH;
+                let mut columns = keys.clone();
+                columns.push(Arc::new(Int64Array::from_iter_values(
+                    (start..start + ROWS_PER_BATCH).rev().map(|id| id as i64),
+                )));
+                RecordBatch::try_from_iter(
+                    columns
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, array)| (format!("c{i}"), array)),
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let schema = batches[0].schema();
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let expressions = (0..=KEY_COLUMNS)
+            .map(|i| {
+                PhysicalSortExpr::new_default(Arc::new(Column::new(&format!("c{i}"), i)))
+            })
+            .collect::<Vec<_>>();
+        let sort = Arc::new(SortExec::new(LexOrdering::new(expressions).unwrap(), input));
+        let pool: Arc<dyn MemoryPool> = Arc::new(FairSpillPool::new(4 * 1024 * 1024));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .with_max_spill_merge_fan_in(2)
+            .build_arc()?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(
+                    SessionConfig::new()
+                        .with_batch_size(batch_size)
+                        .with_sort_spill_reservation_bytes(merge_headroom),
+                )
+                .with_runtime(runtime),
+        );
+        let mut builder = if multithreaded {
+            let mut builder = tokio::runtime::Builder::new_multi_thread();
+            builder.worker_threads(2);
+            builder
+        } else {
+            tokio::runtime::Builder::new_current_thread()
+        };
+        let executor = builder.enable_all().build()?;
+        let output = executor.block_on(collect(
+            Arc::clone(&sort) as Arc<dyn ExecutionPlan>,
+            task_ctx,
+        ))?;
+        assert_eq!(output[0].schema(), schema);
+        let decoded = output
+            .iter()
+            .map(|batch| {
+                RecordBatch::try_from_iter(
+                    batch
+                        .columns()
+                        .iter()
+                        .enumerate()
+                        .map(|(i, array)| {
+                            let array = if i < KEY_COLUMNS {
+                                arrow::compute::cast(array, &DataType::Utf8)
+                            } else {
+                                Ok(Arc::clone(array))
+                            };
+                            array.map(|array| (format!("c{i}"), array))
+                        })
+                        .collect::<std::result::Result<Vec<_>, _>>()?,
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let actual = concat_batches(&decoded[0].schema(), &decoded)?;
+        let key_index =
+            |id: usize| (ROWS_PER_BATCH - 1 - id % ROWS_PER_BATCH) % VALUE_COUNT;
+        let mut ids = (0..ROWS_PER_BATCH * BATCH_COUNT).collect::<Vec<_>>();
+        ids.sort_by_key(|&id| (key_index(id), id));
+        let mut expected = (0..KEY_COLUMNS)
+            .map(|column| {
+                Arc::new(StringArray::from_iter_values(ids.iter().map(|&id| {
+                    values[(key_index(id) + column) % VALUE_COUNT].as_str()
+                }))) as ArrayRef
+            })
+            .collect::<Vec<_>>();
+        expected.push(Arc::new(Int64Array::from_iter_values(
+            ids.into_iter().map(|id| id as i64),
+        )));
+        assert_eq!(actual, RecordBatch::try_new(actual.schema(), expected)?);
+        assert!(sort.metrics().unwrap().spill_count().unwrap_or(0) > 0);
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 
@@ -4653,14 +4855,10 @@ mod tests {
         #[case] workspace_bytes: usize,
     ) -> Result<()> {
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(0));
-        let write_started = Arc::new(Notify::new());
-        let aborted = Arc::new(Notify::new());
-        let abort_count = Arc::new(AtomicUsize::new(0));
+        let state = Arc::new(PendingWriteState::default());
         let disk_manager_builder = DiskManagerBuilder::default().with_temp_file_factory(
             Arc::new(PendingWriteTempFileFactory {
-                write_started: Arc::clone(&write_started),
-                aborted: Arc::clone(&aborted),
-                abort_count: Arc::clone(&abort_count),
+                state: Arc::clone(&state),
             }),
         );
         let runtime = RuntimeEnvBuilder::new()
@@ -4699,7 +4897,7 @@ mod tests {
 
         if tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            write_started.notified(),
+            state.write_started.notified(),
         )
         .await
         .is_err()
@@ -4719,11 +4917,136 @@ mod tests {
 
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
-        tokio::time::timeout(std::time::Duration::from_secs(1), aborted.notified())
+        tokio::time::timeout(std::time::Duration::from_secs(1), state.aborted.notified())
             .await
             .expect("cancelling the spill should abort its writer");
-        assert_eq!(abort_count.load(AtomicOrdering::Relaxed), 1);
+        assert_eq!(state.abort_count.load(AtomicOrdering::Relaxed), 1);
         assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::success(false, false)]
+    #[case::write_error(false, true)]
+    #[case::cancel(true, false)]
+    #[tokio::test]
+    async fn test_independent_spill_retains_shared_input(
+        #[case] cancel: bool,
+        #[case] fail_write: bool,
+    ) -> Result<()> {
+        const ROWS_PER_RUN: usize = 4;
+        const RUNS: usize = 3;
+        const WORKSPACE: usize = 64;
+        let shared = Int32Array::from_iter_values(
+            (0..ROWS_PER_RUN * RUNS).rev().map(|i| i as i32),
+        );
+        let shared_bytes = shared.get_buffer_memory_size();
+        let mut private_bytes = 0;
+        let batches = (0..RUNS)
+            .map(|run| {
+                let private = StringArray::from(vec!["z", "a", "y", "b"]);
+                private_bytes += private.get_buffer_memory_size();
+                RecordBatch::try_from_iter([
+                    (
+                        "shared",
+                        Arc::new(shared.slice(run * ROWS_PER_RUN, ROWS_PER_RUN))
+                            as ArrayRef,
+                    ),
+                    ("private", Arc::new(private) as ArrayRef),
+                ])
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(shared);
+        let schema = batches[0].schema();
+        let state = Arc::new(PendingWriteState {
+            pause_file: 1,
+            fail_write,
+            ..Default::default()
+        });
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(4096));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_temp_file_factory(Arc::new(
+                    PendingWriteTempFileFactory {
+                        state: Arc::clone(&state),
+                    },
+                )),
+            )
+            .build_arc()?;
+        let ordering = [
+            PhysicalSortExpr::new_default(Arc::new(Column::new("shared", 0))),
+            PhysicalSortExpr::new_default(Arc::new(Column::new("private", 1))),
+        ]
+        .into();
+        let mut sorter = ExternalSorter::new(
+            0,
+            schema,
+            ordering,
+            2,
+            WORKSPACE,
+            0,
+            SpillCompression::Uncompressed,
+            &ExecutionPlanMetricsSet::new(),
+            Arc::clone(&runtime),
+        )?;
+        for batch in batches {
+            sorter.insert_batch(batch).await?;
+        }
+        #[expect(clippy::disallowed_methods)] // spawn allowed only in tests
+        let task = tokio::spawn(async move {
+            sorter.sort_and_spill_in_mem_batches().await?;
+            Ok::<_, DataFusionError>(sorter)
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            state.write_started.notified(),
+        )
+        .await
+        .expect("the second spill must reach its asynchronous write");
+        assert_eq!(state.files_finished.load(AtomicOrdering::Relaxed), 1);
+        // The first run has released its sort-copy budget, but all input buffers
+        // remain covered until the last run no longer refers to the shared input.
+        let run_sort_bytes =
+            ROWS_PER_RUN * (size_of::<i32>() + 1) + (ROWS_PER_RUN + 1) * size_of::<i32>();
+        let remaining_sort_bytes = (RUNS - 1) * run_sort_bytes;
+        assert_eq!(
+            pool.reserved(),
+            WORKSPACE + shared_bytes + private_bytes + remaining_sort_bytes
+        );
+        assert_eq!(state.live_files.load(AtomicOrdering::Relaxed), 2);
+
+        if cancel {
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+        } else {
+            state.resume_write.notify_one();
+            let result = task.await.unwrap();
+            if fail_write {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("injected spill write failure")
+                );
+            } else {
+                let sorter = result?;
+                assert_eq!(state.files_finished.load(AtomicOrdering::Relaxed), RUNS);
+                assert_eq!(pool.reserved(), WORKSPACE);
+                drop(sorter);
+            }
+        }
+        if cancel || fail_write {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                state.aborted.notified(),
+            )
+            .await
+            .expect("the active spill must be aborted");
+            assert_eq!(state.abort_count.load(AtomicOrdering::Relaxed), 1);
+        }
+        assert_eq!(pool.reserved(), 0);
+        assert_eq!(state.live_files.load(AtomicOrdering::Relaxed), 0);
         Ok(())
     }
 
