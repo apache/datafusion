@@ -1883,6 +1883,7 @@ dependencies = [
  "aws-credential-types",
  "chrono",
  "clap",
+ "comfy-table",
  "ctor",
  "datafusion",
  "datafusion-common",
@@ -1900,7 +1901,9 @@ dependencies = [
  "rstest",
  "rustyline",
  "serde_json",
+ "terminal_size",
  "testcontainers-modules",
+ "textwrap",
  "tokio",
  "url",
 ]
@@ -6338,6 +6341,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
+ "rustix",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "test-utils"
 version = "0.1.0"
 dependencies = [
@@ -6386,6 +6399,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5985fde5befe4ffa77a052e035e16c2da86e8bae301baa9f9904ad3c494d357"
 dependencies = [
  "testcontainers",
+]
+
+[[package]]
+name = "textwrap"
+version = "0.16.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ecfad6c3abc80a577f2b91c1e412ee57e7a060d430b553c1b0c940974ebcd49"
+dependencies = [
+ "unicode-width 0.2.3",
 ]
 
 [[package]]

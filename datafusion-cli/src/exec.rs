@@ -11,7 +11,7 @@ use crate::{
     command::{Command, OutputFormat},
     helper::CliHelper,
     object_storage::{get_object_store, stdin::StdinUtils},
-    print_options::{MaxRows, PrintOptions},
+    print_options::{MaxRows, MaxWidth, PrintOptions},
 };
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
@@ -19,7 +19,7 @@ use datafusion::config::{ConfigFileType, Dialect};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryConsumer;
-use datafusion::logical_expr::{DdlStatement, LogicalPlan};
+use datafusion::logical_expr::{DdlStatement, ExplainFormat, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::spill::get_record_batch_memory_size;
 use datafusion::physical_plan::{ExecutionPlanProperties, execute_stream};
@@ -250,10 +250,44 @@ impl StatementExecutor {
         let (df, adjusted) = self
             .create_and_execute_logical_plan(ctx, print_options)
             .await?;
+        let print_options = adjusted.into_inner();
+        let is_tree = matches!(df.logical_plan(), LogicalPlan::Explain(explain)
+            if explain.explain_format == ExplainFormat::Tree);
+        let is_indent = match df.logical_plan() {
+            LogicalPlan::Explain(explain) => {
+                explain.explain_format == ExplainFormat::Indent
+            }
+            LogicalPlan::Analyze(analyze) => analyze.format == ExplainFormat::Indent,
+            _ => false,
+        };
+        let df = if is_tree && print_options.format == PrintFormat::Table {
+            let (mut state, plan) = df.into_parts();
+            match print_options.maxwidth {
+                MaxWidth::Limited(width) => {
+                    // The renderer emits whole 29-column boxes, rounding its limit up.
+                    state
+                        .config_mut()
+                        .options_mut()
+                        .explain
+                        .tree_maximum_render_width =
+                        (usize::from(width) / 29 * 29).max(1);
+                }
+                MaxWidth::Unlimited => {
+                    state
+                        .config_mut()
+                        .options_mut()
+                        .explain
+                        .tree_maximum_render_width = 0;
+                }
+                MaxWidth::Auto => {}
+            }
+            datafusion::dataframe::DataFrame::new(state, plan)
+        } else {
+            df
+        };
         let physical_plan = df.create_physical_plan().await?;
         let task_ctx = ctx.task_ctx();
         let options = task_ctx.session_config().options();
-        let print_options = adjusted.into_inner();
 
         // Track memory usage for the query result if it's bounded
         let reservation =
@@ -295,13 +329,31 @@ impl StatementExecutor {
                 }
                 row_count += curr_num_rows;
             }
-            print_options.print_batches(
-                schema,
-                &results,
-                now,
-                row_count,
-                &options.format,
-            )?;
+            if is_indent && print_options.format == PrintFormat::Table {
+                print_options.print_plan_batches(
+                    &results,
+                    now,
+                    row_count,
+                    &options.format,
+                    print_options.maxwidth.resolve(),
+                )?;
+            } else if is_tree {
+                print_options.print_tree_batches(
+                    schema,
+                    &results,
+                    now,
+                    row_count,
+                    &options.format,
+                )?;
+            } else {
+                print_options.print_batches(
+                    schema,
+                    &results,
+                    now,
+                    row_count,
+                    &options.format,
+                )?;
+            }
             reservation.free();
         }
 
@@ -347,7 +399,12 @@ struct AdjustedPrintOptions {
 }
 
 impl AdjustedPrintOptions {
-    fn new(inner: PrintOptions) -> Self {
+    fn new(mut inner: PrintOptions) -> Self {
+        if inner.maxwidth == MaxWidth::Auto
+            && let Some(width) = inner.maxwidth.resolve()
+        {
+            inner.maxwidth = MaxWidth::Limited(width);
+        }
         Self { inner }
     }
     /// Adjust print options based on any statement specific requirements

@@ -12,7 +12,12 @@ use arrow::csv::writer::WriterBuilder;
 use arrow::datatypes::SchemaRef;
 use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use arrow::record_batch::RecordBatch;
+use arrow::util::display::ArrayFormatter;
 use arrow::util::pretty::pretty_format_batches_with_options;
+use comfy_table::presets::ASCII_FULL_CONDENSED;
+use comfy_table::{
+    ColumnConstraint, ContentArrangement, LineStyle, Table, TableStyle, Width,
+};
 use datafusion::config::FormatOptions;
 use datafusion::error::Result;
 
@@ -25,6 +30,12 @@ pub enum PrintFormat {
     Json,
     NdJson,
     Automatic,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TableOptions {
+    pub maxrows: MaxRows,
+    pub width: Option<u16>,
 }
 
 impl FromStr for PrintFormat {
@@ -140,6 +151,271 @@ fn format_batches_with_maxrows<W: std::io::Write>(
     Ok(())
 }
 
+fn format_batches_with_width<W: std::io::Write>(
+    writer: &mut W,
+    schema: &SchemaRef,
+    batches: &[RecordBatch],
+    maxrows: MaxRows,
+    width: u16,
+    format_options: &FormatOptions,
+) -> Result<()> {
+    if schema.fields().is_empty() || maxrows == MaxRows::Limited(0) {
+        return Ok(());
+    }
+
+    let options = format_options.try_into()?;
+    let limit = match maxrows {
+        MaxRows::Limited(limit) => limit,
+        MaxRows::Unlimited => usize::MAX,
+    };
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut over_limit = false;
+    for batch in batches {
+        let formatters = batch
+            .columns()
+            .iter()
+            .map(|array| ArrayFormatter::try_new(array.as_ref(), &options))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for row in 0..batch.num_rows() {
+            if rows.len() == limit {
+                over_limit = true;
+                break;
+            }
+            rows.push(
+                formatters
+                    .iter()
+                    .map(|formatter| formatter.value(row).try_to_string())
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            );
+        }
+        if over_limit {
+            break;
+        }
+    }
+
+    let new_table = || {
+        let mut table = Table::new();
+        table
+            .load_style(if width < 11 {
+                TableStyle::new()
+            } else {
+                ASCII_FULL_CONDENSED.header_separator(LineStyle::new('+', '-', '+', '+'))
+            })
+            .set_content_arrangement(ContentArrangement::Dynamic)
+            .set_width(width);
+        table
+    };
+
+    // Reserve two content columns per cell so wide Unicode characters fit too.
+    if width < 11
+        || schema.fields().len().saturating_mul(5).saturating_add(1) > usize::from(width)
+    {
+        let empty = rows.is_empty();
+        if empty {
+            rows.push(
+                schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.data_type().to_string())
+                    .collect(),
+            );
+        }
+        for (index, row) in rows.into_iter().enumerate() {
+            let mut table = new_table();
+            if width < 11 {
+                for (field, value) in schema.fields().iter().zip(row) {
+                    table.add_row([field.name().as_str()]);
+                    table.add_row([&value]);
+                }
+                for column in table.column_iter_mut() {
+                    column.set_padding((0, 0));
+                }
+            } else {
+                table.set_header(["Column", if empty { "Type" } else { "Value" }]);
+                for (field, value) in schema.fields().iter().zip(row) {
+                    table.add_row([field.name().as_str(), &value]);
+                }
+                table.set_constraints(
+                    [ColumnConstraint::LowerBoundary(Width::Fixed(4)); 2],
+                );
+            }
+            if index > 0 {
+                writeln!(writer)?;
+            }
+            writeln!(writer, "{table}")?;
+        }
+        if over_limit {
+            writeln!(writer, "...")?;
+        }
+    } else {
+        let mut table = new_table();
+        table.set_header(schema.fields().iter().map(|field| field.name()));
+        table.set_constraints(std::iter::repeat_n(
+            ColumnConstraint::LowerBoundary(Width::Fixed(4)),
+            schema.fields().len(),
+        ));
+        table.add_rows(rows);
+        if over_limit {
+            table.add_row(vec!["..."; schema.fields().len()]);
+        }
+        writeln!(writer, "{table}")?;
+    }
+    Ok(())
+}
+
+pub(crate) fn print_plan_batches<W: std::io::Write>(
+    writer: &mut W,
+    batches: &[RecordBatch],
+    format_options: &FormatOptions,
+    width: Option<u16>,
+) -> Result<()> {
+    let options = format_options.try_into()?;
+    let mut rows = Vec::new();
+    let mut group = None;
+    let mut grouped = false;
+    for batch in batches {
+        let kind = ArrayFormatter::try_new(batch.column(0).as_ref(), &options)?;
+        let plan = ArrayFormatter::try_new(batch.column(1).as_ref(), &options)?;
+        for row in 0..batch.num_rows() {
+            let kind = kind.value(row).try_to_string()?;
+            let (next_group, stage) = plan_group_and_stage(&kind);
+            if next_group != group {
+                if let Some(title) = next_group {
+                    rows.push((title.to_owned(), String::new()));
+                }
+                group = next_group;
+            }
+            grouped |= next_group.is_some();
+            rows.push((stage.to_owned(), plan.value(row).try_to_string()?));
+        }
+    }
+    let type_header = if grouped { "stage" } else { "plan_type" };
+    let mut table = Table::new();
+    // Wrapping cells here prevents the table formatter from stripping node indentation.
+    table.set_content_arrangement(ContentArrangement::Disabled);
+    if let Some(width) = width.filter(|width| *width < 11) {
+        table.load_style(TableStyle::new());
+        let width = usize::from(width);
+        for (kind, plan) in rows {
+            table.add_row([format!(
+                "{}\n{}\n{}\n{}",
+                textwrap::fill(type_header, width),
+                textwrap::fill(&kind, width),
+                textwrap::fill("plan", width),
+                wrap_plan(&plan, width),
+            )]);
+        }
+        for column in table.column_iter_mut() {
+            column.set_padding((0, 0));
+        }
+    } else if let Some(width) = width {
+        let type_width = rows
+            .iter()
+            .map(|(kind, _)| textwrap::core::display_width(kind))
+            .max()
+            .unwrap_or(0)
+            .max(type_header.len())
+            .min(usize::from(width) - 9);
+        let plan_width = usize::from(width) - type_width - 7;
+        table.load_style(
+            ASCII_FULL_CONDENSED.header_separator(LineStyle::new('+', '-', '+', '+')),
+        );
+        table.set_header([
+            textwrap::fill(type_header, type_width),
+            textwrap::fill("plan", plan_width),
+        ]);
+        for (kind, plan) in rows {
+            table.add_row([
+                textwrap::fill(&kind, type_width),
+                wrap_plan(&plan, plan_width),
+            ]);
+        }
+        table.set_constraints([ColumnConstraint::Absolute(Width::Fixed(
+            type_width as u16 + 2,
+        ))]);
+    } else {
+        table.load_style(
+            ASCII_FULL_CONDENSED.header_separator(LineStyle::new('+', '-', '+', '+')),
+        );
+        table.set_header([type_header, "plan"]);
+        table.add_rows(rows.into_iter().map(|(kind, plan)| [kind, plan]));
+    }
+    writeln!(writer, "{table}")?;
+    Ok(())
+}
+
+fn plan_group_and_stage(kind: &str) -> (Option<&'static str>, &str) {
+    let (group, stage) = match kind {
+        "initial_logical_plan" => ("logical plan", "initial"),
+        "analyzed_logical_plan" => ("logical plan", "analyzed"),
+        "logical_plan" => ("logical plan", "final"),
+        "initial_physical_plan" => ("physical plan", "initial"),
+        "initial_physical_plan_with_stats" => ("physical plan", "initial_with_stats"),
+        "initial_physical_plan_with_schema" => ("physical plan", "initial_with_schema"),
+        "physical_plan" => ("physical plan", "final"),
+        "physical_plan_with_stats" => ("physical plan", "final_with_stats"),
+        "physical_plan_with_schema" => ("physical plan", "final_with_schema"),
+        "physical_plan_error" => ("physical plan", "error"),
+        _ => {
+            if let Some(stage) = kind.strip_prefix("logical_plan after ") {
+                ("logical plan", stage)
+            } else if let Some(stage) = kind.strip_prefix("physical_plan after ") {
+                ("physical plan", stage)
+            } else {
+                return (None, kind);
+            }
+        }
+    };
+    (Some(group), stage)
+}
+
+pub(crate) fn print_tree_batches<W: std::io::Write>(
+    writer: &mut W,
+    batches: &[RecordBatch],
+    format_options: &FormatOptions,
+) -> Result<()> {
+    let options = format_options.try_into()?;
+    for batch in batches {
+        let kind = ArrayFormatter::try_new(batch.column(0).as_ref(), &options)?;
+        let plan = ArrayFormatter::try_new(batch.column(1).as_ref(), &options)?;
+        for row in 0..batch.num_rows() {
+            writeln!(writer, "{}", kind.value(row).try_to_string()?)?;
+            writeln!(writer, "{}", plan.value(row).try_to_string()?)?;
+        }
+    }
+    Ok(())
+}
+
+fn wrap_plan(plan: &str, width: usize) -> String {
+    let mut output = String::new();
+    for (index, line) in plan.trim_end_matches('\n').lines().enumerate() {
+        if index > 0 {
+            output.push('\n');
+        }
+        wrap_plan_line(&mut output, line, width);
+    }
+    output
+}
+
+fn wrap_plan_line(output: &mut String, line: &str, width: usize) {
+    let content = line.trim_start_matches(' ');
+    if content.is_empty() {
+        return;
+    }
+    // Leave room for a wide character even when the terminal is very narrow.
+    let max_indent = width.saturating_sub(2);
+    let indent = (line.len() - content.len()).min(max_indent);
+    let initial_indent = " ".repeat(indent);
+    let subsequent_indent = " ".repeat((indent + 4).min(max_indent));
+    let options = textwrap::Options::new(width)
+        .initial_indent(&initial_indent)
+        .subsequent_indent(&subsequent_indent)
+        .word_separator(textwrap::WordSeparator::AsciiSpace)
+        .word_splitter(textwrap::WordSplitter::NoHyphenation)
+        .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit);
+    output.push_str(&textwrap::fill(content, options));
+}
+
 impl PrintFormat {
     /// Print the batches to a writer using the specified format
     pub fn print_batches<W: std::io::Write>(
@@ -151,6 +427,41 @@ impl PrintFormat {
         with_header: bool,
         format_options: &FormatOptions,
     ) -> Result<()> {
+        self.print_batches_with_options(
+            writer,
+            schema,
+            batches,
+            TableOptions {
+                maxrows,
+                width: None,
+            },
+            with_header,
+            format_options,
+        )
+    }
+
+    pub(crate) fn print_batches_with_options<W: std::io::Write>(
+        &self,
+        writer: &mut W,
+        schema: SchemaRef,
+        batches: &[RecordBatch],
+        table_options: TableOptions,
+        with_header: bool,
+        format_options: &FormatOptions,
+    ) -> Result<()> {
+        let TableOptions { maxrows, width } = table_options;
+        if *self == Self::Table
+            && let Some(width) = width
+        {
+            return format_batches_with_width(
+                writer,
+                &schema,
+                batches,
+                maxrows,
+                width,
+                format_options,
+            );
+        }
         // filter out any empty batches
         let batches: Vec<_> = batches
             .iter()

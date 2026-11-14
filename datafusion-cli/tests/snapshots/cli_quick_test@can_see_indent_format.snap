@@ -11,11 +11,13 @@ exit_code: 0
 ----- stdout -----
 [CLI_VERSION]
 +---------------+------------------------------------------+
-| plan_type     | plan                                     |
+| stage         | plan                                     |
 +---------------+------------------------------------------+
-| logical_plan  | Projection: Int64(123)                   |
+| logical plan  |                                          |
+| final         | Projection: Int64(123)                   |
 |               |   EmptyRelation: rows=1                  |
-| physical_plan | ProjectionExec: expr=[123 as Int64(123)] |
+| physical plan |                                          |
+| final         | ProjectionExec: expr=[123 as Int64(123)] |
 |               |   PlaceholderRowExec                     |
 |               |                                          |
 +---------------+------------------------------------------+

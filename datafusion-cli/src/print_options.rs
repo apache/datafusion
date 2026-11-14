@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::object_storage::instrumented::{
     InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry, RequestSummaries,
 };
-use crate::print_format::PrintFormat;
+use crate::print_format::{PrintFormat, TableOptions};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -60,6 +60,66 @@ impl Display for MaxRows {
     }
 }
 
+/// Maximum output width for tables and explain plans.
+///
+/// ```
+/// use datafusion_cli::print_options::MaxWidth;
+///
+/// assert_eq!("auto".parse::<MaxWidth>().unwrap(), MaxWidth::Auto);
+/// assert_eq!("100".parse::<MaxWidth>().unwrap(), MaxWidth::Limited(100));
+/// ```
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum MaxWidth {
+    /// Read the current width of the output terminal before each query.
+    #[default]
+    Auto,
+    /// Do not limit output width.
+    Unlimited,
+    /// Limit output to this many terminal columns.
+    Limited(u16),
+}
+
+impl FromStr for MaxWidth {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "inf" | "infinite" | "none" | "0" => Ok(Self::Unlimited),
+            _ => value
+                .parse::<u16>()
+                .ok()
+                .filter(|width| *width > 0)
+                .map(Self::Limited)
+                .ok_or_else(|| {
+                    format!("Invalid maxwidth {value}. Expected auto, 1..65535, or inf.")
+                }),
+        }
+    }
+}
+
+impl Display for MaxWidth {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auto => f.write_str("auto"),
+            Self::Unlimited => f.write_str("inf"),
+            Self::Limited(width) => write!(f, "{width}"),
+        }
+    }
+}
+
+impl MaxWidth {
+    pub(crate) fn resolve(self) -> Option<u16> {
+        match self {
+            Self::Auto => terminal_size::terminal_size_of(io::stdout())
+                .map(|(width, _)| width.0)
+                .filter(|width| *width > 0),
+            Self::Unlimited | Self::Limited(0) => None,
+            Self::Limited(width) => Some(width),
+        }
+    }
+}
+
 const OBJECT_STORE_PROFILING_HEADER: &str = "Object Store Profiling";
 
 #[derive(Debug, Clone)]
@@ -67,6 +127,8 @@ pub struct PrintOptions {
     pub format: PrintFormat,
     pub quiet: bool,
     pub maxrows: MaxRows,
+    /// Maximum output width, independent of the selected output format.
+    pub maxwidth: MaxWidth,
     pub color: bool,
     pub instrumented_registry: Arc<InstrumentedObjectStoreRegistry>,
 }
@@ -104,19 +166,28 @@ impl PrintOptions {
     ) -> Result<()> {
         let stdout = io::stdout();
         let mut writer = stdout.lock();
+        let width = self.maxwidth.resolve();
+        let format = if self.format == PrintFormat::Automatic && width.is_some() {
+            PrintFormat::Table
+        } else {
+            self.format
+        };
 
-        self.format.print_batches(
+        format.print_batches_with_options(
             &mut writer,
             schema,
             batches,
-            self.maxrows,
+            TableOptions {
+                maxrows: self.maxrows,
+                width,
+            },
             true,
             format_options,
         )?;
 
         let formatted_exec_details = get_execution_details_formatted(
             row_count,
-            if self.format == PrintFormat::Table {
+            if format == PrintFormat::Table {
                 self.maxrows
             } else {
                 MaxRows::Unlimited
@@ -125,6 +196,65 @@ impl PrintOptions {
         );
 
         self.write_output(&mut writer, &formatted_exec_details)
+    }
+
+    pub(crate) fn print_tree_batches(
+        &self,
+        schema: SchemaRef,
+        batches: &[RecordBatch],
+        query_start_time: Instant,
+        row_count: usize,
+        format_options: &FormatOptions,
+    ) -> Result<()> {
+        if self.format != PrintFormat::Table || self.maxwidth.resolve().is_none() {
+            return self.print_batches(
+                schema,
+                batches,
+                query_start_time,
+                row_count,
+                format_options,
+            );
+        }
+
+        let stdout = io::stdout();
+        let mut writer = stdout.lock();
+        crate::print_format::print_tree_batches(&mut writer, batches, format_options)?;
+        self.write_plan_details(&mut writer, query_start_time, row_count)
+    }
+
+    pub(crate) fn print_plan_batches(
+        &self,
+        batches: &[RecordBatch],
+        query_start_time: Instant,
+        row_count: usize,
+        format_options: &FormatOptions,
+        width: Option<u16>,
+    ) -> Result<()> {
+        let stdout = io::stdout();
+        let mut writer = stdout.lock();
+        crate::print_format::print_plan_batches(
+            &mut writer,
+            batches,
+            format_options,
+            width,
+        )?;
+        self.write_plan_details(&mut writer, query_start_time, row_count)
+    }
+
+    fn write_plan_details<W: io::Write>(
+        &self,
+        writer: &mut W,
+        query_start_time: Instant,
+        row_count: usize,
+    ) -> Result<()> {
+        self.write_output(
+            writer,
+            &get_execution_details_formatted(
+                row_count,
+                MaxRows::Unlimited,
+                query_start_time,
+            ),
+        )
     }
 
     /// Print the stream to stdout using the specified format
@@ -195,7 +325,18 @@ impl PrintOptions {
 
                         writeln!(writer, "Summaries:")?;
                         let summaries = RequestSummaries::new(&requests);
-                        writeln!(writer, "{summaries}")?;
+                        let batch = summaries.to_batch();
+                        PrintFormat::Table.print_batches_with_options(
+                            writer,
+                            batch.schema(),
+                            &[batch],
+                            TableOptions {
+                                maxrows: MaxRows::Unlimited,
+                                width: self.maxwidth.resolve(),
+                            },
+                            true,
+                            &FormatOptions::default(),
+                        )?;
                     }
                 }
             }
@@ -218,6 +359,7 @@ mod tests {
             format: PrintFormat::Automatic,
             quiet: true,
             maxrows: MaxRows::Unlimited,
+            maxwidth: MaxWidth::Auto,
             color: true,
             instrumented_registry: Arc::clone(&instrumented_registry),
         };

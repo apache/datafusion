@@ -38,6 +38,8 @@ pub enum Command {
 
 pub enum OutputFormat {
     ChangeFormat(String),
+    /// Set or display the maximum output width.
+    ChangeMaxWidth(Option<String>),
 }
 
 impl Command {
@@ -148,9 +150,10 @@ impl Command {
             Self::ListFunctions => ("\\h", "function list"),
             Self::SearchFunctions(_) => ("\\h function", "search function"),
             Self::QuietMode(_) => ("\\quiet (true|false)?", "print or set quiet mode"),
-            Self::OutputFormat(_) => {
-                ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
-            }
+            Self::OutputFormat(_) => (
+                "\\pset [NAME [VALUE]]",
+                "set table output option\n(format, maxwidth)",
+            ),
             Self::ObjectStoreProfileMode(_) => (
                 "\\object_store_profiling (disabled|summary|trace)",
                 "print or set object store profile mode",
@@ -240,6 +243,7 @@ impl FromStr for OutputFormat {
         };
         Ok(match (c, arg) {
             ("format", Some(format)) => Self::ChangeFormat(format.to_string()),
+            ("maxwidth", width) => Self::ChangeMaxWidth(width.map(str::to_owned)),
             _ => return Err(()),
         })
     }
@@ -248,6 +252,15 @@ impl FromStr for OutputFormat {
 impl OutputFormat {
     pub fn execute(&self, print_options: &mut PrintOptions) -> Result<()> {
         match self {
+            Self::ChangeMaxWidth(width) => {
+                if let Some(width) = width {
+                    print_options.maxwidth = width
+                        .parse()
+                        .map_err(|error: String| exec_datafusion_err!("{error}"))?;
+                }
+                println!("Maximum output width is {}.", print_options.maxwidth);
+                Ok(())
+            }
             Self::ChangeFormat(format) => {
                 if let Ok(format) = format.parse::<PrintFormat>() {
                     print_options.format = format;
@@ -286,6 +299,7 @@ mod tests {
             format: PrintFormat::Automatic,
             quiet: false,
             maxrows: MaxRows::Unlimited,
+            maxwidth: crate::print_options::MaxWidth::Auto,
             color: true,
             instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
         };
