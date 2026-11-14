@@ -759,6 +759,31 @@ SELECT approx_median(c12) FROM aggregate_test_100
 statement error
 SELECT approx_median(c1) FROM aggregate_test_100
 
+# APPROX_MEDIAN rejects aggregate ORDER BY keys rather than interpreting them
+# as percentile arguments in the shared accumulator.
+statement error ORDER BY is not supported for APPROX_MEDIAN
+SELECT approx_median(x ORDER BY k)
+FROM (VALUES (1.0, 3), (2.0, 1), (3.0, 2)) t(x, k)
+
+statement error ORDER BY is not supported for APPROX_MEDIAN
+SELECT approx_median(x ORDER BY CAST(k AS DOUBLE) DESC)
+FROM (VALUES (1.0, 0.3), (2.0, 0.1), (3.0, 0.2)) t(x, k)
+
+statement error ORDER BY is not supported for APPROX_MEDIAN
+SELECT approx_median(NULL ORDER BY k)
+FROM (VALUES (3), (1), (2)) t(k)
+
+statement error ORDER BY is not supported for APPROX_MEDIAN
+SELECT g, approx_median(x ORDER BY k)
+FROM (VALUES (1, 1.0, 3), (1, 2.0, 1), (1, 3.0, 2)) t(g, x, k)
+GROUP BY g
+
+query R
+SELECT approx_median(x)
+FROM (VALUES (1.0), (2.0), (3.0)) t(x)
+----
+2
+
 # csv_query_median_1
 query R
 SELECT median(c2) FROM aggregate_test_100

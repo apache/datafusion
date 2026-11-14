@@ -117,6 +117,10 @@ impl AggregateUDFImpl for ApproxMedian {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if !acc_args.order_bys.is_empty() {
+            return not_impl_err!("ORDER BY is not supported for APPROX_MEDIAN");
+        }
+
         if acc_args.is_distinct {
             return not_impl_err!(
                 "APPROX_MEDIAN(DISTINCT) aggregations are not available"
