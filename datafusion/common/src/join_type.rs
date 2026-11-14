@@ -13,14 +13,76 @@ use crate::error::_not_impl_err;
 use crate::{DataFusionError, Result};
 
 /// Join type
+///
+/// A join combines rows from two inputs, called the "left" and "right"
+/// inputs, according to a join condition. The `JoinType` determines which
+/// rows appear in the output and which columns the output contains.
+///
+/// # Example Inputs
+///
+/// The examples on each variant use the following two inputs, joined on
+/// `left.id = right.id`. Note that `id = 2` appears only in `left`,
+/// `id = 4` appears only in `right`, and `id = 3` appears twice in `right`.
+///
+/// ```text
+/// left               right
+/// +----+------+      +----+-------+
+/// | id | name |      | id | color |
+/// +----+------+      +----+-------+
+/// | 1  | a    |      | 1  | red   |
+/// | 2  | b    |      | 3  | blue  |
+/// | 3  | c    |      | 3  | green |
+/// +----+------+      | 4  | pink  |
+///                    +----+-------+
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
 pub enum JoinType {
-    /// Inner Join - Returns only rows where there is a matching value in both tables based on the join condition.
-    /// For example, if joining table A and B on A.id = B.id, only rows where A.id equals B.id will be included.
-    /// All columns from both tables are returned for the matching rows. Non-matching rows are excluded entirely.
+    /// Inner Join
+    ///
+    /// Returns only the rows where the join condition matches a row from the
+    /// left input with a row from the right input. Each left row is combined
+    /// with every right row it matches, so a row can appear more than once.
+    /// Rows without a match on the other side are excluded. The output
+    /// contains all columns from both inputs.
+    ///
+    /// For the [example inputs](JoinType#example-inputs), `id = 2` and
+    /// `id = 4` have no match and are excluded, while `id = 3` appears twice
+    /// because it matches two rows from the right input:
+    ///
+    /// ```text
+    /// +----+------+----+-------+
+    /// | id | name | id | color |
+    /// +----+------+----+-------+
+    /// | 1  | a    | 1  | red   |
+    /// | 3  | c    | 3  | blue  |
+    /// | 3  | c    | 3  | green |
+    /// +----+------+----+-------+
+    /// ```
     Inner,
-    /// Left Join - Returns all rows from the left table and matching rows from the right table.
-    /// If no match, NULL values are returned for columns from the right table.
+    /// Left Join (also called Left Outer Join)
+    ///
+    /// Returns all rows from the left input. Each left row that matches one
+    /// or more right rows is combined with each of them, as in an [`Inner`]
+    /// join. A left row with no match is output once, with `NULL` for all
+    /// columns from the right input. Right rows with no match are excluded.
+    /// The output contains all columns from both inputs.
+    ///
+    /// For the [example inputs](JoinType#example-inputs), `id = 2` is kept
+    /// with `NULL` right columns, while `id = 4` (only in the right input)
+    /// is excluded:
+    ///
+    /// ```text
+    /// +----+------+------+-------+
+    /// | id | name | id   | color |
+    /// +----+------+------+-------+
+    /// | 1  | a    | 1    | red   |
+    /// | 2  | b    | NULL | NULL  |
+    /// | 3  | c    | 3    | blue  |
+    /// | 3  | c    | 3    | green |
+    /// +----+------+------+-------+
+    /// ```
+    ///
+    /// [`Inner`]: JoinType::Inner
     Left,
     /// Right Join - Returns all rows from the right table and matching rows from the left table.
     /// If no match, NULL values are returned for columns from the left table.
