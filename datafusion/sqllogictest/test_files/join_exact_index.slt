@@ -1,0 +1,370 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# configMatrix: datafusion.execution.enable_migration_hash_join=true,false
+
+# Keep the written build/probe sides and split every duplicate group across
+# output chunks. A miss before the first hit must not exhaust the probe batch.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.execution.batch_size = 1;
+
+statement ok
+SET datafusion.optimizer.join_reordering = false;
+
+statement ok
+SET datafusion.optimizer.prefer_hash_join = true;
+
+statement ok
+CREATE TABLE exact_build(k VARCHAR, bucket INT, b INT) AS VALUES
+  ('alpha', 1, 10),
+  ('beta', 1, 20),
+  ('alpha', 1, 11),
+  ('alpha', 2, 30),
+  ('beta', 1, 21),
+  ('alpha', 1, 12),
+  (NULL, 1, 40),
+  (NULL, 1, 41),
+  ('alpha', NULL, 50),
+  ('alpha', NULL, 51);
+
+statement ok
+CREATE TABLE exact_probe(k VARCHAR, bucket INT, p INT, cutoff INT) AS VALUES
+  ('missing', 1, 99, 0),
+  ('alpha', 1, 100, 10),
+  ('beta', 1, 101, 100),
+  ('alpha', 2, 102, 0),
+  ('missing', 1, 103, 0),
+  (NULL, 1, 104, 0),
+  ('alpha', NULL, 105, 0),
+  ('alpha', 1, 106, 11);
+
+# Deliberately do not sort the join result: probe rows stay in order, and each
+# exact-key group's members retain their original build-row order. The same
+# string with a different second key must belong to a different group.
+query II
+SELECT p.p, b.b
+FROM exact_build b
+JOIN (SELECT * FROM exact_probe ORDER BY p) p
+  ON b.k = p.k AND b.bucket = p.bucket;
+----
+100 10
+100 11
+100 12
+101 20
+101 21
+102 30
+106 10
+106 11
+106 12
+
+# NULL equality applies independently to every key column, including groups
+# with a NULL string and groups with a NULL integer component.
+query II
+SELECT p.p, b.b
+FROM exact_build b
+JOIN (SELECT * FROM exact_probe ORDER BY p) p
+  ON b.k IS NOT DISTINCT FROM p.k
+ AND b.bucket IS NOT DISTINCT FROM p.bucket;
+----
+100 10
+100 11
+100 12
+101 20
+101 21
+102 30
+104 40
+104 41
+105 50
+105 51
+106 10
+106 11
+106 12
+
+# Single string keys combine the composite groups above, without comparing
+# the string again for every duplicate output row.
+query II
+SELECT p.p, COUNT(*)
+FROM exact_build b JOIN exact_probe p ON b.k = p.k
+GROUP BY p.p ORDER BY p.p;
+----
+100 6
+101 2
+102 6
+105 6
+106 6
+
+# The first member of alpha/1 fails the residual predicate but later members
+# pass. Every beta/1 member fails. Only accepted pairs mark either side as
+# matched; rejecting an entire group still emits its unmatched probe row.
+query II
+SELECT p.p, b.b
+FROM exact_build b FULL JOIN exact_probe p
+  ON b.k = p.k AND b.bucket = p.bucket AND b.b > p.cutoff
+ORDER BY p.p NULLS LAST, b.b NULLS LAST;
+----
+99 NULL
+100 11
+100 12
+101 NULL
+102 30
+103 NULL
+104 NULL
+105 NULL
+106 12
+NULL 10
+NULL 20
+NULL 21
+NULL 40
+NULL 41
+NULL 50
+NULL 51
+
+# Existence joins consume the same duplicate groups but return each preserved
+# row once, after applying the residual predicate to individual payload rows.
+query I
+SELECT b.b FROM exact_build b
+WHERE EXISTS (
+  SELECT 1 FROM exact_probe p
+  WHERE b.k = p.k AND b.bucket = p.bucket AND b.b > p.cutoff
+)
+ORDER BY b.b;
+----
+11
+12
+30
+
+query I
+SELECT b.b FROM exact_build b
+WHERE NOT EXISTS (
+  SELECT 1 FROM exact_probe p
+  WHERE b.k = p.k AND b.bucket = p.bucket AND b.b > p.cutoff
+)
+ORDER BY b.b;
+----
+10
+20
+21
+40
+41
+50
+51
+
+# Dense signed-integer lookup must enumerate the same ordered groups, skip
+# NULL keys for ordinary equality, and resume after both misses and groups.
+statement ok
+CREATE TABLE dense_build(k INT, b INT) AS VALUES
+  (-1, 10), (1, 20), (-1, 11), (NULL, 99), (-1, 12);
+
+statement ok
+CREATE TABLE dense_probe(k INT, p INT) AS VALUES
+  (0, 99), (-1, 100), (0, 101), (1, 102), (-1, 103), (NULL, 104);
+
+query II
+SELECT p.p, b.b FROM dense_build b
+JOIN (SELECT * FROM dense_probe ORDER BY p) p ON b.k = p.k;
+----
+100 10
+100 11
+100 12
+102 20
+103 10
+103 11
+103 12
+
+# With NULL-equal semantics the same integer data must retain the NULL match.
+query II
+SELECT p.p, b.b FROM dense_build b
+JOIN (SELECT * FROM dense_probe ORDER BY p) p
+  ON b.k IS NOT DISTINCT FROM p.k;
+----
+100 10
+100 11
+100 12
+102 20
+103 10
+103 11
+103 12
+104 99
+
+# Exercise both directories with a seven-row group and a four-row group at a
+# pair-buffer boundary. Misses share probe batches with hits; build rows for
+# the two groups are interleaved and must retain their order during expansion.
+statement ok
+SET datafusion.execution.batch_size = 2;
+
+statement ok
+CREATE TABLE cursor_build(k INT, s VARCHAR, b INT) AS VALUES
+  (1, 'large', 10),
+  (2, 'boundary', 20),
+  (1, 'large', 11),
+  (2, 'boundary', 21),
+  (1, 'large', 12),
+  (3, 'build_only', 30),
+  (1, 'large', 13),
+  (2, 'boundary', 22),
+  (1, 'large', 14),
+  (2, 'boundary', 23),
+  (1, 'large', 15),
+  (1, 'large', 16);
+
+statement ok
+CREATE TABLE cursor_probe(k INT, s VARCHAR, p INT, reject_from INT, reject_to INT) AS VALUES
+  (0, 'missing_before', 99, 0, 0),
+  (1, 'large', 100, 12, 13),
+  (2, 'boundary', 101, 20, 23),
+  (4, 'missing_between', 102, 0, 0),
+  (1, 'large', 103, 10, 15);
+
+# Dense integer lookup and Swiss string lookup must emit the same ordered
+# pairs, including a final group larger than the entire output batch.
+query II
+SELECT p.p, b.b FROM cursor_build b
+JOIN (SELECT * FROM cursor_probe ORDER BY p) p ON b.k = p.k;
+----
+100 10
+100 11
+100 12
+100 13
+100 14
+100 15
+100 16
+101 20
+101 21
+101 22
+101 23
+103 10
+103 11
+103 12
+103 13
+103 14
+103 15
+103 16
+
+query II
+SELECT p.p, b.b FROM cursor_build b
+JOIN (SELECT * FROM cursor_probe ORDER BY p) p ON b.s = p.s;
+----
+100 10
+100 11
+100 12
+100 13
+100 14
+100 15
+100 16
+101 20
+101 21
+101 22
+101 23
+103 10
+103 11
+103 12
+103 13
+103 14
+103 15
+103 16
+
+# Probe 100 accepts its first chunk, rejects an entire middle chunk, then
+# accepts later rows. Probe 101 rejects a whole four-row group; probe 103
+# matches only its seventh row. Empty filtered chunks must neither finish a
+# probe row early nor mark rejected build rows as matched.
+query II
+SELECT p.p, b.b FROM cursor_build b
+FULL JOIN (SELECT * FROM cursor_probe ORDER BY p) p
+  ON b.k = p.k AND (b.b < p.reject_from OR b.b > p.reject_to)
+ORDER BY p.p NULLS LAST, b.b NULLS LAST;
+----
+99 NULL
+100 10
+100 11
+100 14
+100 15
+100 16
+101 NULL
+102 NULL
+103 16
+NULL 12
+NULL 13
+NULL 20
+NULL 21
+NULL 22
+NULL 23
+NULL 30
+
+query II
+SELECT p.p, b.b FROM cursor_build b
+FULL JOIN (SELECT * FROM cursor_probe ORDER BY p) p
+  ON b.s = p.s AND (b.b < p.reject_from OR b.b > p.reject_to)
+ORDER BY p.p NULLS LAST, b.b NULLS LAST;
+----
+99 NULL
+100 10
+100 11
+100 14
+100 15
+100 16
+101 NULL
+102 NULL
+103 16
+NULL 12
+NULL 13
+NULL 20
+NULL 21
+NULL 22
+NULL 23
+NULL 30
+
+# All-unique build keys use direct pairs. With batch_size still 2, misses
+# surround repeated hits on alpha; rejecting beta leaves both its build and
+# probe rows unmatched. Gamma has no probe key at all.
+statement ok
+CREATE TABLE unique_build(k INT, s VARCHAR, b INT) AS VALUES
+  (1, 'alpha', 10), (2, 'beta', 20), (3, 'gamma', 30);
+
+statement ok
+CREATE TABLE unique_probe(k INT, s VARCHAR, p INT, cutoff INT) AS VALUES
+  (0, 'missing_before', 99, 0),
+  (1, 'alpha', 100, 0),
+  (2, 'beta', 101, 20),
+  (1, 'alpha', 102, 0),
+  (4, 'missing_after', 103, 0);
+
+query II
+SELECT p.p, b.b FROM unique_build b
+FULL JOIN (SELECT * FROM unique_probe ORDER BY p) p
+  ON b.k = p.k AND b.b > p.cutoff
+ORDER BY p.p NULLS LAST, b.b NULLS LAST;
+----
+99 NULL
+100 10
+101 NULL
+102 10
+103 NULL
+NULL 20
+NULL 30
+
+query II
+SELECT p.p, b.b FROM unique_build b
+FULL JOIN (SELECT * FROM unique_probe ORDER BY p) p
+  ON b.s = p.s AND b.b > p.cutoff
+ORDER BY p.p NULLS LAST, b.b NULLS LAST;
+----
+99 NULL
+100 10
+101 NULL
+102 10
+103 NULL
+NULL 20
+NULL 30
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+SET datafusion.execution.batch_size = 8192;
+
+statement ok
+SET datafusion.optimizer.join_reordering = true;
