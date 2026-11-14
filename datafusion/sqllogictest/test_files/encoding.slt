@@ -118,6 +118,32 @@ qweqw
 NULL
 8f50d3f60eae370ddbf85c86219c55108a350165
 
+# Dictionary inputs are transformed once per value and retain their keys.
+query TT rowsort
+SELECT
+  encode(arrow_cast(bin_field, 'Dictionary(Int8, Binary)'), 'hex'),
+  arrow_typeof(encode(arrow_cast(bin_field, 'Dictionary(Int8, Binary)'), 'hex'))
+FROM test;
+----
+616263 Dictionary(Int8, Utf8)
+7177657177 Dictionary(Int8, Utf8)
+8f50d3f60eae370ddbf85c86219c55108a350165 Dictionary(Int8, Utf8)
+NULL Dictionary(Int8, Utf8)
+
+query TT rowsort
+SELECT
+  arrow_cast(
+    decode(arrow_cast(hex_field, 'Dictionary(Int8, Utf8)'), 'hex'),
+    'Utf8'
+  ),
+  arrow_typeof(decode(arrow_cast(hex_field, 'Dictionary(Int8, Utf8)'), 'hex'))
+FROM test;
+----
+8f50d3f60eae370ddbf85c86219c55108a350165 Dictionary(Int8, Binary)
+NULL Dictionary(Int8, Binary)
+abc Dictionary(Int8, Binary)
+qweqw Dictionary(Int8, Binary)
+
 query T
 select to_hex(num) from test ORDER BY num;
 ----
