@@ -20,8 +20,7 @@ use datafusion_execution::memory_pool::{MemoryPool, MemoryReservation, MergeMemo
 use crate::sorts::builder::try_grow_reservation_to_at_least;
 use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::gc_view_arrays;
-use crate::spill::spill_manager::GetSlicedSize;
+use crate::spill::{gc_view_arrays, get_record_batch_memory_size};
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -161,6 +160,8 @@ pub(crate) struct MultiLevelMergeBuilder {
     batch_size: usize,
     /// See [`StreamingMergeBuilder::with_max_batch_bytes`]
     max_batch_bytes: Option<usize>,
+    /// See [`StreamingMergeBuilder::with_spill_max_batch_bytes`]
+    spill_max_batch_bytes: Option<usize>,
     reservation: MemoryReservation,
     /// Workspace retained across retries and intermediate spill passes.
     merge_pool: Option<Arc<MergeMemoryPool>>,
@@ -211,6 +212,7 @@ impl MultiLevelMergeBuilder {
             metrics,
             batch_size,
             max_batch_bytes: None,
+            spill_max_batch_bytes: None,
             reservation,
             merge_pool: None,
             reserve_replay_headroom: false,
@@ -230,6 +232,15 @@ impl MultiLevelMergeBuilder {
     /// including the passes whose output is spilled again.
     pub(super) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
         self.max_batch_bytes = max_batch_bytes;
+        self
+    }
+
+    /// See [`StreamingMergeBuilder::with_spill_max_batch_bytes`]
+    pub(super) fn with_spill_max_batch_bytes(
+        mut self,
+        max_batch_bytes: Option<usize>,
+    ) -> Self {
+        self.spill_max_batch_bytes = max_batch_bytes;
         self
     }
 
@@ -575,7 +586,11 @@ impl MultiLevelMergeBuilder {
             })
             .with_round_robin_tie_breaker(self.enable_round_robin_tie_breaker)
             .with_streams(streams)
-            .with_max_batch_bytes(self.max_batch_bytes);
+            .with_max_batch_bytes(if is_output {
+                self.max_batch_bytes
+            } else {
+                self.spill_max_batch_bytes.or(self.max_batch_bytes)
+            });
 
         if !all_in_memory {
             // Don't track memory used by this stream as we reserve that memory by worst case sceneries
@@ -816,9 +831,14 @@ impl MultiLevelMergeBuilder {
                 let batch = batch?;
                 max_batch_rows = max_batch_rows.max(batch.num_rows());
                 all_singletons &= batch.num_rows() == 1;
-                decoded_max = decoded_max.max(batch.get_sliced_size()?);
+                // A decoded batch can hold its whole IPC message (see
+                // `SpillManager::read_back_size`), which only its memory size counts.
+                decoded_max = decoded_max
+                    .max(self.spill_manager.recorded_size(&batch)?)
+                    .max(get_record_batch_memory_size(&batch));
                 if batch.num_rows() == 1
-                    && gc_view_arrays(&batch)?.get_sliced_size()? >= old_max
+                    && self.spill_manager.recorded_size(&gc_view_arrays(&batch)?)?
+                        >= old_max
                 {
                     max_is_singleton = true;
                     break;
@@ -967,11 +987,14 @@ fn split_batch_in_half(batch: RecordBatch) -> Vec<RecordBatch> {
     vec![batch.slice(0, mid), batch.slice(mid, num_rows - mid)]
 }
 
+/// The fewest spill files a merge reads at once.
+pub(super) const MIN_SPILL_MERGE_FAN_IN: usize = 2;
+
 fn effective_spill_merge_fan_in(configured_fan_in: usize) -> usize {
     if configured_fan_in == 0 {
         usize::MAX
     } else {
-        configured_fan_in.max(2)
+        configured_fan_in.max(MIN_SPILL_MERGE_FAN_IN)
     }
 }
 
@@ -1035,6 +1058,7 @@ mod tests {
     use super::*;
 
     use crate::expressions::PhysicalSortExpr;
+    use crate::spill::spill_manager::GetSlicedSize;
     use arrow::array::{AsArray, Int64Array};
     use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Field, Int64Type, Schema};
@@ -1435,9 +1459,7 @@ mod tests {
             let batch = batch?;
             // Short input runs must not rebuild a larger output batch than
             // the attached merge reservation can hold.
-            assert!(
-                crate::spill::get_record_batch_memory_size(&batch) <= pool.reserved()
-            );
+            assert!(get_record_batch_memory_size(&batch) <= pool.reserved());
             batches.push(batch);
             assert!(pool.reserved() <= merge_limit);
         }
