@@ -400,8 +400,10 @@ jobs:
       - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        # datafusion-testing is used only with --include-sqlite.
+        run: git submodule update --init --depth=1 testing parquet-testing
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
