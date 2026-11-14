@@ -233,6 +233,44 @@ physical_plan
 statement ok
 SET datafusion.explain.physical_plan_only = false;
 
+# Repeated singleton values, NULL-only groups and larger sets span small batches.
+statement ok
+SET datafusion.execution.batch_size = 2;
+
+statement ok
+CREATE TABLE inline_counts AS
+SELECT value % 4 AS g,
+       CASE WHEN value < 4 OR value % 4 = 0 THEN NULL
+            WHEN value % 4 = 1 THEN 0
+            WHEN value % 4 = 2 THEN (value / 4) % 2
+            ELSE value / 4 END AS x
+FROM range(64);
+
+query II rowsort
+SELECT g, count(DISTINCT x) FROM inline_counts GROUP BY g;
+----
+0 0
+1 1
+2 2
+3 15
+
+# Partial states overlap in both their first value and their additional values.
+query II rowsort
+SELECT g, count(DISTINCT x)
+FROM (SELECT g, x FROM inline_counts UNION ALL SELECT g, x FROM inline_counts)
+GROUP BY g;
+----
+0 0
+1 1
+2 2
+3 15
+
+statement ok
+DROP TABLE inline_counts;
+
+statement ok
+RESET datafusion.execution.batch_size;
+
 # Turning the opt-in off in the same session restores the rewrite.
 statement ok
 SET datafusion.optimizer.single_distinct_prefer_native = false;

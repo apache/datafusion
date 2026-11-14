@@ -20,7 +20,7 @@ expect_plan AggregateExec
 
 run
 -- Int64, 1M groups with four identical values per group at the default 4M rows.
--- Native DISTINCT probes both the group table and its per-group set on each row.
+-- Repeated singleton values exercise the native accumulator's inline first value.
 SELECT many_g, count(DISTINCT dup_x) FROM grouped_distinct GROUP BY many_g;
 
 cleanup sql_benchmarks/grouped_count_distinct/init/cleanup.sql
