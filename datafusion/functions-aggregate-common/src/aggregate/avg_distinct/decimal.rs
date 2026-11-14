@@ -132,10 +132,7 @@ where
     }
 
     fn size(&self) -> usize {
-        let fixed_size = size_of_val(self);
-
-        // Account for the size of the sum_accumulator with its contained values
-        fixed_size + self.sum_accumulator.size()
+        size_of_val(self) + self.sum_accumulator.heap_size()
     }
 }
 
