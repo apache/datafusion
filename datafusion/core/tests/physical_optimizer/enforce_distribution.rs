@@ -380,6 +380,22 @@ fn parquet_exec_multiple_sorted(
 fn parquet_exec_with_output_partitioning(
     output_partitioning: Partitioning,
 ) -> Arc<DataSourceExec> {
+    parquet_exec_with_partitioning_and_size(
+        output_partitioning,
+        Precision::Absent,
+        Precision::Absent,
+    )
+}
+
+fn parquet_exec_with_partitioning_and_size(
+    output_partitioning: Partitioning,
+    num_rows: Precision<usize>,
+    total_byte_size: Precision<usize>,
+) -> Arc<DataSourceExec> {
+    let mut statistics = Statistics::new_unknown(&schema());
+    statistics.num_rows = num_rows;
+    statistics.total_byte_size = total_byte_size;
+
     let file_groups = (0..output_partitioning.partition_count())
         .map(|partition| {
             FileGroup::new(vec![PartitionedFile::new(format!("p{partition}"), 100)])
@@ -392,6 +408,7 @@ fn parquet_exec_with_output_partitioning(
     )
     .with_file_groups(file_groups)
     .with_output_partitioning(Some(output_partitioning))
+    .with_statistics(statistics)
     .build();
 
     DataSourceExec::from_data_source(config)
@@ -1972,6 +1989,116 @@ fn range_hash_join_repartitions_unpartitioned_side_to_match_range() -> Result<()
       DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
     "
     );
+
+    Ok(())
+}
+
+#[test]
+fn range_join_reference_size_gate() -> Result<()> {
+    let optimizer = TestConfig::default().config.optimizer;
+    let bytes = optimizer.hash_join_single_partition_threshold;
+    let rows = optimizer.hash_join_single_partition_threshold_rows;
+    let known = |n: usize| Precision::Inexact(n);
+    let absent = Precision::Absent;
+
+    // (name, other (rows, bytes), reference (rows, bytes), expect hash fallback)
+    let cases = [
+        (
+            "bytes: straddle",
+            (absent, known(bytes)),
+            (absent, known(bytes - 1)),
+            true,
+        ),
+        (
+            "bytes: both at or above",
+            (absent, known(bytes + 1)),
+            (absent, known(bytes)),
+            false,
+        ),
+        (
+            "bytes: both below",
+            (absent, known(100)),
+            (absent, known(100)),
+            false,
+        ),
+        (
+            "rows: straddle",
+            (known(rows), absent),
+            (known(rows - 1), absent),
+            true,
+        ),
+        (
+            "rows: both at or above",
+            (known(rows + 1), absent),
+            (known(rows), absent),
+            false,
+        ),
+        (
+            "bytes win over rows",
+            (known(rows * 10), known(100)),
+            (known(1), known(100)),
+            false,
+        ),
+        (
+            "other unknown",
+            (absent, absent),
+            (known(1), known(100)),
+            false,
+        ),
+        (
+            "reference unknown",
+            (known(rows * 10), known(bytes * 10)),
+            (absent, absent),
+            false,
+        ),
+    ];
+
+    type MakeJoin = fn(
+        Arc<dyn ExecutionPlan>,
+        Arc<dyn ExecutionPlan>,
+        &JoinOn,
+        &JoinType,
+    ) -> Arc<dyn ExecutionPlan>;
+    let joins: [(&str, MakeJoin); 2] = [
+        ("hash", hash_join_exec),
+        ("sort-merge", sort_merge_join_exec),
+    ];
+
+    for (join_name, make_join) in joins {
+        for (name, other, reference, expect_hash) in cases {
+            let left = parquet_exec_with_partitioning_and_size(
+                Partitioning::UnknownPartitioning(4),
+                other.0,
+                other.1,
+            );
+            let right = parquet_exec_with_partitioning_and_size(
+                range_partitioning("a", [10, 20, 30], SortOptions::default())?,
+                reference.0,
+                reference.1,
+            );
+            let join_on = vec![(
+                Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+            )];
+            let join = make_join(left, right, &join_on, &JoinType::Inner);
+
+            let plan = TestConfig::default()
+                .with_query_execution_partitions(4)
+                .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+            for child in plan.children() {
+                let is_hash =
+                    matches!(child.output_partitioning(), Partitioning::Hash(_, 4));
+                let is_range =
+                    matches!(child.output_partitioning(), Partitioning::Range(_));
+                assert!(
+                    if expect_hash { is_hash } else { is_range },
+                    "{join_name}, {name}: got {:?}",
+                    child.output_partitioning(),
+                );
+            }
+        }
+    }
 
     Ok(())
 }
