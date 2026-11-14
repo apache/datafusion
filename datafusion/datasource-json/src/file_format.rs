@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crate::source::JsonSource;
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::json;
 use arrow::json::reader::{ValueIter, infer_json_schema_from_iterator};
@@ -373,6 +373,53 @@ impl Default for JsonSerializer {
     }
 }
 
+/// Returns `true` if `data_type` is, or contains at any nesting level, a
+/// [`DataType::Map`].
+fn contains_map(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Map(_, _) => true,
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::FixedSizeList(field, _) => contains_map(field.data_type()),
+        DataType::Struct(fields) => {
+            fields.iter().any(|field| contains_map(field.data_type()))
+        }
+        DataType::Union(fields, _) => fields
+            .iter()
+            .any(|(_, field)| contains_map(field.data_type())),
+        DataType::Dictionary(_, value_type) => contains_map(value_type),
+        DataType::RunEndEncoded(_, values) => contains_map(values.data_type()),
+        _ => false,
+    }
+}
+
+/// Creates a newline-delimited JSON writer suited to `schema`.
+///
+/// By default, `arrow-json` omits any NULL value from the output. For a
+/// struct field or a top level column that is lossless because a reader fills
+/// the missing key back in from the schema. A `MAP` is different: the entry
+/// key *is* the data, so omitting an entry whose value is NULL silently drops
+/// the key and changes the cardinality of the map
+/// (`{color: red, size: NULL}` would be written as `{"color":"red"}`).
+///
+/// Therefore, when the schema contains a `MAP` (at any nesting level), NULLs
+/// are written explicitly, e.g. `{"color":"red","size":null}`. Schemas
+/// without a `MAP` keep the previous, more compact output.
+pub(crate) fn line_delimited_writer<W: std::io::Write>(
+    writer: W,
+    schema: &Schema,
+) -> json::LineDelimitedWriter<W> {
+    let explicit_nulls = schema
+        .fields()
+        .iter()
+        .any(|field| contains_map(field.data_type()));
+    json::WriterBuilder::new()
+        .with_explicit_nulls(explicit_nulls)
+        .build::<_, json::writer::LineDelimited>(writer)
+}
+
 /// Define a struct for serializing Json records to a stream
 pub struct JsonSerializer {}
 
@@ -386,7 +433,7 @@ impl JsonSerializer {
 impl BatchSerializer for JsonSerializer {
     fn serialize(&self, batch: RecordBatch, _initial: bool) -> Result<Bytes> {
         let mut buffer = Vec::with_capacity(4096);
-        let mut writer = json::LineDelimitedWriter::new(&mut buffer);
+        let mut writer = line_delimited_writer(&mut buffer, batch.schema_ref());
         writer.write(&batch)?;
         Ok(Bytes::from(buffer))
     }
@@ -643,5 +690,151 @@ impl From<&JsonFormatFactory> for datafusion_proto_models::protobuf::JsonOptions
         } else {
             datafusion_proto_models::protobuf::JsonOptions::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{
+        Array, ArrayRef, AsArray, Int64Array, ListArray, MapBuilder, MapFieldNames,
+        StringArray, StringBuilder,
+    };
+    use arrow::datatypes::{Field, Fields};
+
+    /// Builds a batch with an `id` column and an `attrs` MAP(Utf8, Utf8) column
+    /// holding `{color: red, size: NULL, note: NULL}` and `{flag: NULL}`.
+    fn map_batch() -> RecordBatch {
+        let mut builder = MapBuilder::new(
+            Some(MapFieldNames {
+                entry: "entries".to_string(),
+                key: "key".to_string(),
+                value: "value".to_string(),
+            }),
+            StringBuilder::new(),
+            StringBuilder::new(),
+        );
+        builder.keys().append_value("color");
+        builder.values().append_value("red");
+        builder.keys().append_value("size");
+        builder.values().append_null();
+        builder.keys().append_value("note");
+        builder.values().append_null();
+        builder.append(true).unwrap();
+        builder.keys().append_value("flag");
+        builder.values().append_null();
+        builder.append(true).unwrap();
+        let attrs: ArrayRef = Arc::new(builder.finish());
+
+        let id: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("attrs", attrs.data_type().clone(), true),
+        ]));
+        RecordBatch::try_new(schema, vec![id, attrs]).unwrap()
+    }
+
+    #[test]
+    fn test_contains_map() {
+        let map = map_batch().schema().field(1).data_type().clone();
+        assert!(contains_map(&map));
+        assert!(!contains_map(&DataType::Int64));
+        assert!(!contains_map(&DataType::Utf8));
+
+        let item = Arc::new(Field::new("item", map.clone(), true));
+        assert!(contains_map(&DataType::List(Arc::clone(&item))));
+        assert!(contains_map(&DataType::LargeList(Arc::clone(&item))));
+        assert!(contains_map(&DataType::FixedSizeList(item, 2)));
+        assert!(contains_map(&DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("m", map, true),
+        ]))));
+        assert!(!contains_map(&DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int64, true),
+        ]))));
+        assert!(!contains_map(&DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Int64,
+            true
+        )))));
+    }
+
+    #[test]
+    fn test_serialize_map_keeps_null_values() {
+        let bytes = JsonSerializer::new().serialize(map_batch(), true).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            "{\"id\":1,\"attrs\":{\"color\":\"red\",\"size\":null,\"note\":null}}\n\
+             {\"id\":2,\"attrs\":{\"flag\":null}}\n"
+        );
+    }
+
+    #[test]
+    fn test_serialize_map_round_trip() {
+        let batch = map_batch();
+        let bytes = JsonSerializer::new()
+            .serialize(batch.clone(), true)
+            .unwrap();
+
+        let mut reader = json::ReaderBuilder::new(batch.schema())
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+        let read = reader.next().unwrap().unwrap();
+        assert_eq!(read.num_rows(), 2);
+
+        let attrs = read.column(1).as_map();
+        // Cardinality (number of entries per row) is preserved: 3 and 1.
+        assert_eq!(attrs.value_length(0), 3);
+        assert_eq!(attrs.value_length(1), 1);
+        let values = attrs.values().as_string::<i32>();
+        assert_eq!(values.null_count(), 3);
+        assert_eq!(attrs.keys().as_string::<i32>().value(1), "size");
+    }
+
+    #[test]
+    fn test_serialize_map_nested_in_list() {
+        let map_batch = map_batch();
+        let map_array = map_batch.column(1);
+        let item = Arc::new(Field::new("item", map_array.data_type().clone(), true));
+        let list = ListArray::new(
+            Arc::clone(&item),
+            arrow::buffer::OffsetBuffer::from_lengths([2]),
+            Arc::clone(map_array),
+            None,
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "maps",
+            DataType::List(item),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(list)]).unwrap();
+
+        let bytes = JsonSerializer::new().serialize(batch, true).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            "{\"maps\":[{\"color\":\"red\",\"size\":null,\"note\":null},{\"flag\":null}]}\n"
+        );
+    }
+
+    #[test]
+    fn test_serialize_without_map_still_omits_nulls() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![Some(1), None])),
+                Arc::new(StringArray::from(vec![None, Some("x")])),
+            ],
+        )
+        .unwrap();
+
+        let bytes = JsonSerializer::new().serialize(batch, true).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&bytes).unwrap(),
+            "{\"a\":1}\n{\"b\":\"x\"}\n"
+        );
     }
 }

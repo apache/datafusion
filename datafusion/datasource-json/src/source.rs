@@ -9,7 +9,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::file_format::JsonDecoder;
+use crate::file_format::{JsonDecoder, line_delimited_writer};
 use crate::utils::{ChannelReader, JsonArrayToNdjsonReader};
 
 use datafusion_common::error::{DataFusionError, Result};
@@ -26,8 +26,8 @@ use datafusion_physical_plan::projection::ProjectionExprs;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow::array::RecordBatch;
+use arrow::datatypes::SchemaRef;
 use arrow::json::ReaderBuilder;
-use arrow::{datatypes::SchemaRef, json};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::TaskContext;
@@ -571,7 +571,7 @@ pub async fn plan_to_json(
 
             let mut buffer = Vec::with_capacity(1024);
             while let Some(batch) = stream.next().await.transpose()? {
-                let mut writer = json::LineDelimitedWriter::new(buffer);
+                let mut writer = line_delimited_writer(buffer, batch.schema_ref());
                 writer.write(&batch)?;
                 buffer = writer.into_inner();
                 buf_writer.write_all(&buffer).await?;

@@ -161,3 +161,36 @@ statement error Not valid JSON
 CREATE EXTERNAL TABLE json_array_as_ndjson
 STORED AS JSON
 LOCATION '../core/tests/data/json_array.json';
+
+##########
+## MAP values that are NULL must survive a write/read round trip
+## (https://github.com/apache/datafusion/issues/26493)
+##########
+
+statement ok
+CREATE TABLE map_null_values_src AS
+SELECT 1 AS id, MAP(['color', 'size', 'note'], ['red', NULL, NULL]) AS attrs
+UNION ALL
+SELECT 2, MAP(['flag'], [NULL]);
+
+query I
+COPY map_null_values_src TO 'test_files/scratch/json/map_null_values.json' STORED AS JSON;
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE map_null_values_back (id BIGINT, attrs MAP(VARCHAR, VARCHAR))
+STORED AS JSON
+LOCATION 'test_files/scratch/json/map_null_values.json';
+
+query I?I
+SELECT id, attrs, cardinality(attrs) FROM map_null_values_back ORDER BY id;
+----
+1 {color: red, size: NULL, note: NULL} 3
+2 {flag: NULL} 1
+
+statement ok
+DROP TABLE map_null_values_back;
+
+statement ok
+DROP TABLE map_null_values_src;
