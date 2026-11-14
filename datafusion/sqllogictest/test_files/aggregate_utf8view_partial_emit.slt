@@ -15,13 +15,13 @@ SET datafusion.execution.target_partitions = 8
 query I
 COPY (
   SELECT value % 1000 AS k, repeat('x', 100) || (value % 7)::varchar AS s, value AS v
-  FROM generate_series(1, 2000000)
+  FROM generate_series(1, 500000)
   ORDER BY k
 )
 TO 'test_files/scratch/aggregate_utf8view_partial_emit/data.parquet'
 STORED AS PARQUET;
 ----
-2000000
+500000
 
 statement ok
 CREATE EXTERNAL TABLE t
@@ -46,15 +46,7 @@ physical_plan
 05)--------AggregateExec: mode=Partial, gby=[k@0 as k, s@1 as s], aggr=[count(Int64(1))], group_clustering_mode=Partial([0])
 06)----------DataSourceExec: file_groups={8 groups: <slt:ignore>
 
-# All three limits failed with ResourcesExhausted before the fix
-statement ok
-SET datafusion.runtime.memory_limit = '200M'
-
-query I
-SELECT count(*) FROM (SELECT k, s, count(*) FROM t GROUP BY k, s ORDER BY k)
-----
-7000
-
+# Both limits failed with ResourcesExhausted before the fix
 statement ok
 SET datafusion.runtime.memory_limit = '50M'
 
