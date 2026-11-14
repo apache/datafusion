@@ -1583,7 +1583,7 @@ config_namespace! {
         /// Boosting these values is likely worthwhile when
         /// writing out already in-memory data, such as from a cached
         /// data frame.
-        pub maximum_buffered_record_batches_per_stream: usize, default = 2
+        pub maximum_buffered_record_batches_per_stream: ConfigNonZeroUsize, default = non_zero_usize_default(2)
 
         /// (writing) EXPERIMENTAL: Content-defined chunking (CDC) options when writing
         /// parquet files. Disabled by default; toggle with

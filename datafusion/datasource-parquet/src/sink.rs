@@ -281,7 +281,8 @@ impl FileSink for ParquetSink {
                 .maximum_parallel_row_group_writers,
             max_buffered_record_batches_per_stream: parquet_opts
                 .global
-                .maximum_buffered_record_batches_per_stream,
+                .maximum_buffered_record_batches_per_stream
+                .get(),
         };
 
         while let Some((file_metadata, mut rx)) = file_stream_rx.recv().await {

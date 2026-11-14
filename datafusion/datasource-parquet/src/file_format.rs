@@ -852,7 +852,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             }),
             allow_single_file_parallelism: global_options.global.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: global_options.global.maximum_parallel_row_group_writers as u64,
-            maximum_buffered_record_batches_per_stream: global_options.global.maximum_buffered_record_batches_per_stream as u64,
+            maximum_buffered_record_batches_per_stream: global_options.global.maximum_buffered_record_batches_per_stream.get() as u64,
             schema_force_view_types: global_options.global.schema_force_view_types,
             binary_as_string: global_options.global.binary_as_string,
             skip_arrow_metadata: global_options.global.skip_arrow_metadata,
