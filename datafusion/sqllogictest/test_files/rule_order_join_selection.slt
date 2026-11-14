@@ -1,0 +1,64 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# This file runs `JoinSelection` after `EnsureRequirements` (see `moved_rule` in
+# `test_context.rs`). A join in `Auto` mode declares no distribution, so
+# enforcement has to pick the mode itself. Otherwise the inputs get no hash
+# repartitioning, and the `Partitioned` mode that `JoinSelection` picks later
+# breaks the plan. CSV tables have no statistics, so `JoinSelection` can't pick
+# `CollectLeft`.
+
+statement ok
+COPY (SELECT column1 AS a, column2 AS b FROM (VALUES (1, 10), (2, 20)))
+TO 'test_files/scratch/rule_order_join_selection/l.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+
+statement ok
+COPY (SELECT column1 AS a, column2 AS c FROM (VALUES (1, 100), (2, 200), (2, 201), (3, 300)))
+TO 'test_files/scratch/rule_order_join_selection/r.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE l (a INT, b INT)
+STORED AS CSV LOCATION 'test_files/scratch/rule_order_join_selection/l.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE r (a INT, c INT)
+STORED AS CSV LOCATION 'test_files/scratch/rule_order_join_selection/r.csv'
+OPTIONS ('format.has_header' 'true');
+
+query III
+SELECT l.a, b, c FROM l JOIN r ON l.a = r.a ORDER BY c;
+----
+1 10 100
+2 20 200
+2 20 201
+
+query III
+SELECT r.a, b, c FROM r LEFT JOIN l ON l.a = r.a ORDER BY c;
+----
+1 10 100
+2 20 200
+2 20 201
+3 NULL 300
+
+statement ok
+DROP TABLE l;
+
+statement ok
+DROP TABLE r;

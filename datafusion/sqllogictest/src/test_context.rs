@@ -31,6 +31,7 @@ use datafusion::logical_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, create_udf,
 };
+use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
@@ -155,6 +156,21 @@ impl TestContext {
                 ensure_requirements,
                 Arc::new(custom_sort_pushdown::CustomLimitRule),
             );
+            state_builder = state_builder.with_physical_optimizer_rules(rules);
+        }
+
+        if let Some((rule, after, anchor)) = moved_rule(file_name) {
+            let mut rules = PhysicalOptimizer::new().rules;
+            let position = |rules: &[Arc<dyn PhysicalOptimizerRule + Send + Sync>],
+                            name: &str| {
+                rules
+                    .iter()
+                    .position(|r| r.name() == name)
+                    .unwrap_or_else(|| panic!("default optimizer includes {name}"))
+            };
+            let moved = rules.remove(position(&rules, rule));
+            let at = position(&rules, anchor) + usize::from(after);
+            rules.insert(at, moved);
             state_builder = state_builder.with_physical_optimizer_rules(rules);
         }
 
@@ -342,6 +358,18 @@ impl SchemaProvider for StrictOrdersSchema {
 
     fn table_exist(&self, name: &str) -> bool {
         name == "orders"
+    }
+}
+
+/// A test file that checks a physical optimizer rule gives correct results in
+/// another position: the rule to move, whether it goes after (rather than before)
+/// the anchor rule, and the anchor.
+fn moved_rule(file_name: &str) -> Option<(&'static str, bool, &'static str)> {
+    match file_name {
+        "rule_order_join_selection.slt" => {
+            Some(("join_selection", true, "EnsureRequirements"))
+        }
+        _ => None,
     }
 }
 
