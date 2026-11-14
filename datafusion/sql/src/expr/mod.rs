@@ -17,6 +17,7 @@ use sqlparser::ast::{
 };
 use sqlparser::ast::{Query, Visit, Visitor};
 
+use datafusion_common::config::IdentNormalization;
 use datafusion_common::{
     DFSchema, Diagnostic, HashMap, Result, ScalarValue, Span, internal_datafusion_err,
     internal_err, not_impl_err, plan_err,
@@ -237,7 +238,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut expr =
             self.sql_expr_to_logical_expr(sql.expr, schema, planner_context)?;
         if let Some(alias) = sql.alias {
-            expr = expr.alias(alias.value);
+            expr = expr.alias(
+                self.legacy_normalizer(IdentNormalization::Preserve)
+                    .normalize(alias),
+            );
         }
         Ok(expr)
     }
@@ -1021,7 +1025,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut keys = Vec::with_capacity(fields.len());
         let mut values = Vec::with_capacity(fields.len());
         for field in fields {
-            let key = lit(field.key.value);
+            let key = lit(self
+                .legacy_normalizer(IdentNormalization::Preserve)
+                .normalize(field.key));
             let value =
                 self.sql_expr_to_logical_expr(*field.value, schema, planner_context)?;
             keys.push(key);
@@ -1077,7 +1083,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|(i, value)| {
                 let args = if let SQLExpr::Named { expr, name } = value {
                     [
-                        name.value.lit(),
+                        self.legacy_normalizer(IdentNormalization::Preserve)
+                            .normalize(name)
+                            .lit(),
                         self.sql_expr_to_logical_expr(
                             *expr,
                             input_schema,

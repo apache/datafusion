@@ -12,7 +12,7 @@ use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
 use arrow_schema::extension::{Json, Uuid};
 use datafusion_common::TableReference;
-use datafusion_common::config::SqlParserOptions;
+use datafusion_common::config::{IdentNormalization, SqlParserOptions};
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
@@ -35,6 +35,11 @@ pub struct ParserOptions {
     pub parse_float_as_decimal: bool,
     /// Whether to normalize identifiers.
     pub enable_ident_normalization: bool,
+    /// Explicit folding policy for unquoted identifiers.
+    ///
+    /// Overrides [`Self::enable_ident_normalization`] when set. `None` retains
+    /// legacy behavior, including name-binding paths that always lowercase.
+    pub ident_normalization: Option<IdentNormalization>,
     /// Whether to support varchar with length.
     pub support_varchar_with_length: bool,
     /// Whether to normalize options value.
@@ -62,6 +67,7 @@ impl ParserOptions {
         Self {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
+            ident_normalization: None,
             support_varchar_with_length: true,
             map_string_types_to_utf8view: true,
             enable_options_value_normalization: false,
@@ -98,6 +104,29 @@ impl ParserOptions {
     pub fn with_enable_ident_normalization(mut self, value: bool) -> Self {
         self.enable_ident_normalization = value;
         self
+    }
+
+    /// Selects the folding policy, overriding the legacy boolean switch.
+    ///
+    /// Quoted identifiers retain their spelling in every mode.
+    ///
+    /// ```
+    /// use datafusion_common::config::IdentNormalization;
+    /// use datafusion_sql::planner::ParserOptions;
+    ///
+    /// let options = ParserOptions::new()
+    ///     .with_ident_normalization(IdentNormalization::Upper);
+    /// assert_eq!(options.effective_ident_normalization(), IdentNormalization::Upper);
+    /// ```
+    pub fn with_ident_normalization(mut self, policy: IdentNormalization) -> Self {
+        self.ident_normalization = Some(policy);
+        self
+    }
+
+    /// Returns the explicit policy or the policy selected by the legacy boolean.
+    pub fn effective_ident_normalization(&self) -> IdentNormalization {
+        self.ident_normalization
+            .unwrap_or_else(|| self.enable_ident_normalization.into())
     }
 
     /// Sets the `support_varchar_with_length` option.
@@ -142,6 +171,7 @@ impl From<&SqlParserOptions> for ParserOptions {
         Self {
             parse_float_as_decimal: options.parse_float_as_decimal,
             enable_ident_normalization: options.enable_ident_normalization,
+            ident_normalization: None,
             support_varchar_with_length: options.support_varchar_with_length,
             map_string_types_to_utf8view: options.map_string_types_to_utf8view,
             enable_options_value_normalization: options
@@ -203,28 +233,48 @@ impl From<&str> for NullOrdering {
     }
 }
 
-/// Ident Normalizer
+/// Applies ASCII case folding to unquoted SQL identifiers.
 #[derive(Debug)]
 pub struct IdentNormalizer {
-    normalize: bool,
+    policy: IdentNormalization,
 }
 
 impl Default for IdentNormalizer {
     fn default() -> Self {
-        Self { normalize: true }
+        Self::with_policy(IdentNormalization::Lower)
     }
 }
 
 impl IdentNormalizer {
+    /// Creates a legacy normalizer: lowercase when enabled, otherwise preserve.
     pub fn new(normalize: bool) -> Self {
-        Self { normalize }
+        Self::with_policy(normalize.into())
     }
 
+    /// Creates a normalizer with an explicit folding policy.
+    ///
+    /// ```
+    /// use datafusion_common::config::IdentNormalization;
+    /// use datafusion_sql::planner::IdentNormalizer;
+    /// use sqlparser::ast::Ident;
+    ///
+    /// let normalizer = IdentNormalizer::with_policy(IdentNormalization::Upper);
+    /// assert_eq!(normalizer.normalize(Ident::new("Foo")), "FOO");
+    /// assert_eq!(normalizer.normalize(Ident::with_quote('"', "foo")), "foo");
+    /// ```
+    pub fn with_policy(policy: IdentNormalization) -> Self {
+        Self { policy }
+    }
+
+    /// Normalizes an identifier, preserving quoted spelling and non-ASCII letters.
     pub fn normalize(&self, ident: Ident) -> String {
-        if self.normalize {
-            crate::utils::normalize_ident(ident)
-        } else {
-            ident.value
+        if ident.quote_style.is_some() {
+            return ident.value;
+        }
+        match self.policy {
+            IdentNormalization::Lower => ident.value.to_ascii_lowercase(),
+            IdentNormalization::Upper => ident.value.to_ascii_uppercase(),
+            IdentNormalization::Preserve => ident.value,
         }
     }
 }
@@ -460,12 +510,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// The query planner ignores the parser options from the context provider
     /// and uses the given parser options instead.
     pub fn new_with_options(context_provider: &'a S, options: ParserOptions) -> Self {
-        let ident_normalize = options.enable_ident_normalization;
+        let ident_normalize = options.effective_ident_normalization();
 
         SqlToRel {
             context_provider,
             options,
-            ident_normalizer: IdentNormalizer::new(ident_normalize),
+            ident_normalizer: IdentNormalizer::with_policy(ident_normalize),
             warnings: Mutex::new(vec![]),
         }
     }
@@ -948,10 +998,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         object_name: ObjectName,
     ) -> Result<TableReference> {
-        object_name_to_table_reference(
+        object_name_to_table_reference_with_policy(
             object_name,
-            self.options.enable_ident_normalization,
+            self.options.effective_ident_normalization(),
         )
+    }
+
+    /// Some binding paths historically ignored the boolean, using their own policy.
+    /// Preserve that policy unless the caller explicitly selects a new one.
+    pub(crate) fn legacy_normalizer(
+        &self,
+        legacy: IdentNormalization,
+    ) -> IdentNormalizer {
+        IdentNormalizer::with_policy(self.options.ident_normalization.unwrap_or(legacy))
     }
 }
 
@@ -981,6 +1040,17 @@ pub fn object_name_to_table_reference(
     object_name: ObjectName,
     enable_normalization: bool,
 ) -> Result<TableReference> {
+    object_name_to_table_reference_with_policy(object_name, enable_normalization.into())
+}
+
+/// Creates a table reference using an explicit policy for each name component.
+///
+/// Quoted components, including names containing dots, retain their spelling.
+/// Returns an error for non-identifier components or names with more than three parts.
+pub fn object_name_to_table_reference_with_policy(
+    object_name: ObjectName,
+    policy: IdentNormalization,
+) -> Result<TableReference> {
     // Use destructure to make it clear no fields on ObjectName are ignored
     let ObjectName(object_name_parts) = object_name;
     let idents = object_name_parts
@@ -994,7 +1064,7 @@ pub fn object_name_to_table_reference(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    idents_to_table_reference(idents, enable_normalization)
+    idents_to_table_reference(idents, policy)
 }
 
 struct IdentTaker {
@@ -1005,9 +1075,9 @@ struct IdentTaker {
 /// Take the next identifier from the back of idents, panic'ing if
 /// there are none left
 impl IdentTaker {
-    fn new(idents: Vec<Ident>, enable_normalization: bool) -> Self {
+    fn new(idents: Vec<Ident>, policy: IdentNormalization) -> Self {
         Self {
-            normalizer: IdentNormalizer::new(enable_normalization),
+            normalizer: IdentNormalizer::with_policy(policy),
             idents,
         }
     }
@@ -1040,11 +1110,11 @@ impl std::fmt::Display for IdentTaker {
 }
 
 /// Create a [`TableReference`] after normalizing the specified identifier
-pub(crate) fn idents_to_table_reference(
+fn idents_to_table_reference(
     idents: Vec<Ident>,
-    enable_normalization: bool,
+    policy: IdentNormalization,
 ) -> Result<TableReference> {
-    let mut taker = IdentTaker::new(idents, enable_normalization);
+    let mut taker = IdentTaker::new(idents, policy);
 
     match taker.len() {
         1 => {
@@ -1102,4 +1172,49 @@ pub fn object_name_to_qualifier(
         })
         .collect::<Result<Vec<_>>>()
         .map(|parts| parts.join(" AND "))
+}
+
+#[cfg(test)]
+mod ident_policy_tests {
+    use super::*;
+    use datafusion_common::config::IdentNormalization;
+
+    #[test]
+    fn ident_normalizer_policy() {
+        for (policy, expected) in [
+            (IdentNormalization::Lower, "föö"),
+            (IdentNormalization::Upper, "Föö"),
+            (IdentNormalization::Preserve, "Föö"),
+        ] {
+            let normalizer = IdentNormalizer::with_policy(policy);
+            assert_eq!(normalizer.normalize(Ident::new("Föö")), expected);
+            assert_eq!(normalizer.normalize(Ident::with_quote('"', "föö")), "föö");
+            assert_eq!(normalizer.normalize(Ident::with_quote('`', "Foo")), "Foo");
+            assert_eq!(normalizer.normalize(Ident::new("")), "");
+        }
+        for enabled in [false, true] {
+            let legacy = IdentNormalizer::new(enabled);
+            let explicit = IdentNormalizer::with_policy(enabled.into());
+            assert_eq!(
+                legacy.normalize(Ident::new("Foo")),
+                explicit.normalize(Ident::new("Foo"))
+            );
+            let options = ParserOptions::new().with_enable_ident_normalization(enabled);
+            assert_eq!(options.effective_ident_normalization(), enabled.into());
+            for policy in [
+                IdentNormalization::Lower,
+                IdentNormalization::Upper,
+                IdentNormalization::Preserve,
+            ] {
+                assert_eq!(
+                    options
+                        .with_ident_normalization(policy)
+                        .effective_ident_normalization(),
+                    policy
+                );
+            }
+        }
+        let options = ParserOptions::from(&SqlParserOptions::default());
+        assert!(options.ident_normalization.is_none());
+    }
 }
