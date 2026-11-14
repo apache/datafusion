@@ -143,13 +143,14 @@ pub fn serialize_expr(
             expr,
             pattern,
             escape_char,
-            case_insensitive: _,
+            case_insensitive,
         }) => {
             let pb = Box::new(protobuf::SimilarToNode {
                 negated: *negated,
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
                 pattern: Some(Box::new(serialize_expr(pattern.as_ref(), codec)?)),
                 escape_char: escape_char.map(|ch| ch.to_string()).unwrap_or_default(),
+                case_insensitive: *case_insensitive,
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::SimilarTo(pb)),
