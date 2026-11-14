@@ -238,8 +238,15 @@ impl StepContext {
 
         match variant.as_str() {
             "workspace" | "slt-coverage" => {
-                cmd_builder.program("cargo").args([
-                    "llvm-cov",
+                if variant == "workspace" {
+                    cmd_builder
+                        .program("python3")
+                        .args(["ci/scripts/rust_coverage.py"])
+                        .requires_executable("python3", "install Python 3");
+                } else {
+                    cmd_builder.program("cargo").args(["llvm-cov"]);
+                }
+                cmd_builder.args([
                     "--profile",
                     "ci",
                     "--exclude",
@@ -248,28 +255,27 @@ impl StepContext {
                     "ffi_example_table_provider",
                     "--exclude",
                     "datafusion-cli",
-                    "--workspace",
                 ]);
-                let output_path = if variant == "slt-coverage" {
-                    cmd_builder.args(["--test", "sqllogictests"]);
-                    "target/codecov-slt.json"
-                } else {
-                    cmd_builder.args(["--lib", "--tests", "--bins"]);
-                    "target/codecov.json"
-                };
+                if variant == "slt-coverage" {
+                    cmd_builder.args(["--workspace", "--test", "sqllogictests"]);
+                }
                 cmd_builder
                     .args([
                         "--features",
                         "serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait",
-                        "--codecov",
-                        "--output-path",
-                        output_path,
                     ])
                     .env("RUST_BACKTRACE", "1")
                     .requires_executable(
                         "cargo-llvm-cov",
                         "install it with `cargo install cargo-llvm-cov --locked`",
                     );
+                if variant == "slt-coverage" {
+                    cmd_builder.args([
+                        "--codecov",
+                        "--output-path",
+                        "target/codecov-slt.json",
+                    ]);
+                }
             }
             "cli" => {
                 cmd_builder.doc(
@@ -755,21 +761,16 @@ cargo check \
                 command: &["test", "workspace"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
+# Requires executable `python3` (install Python 3)
 # Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
 cd /workspace && \
 RUST_BACKTRACE=1 \
-cargo llvm-cov \
+python3 ci/scripts/rust_coverage.py \
 --profile ci \
 --exclude datafusion-examples \
 --exclude ffi_example_table_provider \
 --exclude datafusion-cli \
---workspace \
---lib \
---tests \
---bins \
---features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
---codecov \
---output-path target/codecov.json
+--features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait
 ")
                 },
             },
