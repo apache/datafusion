@@ -14,6 +14,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
+use datafusion_physical_plan::materialized_cte::MaterializedCteExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use itertools::Itertools;
@@ -143,6 +144,11 @@ impl TopKAggregation {
                         sort_col_name = src_col.name().to_string();
                     }
                 }
+            } else if plan.downcast_ref::<MaterializedCteExec>().is_some() {
+                // The output is the continuation, but the first child is the
+                // CTE body, which every reference to the CTE reads in full.
+                // A limit in the body would drop rows that they need.
+                cardinality_preserved = false;
             } else {
                 // or we continue down through types that don't reduce cardinality
                 match plan.cardinality_effect() {
