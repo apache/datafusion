@@ -71,10 +71,17 @@ jobs:
           df -h
       # Give the longest-running suite the build lock before the other Cargo commands.
       - name: Build extended tests
-        run: cargo xtask ci step test extended-build
+        run: |
+          cargo xtask ci step test extended-build > "$RUNNER_TEMP/extended-tests.json"
+          extended_test_binary="$(jq -Rr 'fromjson? | select(.reason == "compiler-artifact" and .target.name == "extended_tests" and .executable != null) | .executable' "$RUNNER_TEMP/extended-tests.json")"
+          test -x "$extended_test_binary"
+          printf 'EXTENDED_TEST_BINARY=%s\n' "$extended_test_binary" >> "$GITHUB_ENV"
       - parallel:
           - name: Run extended tests
-            run: cargo xtask ci step test extended
+            run: '"$EXTENDED_TEST_BINARY"'
+            working-directory: datafusion/core
+            env:
+              RUST_BACKTRACE: "1"
           - name: Run fuzz tests
             run: cargo xtask ci step test fuzz
           # Migrate it to the above unified fuzz runner over time

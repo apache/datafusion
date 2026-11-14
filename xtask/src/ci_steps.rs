@@ -469,7 +469,8 @@ impl StepContext {
                     ])
                     .env("RUST_BACKTRACE", "1");
                 if variant == "extended-build" {
-                    cmd_builder.args(["--no-run"]);
+                    cmd_builder
+                        .args(["--no-run", "--message-format=json-render-diagnostics"]);
                 }
             }
             "fuzz" => {
@@ -985,7 +986,8 @@ cargo test \
 -p datafusion-fuzz \
 --test extended_tests \
 --features avro,backtrace,extended_tests,parquet_encryption \
---no-run
+--no-run \
+--message-format=json-render-diagnostics
 ")
                 },
             },
