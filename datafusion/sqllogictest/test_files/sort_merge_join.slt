@@ -1129,6 +1129,38 @@ DROP TABLE smj_key_r;
 statement ok
 RESET datafusion.execution.batch_size;
 
+# Regression test for #26623: a filter that equates an expression with one of
+# its own sub-expressions must not make the sort below the join fail the
+# sanity check
+statement ok
+CREATE TABLE smj_self_eq (a INT, b INT) AS VALUES (1, 0), (2, 3);
+
+query IIII
+SELECT * FROM smj_self_eq x JOIN smj_self_eq y ON x.a = y.a AND x.b = y.b WHERE x.a + x.b = x.a;
+----
+1 0 1 0
+
+statement ok
+DROP TABLE smj_self_eq;
+
+statement ok
+CREATE TABLE smj_self_eq_cd (a INT, b INT, c INT, d INT) AS VALUES (1, 0, 1, 1), (2, 3, 5, 2);
+
+# a joins the class of a + b after the class exists
+query IIII
+SELECT x.a, x.b, y.a, y.b FROM smj_self_eq_cd x JOIN smj_self_eq_cd y ON x.a = y.a AND x.b = y.b WHERE x.a + x.b = x.c AND x.c = x.a;
+----
+1 0 1 0
+
+# a reaches the class of a + b when two classes merge
+query IIII
+SELECT x.a, x.b, y.a, y.b FROM smj_self_eq_cd x JOIN smj_self_eq_cd y ON x.a = y.a AND x.b = y.b WHERE x.a + x.b = x.c AND x.a = x.d AND x.d = x.c;
+----
+1 0 1 0
+
+statement ok
+DROP TABLE smj_self_eq_cd;
+
 # Config reset
 statement ok
 RESET datafusion.optimizer.prefer_hash_join;
