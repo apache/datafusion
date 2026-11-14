@@ -2,13 +2,13 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::array::{ArrayRef, Int32Array, Int64Array};
+use arrow::array::{ArrayRef, DictionaryArray, Int32Array, Int64Array};
 use arrow::{array::StringArray, record_batch::RecordBatch};
 use arrow::{
     array::{BooleanArray, Date32Array, Date64Array},
-    datatypes::{DataType, Field, Schema},
+    datatypes::{DataType, Field, Int32Type, Schema},
 };
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{Operator, and, binary_expr, col, lit, or};
 use datafusion_physical_expr::{
@@ -553,12 +553,85 @@ fn benchmark_date64_subtract(c: &mut Criterion) {
     }
 }
 
+/// Compare evaluating a scalar regex once per dictionary value with the
+/// current plan, which materializes the dictionary before matching each row.
+fn benchmark_dictionary_regex(c: &mut Criterion) {
+    const REGEX_ROWS: usize = 65_536;
+    let mut group = c.benchmark_group("dictionary_regex");
+
+    for (name, rows, distinct) in [
+        ("ndv_16", REGEX_ROWS, 16),
+        ("ndv_256", REGEX_ROWS, 256),
+        ("ndv_4096", REGEX_ROWS, 4096),
+        ("ndv_65536", REGEX_ROWS, REGEX_ROWS),
+        // A slice can retain a much larger backing dictionary than its rows.
+        ("oversized", 8192, REGEX_ROWS),
+    ] {
+        let values = Arc::new(StringArray::from(
+            (0..distinct)
+                .map(|value| format!("value_{value:05}"))
+                .collect::<Vec<_>>(),
+        ));
+        let keys = Int32Array::from(
+            (0..rows)
+                .map(|row| (row % distinct) as i32)
+                .collect::<Vec<_>>(),
+        );
+        let dictionary = Arc::new(
+            DictionaryArray::<Int32Type>::try_new(keys, values)
+                .expect("dictionary array"),
+        ) as ArrayRef;
+        let schema = Schema::new(vec![Field::new(
+            "value",
+            dictionary.data_type().clone(),
+            false,
+        )]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![dictionary])
+            .expect("record batch");
+        let pattern = || {
+            Arc::new(Literal::new(ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Utf8(Some("^value_[0-3]".to_string()))),
+            ))) as Arc<dyn PhysicalExpr>
+        };
+
+        let dictionary_expr = BinaryExpr::new(
+            Arc::new(Column::new("value", 0)),
+            Operator::RegexMatch,
+            pattern(),
+        );
+        let cast_expr = BinaryExpr::new(
+            cast(Arc::new(Column::new("value", 0)), &schema, DataType::Utf8).unwrap(),
+            Operator::RegexMatch,
+            pattern(),
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("dictionary", name),
+            &batch,
+            |b, batch| {
+                b.iter(|| black_box(dictionary_expr.evaluate(black_box(batch)).unwrap()))
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("cast_away", name),
+            &batch,
+            |b, batch| {
+                b.iter(|| black_box(cast_expr.evaluate(black_box(batch)).unwrap()))
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_binary_op_in_short_circuit,
     benchmark_conjunction,
     benchmark_date32_subtract,
-    benchmark_date64_subtract
+    benchmark_date64_subtract,
+    benchmark_dictionary_regex
 );
 
 criterion_main!(benches);
