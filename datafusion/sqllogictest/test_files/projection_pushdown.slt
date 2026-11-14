@@ -754,7 +754,7 @@ physical_plan
 03)----SortExec: expr=[id@1 ASC NULLS LAST], preserve_partitioning=[true]
 04)------FilterExec: id@1 > 2
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
-06)----------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part3.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part4.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part5.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, id], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
+06)----------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part3.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part4.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part5.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, id], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
 
 # Verify correctness
 query II
@@ -2109,7 +2109,7 @@ SET datafusion.execution.target_partitions = 4;
 # reused. Projection pushdown must not merge the outer projection into the file
 # scan when doing so would inline and duplicate the volatile expression.
 # Reproduces only against a file scan (not an in-memory table); if the volatile
-# expression is duplicated, the two references diverge and `x = y` is false.
+# expression is duplicated, it is evaluated two times per row.
 #####################
 
 statement ok
@@ -2121,15 +2121,20 @@ statement ok
 CREATE EXTERNAL TABLE volatile_scan STORED AS PARQUET
 LOCATION 'test_files/scratch/projection_pushdown/volatile.parquet';
 
-# The two references to the aliased `random()` value must be equal on every
-# row: the expression is evaluated once and reused, not inlined twice.
-query B rowsort
-SELECT s.x = s.y
-FROM (SELECT r AS x, r AS y FROM (SELECT random() AS r FROM volatile_scan) AS t) AS s;
+# The aliased volatile value is evaluated one time per row and reused, not
+# inlined twice.
+query II rowsort
+SELECT s.x, s.y
+FROM (SELECT r AS x, r AS y FROM (SELECT counted_volatile(id) AS r FROM volatile_scan) AS t) AS s;
 ----
-true
-true
-true
+1 1
+2 2
+3 3
+
+query I
+SELECT evaluations();
+----
+3
 
 #####################
 # Section: leaf expression extraction does not duplicate volatile expressions
@@ -2176,37 +2181,52 @@ logical_plan
 statement ok
 set datafusion.explain.logical_plan_only = false;
 
-# Every row's `field` is the `a` field of that row's own struct.
-query B
-SELECT bool_and(field = s['a'])
+# The struct is evaluated one time per row; `field` reads it.
+query II
+SELECT count(s), sum(field)
 FROM (
   SELECT s, s['a'] AS field
-  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000))
+  FROM (SELECT named_struct('a', counted_volatile(value)) AS s FROM generate_series(1, 10))
 );
 ----
-true
+10 55
 
-# Same invariant when the extraction is routed into one side of a join.
-query B
-SELECT bool_and(field = s['a'])
+query I
+SELECT evaluations();
+----
+10
+
+# Same when the extraction is routed into one side of a join.
+query II
+SELECT count(s), sum(field)
 FROM (
   SELECT l.s, l.s['a'] AS field
-  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000)) AS l
+  FROM (SELECT named_struct('a', counted_volatile(value)) AS s FROM generate_series(1, 10)) AS l
   INNER JOIN (SELECT 1 AS k) AS r ON true
 );
 ----
-true
+10 55
 
-# Every surviving row satisfies the predicate it was filtered on.
-query B
-SELECT bool_and(s['a'] > 0.5)
+query I
+SELECT evaluations();
+----
+10
+
+# The filter tests the struct that is returned, not a second evaluation.
+query I
+SELECT count(s)
 FROM (
   SELECT s
-  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000))
-  WHERE s['a'] > 0.5
+  FROM (SELECT named_struct('a', counted_volatile(value)) AS s FROM generate_series(1, 10))
+  WHERE s['a'] > 5
 );
 ----
-true
+5
+
+query I
+SELECT evaluations();
+----
+10
 
 #####################
 # Section: expensive expressions are not re-inlined by projection pushdown
@@ -2654,6 +2674,206 @@ A 2
 
 statement ok
 DROP TABLE duplicate_alias;
+
+# A leaf expression must still reach the scan when its projection also holds a
+# `KeepInPlace` expression. See `try_split_leaf_projection` in
+# `datafusion/physical-optimizer/src/projection_pushdown.rs` for why that used
+# to be impossible.
+#
+# These are plan assertions on purpose. `get_field` stranded above the
+# repartition still returns the right answer, it just reads the whole struct,
+# so a result-only test passes whether or not the bug is present.
+#
+# Needs both a repartition (`target_partitions` > 1) and a row estimate above
+# `batch_size`, hence the two SETs. Restore them with `SET` rather than `RESET`:
+# `RESET` puts back the global default instead of the harness value, and the
+# harness rejects a file that leaves configuration modified.
+
+# `arr` and `tags` are only read by the lambda queries further down. They are
+# appended after `s` so the `get_field(s@1, ...)` indices below do not move.
+statement ok
+COPY (
+    SELECT column1 AS id, column2 AS s, column3 AS arr, column4 AS tags
+    FROM VALUES
+        (1, {value: 100, label: 'alpha'},   [1, 2, 3], ['a', 'b']),
+        (2, {value: 200, label: 'beta'},    [4, 5],    ['c']),
+        (3, {value: 150, label: 'gamma'},   [6],       ['d', 'e', 'f']),
+        (4, {value: 300, label: 'delta'},   [7, 8, 9], ['g']),
+        (5, {value: 250, label: 'epsilon'}, [10],      ['h', 'i'])
+) TO 'test_files/scratch/projection_pushdown/leaf_split.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE leaf_split STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/leaf_split.parquet';
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+SET datafusion.execution.batch_size = 2;
+
+# The scan must read only the `value` leaf. A plan holding a bare `s` in the
+# `DataSourceExec` projection means the whole struct is being read.
+query TT
+EXPLAIN SELECT s['value'] + 1 AS v FROM leaf_split;
+----
+logical_plan
+01)Projection: get_field(leaf_split.s, Utf8("value")) + Int64(1) AS v
+02)--TableScan: leaf_split projection=[s]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@0 + 1 as v]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+
+# The leaf is bare here: the unrelated computed column is what triggers it.
+query TT
+EXPLAIN SELECT s['value'] AS v, id + 1 AS w FROM leaf_split;
+----
+logical_plan
+01)Projection: get_field(leaf_split.s, Utf8("value")) AS v, leaf_split.id + Int64(1) AS w
+02)--TableScan: leaf_split projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+
+# `s` is genuinely needed by the outer projection here, so it must stay.
+query TT
+EXPLAIN SELECT s['value'] + 1 AS v, s AS whole FROM leaf_split;
+----
+logical_plan
+01)Projection: get_field(leaf_split.s, Utf8("value")) + Int64(1) AS v, leaf_split.s AS whole
+02)--TableScan: leaf_split projection=[s]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@1 + 1 as v, s@0 as whole]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[s, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+
+# Two distinct leaves plus a computed sibling: both leaves must reach the scan
+# and the struct must not be read whole.
+query TT
+EXPLAIN SELECT s['value'] AS v, s['label'] AS l, id + 1 AS w FROM leaf_split;
+----
+logical_plan
+01)Projection: get_field(leaf_split.s, Utf8("value")) AS v, get_field(leaf_split.s, Utf8("label")) AS l, leaf_split.id + Int64(1) AS w
+02)--TableScan: leaf_split projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@1 as v, __datafusion_leaf_1@2 as l, id@0 + 1 as w]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0, get_field(s@1, label) as __datafusion_leaf_1], file_type=parquet
+
+query ITI
+SELECT s['value'] AS v, s['label'] AS l, id + 1 AS w FROM leaf_split ORDER BY v;
+----
+100 alpha 2
+150 gamma 4
+200 beta 3
+250 epsilon 6
+300 delta 5
+
+query I
+SELECT s['value'] + 1 AS v FROM leaf_split ORDER BY v;
+----
+101
+151
+201
+251
+301
+
+# A lambda parameter is indexed after the input columns, so the split moves it;
+# see `rewrite_outer_expr`. These are value queries because an index left behind
+# is only sometimes an error, see the third one.
+
+statement ok
+SET datafusion.sql_parser.dialect = databricks;
+
+query ?IT
+SELECT array_transform(arr, x -> x + 1) AS a, s['value'] AS v, s['label'] AS l
+FROM leaf_split ORDER BY v;
+----
+[2, 3, 4] 100 alpha
+[7] 150 gamma
+[5, 6] 200 beta
+[11] 250 epsilon
+[8, 9, 10] 300 delta
+
+# Nested lambdas need two leaves: with one the split is width-neutral, the
+# parameter does not move, and the query passes against broken code.
+query ?IT
+SELECT array_transform(arr, x -> x + array_length(array_transform(arr, y -> y * 2))) AS a,
+       s['value'] AS v, s['label'] AS l
+FROM leaf_split ORDER BY v;
+----
+[4, 5, 6] 100 alpha
+[7] 150 gamma
+[6, 7] 200 beta
+[11] 250 epsilon
+[10, 11, 12] 300 delta
+
+# Naming the parameter after the column a stale index would land on makes
+# `LambdaVariable`'s field check match, so the wrong column is read with no
+# error at all. The name has to track `leaf_column_name` to stay adversarial.
+query ?ITI
+SELECT array_transform(tags, __datafusion_leaf_1 -> concat(__datafusion_leaf_1, '!')) AS a,
+       s['value'] AS v, s['label'] AS l, id
+FROM leaf_split ORDER BY v;
+----
+[a!, b!] 100 alpha 1
+[d!, e!, f!] 150 gamma 3
+[c!] 200 beta 2
+[h!, i!] 250 epsilon 5
+[g!] 300 delta 4
+
+# A leaf expression inside the lambda body, rather than beside it: the split has
+# to find it through `LambdaExpr` before the parameter rebase even applies.
+query ?IT
+SELECT array_transform(arr, x -> x + file_row_index()) AS a, s['value'] AS v, s['label'] AS l
+FROM leaf_split ORDER BY v;
+----
+[1, 2, 3] 100 alpha
+[8] 150 gamma
+[5, 6] 200 beta
+[14] 250 epsilon
+[10, 11, 12] 300 delta
+
+statement ok
+SET datafusion.sql_parser.dialect = generic;
+
+# A source that does not absorb the projection keeps the plan unchanged: the
+# split must not add a projection nobody can use. A memory table refuses
+# because `all_alias_free_columns` rejects the aliased `get_field`, and that is
+# the default for any node that does not override `try_swapping_with_projection`.
+statement ok
+CREATE TABLE leaf_split_mem AS
+SELECT column1 AS id, column2 AS s FROM VALUES
+    (1, {value: 100}), (2, {value: 200}), (3, {value: 150}),
+    (4, {value: 300}), (5, {value: 250});
+
+query TT
+EXPLAIN SELECT s['value'] AS v, id + 1 AS w FROM leaf_split_mem;
+----
+logical_plan
+01)Projection: get_field(leaf_split_mem.s, Utf8("value")) AS v, leaf_split_mem.id + Int64(1) AS w
+02)--TableScan: leaf_split_mem projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: partitions=1, partition_sizes=[3]
+
+statement ok
+DROP TABLE leaf_split_mem;
+
+statement ok
+SET datafusion.execution.batch_size = 8192;
+
+# Back to 4, which is what this file leaves configured and what the harness
+# started from.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE leaf_split;
 
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;

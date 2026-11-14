@@ -50,7 +50,7 @@ make_udf_function!(getfield::GetFieldFunc, get_field);
 make_udf_function!(coalesce::CoalesceFunc, coalesce);
 make_udf_function!(greatest::GreatestFunc, greatest);
 make_udf_function!(least::LeastFunc, least);
-make_udf_function!(union_extract::UnionExtractFun, union_extract);
+make_udf_function!(union_extract::UnionExtractFunc, union_extract);
 make_udf_function!(union_tag::UnionTagFunc, union_tag);
 make_udf_function!(version::VersionFunc, version);
 make_udf_function!(arrow_metadata::ArrowMetadataFunc, arrow_metadata);

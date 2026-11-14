@@ -196,8 +196,13 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use crate::all_default_aggregate_functions;
+    use crate::approx_distinct::approx_distinct_udaf;
+    use crate::count::count_udaf;
+    use crate::regr::{regr_count_udaf, regr_slope_udaf};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::Result;
     use std::collections::HashSet;
+    use std::sync::Arc;
 
     #[test]
     fn test_no_duplicate_name() -> Result<()> {
@@ -214,6 +219,35 @@ mod tests {
                     "duplicate function name: {alias}"
                 );
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[expect(deprecated)]
+    fn test_is_nullable_matches_return_field() -> Result<()> {
+        let int64 = Arc::new(Field::new("a", DataType::Int64, true));
+        let float64 = Arc::new(Field::new("a", DataType::Float64, true));
+        let cases = [
+            (count_udaf(), vec![Arc::clone(&int64)]),
+            (approx_distinct_udaf(), vec![Arc::clone(&int64)]),
+            (
+                regr_count_udaf(),
+                vec![Arc::clone(&float64), Arc::clone(&float64)],
+            ),
+            (
+                regr_slope_udaf(),
+                vec![Arc::clone(&float64), Arc::clone(&float64)],
+            ),
+        ];
+        for (udaf, arg_fields) in cases {
+            let field = udaf.return_field(&arg_fields)?;
+            assert_eq!(
+                udaf.is_nullable(),
+                field.is_nullable(),
+                "is_nullable and return_field disagree for {}",
+                udaf.name()
+            );
         }
         Ok(())
     }

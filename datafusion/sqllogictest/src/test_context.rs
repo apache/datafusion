@@ -22,11 +22,11 @@ use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
 };
-use datafusion::common::config::Dialect;
 use datafusion::common::stats::Precision;
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
+use datafusion::logical_expr::registry::MemoryExtensionTypeRegistry;
 use datafusion::logical_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, create_udf,
@@ -38,11 +38,10 @@ use datafusion::{
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
-use datafusion_spark::SessionStateBuilderSpark;
 
-use crate::is_spark_path;
 use range_partitioning::{
-    register_range_partitioned_table, register_range_sorted_time_bin_table,
+    register_range_partitioned_table, register_range_sorted_day_bin_table,
+    register_range_sorted_time_bin_table,
 };
 
 use async_trait::async_trait;
@@ -59,6 +58,8 @@ use log::info;
 use tempfile::TempDir;
 
 mod custom_sort_pushdown;
+mod evaluation_counter;
+mod exact_sort_pushdown;
 mod range_partitioning;
 
 /// Context for running tests
@@ -107,11 +108,10 @@ impl TestContext {
             .with_runtime_env(runtime)
             .with_default_features();
 
-        if is_spark_path(relative_path) {
-            state_builder = state_builder.with_spark_features();
-            if let Some(config) = state_builder.config() {
-                config.options_mut().sql_parser.dialect = Dialect::Spark;
-            }
+        if file_name == "sql_extension_types.slt" {
+            state_builder = state_builder.with_extension_type_registry(Arc::new(
+                MemoryExtensionTypeRegistry::new_with_canonical_extension_types(),
+            ));
         }
 
         if matches!(
@@ -161,6 +161,7 @@ impl TestContext {
         let state = state_builder.build();
 
         let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
+        evaluation_counter::register_evaluation_counter(test_ctx.session_ctx());
 
         match file_name {
             "sort_pushdown.slt" => {
@@ -168,6 +169,8 @@ impl TestContext {
                     test_ctx.session_ctx(),
                 )
                 .expect("register custom projection table");
+                exact_sort_pushdown::register_exact_sort_source(test_ctx.session_ctx())
+                    .expect("register exact sort source");
             }
             "parquet_missing_bounds.slt" => {
                 register_parquet_missing_bounds(&mut test_ctx).await;
@@ -218,6 +221,7 @@ impl TestContext {
             "range_sorted_time_bin_agg.slt" => {
                 info!("Registering range-sorted time-bin table");
                 register_range_sorted_time_bin_table(test_ctx.session_ctx());
+                register_range_sorted_day_bin_table(test_ctx.session_ctx());
             }
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");

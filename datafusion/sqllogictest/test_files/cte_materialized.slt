@@ -210,6 +210,22 @@ SELECT k FROM t WHERE v IN (
 3
 4
 
+# A LIMIT at the root of the continuation does not change whether it is empty.
+query I rowsort
+SELECT k FROM t WHERE EXISTS (
+  WITH r AS MATERIALIZED (SELECT k AS rk FROM t)
+  SELECT 1 FROM r WHERE r.rk = t.k + 1 LIMIT 1)
+----
+1
+2
+3
+
+# A filter above the LIMIT reads the row the LIMIT kept, so it stays correlated.
+query error Physical plan does not support logical expression Exists
+SELECT k FROM t WHERE EXISTS (
+  WITH r AS MATERIALIZED (SELECT k AS rk, v AS rv FROM t)
+  SELECT 1 FROM (SELECT * FROM r WHERE r.rk = t.k LIMIT 1) s WHERE s.rv > 0)
+
 # A body that refers to the outer query would have to run once per outer row.
 # Such a CTE is inlined, as if MATERIALIZED was not given.
 query I rowsort
@@ -402,6 +418,36 @@ SELECT * FROM (
 ) s WHERE s.v = 10
 ----
 1 10
+
+# An ORDER BY ... LIMIT above the query that declares the CTE does not limit an
+# aggregate in the shared body. The body groups by the sort column, but every
+# reference reads the whole body: the filter keeps only groups after the first
+# 100, and count(*) counts all 200.
+statement ok
+CREATE TABLE g AS SELECT value AS x FROM generate_series(1, 200);
+
+query I
+SELECT * FROM (
+  WITH c AS MATERIALIZED (SELECT x FROM g GROUP BY x)
+  SELECT x FROM c WHERE x > 100
+) s ORDER BY x LIMIT 3
+----
+101
+102
+103
+
+query II
+SELECT * FROM (
+  WITH c AS MATERIALIZED (SELECT x FROM g GROUP BY x)
+  SELECT c.x, m.n FROM c CROSS JOIN (SELECT count(*) AS n FROM c) m
+) s ORDER BY x LIMIT 3
+----
+1 200
+2 200
+3 200
+
+statement ok
+DROP TABLE g;
 
 # Spill: the body does not fit in the memory limit, so it is written to disk
 # and replayed from there by every reference. Part of the in-memory prefix is

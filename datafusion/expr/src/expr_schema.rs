@@ -13,6 +13,7 @@ use crate::expr::{FieldMetadata, LambdaVariable};
 use crate::higher_order_function::HigherOrderReturnFieldArgs;
 use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
+use crate::type_coercion::other::get_coerce_type_for_case_expression;
 use crate::udf::ReturnFieldArgs;
 use crate::{
     LogicalPlan, Operator, Projection, Subquery, WindowFunctionDefinition, utils,
@@ -34,6 +35,10 @@ use std::sync::Arc;
 /// Trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {
     /// Given a schema, return the type of the expr
+    ///
+    /// `CASE` expressions infer a common type from all `THEN` and `ELSE`
+    /// branches without inserting casts. Incompatible branches retain a
+    /// provisional type until analysis.
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType>;
 
     /// Given a schema, return the nullability of the expr
@@ -254,19 +259,17 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                 let metadata = coerced_fields_metadata(
                     fields[start..].iter().map(|branch| branch.field.as_ref()),
                 )?;
-                let mut then_type = DataType::Null;
-                let mut else_type = DataType::Null;
+                let mut then_types = Vec::with_capacity(case.when_then_expr.len());
+                let mut else_type = None;
                 let mut branch_type = None;
                 let mut type_conflict = false;
                 let mut certainly_null = true;
                 for (index, branch) in fields.drain(start..).enumerate() {
                     let data_type = branch.field.data_type();
                     if index < case.when_then_expr.len() {
-                        if then_type.is_null() && !data_type.is_null() {
-                            then_type = data_type.clone();
-                        }
+                        then_types.push(data_type.clone());
                     } else {
-                        else_type = data_type.clone();
+                        else_type = Some(data_type.clone());
                     }
                     certainly_null &= branch.certainly_null;
                     if data_type.is_null()
@@ -279,11 +282,15 @@ fn case_field_metadata(case: &Case, schema: &dyn ExprSchema) -> Result<FieldRef>
                     }
                     branch_type.get_or_insert_with(|| data_type.clone());
                 }
-                let data_type = if then_type.is_null() {
-                    else_type
-                } else {
-                    then_type
-                };
+                let data_type =
+                    get_coerce_type_for_case_expression(&then_types, else_type.as_ref())
+                        .unwrap_or_else(|| {
+                            then_types
+                                .into_iter()
+                                .find(|data_type| !data_type.is_null())
+                                .or(else_type)
+                                .unwrap_or(DataType::Null)
+                        });
                 let field = Field::new("", data_type, true);
                 let field = if !type_conflict
                     && branch_type.as_ref() == Some(field.data_type())
@@ -357,15 +364,28 @@ impl ExprSchemable for Expr {
             Expr::ScalarVariable(field, _) => Ok(field.data_type().clone()),
             Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
-                for (_, then_expr) in &case.when_then_expr {
-                    let then_type = then_expr.get_type(schema)?;
-                    if !then_type.is_null() {
-                        return Ok(then_type);
-                    }
-                }
-                case.else_expr
+                let then_types = case
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, expr)| expr.get_type(schema))
+                    .collect::<Result<Vec<_>>>()?;
+                let else_type = case
+                    .else_expr
                     .as_ref()
-                    .map_or(Ok(DataType::Null), |e| e.get_type(schema))
+                    .map(|expr| expr.get_type(schema))
+                    .transpose()?;
+                // If the branches have no common type, keep the old provisional
+                // type. The analyzer reports the error.
+                let common_type =
+                    get_coerce_type_for_case_expression(&then_types, else_type.as_ref());
+                let result_type = common_type.unwrap_or_else(|| {
+                    then_types
+                        .into_iter()
+                        .find(|t| !t.is_null())
+                        .or(else_type)
+                        .unwrap_or(DataType::Null)
+                });
+                Ok(result_type)
             }
             Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
                 Ok(field.data_type().clone())
@@ -1711,6 +1731,28 @@ mod tests {
     }
 
     #[test]
+    fn test_nested_case_metadata_uses_common_result_type() -> Result<()> {
+        let metadata = HashMap::from([("source".to_owned(), "marked".to_owned())]);
+        let schema = DFSchema::try_from(Schema::new(vec![
+            Field::new("integer", DataType::Int64, false),
+            Field::new("plain", DataType::Float64, true),
+            Field::new("marked", DataType::Float64, true).with_metadata(metadata.clone()),
+        ]))?;
+        let mixed_else = when(lit(true), col("integer")).otherwise(col("plain"))?;
+        let mixed_then = when(lit(true), col("integer"))
+            .when(lit(false), col("plain"))
+            .otherwise(lit(ScalarValue::Null))?;
+        for inner in [mixed_else.clone(), mixed_else.alias("nested"), mixed_then] {
+            assert_eq!(inner.get_type(&schema)?, DataType::Float64);
+            let outer = when(lit(false), col("marked")).otherwise(inner)?;
+            let field = outer.to_field(&schema)?.1;
+            assert_eq!(field.data_type(), &DataType::Float64);
+            assert_eq!(field.metadata(), &metadata);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_nested_case_field_inference_is_linear() -> Result<()> {
         #[derive(Debug)]
         struct CountingSchema {
@@ -2429,5 +2471,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn case_infers_all_result_types_without_casting() -> Result<()> {
+        use crate::expr::Case;
+        let schema = DFSchema::empty();
+        let nested = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(lit(false)), Box::new(lit(1_i64)))],
+            Some(Box::new(lit(2.5))),
+        ));
+        for (then_values, else_value, expected) in [
+            (vec![lit(1_i64)], Some(lit(2.5)), DataType::Float64),
+            (vec![lit(1_i64), lit(2.5)], None, DataType::Float64),
+            (vec![lit(2.5), lit(1_i64)], None, DataType::Float64),
+            (vec![lit(2.5)], Some(lit(1_i64)), DataType::Float64),
+            (vec![lit(3_i64)], Some(nested), DataType::Float64),
+            (vec![lit(ScalarValue::Null)], None, DataType::Null),
+            // Incompatible raw types retain a provisional type for the analyzer.
+            (vec![lit(true)], Some(lit("a")), DataType::Boolean),
+        ] {
+            let when_then = then_values
+                .into_iter()
+                .map(|value| (Box::new(lit(true)), Box::new(value)))
+                .collect();
+            let expr = Expr::Case(Case::new(None, when_then, else_value.map(Box::new)));
+            assert_eq!(expr.get_type(&schema)?, expected);
+        }
+        Ok(())
     }
 }

@@ -463,26 +463,34 @@ physical_plan
 01)ProjectionExec: expr=[coalesce(nullif(floor(random() * 2), 0), -1) as c]
 02)--PlaceholderRowExec
 
-# With two draws, about 25% of rows were NULL (and Arrow rejected them because
-# the `-1` fallback makes the result non-nullable). With one draw, every row is
-# either 1 or -1.
-statement ok
-create table volatile_t as select * from generate_series(1, 100000) as t(i);
-
-query III
+# A volatile first argument is evaluated one time per row, not once for the
+# null test and again for the value.
+query II
 select
-  count(coalesce(nullif(floor(random() * 2), 0), -1)),
-  count(nvl(nullif(floor(random() * 2), 0), -1)),
-  count(*) filter (where coalesce(nullif(floor(random() * 2), 0), -1) not in (1, -1))
-from volatile_t;
+  count(coalesce(nullif(counted_volatile(value) % 2, 0), -1)),
+  sum(coalesce(nullif(counted_volatile(value) % 2, 0), -1))
+from generate_series(1, 10);
 ----
-100000 100000 0
+10 0
 
-statement ok
-drop table volatile_t;
+query I
+select evaluations();
+----
+20
 
-# `case when random() >= 0 then x end` is volatile but always equals `x`, which
-# makes the results of the volatile code path deterministic.
+query II
+select
+  count(nvl(nullif(counted_volatile(value) % 2, 0), -1)),
+  sum(nvl(nullif(counted_volatile(value) % 2, 0), -1))
+from generate_series(1, 10);
+----
+10 0
+
+query I
+select evaluations();
+----
+20
+
 statement ok
 create table volatile_args(a int, b int, c int, s varchar, x int, y int) as values
   (1,    9,    8,    null, 0, 1),
@@ -492,11 +500,11 @@ create table volatile_args(a int, b int, c int, s varchar, x int, y int) as valu
 
 query IIIIT
 select
-  coalesce(case when random() >= 0 then a end, b, c),
-  coalesce(case when random() >= 0 then a end, -1),
-  coalesce(case when random() >= 0 then a end, null::int),
-  coalesce(a, case when random() >= 0 then b end, c),
-  coalesce(case when random() >= 0 then s end, 'none')
+  coalesce(counted_volatile(a), b, c),
+  coalesce(counted_volatile(a), -1),
+  coalesce(counted_volatile(a), null::int),
+  coalesce(a, counted_volatile(b), c),
+  coalesce(counted_volatile(s), 'none')
 from volatile_args;
 ----
 1 1 1 1 none
@@ -504,12 +512,24 @@ from volatile_args;
 3 -1 NULL 3 none
 NULL -1 NULL NULL none
 
+# Four rows for each of the first three and the last call, and three for
+# `counted_volatile(b)`, which is reached only where `a` is null.
+query I
+select evaluations();
+----
+19
+
 query TI
 select
-  coalesce(case when random() >= 0 then null::varchar end, 'datafusion', 'unused'),
-  coalesce(case when random() >= 0 then null::int end, null::int);
+  coalesce(counted_volatile(null::varchar), 'datafusion', 'unused'),
+  coalesce(counted_volatile(null::int), null::int);
 ----
 datafusion NULL
+
+query I
+select evaluations();
+----
+2
 
 # Arguments before the first volatile one keep the CASE rewrite; only the rest
 # is left to `coalesce`.

@@ -55,7 +55,7 @@ use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
-use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
+use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -1053,7 +1053,7 @@ async fn aligned_hour_groups_avoid_shuffle_through_partial_aggregate() -> Result
         .with_query_execution_partitions(2)
         .config;
     let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+    check_plan_tree_sanity(&optimized, &config.optimizer)?;
 
     assert_plan!(
         optimized,
@@ -1089,7 +1089,7 @@ async fn crossing_day_groups_keep_shuffle_through_partial_aggregate() -> Result<
         .with_query_execution_partitions(2)
         .config;
     let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+    check_plan_tree_sanity(&optimized, &config.optimizer)?;
 
     assert_plan!(
         optimized,
@@ -1126,10 +1126,10 @@ fn range_transform_aggregate_optimization_is_idempotent() -> Result<()> {
         let input = timestamp_range_input(hour)?;
         let aggregate = partial_final_date_trunc_count(input, precision)?;
         let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
-        SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+        check_plan_tree_sanity(&optimized, &config.optimizer)?;
         let reoptimized =
             EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
-        SanityCheckPlan::new().optimize(Arc::clone(&reoptimized), &config)?;
+        check_plan_tree_sanity(&reoptimized, &config.optimizer)?;
         assert_plan!(optimized, reoptimized);
     }
     Ok(())
@@ -1155,7 +1155,7 @@ async fn range_transform_locality_does_not_satisfy_join_distribution() -> Result
         .with_query_execution_partitions(2)
         .config;
     let optimized = EnsureRequirements::new().optimize(join, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+    check_plan_tree_sanity(&optimized, &config.optimizer)?;
     assert_plan!(
         optimized,
         @r"
@@ -1275,7 +1275,7 @@ fn range_inner_hash_join_rehashes_incompatible_range_partitioning() -> Result<()
 
 /// Optimizes `plan` under both `top_down_join_key_reordering` settings with
 /// round-robin and file-scan repartitioning disabled. Checks the expected plan,
-/// validates it with [`SanityCheckPlan`], and verifies that a second
+/// validates it with [`check_plan_tree_sanity`], and verifies that a second
 /// [`EnsureRequirements`] pass leaves it unchanged.
 fn check_range_join_key_alignment(
     plan: Arc<dyn ExecutionPlan>,
@@ -1299,7 +1299,7 @@ fn check_range_join_key_alignment_with_partitions(
 
         let optimized = config.try_to_plan(Arc::clone(&plan), &[Run::Distribution])?;
         check(&optimized);
-        SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config.config)?;
+        check_plan_tree_sanity(&optimized, &config.config.optimizer)?;
 
         let second = config.try_to_plan(Arc::clone(&optimized), &[Run::Distribution])?;
         assert_eq!(
@@ -1307,7 +1307,7 @@ fn check_range_join_key_alignment_with_partitions(
             displayable(second.as_ref()).indent(true).to_string(),
             "plan changed on the second pass; top_down={top_down}"
         );
-        SanityCheckPlan::new().optimize(second, &config.config)?;
+        check_plan_tree_sanity(&second, &config.config.optimizer)?;
     }
     Ok(())
 }
@@ -4255,15 +4255,11 @@ fn interleave_broken_by_later_rewrite_is_repaired_on_next_pass() -> Result<()> {
         Partitioning::UnknownPartitioning(10)
     ));
     // Without a repair, the plan is rejected rather than executed.
-    assert!(
-        SanityCheckPlan::new()
-            .optimize(Arc::clone(&rewritten), &config)
-            .is_err()
-    );
+    assert!(check_plan_tree_sanity(&rewritten, &config.optimizer).is_err());
 
     // The next distribution pass restores a valid interleave.
     let pass2 = EnsureRequirements::new().optimize(rewritten, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&pass2), &config)?;
+    check_plan_tree_sanity(&pass2, &config.optimizer)?;
     assert_plan!(pass2,
         @r"
     InterleaveExec
@@ -4333,16 +4329,12 @@ fn issue_21826_join_selection_after_distribution_pass() -> Result<()> {
         Partitioning::UnknownPartitioning(10)
     ));
     // Without a repair, the plan is rejected rather than executed.
-    assert!(
-        SanityCheckPlan::new()
-            .optimize(Arc::clone(&reordered), &config)
-            .is_err()
-    );
+    assert!(check_plan_tree_sanity(&reordered, &config.optimizer).is_err());
 
     // The second distribution pass repairs it. The two joins no longer share
     // a partitioning, so the result is a plain union.
     let pass2 = EnsureRequirements::new().optimize(reordered, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&pass2), &config)?;
+    check_plan_tree_sanity(&pass2, &config.optimizer)?;
     assert_plan!(pass2,
         @r"
     UnionExec

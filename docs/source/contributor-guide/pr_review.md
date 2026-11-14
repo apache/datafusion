@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Reviewing Pull Requests
@@ -108,9 +95,10 @@ Some practical guidelines for reviewing comments:
    code, e.g. "// changed to use a HashMap" or "// this handles the case
    mentioned above"). Such comments become irrelevant as soon as the PR merges.
 3. When comments refer to other structs, functions, or modules, they should use
-   [rustdoc intra-doc links] (e.g. `` [`SessionContext`] ``) rather than plain
+   [rustdoc intra-doc links] (e.g. `` [`LogicalPlan`] ``) rather than plain
    text names, so that `cargo doc` link checking ensures the references stay
-   valid as the code evolves.
+   valid as the code evolves. For an item in a crate that depends on the
+   current one, link to its docs.rs URL instead.
 4. New public APIs have doc comments, including examples where appropriate
    (doc examples are also tested by CI, so they double as test coverage).
 5. When documenting modules, functions, or fields, start with simple examples
@@ -198,6 +186,15 @@ When reviewing:
 3. If the PR claims a performance improvement, check that the reported
    results are reproducible and that the benchmark exercises the changed
    code path.
+4. Check which part of the change produces the gain, for example by removing
+   it and rerunning. A benchmark can improve for reasons other than the
+   change's core idea, such as inputs that happen to defeat the branch
+   predictor or a shift in code layout, so check that the benchmark covers
+   both well-predicted input (constant lengths, all valid) and poorly
+   predicted input (random).
+5. Ask which inputs get slower and whether real workloads are likely to hit
+   them, and whether the generated code holds up on another architecture
+   and under the build settings downstream projects use.
 
 [system-level sql benchmarks]: https://github.com/apache/datafusion/tree/main/benchmarks
 [benchmarks readme]: https://github.com/apache/datafusion/blob/main/benchmarks/README.md
@@ -227,6 +224,12 @@ without scope creep.
 Similarly, when a PR mixes refactoring with behavior changes or fixes a narrow
 problem with a broad mechanism, ask for it to be split or scoped down rather
 than reviewing it as-is.
+
+### Back Each Claim with Evidence
+
+Support a claim about how code behaves with what you checked: a permalink to
+the code, a test or command and its output, generated code, or benchmark
+results. A claim without evidence leaves the author to redo the investigation.
 
 ### Narrate What You Verified When Approving
 

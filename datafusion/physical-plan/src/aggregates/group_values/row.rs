@@ -12,7 +12,7 @@ use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::Result;
-use datafusion_common::float_semantics::normalize_floats;
+use datafusion_common::float_semantics;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -112,7 +112,10 @@ impl GroupValues for GroupValuesRows {
         // Normalize -0.0 → +0.0 so RowConverter (IEEE 754 totalOrder) and
         // primitive hashing both group ±0 together. No-op for non-float
         // columns.
-        let normalized_cols: Vec<ArrayRef> = cols.iter().map(normalize_floats).collect();
+        let normalized_cols: Vec<ArrayRef> = cols
+            .iter()
+            .map(|col| float_semantics::normalize(Arc::clone(col)))
+            .collect();
         let cols = normalized_cols.as_slice();
 
         // Convert the group keys into the row format

@@ -1069,6 +1069,34 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     Ok(())
 }
 
+/// Unset and `false` must stay distinct so that an unset table option still
+/// falls back to the session default
+#[test]
+fn roundtrip_csv_options_match_columns_by_header() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = CsvLogicalExtensionCodec {};
+    for value in [None, Some(false), Some(true)] {
+        let mut options = TableOptions::default().csv;
+        options.match_columns_by_header = value;
+
+        let mut buf = vec![];
+        codec.try_encode_file_format(
+            &mut buf,
+            Arc::new(CsvFormatFactory::new_with_options(options)),
+        )?;
+        let decoded = codec.try_decode_file_format(&buf, &ctx.task_ctx())?;
+        let decoded = decoded
+            .as_ref()
+            .downcast_ref::<CsvFormatFactory>()
+            .unwrap()
+            .options
+            .as_ref()
+            .unwrap();
+        assert_eq!(decoded.match_columns_by_header, value);
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
     let ctx = SessionContext::new();
@@ -3894,7 +3922,7 @@ async fn roundtrip_join_null_aware() -> Result<()> {
         (
             "
             SELECT k
-            FROM (VALUES (1, 1, 2), (2, 3, 4)) AS t1(k, a, b)
+            FROM (VALUES (1, 1, 2), (2, 3, CAST(NULL AS INT))) AS t1(k, a, b)
             WHERE (a, b) NOT IN (
                 SELECT x, y
                 FROM (VALUES (1, CAST(NULL AS INT), 2)) AS t2(k, x, y)

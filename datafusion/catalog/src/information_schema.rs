@@ -36,6 +36,7 @@ use datafusion_expr::logical_plan::information_schema::{
 pub use datafusion_expr::logical_plan::information_schema::{
     InformationSchemataBuilder, schemata_schema,
 };
+use datafusion_expr::registry::ExtensionTypeRegistryRef;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
     AggregateUDF, Documentation, ReturnFieldArgs, ScalarUDF, Signature, TypeSignature,
@@ -93,6 +94,7 @@ impl InformationSchemaProvider {
                 catalog_list,
                 catalog_filter: None,
                 table_functions: HashMap::new(),
+                extension_types: None,
             },
         }
     }
@@ -111,6 +113,18 @@ impl InformationSchemaProvider {
     /// tables are not reported and cannot be described.
     pub fn with_information_schema_enabled(mut self, enabled: bool) -> Self {
         self.config.information_schema_enabled = enabled;
+        self
+    }
+
+    /// Attach the session's extension type registry so that `DESCRIBE`,
+    /// `SHOW COLUMNS` and `information_schema.columns` show the
+    /// [`display_name`](datafusion_common::types::DFExtensionType::display_name)
+    /// of registered extension types.
+    pub fn with_extension_type_registry(
+        mut self,
+        extension_types: ExtensionTypeRegistryRef,
+    ) -> Self {
+        self.config.extension_types = Some(extension_types);
         self
     }
 
@@ -136,7 +150,8 @@ impl InformationSchemaProvider {
     /// Creates an execution plan for a `DESCRIBE <query>` statement, where
     /// `schema` is the output schema of the query.
     pub fn describe_schema(&self, schema: &Schema) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut builder = InformationSchemaColumnsBuilder::new(ColumnsDetail::Describe);
+        let mut builder = InformationSchemaColumnsBuilder::new(ColumnsDetail::Describe)
+            .with_extension_type_registry(self.config.extension_types.clone());
         for (position, field) in schema.fields().iter().enumerate() {
             builder.add_column("", "", "", position, field);
         }
@@ -152,7 +167,8 @@ impl InformationSchemaProvider {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let table = self.resolve_table(table_ref).await?;
 
-        let mut builder = InformationSchemaColumnsBuilder::new(detail);
+        let mut builder = InformationSchemaColumnsBuilder::new(detail)
+            .with_extension_type_registry(self.config.extension_types.clone());
         for (position, field) in table.schema().fields().iter().enumerate() {
             builder.add_column(
                 &table_ref.catalog,
@@ -407,6 +423,7 @@ struct InformationSchemaConfig {
     catalog_list: Arc<dyn CatalogProviderList>,
     catalog_filter: Option<String>,
     table_functions: HashMap<String, Arc<TableFunction>>,
+    extension_types: Option<ExtensionTypeRegistryRef>,
 }
 
 impl InformationSchemaConfig {
@@ -1041,7 +1058,8 @@ impl PartitionStream for InformationSchemaColumns {
     }
 
     fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        let mut builder = InformationSchemaColumnsBuilder::new(ColumnsDetail::Full);
+        let mut builder = InformationSchemaColumnsBuilder::new(ColumnsDetail::Full)
+            .with_extension_type_registry(self.config.extension_types.clone());
         let config = self.config.clone();
         Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),
@@ -1223,6 +1241,7 @@ mod tests {
             catalog_list: Arc::new(Fixture),
             catalog_filter: None,
             table_functions: HashMap::new(),
+            extension_types: None,
         };
         let mut builder = InformationSchemaTablesBuilder::new();
 

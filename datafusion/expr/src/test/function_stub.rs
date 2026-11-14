@@ -9,8 +9,9 @@
 use arrow::datatypes::{
     DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION,
     DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType, FieldRef,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType, Field, FieldRef,
 };
+use std::sync::Arc;
 
 use datafusion_common::plan_err;
 use datafusion_common::{Result, exec_err, not_impl_err, utils::take_function_args};
@@ -239,6 +240,11 @@ impl AggregateUDFImpl for Count {
         Ok(DataType::Int64)
     }
 
+    fn return_field(&self, _arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, false)))
+    }
+
+    // Keep the deprecated method consistent with `return_field` until it is removed
     fn is_nullable(&self) -> bool {
         false
     }

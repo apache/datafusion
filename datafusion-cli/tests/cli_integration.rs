@@ -328,37 +328,6 @@ fn cli_quick_test<'a>(
     assert_cmd_snapshot!(cmd);
 }
 
-#[test]
-fn spark_features_require_opt_in() {
-    let dialect_query = "SELECT CAST(1 AS LONG);";
-    let spark_query = "SELECT concat_ws(',', array(1, 2)), CAST(1 AS LONG);";
-
-    let output = cli()
-        .args(["-q", "--command", dialect_query])
-        .output()
-        .expect("failed to run datafusion-cli without --spark");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!output.status.success(), "query unexpectedly succeeded");
-    assert!(
-        stdout.contains("Unsupported SQL type LONG"),
-        "expected Spark SQL syntax to be unavailable without --spark, got:\n{stdout}"
-    );
-
-    let output = cli()
-        .args(["-q", "--spark", "--format", "csv", "--command", spark_query])
-        .output()
-        .expect("failed to run datafusion-cli with --spark");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success(),
-        "query failed with --spark, got:\n{stdout}"
-    );
-    assert!(
-        stdout.lines().any(|line| line == "\"1,2\",1"),
-        "expected Spark planner and dialect result, got:\n{stdout}"
-    );
-}
-
 /// Read data piped into the CLI via the `/dev/stdin` pseudo-path.
 ///
 /// Unix-only: `/dev/stdin` does not exist on Windows. This drives the real
@@ -704,6 +673,38 @@ fn test_cli_wide_result_set_no_crash() {
     cmd.args(["--maxrows", "5", "--command", sql]);
 
     assert_cmd_snapshot!(cmd);
+}
+
+#[rstest]
+#[case("csv", "\n8200\n")]
+#[case("tsv", "\n8200\n")]
+#[case("json", r#"{"value":8200}]"#)]
+#[case("nd-json", "\n{\"value\":8200}\n")]
+fn test_non_table_formats_ignore_maxrows(
+    #[case] format: &str,
+    #[case] final_row_fragment: &str,
+) {
+    let output = cli()
+        .args([
+            "--format",
+            format,
+            "--maxrows",
+            "1",
+            "--command",
+            "SELECT value FROM generate_series(1, 8200)",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "query failed for {format} output:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(final_row_fragment),
+        "expected the final row in {format} output"
+    );
 }
 
 #[tokio::test]

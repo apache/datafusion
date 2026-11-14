@@ -65,7 +65,7 @@ use datafusion_common::{
     internal_err, not_impl_err, plan_err,
 };
 use datafusion_common::{
-    TableReference, assert_eq_or_internal_err, assert_or_internal_err,
+    NullEquality, TableReference, assert_eq_or_internal_err, assert_or_internal_err,
 };
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
@@ -93,6 +93,10 @@ use datafusion_physical_expr::aggregate::{
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
+};
+use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+use datafusion_physical_optimizer::sanity_checker::{
+    check_plan_tree_sanity, input_requirements_hold,
 };
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
@@ -1717,17 +1721,18 @@ impl DefaultPhysicalPlanner {
 
                 let prefer_hash_join =
                     session.config_options().optimizer.prefer_hash_join;
-                // Null-aware joins are pinned to CollectLeft hash joins (see
-                // `HashJoinExec::null_aware`): never repartition them, and
-                // never route them to the sort-merge path below.
+                // Null-aware hash joins require CollectLeft for global NULL tracking,
+                // so they must not be hash-repartitioned.
+                // Supported null-aware LeftAnti joins can instead use the
+                // single-partition sort-merge path below.
                 let can_repartition_join = session.config().target_partitions() > 1
                     && session.config().repartition_joins()
                     && !*null_aware;
 
-                // Only `HashJoinExec` implements null-aware semantics, and it
-                // needs equi-join keys to do so. Without them the join would be
-                // planned as a nested loop (or piecewise merge) join, which
-                // silently ignores the flag and returns wrong results for
+                // Only `HashJoinExec` and the null-aware `LeftAnti` path in `SortMergeJoinExec`
+                // implements null-aware semantics, and those need equi-join keys to do so.
+                // Without them the join would be planned as a nested loop (or piecewise merge)
+                // join, which silently ignores the flag and returns wrong results for
                 // `NOT IN` over a nullable subquery. Fail loudly instead.
                 if *null_aware && join_on.is_empty() {
                     return plan_err!(
@@ -1859,16 +1864,44 @@ impl DefaultPhysicalPlanner {
                             None,
                         )?)
                     }
+                } else if *null_aware
+                    && !prefer_hash_join
+                    && *join_type == JoinType::LeftAnti
+                    && join_on.len() == 1
+                    && join_filter.is_none()
+                    && *null_equality == NullEquality::NullEqualsNothing
+                {
+                    // Use null-aware sort-merge join for single-key LeftAnti joins
+                    // without a filter. Single-partition inputs and NULLS FIRST ordering
+                    // let the stream determine whether the entire RHS is empty or
+                    // contains NULL before emitting any rows.
+                    Arc::new(
+                        SortMergeJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            join_filter,
+                            *join_type,
+                            vec![SortOptions::new(false, true)], // ASC NULLS FIRST
+                            *null_equality,
+                        )?
+                        .with_null_aware(true)?,
+                    )
                 } else if session.config().target_partitions() > 1
                     && session.config().repartition_joins()
                     && !prefer_hash_join
                     && !*null_aware
-                // Null-aware joins (e.g. `NOT IN` with a nullable subquery) must
-                // use the CollectLeft HashJoin below: SortMergeJoinExec does not
-                // implement null-aware anti-join semantics and would return wrong
-                // results when the right side contains a null join key.
+                // Null-aware joins (e.g. `NOT IN` with a nullable subquery) that do not
+                // satisfy the conditions above must use the CollectLeft HashJoin below.
+                // SortMergeJoinExec currently supports null-aware semantics only for
+                // single-key LeftAnti joins without a filter, using NullEqualsNothing.
+                // Routing other null-aware joins through the ordinary sort-merge path
+                // would not preserve NOT IN semantics, including when the subquery
+                // contains a NULL key.
                 {
-                    // Use SortMergeJoin if hash join is not preferred
+                    // Use ordinary sort-merge join when hash join is not preferred.
+                    // Null-aware joins not handled above fall back to CollectLeft
+                    // HashJoin because their semantics are not supported by sort-merge join.
                     let join_on_len = join_on.len();
                     Arc::new(SortMergeJoinExec::try_new(
                         physical_left,
@@ -1880,7 +1913,7 @@ impl DefaultPhysicalPlanner {
                         *null_equality,
                     )?)
                 } else {
-                    // Null-aware joins need global probe-side state, so keep
+                    // Remaining null-aware joins need global probe-side state, so keep
                     // them in CollectLeft mode.
                     let partition_mode = if can_repartition_join {
                         PartitionMode::Auto
@@ -2350,7 +2383,9 @@ fn create_information_schema_provider(
     // Do not set a catalog filter. `SHOW` statements describe all catalogs,
     // regardless of `SessionConfig::partition_information_schema`
     let provider = InformationSchemaProvider::new(session.catalog_list());
-    provider.with_information_schema_enabled(session.config().information_schema())
+    provider
+        .with_information_schema_enabled(session.config().information_schema())
+        .with_extension_type_registry(Arc::clone(session.extension_type_registry()))
 }
 
 /// Expand and align a GROUPING SET expression.
@@ -3481,9 +3516,18 @@ impl DefaultPhysicalPlanner {
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
 
-        // This runs once after all optimizer runs are complete,
-        // to verify that the plan is executable.
-        InvariantChecker(InvariantLevel::Executable).check(&new_plan)?;
+        // This runs once after all optimizer runs are complete, including
+        // rules appended by the user, to verify that the plan is executable.
+        let optimizer_options = &session_state.config_options().optimizer;
+        if let Err(e) = check_plan_tree_sanity(&new_plan, optimizer_options) {
+            return Err(sanity_check_error(
+                e,
+                &new_plan,
+                plan,
+                optimizers,
+                &optimizer_context,
+            ));
+        }
 
         debug!(
             "Optimized physical plan:\n{}\n",
@@ -3691,6 +3735,73 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
         (Ok(_), Err(e1)) => Err(e1),
         (Err(e), Err(_)) => Err(e),
     }
+}
+
+/// Adds context to an error from the final [`check_plan_tree_sanity`].
+///
+/// `EnsureRequirements` makes the order and distribution requirements hold,
+/// and every rule after it must keep them. When they do not hold for
+/// `final_plan`, the context names the rule that broke this contract: either
+/// `EnsureRequirements` itself, or the rule after which the requirements
+/// stopped holding. To find it, `optimizers` run again from `input_plan`, so
+/// planning that succeeds keeps no intermediate plans.
+fn sanity_check_error(
+    error: DataFusionError,
+    final_plan: &Arc<dyn ExecutionPlan>,
+    input_plan: Arc<dyn ExecutionPlan>,
+    optimizers: &[Arc<dyn PhysicalOptimizerRule + Send + Sync>],
+    optimizer_context: &dyn PhysicalOptimizerContext,
+) -> DataFusionError {
+    const SANITY_CHECK: &str = "SanityCheckPlan";
+    let plain_error =
+        |error| DataFusionError::Context(SANITY_CHECK.to_string(), Box::new(error));
+    if input_requirements_hold(final_plan) {
+        // The error is about unbounded inputs or another invariant.
+        return plain_error(error);
+    }
+
+    let ensure_requirements = EnsureRequirements::new();
+    let enforced = optimizers
+        .iter()
+        .rposition(|rule| rule.name() == ensure_requirements.name());
+    // Plans before `EnsureRequirements` need not satisfy the requirements, so
+    // only plans from its last run onwards are checked. Without it, every
+    // plan is checked, starting with the input plan.
+    let first_checked = enforced.unwrap_or(0);
+    let mut held = enforced.is_none() && input_requirements_hold(&input_plan);
+    let mut broken_by = None;
+    let mut plan = input_plan;
+    for (idx, rule) in optimizers.iter().enumerate() {
+        plan = match rule.optimize_with_context(plan, optimizer_context) {
+            Ok(plan) => plan,
+            // The rules did not run as they did before, so no rule is named.
+            Err(_) => return plain_error(error),
+        };
+        if idx >= first_checked {
+            let holds = input_requirements_hold(&plan);
+            if held && !holds {
+                broken_by = Some(rule);
+            }
+            held = holds;
+        }
+    }
+    let context = match (broken_by, enforced) {
+        (Some(rule), _) => format!(
+            "{SANITY_CHECK}: order and distribution requirements stopped holding \
+             after physical optimizer rule '{}'",
+            rule.name()
+        ),
+        (None, Some(_)) => format!(
+            "{SANITY_CHECK}: the plan produced by physical optimizer rule '{}' \
+             does not satisfy the order and distribution requirements",
+            ensure_requirements.name()
+        ),
+        (None, None) => format!(
+            "{SANITY_CHECK}: no physical optimizer rule produced a plan that \
+             satisfies the order and distribution requirements"
+        ),
+    };
+    DataFusionError::Context(context, Box::new(error))
 }
 
 struct OptimizationInvariantChecker<'a> {
