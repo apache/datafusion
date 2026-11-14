@@ -155,14 +155,11 @@ impl PhysicalOptimizerRule for JoinSelection {
     }
 }
 
-/// Determines whether it is possible to swap inputs of a hash join. Of the
-/// null-aware joins only a `LeftAnti` can be swapped: the resulting `RightAnti`
-/// decides `NOT IN` per probe row, including multi-column and correlated
-/// (scope keys or a join filter) shapes. A null-aware `LeftMark` has no
-/// null-aware `RightMark` counterpart.
+/// Determines whether it is possible to swap inputs of a hash join. A
+/// null-aware `LeftAnti` or `LeftMark` swaps to a `RightAnti` or `RightMark`
+/// that decides `NOT IN` per probe row, and back.
 fn can_swap_hash_join(hash_join: &HashJoinExec) -> bool {
     hash_join.join_type().supports_swap()
-        && (!hash_join.null_aware || *hash_join.join_type() == JoinType::LeftAnti)
 }
 
 /// Tries to create a [`HashJoinExec`] in [`PartitionMode::CollectLeft`] when possible.
@@ -247,7 +244,9 @@ pub(crate) fn partitioned_hash_join(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let left = hash_join.left();
     let right = hash_join.right();
-    let partition_mode = if hash_join.null_aware {
+    let partition_mode = if hash_join.null_aware
+        && hash_join.on().len() <= hash_join.null_aware_value_keys.max(1)
+    {
         PartitionMode::CollectLeft
     } else {
         PartitionMode::Partitioned
@@ -255,11 +254,6 @@ pub(crate) fn partitioned_hash_join(
     if can_swap_hash_join(hash_join) && should_swap_join_order(left, right, context)? {
         hash_join.swap_inputs(partition_mode)
     } else {
-        // Null-aware anti joins must use CollectLeft mode because they track probe-side state
-        // (probe_side_non_empty, probe_side_has_null) per-partition, but need global knowledge
-        // for correct null handling. With partitioning, a partition might not see probe rows
-        // even if the probe side is globally non-empty, leading to incorrect NULL row handling.
-
         Ok(Arc::new(
             hash_join
                 .builder()
@@ -306,9 +300,6 @@ fn statistical_join_selection_subrule(
                     if can_swap_hash_join(hash_join)
                         && should_swap_join_order(left, right, context)?
                     {
-                        // A null-aware join is never in `Partitioned` mode
-                        // (`NotIn::try_new` rejects it), so the swap
-                        // keeps the mode this arm matched on.
                         hash_join
                             .swap_inputs(PartitionMode::Partitioned)
                             .map(Some)?

@@ -1721,13 +1721,11 @@ impl DefaultPhysicalPlanner {
 
                 let prefer_hash_join =
                     session.config_options().optimizer.prefer_hash_join;
-                // Null-aware hash joins require CollectLeft for global NULL tracking,
-                // so they must not be hash-repartitioned.
                 // Supported null-aware LeftAnti joins can instead use the
                 // single-partition sort-merge path below.
                 let can_repartition_join = session.config().target_partitions() > 1
                     && session.config().repartition_joins()
-                    && !*null_aware;
+                    && (!*null_aware || join_on.len() > (*null_aware_value_keys).max(1));
 
                 // Only `HashJoinExec` and the null-aware `LeftAnti` path in `SortMergeJoinExec`
                 // implements null-aware semantics, and those need equi-join keys to do so.
@@ -1913,8 +1911,6 @@ impl DefaultPhysicalPlanner {
                         *null_equality,
                     )?)
                 } else {
-                    // Remaining null-aware joins need global probe-side state, so keep
-                    // them in CollectLeft mode.
                     let partition_mode = if can_repartition_join {
                         PartitionMode::Auto
                     } else {

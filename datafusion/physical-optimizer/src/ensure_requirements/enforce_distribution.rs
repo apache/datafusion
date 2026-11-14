@@ -136,7 +136,7 @@ pub fn adjust_input_keys_ordering(
     ) = plan.downcast_ref::<HashJoinExec>()
     {
         match mode {
-            PartitionMode::Partitioned => {
+            PartitionMode::Partitioned if !exec.null_aware => {
                 let join_constructor = |new_conditions: (
                     Vec<(PhysicalExprRef, PhysicalExprRef)>,
                     Vec<SortOptions>,
@@ -172,7 +172,7 @@ pub fn adjust_input_keys_ordering(
                     | JoinType::LeftMark => vec![],
                 };
             }
-            PartitionMode::Auto => {
+            PartitionMode::Partitioned | PartitionMode::Auto => {
                 // Can not satisfy, clear the current requirements and generate new empty requirements
                 requirements.data.clear();
             }
@@ -449,7 +449,7 @@ pub fn reorder_join_keys_to_inputs(
         },
     ) = plan.downcast_ref::<HashJoinExec>()
     {
-        if *mode == PartitionMode::Partitioned {
+        if *mode == PartitionMode::Partitioned && !exec.null_aware {
             let (join_keys, positions) = reorder_current_join_keys(
                 extract_join_keys(on),
                 Some(left.output_partitioning()),
@@ -637,7 +637,7 @@ fn reorder_join_keys_to_range_inputs(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
-        if join.mode != PartitionMode::Partitioned {
+        if join.mode != PartitionMode::Partitioned || join.null_aware {
             return Ok(plan);
         }
         let Some(positions) =

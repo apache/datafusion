@@ -77,7 +77,7 @@ logical_plan
 physical_plan
 01)FilterExec: NOT mark@2 IS NULL, projection=[id@0, value@1]
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], null_aware
+03)----HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)], null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -107,7 +107,7 @@ logical_plan
 physical_plan
 01)FilterExec: NOT mark@1 IS NULL, projection=[value@0]
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], projection=[value@1, mark@2], null_aware
+03)----HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)], projection=[value@1, mark@2], null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -373,7 +373,7 @@ logical_plan
 physical_plan
 01)FilterExec: mark@1 IS NULL, projection=[value@0]
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], projection=[value@1, mark@2], null_aware
+03)----HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)], projection=[value@1, mark@2], null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -409,7 +409,7 @@ logical_plan
 physical_plan
 01)FilterExec: NOT mark@2 IS NULL, projection=[id@0, value@1]
 02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], null_aware
+03)----HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)], null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -501,6 +501,10 @@ CREATE EXTERNAL TABLE inner_pushdown_table (id BIGINT, grp BIGINT)
 STORED AS PARQUET
 LOCATION 'test_files/scratch/null_aware_mark_join/inner.parquet';
 
+# Keep the subquery on the probe side, where the filter is pushed.
+statement ok
+set datafusion.optimizer.join_reordering = false;
+
 query TT
 EXPLAIN SELECT value
 FROM outer_pushdown_table
@@ -538,6 +542,9 @@ WHERE id NOT IN (
 ----
 c
 d
+
+statement ok
+set datafusion.optimizer.join_reordering = true;
 
 statement ok
 DROP TABLE outer_pushdown_table;
@@ -782,7 +789,7 @@ logical_plan
 physical_plan
 01)FilterExec: z@1 > 35 OR NOT mark@2, projection=[id@0]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], filter=z@1 < z@0, null_aware
+03)----HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)], filter=z@1 < z@0, null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
