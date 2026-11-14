@@ -28,7 +28,8 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericByteViewArray, GenericListViewArray,
-    OffsetSizeTrait, RecordBatch, RecordBatchOptions, UInt32Array, make_array,
+    OffsetSizeTrait, RecordBatch, RecordBatchOptions, UInt32Array, UInt64Array,
+    make_array,
 };
 use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow::compute::{cast, take};
@@ -224,41 +225,69 @@ fn compact_views<T: ByteViewType + ?Sized>(
     )?)
 }
 
-/// Copies the range of child values that the rows of a list view cover, and rebases the
-/// offsets onto it. Rows of a list view can share or overlap child ranges, so copying each
-/// row's values separately could multiply the data. Unused values inside the range stay.
+/// Copies the child values that the rows of a list view reference, and rebases the
+/// offsets onto them.
+///
+/// Rows of a list view can share or overlap child ranges, so the ranges of all rows
+/// are merged first, and each merged range is copied once. Elements that no row
+/// references are dropped. A copy of the whole covered range would keep them: after a
+/// sort, the rows of one piece reference elements spread over the whole child, so
+/// every piece would copy almost all of it.
 fn compact_list_view<O: OffsetSizeTrait>(
     array: &ArrayRef,
     field: &Arc<Field>,
     keep_dictionaries: bool,
 ) -> Result<ArrayRef> {
     let list = array.as_list_view::<O>();
-    let rows = || {
-        (0..list.len())
-            .filter(|&row| list.is_valid(row) && list.sizes()[row].as_usize() > 0)
+    let live = |row: usize| list.is_valid(row) && list.sizes()[row].as_usize() > 0;
+    let range = |row: usize| {
+        let offset = list.offsets()[row].as_usize();
+        (offset, offset + list.sizes()[row].as_usize())
     };
-    let start = rows()
-        .map(|row| list.offsets()[row].as_usize())
-        .min()
-        .unwrap_or(0);
-    let end = rows()
-        .map(|row| list.offsets()[row].as_usize() + list.sizes()[row].as_usize())
-        .max()
-        .unwrap_or(0);
+    let mut ranges: Vec<(usize, usize)> = (0..list.len())
+        .filter(|&row| live(row))
+        .map(range)
+        .collect();
+    ranges.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    // The offset of each merged range in the new child.
+    let mut placed = Vec::with_capacity(merged.len());
+    let mut total = 0;
+    for &(start, end) in &merged {
+        placed.push(total);
+        total += end - start;
+    }
+    let indices = UInt64Array::from_iter_values(
+        merged
+            .iter()
+            .flat_map(|&(start, end)| (start as u64)..(end as u64)),
+    );
     let offsets = (0..list.len())
         .map(|row| {
+            if !live(row) {
+                return O::usize_as(0);
+            }
             let offset = list.offsets()[row].as_usize();
-            O::usize_as(offset.saturating_sub(start).min(end - start))
+            let index = merged.partition_point(|r| r.0 <= offset) - 1;
+            O::usize_as(placed[index] + offset - merged[index].0)
         })
         .collect::<Vec<_>>();
     let sizes = (0..list.len())
-        .map(|row| match list.is_valid(row) {
+        .map(|row| match live(row) {
             true => list.sizes()[row],
             false => O::usize_as(0),
         })
         .collect::<Vec<_>>();
-    let values =
-        compact_array(&list.values().slice(start, end - start), keep_dictionaries)?;
+    let values = fixup(
+        &take(list.values().as_ref(), &indices, None)?,
+        keep_dictionaries,
+    )?;
     Ok(Arc::new(GenericListViewArray::<O>::try_new(
         Arc::clone(field),
         ScalarBuffer::from(offsets),
