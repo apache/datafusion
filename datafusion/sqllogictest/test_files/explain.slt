@@ -232,6 +232,7 @@ physical_plan after FilterPushdown SAME TEXT AS ABOVE
 physical_plan after WindowTopN SAME TEXT AS ABOVE
 physical_plan after EnsureRequirements SAME TEXT AS ABOVE
 physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
+physical_plan after SingleDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after OptimizeAggregateOrder SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after OutputRequirements DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true
@@ -402,6 +403,7 @@ physical_plan after FilterPushdown SAME TEXT AS ABOVE
 physical_plan after WindowTopN SAME TEXT AS ABOVE
 physical_plan after EnsureRequirements SAME TEXT AS ABOVE
 physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
+physical_plan after SingleDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after OptimizeAggregateOrder SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after OutputRequirements
@@ -448,6 +450,7 @@ physical_plan after FilterPushdown SAME TEXT AS ABOVE
 physical_plan after WindowTopN SAME TEXT AS ABOVE
 physical_plan after EnsureRequirements SAME TEXT AS ABOVE
 physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
+physical_plan after SingleDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after OptimizeAggregateOrder SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after OutputRequirements
@@ -708,6 +711,7 @@ physical_plan after FilterPushdown SAME TEXT AS ABOVE
 physical_plan after WindowTopN SAME TEXT AS ABOVE
 physical_plan after EnsureRequirements SAME TEXT AS ABOVE
 physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
+physical_plan after SingleDistinctAggregation SAME TEXT AS ABOVE
 physical_plan after OptimizeAggregateOrder SAME TEXT AS ABOVE
 physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
 physical_plan after OutputRequirements DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true

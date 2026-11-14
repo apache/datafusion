@@ -1,0 +1,22 @@
+name Q13
+group grouped_count_distinct
+
+load
+CREATE TABLE grouped_distinct AS
+SELECT value / ${GROUPED_DISTINCT_ROWS:-4000000} AS g,
+       value % 999983 AS x
+FROM range(${GROUPED_DISTINCT_ROWS:-4000000});
+
+assert I
+SELECT sum(n) = least(${GROUPED_DISTINCT_ROWS:-4000000}, 999983)
+FROM (SELECT g, count(DISTINCT x) AS n FROM grouped_distinct GROUP BY g);
+----
+true
+
+expect_plan AggregateExec
+
+run
+-- Int64, one group, up to 999,983 distinct values repeated across input batches.
+SELECT g, count(DISTINCT x) FROM grouped_distinct GROUP BY g;
+
+cleanup sql_benchmarks/grouped_count_distinct/init/cleanup.sql

@@ -1950,17 +1950,13 @@ config_namespace! {
         /// projections or aliases.
         pub enable_unions_to_filter: bool, default = false
 
-        /// Prefer native grouped DISTINCT aggregation when target_partitions is 1
-        /// and every aggregate explicitly supports a specialized GroupsAccumulator
-        /// for its DISTINCT argument types. Defaults to false, preserving the
-        /// two-phase GROUP BY rewrite.
-        ///
-        /// The native plan can avoid materializing distinct (group, value) pairs,
-        /// but can be slower for many groups with duplicate values. It must fit
-        /// each group's distinct values in memory, so queries that succeed by
-        /// spilling with the rewrite may fail with this option enabled. One target
-        /// partition can still have multiple input partitions and merge native states.
-        pub single_distinct_prefer_native: bool, default = false
+        /// Prefer native aggregation for a single grouped integer COUNT(DISTINCT)
+        /// when the physical input has one partition and unordered groups. This
+        /// avoids the separate GROUP BY over (group, value) pairs and supports
+        /// spilling those pairs when memory is limited. Multiple input partitions
+        /// keep the GROUP BY rewrite; other aggregate shapes are unchanged. Set
+        /// to false to disable this physical-plan optimization.
+        pub single_distinct_prefer_native: bool, default = true
     }
 }
 

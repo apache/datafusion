@@ -14,6 +14,7 @@ pub mod multi_group_by;
 
 mod row;
 pub use row::GroupValuesRows;
+pub(crate) use row::encode_array_if_necessary;
 mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
 use multi_group_by::{GroupValuesClustered, GroupValuesColumn};

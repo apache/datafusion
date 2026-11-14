@@ -20,6 +20,7 @@ use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::output_requirements::OutputRequirements;
 use crate::projection_pushdown::ProjectionPushdown;
+use crate::single_distinct_aggregation::SingleDistinctAggregation;
 use crate::topk_aggregation::TopKAggregation;
 use crate::topk_repartition::TopKRepartition;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
@@ -189,6 +190,7 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 /// | `WindowTopN`                   | [`WindowTopN`]                   | Replaces row-number window and filter patterns with per-partition TopK.                       |
 /// | `EnsureRequirements`           | [`EnsureRequirements`]           | Inserts the repartitioning and sorting needed to meet distribution and ordering requirements. |
 /// | `CombinePartialFinalAggregate` | [`CombinePartialFinalAggregate`] | Merges adjacent partial and final aggregates.                                                 |
+/// | `SingleDistinctAggregation`    | `SingleDistinctAggregation`      | Uses native grouped integer distinct counts for single-partition input.                      |
 /// | `OptimizeAggregateOrder`       | [`OptimizeAggregateOrder`]       | Rewrites aggregate expressions to use the input ordering.                                     |
 /// | `ProjectionPushdown`           | [`ProjectionPushdown`]           | Pushes projections toward inputs (early pass).                                                |
 /// | `OutputRequirements`           | [`OutputRequirements`]           | Removes the helper nodes added by the first pass (remove mode).                               |
@@ -276,6 +278,8 @@ impl PhysicalOptimizer {
             Arc::new(EnsureRequirements::new()),
             // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             Arc::new(CombinePartialFinalAggregate::new()),
+            // Select native distinct aggregation after repartitioning is established.
+            Arc::new(SingleDistinctAggregation::new()),
             // Run once after the local sorting requirement is changed
             Arc::new(OptimizeAggregateOrder::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
