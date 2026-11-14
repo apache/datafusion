@@ -44,7 +44,7 @@ pub(crate) struct SpillPiece {
 /// |------------------------------------|--------------------------------------------------|
 /// | Dictionaries that are not compacted | Every piece keeps all their values. The file and the reader hold them once. A piece can exceed the bound by their size. |
 /// | Bytes that several views reference  | A piece copies them once. Only the first view of a value counts it in [`SpilledRowSizes`]. When more than half of the view bytes are repeats, the batch is written whole. |
-/// | Child ranges of list views          | A piece copies the range that its rows cover once. |
+/// | Child ranges of list views          | A piece merges the child ranges that its rows reference and copies each merged range once. It drops elements that no row references. |
 ///
 /// A piece whose rows share data does not get smaller when halved. When the first half of
 /// a range is not clearly smaller than the range, the range is written whole, above the

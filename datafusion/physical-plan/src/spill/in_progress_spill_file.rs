@@ -800,8 +800,9 @@ mod tests {
         Ok(())
     }
 
-    /// Rows of a list view can share child ranges. Each piece copies the range that its
-    /// rows cover, so the shared value is copied once per piece, not once per row.
+    /// Rows of a list view can share child ranges. Each piece merges the child ranges that
+    /// its rows reference and copies each merged range once. A shared value is copied
+    /// once per piece, not once per row.
     #[tokio::test]
     async fn list_view_with_shared_child_copies_it_once_per_piece() -> Result<()> {
         let child: ArrayRef = Arc::new(StringArray::from_iter_values([wide_value(0)]));

@@ -9,11 +9,11 @@
 //!
 //! `take` with the indices `0..n` copies most types into fresh buffers. It does not compact:
 //!
-//! | Type              | What `take` keeps                       | Fix                    |
-//! |-------------------|-----------------------------------------|------------------------|
-//! | View arrays       | the whole data buffers                  | copy the used bytes    |
-//! | Dictionaries      | every value                             | keep only used values  |
-//! | List views        | the whole child                         | copy the covered range |
+//! | Type              | What `take` keeps                       | Fix                        |
+//! |-------------------|-----------------------------------------|----------------------------|
+//! | View arrays       | the whole data buffers                  | copy the used bytes        |
+//! | Dictionaries      | every value                             | keep only used values      |
+//! | List views        | the whole child                         | copy the referenced ranges |
 //!
 //! [`fixup`] applies these fixes at every nesting level.
 //!
