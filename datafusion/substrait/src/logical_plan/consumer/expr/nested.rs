@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use super::literal::name_struct_literals_like_siblings;
 use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::{DFSchema, not_impl_err, substrait_err};
 use datafusion::execution::FunctionRegistry;
@@ -41,6 +42,12 @@ pub async fn from_nested(
                         .await?,
                 );
             }
+            // the elements of a list share one type, so a struct literal element takes the
+            // field names of a struct column element, as in `[s, {c0: 1, c1: 'x'}]`
+            name_struct_literals_like_siblings(
+                &mut args.iter_mut().collect::<Vec<_>>(),
+                input_schema,
+            );
 
             let make_array_udf = consumer.get_function_registry().udf("make_array")?;
             Ok(Expr::ScalarFunction(

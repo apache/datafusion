@@ -1,0 +1,547 @@
+{
+  "extensions": [
+    {
+      "extensionFunction": {
+        "extensionUrnReference": 4294967295,
+        "functionAnchor": 0,
+        "name": "get_field"
+      }
+    },
+    {
+      "extensionFunction": {
+        "extensionUrnReference": 4294967295,
+        "functionAnchor": 1,
+        "name": "coalesce"
+      }
+    },
+    {
+      "extensionFunction": {
+        "extensionUrnReference": 4294967295,
+        "functionAnchor": 2,
+        "name": "array_transform"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "project": {
+            "common": {
+              "emit": {
+                "outputMapping": [
+                  1,
+                  2
+                ]
+              }
+            },
+            "input": {
+              "read": {
+                "baseSchema": {
+                  "names": [
+                    "zones",
+                    "subnet",
+                    "id",
+                    "zone_name"
+                  ],
+                  "struct": {
+                    "types": [
+                      {
+                        "list": {
+                          "type": {
+                            "struct": {
+                              "types": [
+                                {
+                                  "struct": {
+                                    "types": [
+                                      {
+                                        "string": {
+                                          "nullability": "NULLABILITY_NULLABLE"
+                                        }
+                                      }
+                                    ],
+                                    "nullability": "NULLABILITY_NULLABLE"
+                                  }
+                                },
+                                {
+                                  "string": {
+                                    "nullability": "NULLABILITY_NULLABLE"
+                                  }
+                                }
+                              ],
+                              "nullability": "NULLABILITY_NULLABLE"
+                            }
+                          },
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      }
+                    ],
+                    "nullability": "NULLABILITY_REQUIRED"
+                  }
+                },
+                "virtualTable": {
+                  "expressions": [
+                    {
+                      "fields": [
+                        {
+                          "literal": {
+                            "list": {
+                              "values": [
+                                {
+                                  "struct": {
+                                    "fields": [
+                                      {
+                                        "struct": {
+                                          "fields": [
+                                            {
+                                              "string": "subnet-1"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "string": "zone-a"
+                                      }
+                                    ]
+                                  }
+                                },
+                                {
+                                  "struct": {
+                                    "fields": [
+                                      {
+                                        "struct": {
+                                          "fields": [
+                                            {
+                                              "string": "subnet-2"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "string": "zone-b"
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            },
+                            "nullable": true
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "fields": [
+                        {
+                          "literal": {
+                            "null": {
+                              "list": {
+                                "type": {
+                                  "struct": {
+                                    "types": [
+                                      {
+                                        "struct": {
+                                          "types": [
+                                            {
+                                              "string": {
+                                                "nullability": "NULLABILITY_NULLABLE"
+                                              }
+                                            }
+                                          ],
+                                          "nullability": "NULLABILITY_NULLABLE"
+                                        }
+                                      },
+                                      {
+                                        "string": {
+                                          "nullability": "NULLABILITY_NULLABLE"
+                                        }
+                                      }
+                                    ],
+                                    "nullability": "NULLABILITY_NULLABLE"
+                                  }
+                                },
+                                "nullability": "NULLABILITY_NULLABLE"
+                              }
+                            },
+                            "nullable": true
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "expressions": [
+              {
+                "scalarFunction": {
+                  "functionReference": 2,
+                  "arguments": [
+                    {
+                      "value": {
+                        "scalarFunction": {
+                          "functionReference": 1,
+                          "arguments": [
+                            {
+                              "value": {
+                                "selection": {
+                                  "directReference": {
+                                    "structField": {
+                                      "field": 0
+                                    }
+                                  },
+                                  "rootReference": {}
+                                }
+                              }
+                            },
+                            {
+                              "value": {
+                                "literal": {
+                                  "emptyList": {
+                                    "type": {
+                                      "struct": {
+                                        "types": [
+                                          {
+                                            "struct": {
+                                              "types": [
+                                                {
+                                                  "string": {
+                                                    "nullability": "NULLABILITY_NULLABLE"
+                                                  }
+                                                }
+                                              ],
+                                              "nullability": "NULLABILITY_NULLABLE"
+                                            }
+                                          },
+                                          {
+                                            "string": {
+                                              "nullability": "NULLABILITY_NULLABLE"
+                                            }
+                                          }
+                                        ],
+                                        "nullability": "NULLABILITY_NULLABLE"
+                                      }
+                                    },
+                                    "nullability": "NULLABILITY_NULLABLE"
+                                  },
+                                  "nullable": true
+                                }
+                              }
+                            }
+                          ],
+                          "outputType": {
+                            "list": {
+                              "type": {
+                                "struct": {
+                                  "types": [
+                                    {
+                                      "struct": {
+                                        "types": [
+                                          {
+                                            "string": {
+                                              "nullability": "NULLABILITY_NULLABLE"
+                                            }
+                                          }
+                                        ],
+                                        "nullability": "NULLABILITY_NULLABLE"
+                                      }
+                                    },
+                                    {
+                                      "string": {
+                                        "nullability": "NULLABILITY_NULLABLE"
+                                      }
+                                    }
+                                  ],
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              },
+                              "nullability": "NULLABILITY_NULLABLE"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "value": {
+                        "lambda": {
+                          "parameters": {
+                            "types": [
+                              {
+                                "struct": {
+                                  "types": [
+                                    {
+                                      "struct": {
+                                        "types": [
+                                          {
+                                            "string": {
+                                              "nullability": "NULLABILITY_NULLABLE"
+                                            }
+                                          }
+                                        ],
+                                        "nullability": "NULLABILITY_NULLABLE"
+                                      }
+                                    },
+                                    {
+                                      "string": {
+                                        "nullability": "NULLABILITY_NULLABLE"
+                                      }
+                                    }
+                                  ],
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              }
+                            ],
+                            "nullability": "NULLABILITY_REQUIRED"
+                          },
+                          "body": {
+                            "scalarFunction": {
+                              "functionReference": 0,
+                              "arguments": [
+                                {
+                                  "value": {
+                                    "selection": {
+                                      "directReference": {
+                                        "structField": {}
+                                      },
+                                      "lambdaParameterReference": {}
+                                    }
+                                  }
+                                },
+                                {
+                                  "value": {
+                                    "literal": {
+                                      "string": "zone_name",
+                                      "nullable": true
+                                    }
+                                  }
+                                }
+                              ],
+                              "outputType": {
+                                "string": {
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "outputType": {
+                    "list": {
+                      "type": {
+                        "string": {
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      },
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  }
+                }
+              },
+              {
+                "scalarFunction": {
+                  "functionReference": 2,
+                  "arguments": [
+                    {
+                      "value": {
+                        "scalarFunction": {
+                          "functionReference": 1,
+                          "arguments": [
+                            {
+                              "value": {
+                                "selection": {
+                                  "directReference": {
+                                    "structField": {
+                                      "field": 0
+                                    }
+                                  },
+                                  "rootReference": {}
+                                }
+                              }
+                            },
+                            {
+                              "value": {
+                                "literal": {
+                                  "emptyList": {
+                                    "type": {
+                                      "struct": {
+                                        "types": [
+                                          {
+                                            "struct": {
+                                              "types": [
+                                                {
+                                                  "string": {
+                                                    "nullability": "NULLABILITY_NULLABLE"
+                                                  }
+                                                }
+                                              ],
+                                              "nullability": "NULLABILITY_NULLABLE"
+                                            }
+                                          },
+                                          {
+                                            "string": {
+                                              "nullability": "NULLABILITY_NULLABLE"
+                                            }
+                                          }
+                                        ],
+                                        "nullability": "NULLABILITY_NULLABLE"
+                                      }
+                                    },
+                                    "nullability": "NULLABILITY_NULLABLE"
+                                  },
+                                  "nullable": true
+                                }
+                              }
+                            }
+                          ],
+                          "outputType": {
+                            "list": {
+                              "type": {
+                                "struct": {
+                                  "types": [
+                                    {
+                                      "struct": {
+                                        "types": [
+                                          {
+                                            "string": {
+                                              "nullability": "NULLABILITY_NULLABLE"
+                                            }
+                                          }
+                                        ],
+                                        "nullability": "NULLABILITY_NULLABLE"
+                                      }
+                                    },
+                                    {
+                                      "string": {
+                                        "nullability": "NULLABILITY_NULLABLE"
+                                      }
+                                    }
+                                  ],
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              },
+                              "nullability": "NULLABILITY_NULLABLE"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "value": {
+                        "lambda": {
+                          "parameters": {
+                            "types": [
+                              {
+                                "struct": {
+                                  "types": [
+                                    {
+                                      "struct": {
+                                        "types": [
+                                          {
+                                            "string": {
+                                              "nullability": "NULLABILITY_NULLABLE"
+                                            }
+                                          }
+                                        ],
+                                        "nullability": "NULLABILITY_NULLABLE"
+                                      }
+                                    },
+                                    {
+                                      "string": {
+                                        "nullability": "NULLABILITY_NULLABLE"
+                                      }
+                                    }
+                                  ],
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              }
+                            ],
+                            "nullability": "NULLABILITY_REQUIRED"
+                          },
+                          "body": {
+                            "scalarFunction": {
+                              "functionReference": 0,
+                              "arguments": [
+                                {
+                                  "value": {
+                                    "scalarFunction": {
+                                      "functionReference": 0,
+                                      "arguments": [
+                                        {
+                                          "value": {
+                                            "selection": {
+                                              "directReference": {
+                                                "structField": {}
+                                              },
+                                              "lambdaParameterReference": {}
+                                            }
+                                          }
+                                        },
+                                        {
+                                          "value": {
+                                            "literal": {
+                                              "string": "subnet",
+                                              "nullable": true
+                                            }
+                                          }
+                                        }
+                                      ],
+                                      "outputType": {
+                                        "struct": {
+                                          "types": [
+                                            {
+                                              "string": {
+                                                "nullability": "NULLABILITY_NULLABLE"
+                                              }
+                                            }
+                                          ],
+                                          "nullability": "NULLABILITY_NULLABLE"
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "value": {
+                                    "literal": {
+                                      "string": "id",
+                                      "nullable": true
+                                    }
+                                  }
+                                }
+                              ],
+                              "outputType": {
+                                "string": {
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "outputType": {
+                    "list": {
+                      "type": {
+                        "string": {
+                          "nullability": "NULLABILITY_NULLABLE"
+                        }
+                      },
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "names": [
+          "zone_names",
+          "subnet_ids"
+        ]
+      }
+    }
+  ]
+}

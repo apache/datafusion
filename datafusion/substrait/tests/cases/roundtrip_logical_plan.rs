@@ -2755,6 +2755,421 @@ async fn roundtrip_lambda_parameter_struct_field_names() -> Result<()> {
     Ok(())
 }
 
+// Substrait literals carry no struct field names, so a struct literal combined with a
+// struct column must take the column's field names for the two to have the same type.
+#[tokio::test]
+async fn roundtrip_struct_literal_next_to_struct_column() -> Result<()> {
+    let ctx = create_context().await?;
+    ctx.sql(
+        "CREATE TABLE structs AS SELECT [named_struct('a', 1, 'b', 'x')] AS s \
+         UNION ALL SELECT NULL AS s",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    // coalesce is simplified to a CASE whose ELSE branch is the literal
+    roundtrip_with_ctx(
+        "SELECT coalesce(s, [named_struct('a', 0, 'b', 'z')]) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
+
+    // a NULL struct in the ELSE branch, from https://github.com/apache/datafusion/issues/14632
+    roundtrip(
+        "SELECT (CASE WHEN column1 IS NOT NULL THEN named_struct('f1', column1) ELSE NULL END) AS res \
+         FROM (VALUES ('a'), (NULL))",
+    )
+    .await?;
+
+    ctx.sql("CREATE TABLE struct_rows AS SELECT named_struct('a', 1, 'b', 'x') AS st")
+        .await?
+        .collect()
+        .await?;
+
+    // a set operation input padded with a NULL struct, on either side. The consumer
+    // rebuilds a union with the alias above it rather than in each input, so the plans
+    // can't be compared as text: check the output type and that the plan runs instead.
+    for sql in [
+        "SELECT st AS r FROM struct_rows UNION ALL SELECT NULL AS r FROM struct_rows",
+        "SELECT NULL AS r FROM struct_rows UNION ALL SELECT st AS r FROM struct_rows",
+    ] {
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+        assert_eq!(
+            plan.schema().field(0).data_type(),
+            plan2.schema().field(0).data_type()
+        );
+        DataFrame::new(ctx.state(), plan2).collect().await?;
+    }
+
+    // struct literals in an IN list
+    roundtrip_with_ctx(
+        "SELECT st IN (named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y')) \
+         FROM struct_rows",
+        ctx.clone(),
+    )
+    .await?;
+
+    Ok(())
+}
+
+// Keep these plans unoptimized before serialization so the consumer sees the
+// literal and relation shapes emitted by another Substrait producer.
+#[tokio::test]
+async fn roundtrip_struct_literal_dictionary_values() -> Result<()> {
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::functions::core::expr_fn::coalesce;
+
+    let ctx = SessionContext::new();
+    let dictionary_type = DataType::Dictionary(
+        Box::new(DataType::Int32),
+        Box::new(DataType::Struct(
+            vec![Field::new("a", DataType::Int32, true)].into(),
+        )),
+    );
+    let empty = ScalarValue::List(ScalarValue::new_list_nullable(&[], &dictionary_type));
+    // An empty list can carry a dictionary-of-struct type without requiring
+    // support for serializing non-null dictionary literals.
+    ctx.register_batch(
+        "dicts",
+        RecordBatch::try_from_iter(vec![("s", empty.to_array()?)])?,
+    )?;
+    let plan = ctx
+        .table("dicts")
+        .await?
+        .select(vec![coalesce(vec![col("s"), lit(empty)]).alias("result")])?
+        .into_unoptimized_plan();
+    let expected = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
+    let mut proto = to_substrait_plan(&plan, &ctx.state())?;
+    // Supply a complete NamedStruct, as an external producer would: our producer
+    // currently omits names nested inside dictionary values.
+    let Some(plan_rel::RelType::Root(root)) = &mut proto.relations[0].rel_type else {
+        panic!("expected root");
+    };
+    root.names.push("a".into());
+    let Some(RelType::Project(project)) =
+        &mut root.input.as_mut().expect("root input").rel_type
+    else {
+        panic!("expected project");
+    };
+    let Some(RelType::Read(read)) =
+        &mut project.input.as_mut().expect("project input").rel_type
+    else {
+        panic!("expected read");
+    };
+    read.base_schema
+        .as_mut()
+        .expect("read schema")
+        .names
+        .push("a".into());
+    let restored = from_substrait_plan(&ctx.state(), &proto).await?;
+    let restored = ctx.state().optimize(&restored)?;
+    assert_eq!(
+        plan.schema().field(0).data_type(),
+        restored.schema().field(0).data_type()
+    );
+    assert_eq!(
+        expected,
+        DataFrame::new(ctx.state(), restored).collect().await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_struct_literal_independent_function_arguments() -> Result<()> {
+    use datafusion::common::scalar::ScalarStructBuilder;
+    use datafusion::functions::core::expr_fn::{get_field, named_struct};
+
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE structs AS SELECT named_struct('a', 1) AS s")
+        .await?
+        .collect()
+        .await?;
+    let literal = ScalarStructBuilder::new()
+        .with_scalar(
+            Field::new("c0", DataType::Int32, true),
+            ScalarValue::Int32(Some(42)),
+        )
+        .build()?;
+    let independent =
+        named_struct(vec![lit("left"), col("s"), lit("right"), lit(literal)]);
+    let plan = ctx
+        .table("structs")
+        .await?
+        .select(vec![
+            get_field(get_field(independent, "right"), "c0").alias("result"),
+        ])?
+        .into_unoptimized_plan();
+    let expected = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
+    datafusion::assert_batches_eq!(
+        [
+            "+--------+",
+            "| result |",
+            "+--------+",
+            "| 42     |",
+            "+--------+"
+        ],
+        &expected
+    );
+    let restored = substrait_roundtrip(&plan, &ctx).await?;
+    assert_eq!(
+        expected,
+        DataFrame::new(ctx.state(), restored).collect().await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_struct_literal_union_with_limit() -> Result<()> {
+    use datafusion::common::test_util::batches_to_sort_string;
+
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE structs AS SELECT named_struct('a', 1) AS s")
+        .await?
+        .collect()
+        .await?;
+    let source = ctx.table("structs").await?;
+    let struct_type = source.schema().field(0).data_type().clone();
+    let nulls = source
+        .clone()
+        .select(vec![lit(ScalarValue::try_from(&struct_type)?).alias("s")])?
+        .limit(0, Some(1))?;
+    // Put the wrapped literal first: it must not become the naming reference.
+    let plan = nulls.union(source)?.into_unoptimized_plan();
+    let expected = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
+    let restored = substrait_roundtrip(&plan, &ctx).await?;
+    assert_eq!(
+        plan.schema().field(0).data_type(),
+        restored.schema().field(0).data_type()
+    );
+    assert_eq!(
+        batches_to_sort_string(&expected),
+        batches_to_sort_string(&DataFrame::new(ctx.state(), restored).collect().await?)
+    );
+    Ok(())
+}
+
+/// Runs `plan` directly and through Substrait, with `edit` applied to the JSON of the
+/// Substrait plan to mimic another producer, and checks both return the same rows.
+async fn assert_struct_literal_roundtrip_rows(
+    ctx: &SessionContext,
+    plan: LogicalPlan,
+    edit: impl Fn(&mut serde_json::Value),
+) -> Result<()> {
+    use datafusion::common::test_util::batches_to_sort_string;
+
+    let expected = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let mut json = serde_json::to_value(&*proto).unwrap();
+    edit(&mut json);
+    let proto: Plan = serde_json::from_value(json).unwrap();
+    let restored = from_substrait_plan(&ctx.state(), &proto).await?;
+    let restored = ctx.state().optimize(&restored)?;
+    assert_eq!(
+        batches_to_sort_string(&expected),
+        batches_to_sort_string(&DataFrame::new(ctx.state(), restored).collect().await?)
+    );
+    Ok(())
+}
+
+async fn struct_rows_ctx() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+    ctx.sql(
+        "CREATE TABLE struct_rows AS SELECT named_struct('a', 1, 'b', 'x') AS st \
+         UNION ALL SELECT NULL AS st",
+    )
+    .await?
+    .collect()
+    .await?;
+    Ok(ctx)
+}
+
+#[tokio::test]
+async fn roundtrip_struct_literal_union_with_nested_union_input() -> Result<()> {
+    let ctx = struct_rows_ctx().await?;
+    let source = ctx.table("struct_rows").await?;
+    let struct_type = source.schema().field(0).data_type().clone();
+    let nulls = source
+        .clone()
+        .select(vec![lit(ScalarValue::try_from(&struct_type)?).alias("st")])?;
+    // the literal input is itself a union, and comes first
+    let plan = nulls
+        .clone()
+        .union_distinct(nulls)?
+        .union(source)?
+        .into_unoptimized_plan();
+    assert_struct_literal_roundtrip_rows(&ctx, plan, |_| {}).await
+}
+
+#[tokio::test]
+async fn roundtrip_struct_literal_next_to_run_end_encoded_struct_column() -> Result<()> {
+    use datafusion::arrow::array::{
+        Int32Array, Int64Array, RunArray, StringArray, StructArray,
+    };
+    use datafusion::arrow::buffer::NullBuffer;
+    use datafusion::arrow::datatypes::{Fields, Int32Type};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::common::scalar::ScalarStructBuilder;
+    use datafusion::common::test_util::batches_to_sort_string;
+    use datafusion::functions::core::expr_fn::coalesce;
+
+    let fields = Fields::from(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Utf8, true),
+    ]);
+    let structs = StructArray::try_new(
+        fields.clone(),
+        vec![
+            Arc::new(Int64Array::from(vec![1, 0])),
+            Arc::new(StringArray::from(vec!["x", ""])),
+        ],
+        Some(NullBuffer::from(vec![true, false])),
+    )?;
+    let encoded =
+        RunArray::<Int32Type>::try_new(&Int32Array::from(vec![1, 2]), &structs)?;
+    // The plan types `s` as a plain struct, while the table it runs against stores
+    // `s` run-end encoded, which Substrait has no type for.
+    let producer_ctx = SessionContext::new();
+    producer_ctx.register_batch(
+        "t",
+        RecordBatch::try_from_iter(vec![("s", Arc::new(structs) as ArrayRef)])?,
+    )?;
+    let consumer_ctx = SessionContext::new();
+    consumer_ctx.register_batch(
+        "t",
+        RecordBatch::try_from_iter(vec![("s", Arc::new(encoded) as ArrayRef)])?,
+    )?;
+
+    let literal = ScalarStructBuilder::new()
+        .with_scalar(fields[0].as_ref().clone(), ScalarValue::Int64(Some(42)))
+        .with_scalar(fields[1].as_ref().clone(), ScalarValue::from("z"))
+        .build()?;
+    let select = vec![coalesce(vec![col("s"), lit(literal)]).alias("r")];
+    let plan = producer_ctx
+        .table("t")
+        .await?
+        .select(select.clone())?
+        .into_unoptimized_plan();
+    // the same query run directly against the run-end encoded table
+    let expected = consumer_ctx
+        .table("t")
+        .await?
+        .select(select)?
+        .collect()
+        .await?;
+    let proto = to_substrait_plan(&plan, &producer_ctx.state())?;
+    let restored = from_substrait_plan(&consumer_ctx.state(), &proto).await?;
+    let actual = DataFrame::new(consumer_ctx.state(), restored)
+        .collect()
+        .await?;
+    assert_eq!(
+        batches_to_sort_string(&expected),
+        batches_to_sort_string(&actual)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_struct_literal_in_nested_list() -> Result<()> {
+    use serde_json::{Value, json};
+
+    /// Replaces each call to `make_array` with a Substrait `Nested` list of its arguments.
+    fn make_array_to_nested_list(value: &mut Value, make_array: u64) {
+        match value {
+            Value::Object(map) => map
+                .values_mut()
+                .for_each(|v| make_array_to_nested_list(v, make_array)),
+            Value::Array(items) => items
+                .iter_mut()
+                .for_each(|v| make_array_to_nested_list(v, make_array)),
+            _ => {}
+        }
+        let Some(function) = value.get("scalarFunction") else {
+            return;
+        };
+        if function["functionReference"].as_u64().unwrap_or(0) != make_array {
+            return;
+        }
+        let values: Vec<Value> = function["arguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|argument| argument["value"].clone())
+            .collect();
+        *value = json!({"nested": {"list": {"values": values}}});
+    }
+
+    let ctx = struct_rows_ctx().await?;
+    let plan = ctx
+        .sql(
+            "SELECT make_array(st, named_struct('a', 0, 'b', 'z')) AS r FROM struct_rows",
+        )
+        .await?
+        .into_optimized_plan()?;
+    assert_struct_literal_roundtrip_rows(&ctx, plan, |json| {
+        let make_array = json["extensions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["extensionFunction"]["name"].as_str() == Some("make_array"))
+            .map(|e| {
+                e["extensionFunction"]["functionAnchor"]
+                    .as_u64()
+                    .unwrap_or(0)
+            })
+            .expect("make_array extension");
+        make_array_to_nested_list(json, make_array);
+    })
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_struct_literal_window_function_argument() -> Result<()> {
+    let ctx = struct_rows_ctx().await?;
+    let plan = ctx
+        .sql("SELECT lag(st, 1, named_struct('a', 0, 'b', 'z')) OVER () AS r FROM struct_rows")
+        .await?
+        .into_optimized_plan()?;
+    assert_struct_literal_roundtrip_rows(&ctx, plan, |_| {}).await
+}
+
+#[tokio::test]
+async fn roundtrip_struct_literal_list_next_to_large_list_column() -> Result<()> {
+    use serde_json::Value;
+
+    /// Removes the type variation of every list literal, which makes a `LargeList`
+    /// literal a plain `List`, as a producer without large lists would send it.
+    fn as_plain_lists(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                if let Some(Value::Object(literal)) = map.get_mut("literal")
+                    && literal.contains_key("list")
+                {
+                    literal.remove("typeVariationReference");
+                }
+                map.values_mut().for_each(as_plain_lists);
+            }
+            Value::Array(items) => items.iter_mut().for_each(as_plain_lists),
+            _ => {}
+        }
+    }
+
+    let ctx = struct_rows_ctx().await?;
+    ctx.sql(
+        "CREATE TABLE large_structs AS SELECT arrow_cast(make_array(st), \
+         'LargeList(Struct(\"a\": Int64, \"b\": Utf8))') AS s FROM struct_rows",
+    )
+    .await?
+    .collect()
+    .await?;
+    let plan = ctx
+        .sql("SELECT coalesce(s, [named_struct('a', 0, 'b', 'z')]) AS r FROM large_structs")
+        .await?
+        .into_optimized_plan()?;
+    assert_struct_literal_roundtrip_rows(&ctx, plan, as_plain_lists).await
+}
+
 // Sibling lambda parameter names may repeat, but nested captures must still
 // resolve against their own enclosing scopes during optimization and execution.
 #[tokio::test]

@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use super::literal::name_struct_literals_like_siblings;
 use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::DFSchema;
 use datafusion::logical_expr::{Case, Expr};
@@ -56,7 +57,7 @@ pub async fn from_if_then(
         ));
     }
     // Parse `else`
-    let else_expr = match &if_then.r#else {
+    let mut else_expr = match &if_then.r#else {
         Some(e) => Some(Box::new(
             consumer
                 .consume_expression(e, input_schema, context)
@@ -64,6 +65,13 @@ pub async fn from_if_then(
         )),
         None => None,
     };
+    // the branches' results must have the same type, field names included
+    let mut results = when_then_expr
+        .iter_mut()
+        .map(|(_, then)| then.as_mut())
+        .chain(else_expr.as_deref_mut())
+        .collect::<Vec<_>>();
+    name_struct_literals_like_siblings(&mut results, input_schema);
     Ok(Expr::Case(Case {
         expr,
         when_then_expr,

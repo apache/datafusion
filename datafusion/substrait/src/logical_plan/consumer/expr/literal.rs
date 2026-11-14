@@ -19,15 +19,20 @@ use crate::variation_const::{
     TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
-use datafusion::arrow::array::{AsArray, MapArray, new_empty_array};
+use datafusion::arrow::array::{
+    Array, ArrayData, AsArray, MapArray, make_array, new_empty_array,
+};
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::datatypes::{Field, IntervalDayTime, IntervalMonthDayNano};
+use datafusion::arrow::datatypes::{
+    DataType, Field, FieldRef, Fields, IntervalDayTime, IntervalMonthDayNano,
+};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::common::{
-    ScalarValue, not_impl_err, plan_err, substrait_datafusion_err, substrait_err,
+    DFSchema, ScalarValue, not_impl_err, plan_err, substrait_datafusion_err,
+    substrait_err,
 };
-use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::{Expr, ExprSchemable};
 use prost::Message;
 use std::sync::Arc;
 use substrait::proto;
@@ -571,6 +576,214 @@ pub(crate) fn from_substrait_literal(
     };
 
     Ok(scalar_value)
+}
+
+/// Gives struct-typed literals among `exprs` the field names of an expression of the
+/// same shape next to them.
+///
+/// Substrait types carry no struct field names, so a struct literal is consumed with
+/// generated names (`c0`, `c1`, ...). Next to a column of the same shape, as in
+/// `coalesce(s, [])` with `s: List<Struct{a, b}>`, the literal would be
+/// `List<Struct{c0, c1}>`, and DataFusion matches struct fields by name, so the two types
+/// can't be unified. Substrait matches struct fields by position, so taking the column's
+/// names keeps the meaning of the plan.
+pub(crate) fn name_struct_literals_like_siblings(
+    exprs: &mut [&mut Expr],
+    input_schema: &DFSchema,
+) {
+    // the names come from the first expression that isn't a literal and contains a struct
+    let Some(named_type) = exprs
+        .iter()
+        .filter(|e| !is_literal(e) && !matches!(***e, Expr::Lambda(_)))
+        .filter_map(|e| e.get_type(input_schema).ok())
+        .find(contains_struct)
+    else {
+        return;
+    };
+
+    for expr in exprs.iter_mut() {
+        name_struct_literal_like(expr, &named_type);
+    }
+}
+
+/// If `expr` is a struct-typed literal, possibly aliased, gives it the field names of
+/// `named_type` when the two have the same shape. Anything else is left unchanged.
+pub(crate) fn name_struct_literal_like(expr: &mut Expr, named_type: &DataType) {
+    match expr {
+        Expr::Alias(alias) => name_struct_literal_like(&mut alias.expr, named_type),
+        Expr::Literal(value, _) => {
+            let value_type = value.data_type();
+            if !contains_struct(&value_type) {
+                return;
+            }
+            let Some(renamed_type) = with_field_names_of(&value_type, named_type) else {
+                return;
+            };
+            // if renaming fails, keep the literal: coercion reports the mismatch as before
+            if let Ok(renamed) = with_data_type(value, &renamed_type) {
+                *value = renamed;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Returns true if `expr` is a literal, possibly aliased.
+pub(crate) fn is_literal(expr: &Expr) -> bool {
+    match expr {
+        Expr::Alias(alias) => is_literal(&alias.expr),
+        Expr::Literal(..) => true,
+        _ => false,
+    }
+}
+
+/// Returns true if `expr` is a literal whose type contains a struct, possibly aliased.
+pub(crate) fn is_struct_literal(expr: &Expr) -> bool {
+    match expr {
+        Expr::Alias(alias) => is_struct_literal(&alias.expr),
+        Expr::Literal(value, _) => contains_struct(&value.data_type()),
+        _ => false,
+    }
+}
+
+pub(crate) fn contains_struct(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Struct(_) => true,
+        DataType::List(f)
+        | DataType::LargeList(f)
+        | DataType::FixedSizeList(f, _)
+        | DataType::Map(f, _) => contains_struct(f.data_type()),
+        DataType::Dictionary(_, value) => contains_struct(value),
+        DataType::RunEndEncoded(_, values) => contains_struct(values.data_type()),
+        _ => false,
+    }
+}
+
+/// Returns `data_type` with the field names (and field metadata) of `named`, at every
+/// level, or `None` if the two don't have the same shape. Everything else, such as leaf
+/// types and nullability, stays as in `data_type`.
+fn with_field_names_of(data_type: &DataType, named: &DataType) -> Option<DataType> {
+    let renamed_field = |field: &FieldRef, named: &FieldRef| -> Option<FieldRef> {
+        let data_type = with_field_names_of(field.data_type(), named.data_type())?;
+        Some(Arc::new(
+            Field::new(named.name(), data_type, field.is_nullable())
+                .with_metadata(named.metadata().clone()),
+        ))
+    };
+    match (data_type, named) {
+        (DataType::Struct(fields), DataType::Struct(named_fields)) => {
+            if fields.len() != named_fields.len() {
+                return None;
+            }
+            let fields = fields
+                .iter()
+                .zip(named_fields.iter())
+                .map(|(field, named)| renamed_field(field, named))
+                .collect::<Option<Fields>>()?;
+            Some(DataType::Struct(fields))
+        }
+        // a dictionary literal keeps its keys, which are plain integers; its values take
+        // the names, from the values of a dictionary column or from a plain column
+        (DataType::Dictionary(key, value), named) => {
+            let named = match named {
+                DataType::Dictionary(_, named_value) => named_value.as_ref(),
+                named => named,
+            };
+            Some(DataType::Dictionary(
+                key.clone(),
+                Box::new(with_field_names_of(value, named)?),
+            ))
+        }
+        // a table column can store its values dictionary or run-end encoded, as in
+        // `RunEndEncoded<Int32, Struct{a, b}>`, while the literal next to it is a plain
+        // `Struct{c0, c1}`: the literal takes the names of the encoded values
+        (data_type, DataType::Dictionary(_, named_value)) => {
+            with_field_names_of(data_type, named_value)
+        }
+        (data_type, DataType::RunEndEncoded(_, named_values)) => {
+            with_field_names_of(data_type, named_values.data_type())
+        }
+        // a list literal takes the element names of a list column even if the two use
+        // different list types, as a `List` literal next to a `LargeList` column: the
+        // literal keeps its own list type, and coercion converts between them
+        (DataType::List(field), named) => {
+            Some(DataType::List(renamed_field(field, list_element(named)?)?))
+        }
+        (DataType::LargeList(field), named) => Some(DataType::LargeList(renamed_field(
+            field,
+            list_element(named)?,
+        )?)),
+        (DataType::FixedSizeList(field, size), named) => {
+            if let DataType::FixedSizeList(_, named_size) = named
+                && named_size != size
+            {
+                return None;
+            }
+            let field = renamed_field(field, list_element(named)?)?;
+            Some(DataType::FixedSizeList(field, *size))
+        }
+        (DataType::Map(field, sorted), DataType::Map(named, _)) => {
+            Some(DataType::Map(renamed_field(field, named)?, *sorted))
+        }
+        // types without fields keep their own type; coercion reconciles any difference
+        (data_type, named) if !data_type.is_nested() && !named.is_nested() => {
+            Some(data_type.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Returns the element field of any list type (`List`, `LargeList`, `FixedSizeList`).
+fn list_element(data_type: &DataType) -> Option<&FieldRef> {
+    match data_type {
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _) => Some(field),
+        _ => None,
+    }
+}
+
+/// Returns `value` with `data_type`, which must only differ from the value's type in
+/// field names and metadata.
+fn with_data_type(
+    value: &ScalarValue,
+    data_type: &DataType,
+) -> datafusion::common::Result<ScalarValue> {
+    let data = with_array_data_type(value.to_array()?.to_data(), data_type)?;
+    ScalarValue::try_from_array(&make_array(data), 0)
+}
+
+/// Returns `data` with `data_type`, applied to its children too, as nested arrays keep
+/// their own copy of the field names.
+fn with_array_data_type(
+    data: ArrayData,
+    data_type: &DataType,
+) -> datafusion::common::Result<ArrayData> {
+    let children = match data_type {
+        DataType::Struct(fields) => data
+            .child_data()
+            .iter()
+            .zip(fields.iter())
+            .map(|(child, field)| with_array_data_type(child.clone(), field.data_type()))
+            .collect::<datafusion::common::Result<Vec<_>>>()?,
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _) => vec![with_array_data_type(
+            data.child_data()[0].clone(),
+            field.data_type(),
+        )?],
+        // a dictionary array keeps its values as its only child
+        DataType::Dictionary(_, value) => {
+            vec![with_array_data_type(data.child_data()[0].clone(), value)?]
+        }
+        _ => data.child_data().to_vec(),
+    };
+    Ok(data
+        .into_builder()
+        .data_type(data_type.clone())
+        .child_data(children)
+        .build()?)
 }
 
 #[cfg(test)]
