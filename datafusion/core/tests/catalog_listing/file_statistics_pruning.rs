@@ -406,7 +406,7 @@ async fn volatile_predicate_is_not_evaluated_while_listing() -> Result<()> {
 }
 
 #[tokio::test]
-async fn declared_range_partitioning_preserves_groups() -> Result<()> {
+async fn declared_range_pruning_preserves_partition_indexes() -> Result<()> {
     use datafusion_common::SplitPoint;
     use datafusion_expr::RangePartitioning;
     let dir = fixture(vec![vec![Some(1)], vec![Some(25)]], false, true);
@@ -423,7 +423,21 @@ async fn declared_range_partitioning_preserves_groups() -> Result<()> {
     let plan = table.scan(&ctx.state(), None, &[predicate()], None).await?;
     assert_eq!(
         names(scan_config(&plan)),
-        vec![vec!["f0.parquet"], vec!["f1.parquet"], vec![], vec![]]
+        vec![vec![], vec!["f1.parquet"], vec![], vec![]]
+    );
+    // Empty declared groups retain conservative summary statistics.
+    assert_eq!(scan_config(&plan).statistics().num_rows, Precision::Absent);
+    assert_eq!(
+        scan_config(&plan).file_groups[1]
+            .file_statistics(None)
+            .unwrap()
+            .num_rows,
+        Precision::Exact(1)
+    );
+    ctx.register_table("t", Arc::new(table))?;
+    assert_eq!(
+        rows(&ctx, "select * from t where d >= 20 and d < 40").await?,
+        1
     );
     Ok(())
 }

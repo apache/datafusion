@@ -1418,6 +1418,151 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "parquet")]
+    #[tokio::test]
+    async fn test_list_files_data_filter_does_not_limit_before_pruning() -> Result<()> {
+        let mut config = SessionConfig::new()
+            .with_collect_statistics(true)
+            .with_target_partitions(1);
+        config.options_mut().execution.meta_fetch_concurrency =
+            datafusion_common::config::ConfigNonZeroUsize::try_new(1)?;
+        let ctx = SessionContext::new_with_config(config);
+        let directory = TempDir::new()?;
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        for (name, values) in [("0.parquet", vec![0, 0]), ("1.parquet", vec![20])] {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(arrow::array::Int32Array::from(values))],
+            )?;
+            let file = std::fs::File::create(directory.path().join(name))?;
+            let mut writer =
+                parquet::arrow::ArrowWriter::try_new(file, Arc::clone(&schema), None)?;
+            writer.write(&batch)?;
+            writer.close()?;
+        }
+        let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+            .with_file_extension(".parquet");
+        let table = ListingTable::try_new(
+            ListingTableConfig::new_with_multi_paths(
+                ["0.parquet", "1.parquet"]
+                    .into_iter()
+                    .map(|name| {
+                        ListingTableUrl::parse(
+                            directory.path().join(name).to_str().unwrap(),
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )
+            .with_listing_options(options)
+            .with_schema(schema),
+        )?;
+
+        // Establish that the unfiltered soft limit would stop at the first file.
+        let limited = table
+            .list_files_for_scan(&ctx.state(), &[], Some(1))
+            .await?;
+        assert_eq!(
+            limited
+                .file_groups
+                .iter()
+                .map(|group| group.len())
+                .sum::<usize>(),
+            1
+        );
+        assert_eq!(
+            limited.file_groups[0]
+                .iter()
+                .next()
+                .unwrap()
+                .object_meta
+                .location
+                .filename(),
+            Some("0.parquet")
+        );
+
+        let files = table
+            .list_files_for_scan(&ctx.state(), &[col("a").gt_eq(lit(20_i32))], Some(1))
+            .await?;
+        let paths = files
+            .file_groups
+            .iter()
+            .flat_map(|group| group.iter())
+            .map(|file| file.object_meta.location.filename().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, ["1.parquet"]);
+        assert_eq!(files.statistics.num_rows, Precision::Exact(1));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_files_prunes_normalized_range_boundaries() -> Result<()> {
+        let files = [
+            "bucket/key-prefix/file0",
+            "bucket/key-prefix/file1",
+            "bucket/key-prefix/file2",
+            "bucket/key-prefix/file3",
+        ];
+        let ctx = SessionContext::new();
+        // Logical split points need not have the physical range column's type.
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_output_partitioning(Some(LogicalPartitioning::Range(
+                LogicalRangePartitioning::try_new(
+                    vec![col("a").sort(true, true)],
+                    [10_i64, 20, 30]
+                        .into_iter()
+                        .map(|value| SplitPoint::new(vec![ScalarValue::from(value)]))
+                        .collect(),
+                )?,
+            )));
+        let table = listing_table_with_files(
+            &ctx,
+            &files,
+            "test:///bucket/key-prefix/",
+            opt,
+            Schema::new(vec![Field::new("a", DataType::Int32, true)]),
+        )?;
+
+        for (filter, expected) in [
+            (col("a").lt(lit(10_i32)), vec![1, 0, 0, 0]),
+            (col("a").eq(lit(10_i32)), vec![0, 1, 0, 0]),
+            (col("a").gt_eq(lit(30_i32)), vec![0, 0, 0, 1]),
+            (col("a").is_null(), vec![1, 0, 0, 0]),
+        ] {
+            let listed = table
+                .list_files_for_scan(&ctx.state(), std::slice::from_ref(&filter), Some(1))
+                .await?;
+            assert!(!listed.grouped_by_partition);
+            assert!(listed.partition_split_points.is_empty());
+            assert_eq!(
+                listed
+                    .file_groups
+                    .iter()
+                    .map(|g| g.len())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{filter}"
+            );
+            let scan = table.scan(&ctx.state(), None, &[filter], None).await?;
+            assert_eq!(scan.output_partitioning().partition_count(), 4);
+        }
+        // Invalid pruning expressions are conservative; the normal scan/filter
+        // planning remains responsible for reporting any expression error.
+        let invalid_filter = col("missing").eq(lit(10_i32));
+        let listed = table
+            .list_files_for_scan(&ctx.state(), &[invalid_filter], None)
+            .await?;
+        assert_eq!(
+            listed
+                .file_groups
+                .iter()
+                .map(|g| g.len())
+                .collect::<Vec<_>>(),
+            vec![1, 1, 1, 1]
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_range_output_partitioning_normalizes_split_point_types() -> Result<()> {
         let files = ["bucket/key-prefix/file0"];
