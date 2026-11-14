@@ -8073,6 +8073,24 @@ select regr_slope(column2, column1), regr_intercept(column2, column1), regr_coun
 ----
 NULL NULL 3 NULL 1 4 0 8 0
 
+# regr_r2() is 1 for a horizontal line (all y equal, x not all equal), as in
+# the SQL standard and PostgreSQL. A vertical line (all x equal) stays NULL,
+# even when all y are equal too.
+query RRIRRRRRR
+select regr_slope(column2, column1), regr_intercept(column2, column1), regr_count(column2, column1), regr_r2(column2, column1), regr_avgx(column2, column1), regr_avgy(column2, column1), regr_sxx(column2, column1), regr_syy(column2, column1), regr_sxy(column2, column1) from (values (1,2), (2,2), (3,2));
+----
+0 2 3 1 2 2 2 0 0
+
+query TR rowsort
+select column3, regr_r2(column2, column1)
+from (values (1,5,'horizontal'), (2,5,'horizontal'), (NULL,7,'horizontal'), (3,NULL,'horizontal'),
+    (1,2,'vertical'), (1,4,'vertical'), (1,2,'point'), (1,2,'point'))
+group by column3;
+----
+horizontal 1
+point NULL
+vertical NULL
+
 
 # regr_*() basic tests
 query RRIRRRRRR
