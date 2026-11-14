@@ -406,8 +406,7 @@ jobs:
         with:
           rust-version: stable
       - name: Checkout test data
-        # datafusion-testing is used only with --include-sqlite.
-        run: git submodule update --init --depth=1 testing parquet-testing
+        uses: ./.github/actions/checkout-test-data
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
       - name: Install Python
@@ -477,8 +476,9 @@ jobs:
       - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
       - name: Rust Dependency Cache
@@ -518,8 +518,9 @@ jobs:
       - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -550,8 +551,9 @@ jobs:
       - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -621,8 +623,9 @@ jobs:
       - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - parallel:
           - name: Setup Rust toolchain
             uses: ./.github/actions/setup-builder
@@ -668,8 +671,9 @@ jobs:
       - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -692,8 +696,9 @@ jobs:
       - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -738,8 +743,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Run datafusion-ffi tests
@@ -797,8 +803,9 @@ jobs:
       - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -825,7 +832,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
       - name: Install taplo
         uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
@@ -846,8 +852,9 @@ jobs:
       - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -876,9 +883,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
-
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - parallel:
           - name: Mark repository as safe for git
             # Required for git commands inside container (avoids "dubious ownership" error)

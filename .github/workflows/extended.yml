@@ -51,8 +51,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6  # v2.0.0
       - parallel:
@@ -107,8 +108,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:

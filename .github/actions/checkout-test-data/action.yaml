@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+name: Checkout Arrow and Parquet test data
+description: Check out Arrow and Parquet fixtures without the separate SQLite suite.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        git submodule sync -- testing parquet-testing
+        git submodule update --init --depth=1 testing parquet-testing

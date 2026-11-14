@@ -67,7 +67,7 @@ jobs:
   linux-test:
     name: cargo test (amd64)
     needs: linux-build-lib
-    if: false # Resume after the extended/fuzz experiments.
+    if: false # Disabled while measuring benchmark verification.
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -83,8 +83,7 @@ jobs:
         with:
           rust-version: stable
       - name: Checkout test data
-        # datafusion-testing is used only with --include-sqlite.
-        run: git submodule update --init --depth=1 testing parquet-testing
+        uses: ./.github/actions/checkout-test-data
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
       - name: Install Python
@@ -148,7 +147,7 @@ jobs:
     name: cargo test 'extended_tests' (amd64)
     needs: linux-build-lib
     # Long-running job: run in the merge queue, on release pushes, or manually.
-    if: github.event_name != 'pull_request'
+    if: false # Disabled while measuring benchmark verification.
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:
@@ -156,8 +155,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6  # v2.0.0
       - parallel:
@@ -198,3 +198,37 @@ jobs:
             run: git diff --exit-code
           - name: Cleanup
             run: cargo clean
+
+  verify-benchmark-results:
+    name: verify benchmark results (amd64)
+    needs: linux-build-lib
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    container:
+      image: amd64/rust
+    steps:
+      - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
+      - parallel:
+          - name: Setup Rust toolchain
+            uses: ./.github/actions/setup-builder
+            with:
+              rust-version: stable
+          - name: Generate benchmark data and expected query results
+            run: |
+              mkdir -p datafusion/sqllogictest/test_files/tpch/data
+              git clone https://github.com/databricks/tpch-dbgen.git
+              cd tpch-dbgen
+              make
+              ./dbgen -f -s 0.1
+              mv *.tbl ../datafusion/sqllogictest/test_files/tpch/data
+      - name: Verify that benchmark queries return expected results
+        run: |
+          cargo xtask ci step test benchmark-plan
+          cargo xtask ci step test benchmark-sqllogic
+      - name: Verify Working Directory Clean
+        run: git diff --exit-code
