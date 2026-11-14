@@ -261,7 +261,6 @@ impl StatementExecutor {
                     Some((usize::from(width) / 29 * 29).max(1))
                 }
                 (None, MaxWidth::Unlimited) => Some(0),
-                (None, MaxWidth::Limited(0)) => Some(1),
                 _ => None,
             };
             if let Some(width) = render_width {

@@ -4,6 +4,7 @@
 
 use std::fmt::{Display, Formatter};
 use std::io;
+use std::num::NonZeroU16;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -63,10 +64,11 @@ impl Display for MaxRows {
 /// Maximum output width for tables and explain plans.
 ///
 /// ```
+/// use std::num::NonZeroU16;
 /// use datafusion_cli::print_options::MaxWidth;
 ///
 /// assert_eq!("auto".parse::<MaxWidth>().unwrap(), MaxWidth::Auto);
-/// assert_eq!("100".parse::<MaxWidth>().unwrap(), MaxWidth::Limited(100));
+/// assert_eq!("100".parse::<MaxWidth>().unwrap(), MaxWidth::Limited(NonZeroU16::new(100).unwrap()));
 /// assert_eq!("0".parse::<MaxWidth>().unwrap(), MaxWidth::Unlimited);
 /// ```
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -77,7 +79,7 @@ pub enum MaxWidth {
     /// Do not limit output width.
     Unlimited,
     /// Limit output to this many terminal columns.
-    Limited(u16),
+    Limited(NonZeroU16),
 }
 
 impl FromStr for MaxWidth {
@@ -88,11 +90,9 @@ impl FromStr for MaxWidth {
             "auto" => Ok(Self::Auto),
             "inf" | "infinite" | "none" | "0" => Ok(Self::Unlimited),
             _ => value
-                .parse::<u16>()
-                .ok()
-                .filter(|width| *width > 0)
+                .parse::<NonZeroU16>()
                 .map(Self::Limited)
-                .ok_or_else(|| {
+                .map_err(|_| {
                     format!(
                         "Invalid maxwidth {value}. Expected auto, 1..65535, or 0/inf for no limit."
                     )
@@ -117,8 +117,8 @@ impl MaxWidth {
             Self::Auto => terminal_size::terminal_size_of(io::stdout())
                 .map(|(width, _)| width.0)
                 .filter(|width| *width > 0),
-            Self::Unlimited | Self::Limited(0) => None,
-            Self::Limited(width) => Some(width),
+            Self::Unlimited => None,
+            Self::Limited(width) => Some(width.get()),
         }
     }
 }
@@ -193,18 +193,13 @@ impl PrintOptions {
         let stdout = io::stdout();
         let mut writer = stdout.lock();
         let width = table_options.width;
-        let format = if self.format == PrintFormat::Automatic && width.is_some() {
-            PrintFormat::Table
-        } else {
-            self.format
-        };
-        let maxrows = if format == PrintFormat::Table {
+        let maxrows = if self.format == PrintFormat::Table {
             table_options.maxrows
         } else {
             MaxRows::Unlimited
         };
 
-        format.print_batches_with_options(
+        self.format.print_batches_with_options(
             &mut writer,
             schema,
             batches,

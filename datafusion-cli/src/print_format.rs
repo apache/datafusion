@@ -157,18 +157,8 @@ fn print_table_batches<W: std::io::Write>(
             rows.push(
                 formatters
                     .iter()
-                    .enumerate()
-                    .map(|(column, formatter)| {
-                        let mut value = formatter.value(row).try_to_string()?;
-                        if width.is_some()
-                            && preserve_indent
-                                .is_some_and(|option| option.column == column)
-                        {
-                            value.truncate(value.trim_end_matches('\n').len());
-                        }
-                        Ok(value)
-                    })
-                    .collect::<Result<Vec<_>>>()?,
+                    .map(|formatter| formatter.value(row).try_to_string())
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
             );
         }
         if over_limit {
@@ -226,10 +216,7 @@ fn print_table_batches<W: std::io::Write>(
                 &vertical_rows,
                 Some(width),
                 over_limit && index + 1 == visible_rows,
-                preserve_indent.map(|option| PreserveIndent {
-                    column: 1,
-                    ..option
-                }),
+                None,
             )?;
         }
     } else {
@@ -273,30 +260,30 @@ fn print_table<W: std::io::Write>(
             table.modify(Cell::new(row, 0), Span::column(0));
         }
     }
-    table.with(
-        Width::wrap(width.map_or(usize::MAX, usize::from))
-            .keep_words(true)
-            .priority(Priority::max(false)),
-    );
-    if width.is_some()
-        && let Some(option) = preserve_indent
-    {
-        let widths = table
-            .get_dimension()
-            .get_widths()
-            .expect("Width::wrap estimates column widths")
-            .to_vec();
-        for (row_index, row) in rows.iter().enumerate() {
-            let text = wrap_indented(
-                &row[option.column],
-                widths[option.column].saturating_sub(COLUMN_PADDING_WIDTH),
-                option.continuation_indent,
-            );
-            table
-                .get_records_mut()
-                .set(Position::new(row_index + 1, option.column), text);
+    if let Some(width) = width {
+        table.with(
+            Width::wrap(usize::from(width))
+                .keep_words(true)
+                .priority(Priority::max(false)),
+        );
+        if let Some(option) = preserve_indent {
+            let widths = table
+                .get_dimension()
+                .get_widths()
+                .expect("Width::wrap estimates column widths")
+                .to_vec();
+            for (row_index, row) in rows.iter().enumerate() {
+                let text = wrap_indented(
+                    &row[option.column],
+                    widths[option.column].saturating_sub(COLUMN_PADDING_WIDTH),
+                    option.continuation_indent,
+                );
+                table
+                    .get_records_mut()
+                    .set(Position::new(row_index + 1, option.column), text);
+            }
+            table.get_dimension_mut().clear_height();
         }
-        table.get_dimension_mut().clear_height();
     }
     writeln!(writer, "{table}")?;
     Ok(())
@@ -344,7 +331,7 @@ fn print_wrapped<W: std::io::Write>(
 
 fn wrap_indented(text: &str, width: usize, continuation_indent: usize) -> String {
     let mut output = String::new();
-    for (index, line) in text.split('\n').enumerate() {
+    for (index, line) in text.trim_end_matches('\n').split('\n').enumerate() {
         if index > 0 {
             output.push('\n');
         }
