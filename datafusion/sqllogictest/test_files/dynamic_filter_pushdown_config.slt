@@ -1163,3 +1163,93 @@ SET datafusion.execution.target_partitions = 4;
 
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
+
+# Regression for https://github.com/apache/datafusion/issues/26029.
+# When the TopK filter is pushed into a scan, each sort key is rewritten in
+# terms of the file's columns. One row per row group lets TopK tighten its
+# filter before the answer rows, which are last in each file, are read.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query I
+COPY (SELECT value AS b FROM generate_series(0, 19))
+TO 'test_files/scratch/dynamic_filter_pushdown_config/issue_26029.parquet'
+STORED AS PARQUET OPTIONS ('format.max_row_group_size' '1');
+----
+20
+
+statement ok
+CREATE EXTERNAL TABLE issue_26029 STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/issue_26029.parquet';
+
+# The first sort key contains the second one, `b`. The whole CASE must be
+# rewritten, not only the `b` inside it. `p` and `q` are equal, so the
+# expected rows are easy to work out.
+#
+# The middle projection's column order is not stable between runs, so those
+# parts are ignored. The check is that TopK's filter reaches the scan.
+query TT
+EXPLAIN WITH s AS (SELECT b, 19 - b AS p, 19 - b AS q FROM issue_26029)
+SELECT p FROM s ORDER BY CASE WHEN b % 2 = 0 THEN p ELSE q END, b LIMIT 3;
+----
+physical_plan
+01)ProjectionExec: expr=[p@0 as p]
+02)--SortExec: TopK(fetch=3), expr=[<slt:ignore>], preserve_partitioning=[false]
+03)----ProjectionExec: expr=[<slt:ignore>]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/issue_26029.parquet]]}, projection=[19 - b@0 as __common_expr_1, b], output_ordering=[b@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+query I
+WITH s AS (SELECT b, 19 - b AS p, 19 - b AS q FROM issue_26029)
+SELECT p FROM s ORDER BY CASE WHEN b % 2 = 0 THEN p ELSE q END, b LIMIT 3;
+----
+0
+1
+2
+
+query I
+COPY (SELECT value AS a, 19 - value AS b FROM generate_series(0, 19))
+TO 'test_files/scratch/dynamic_filter_pushdown_config/issue_26029_swap.parquet'
+STORED AS PARQUET OPTIONS ('format.max_row_group_size' '1');
+----
+20
+
+statement ok
+CREATE EXTERNAL TABLE issue_26029_swap STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/issue_26029_swap.parquet';
+
+# In the scan, the sort key `a` becomes `b@1 + 1`. That `b@1` is the file's
+# column, not the sort key `b`, so it must not be rewritten again.
+query TT
+EXPLAIN SELECT a, b FROM (SELECT b + 1 AS a, a AS b FROM issue_26029_swap) ORDER BY a, b LIMIT 3;
+----
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/issue_26029_swap.parquet]]}, projection=[b@1 + 1 as a, a@0 as b], file_type=parquet, predicate=DynamicFilter [ empty ], sort_order_for_reorder=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], dynamic_rg_pruning=eligible
+
+query II
+SELECT a, b FROM (SELECT b + 1 AS a, a AS b FROM issue_26029_swap) ORDER BY a, b LIMIT 3;
+----
+1 19
+2 18
+3 17
+
+statement ok
+DROP TABLE issue_26029;
+
+statement ok
+DROP TABLE issue_26029_swap;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
