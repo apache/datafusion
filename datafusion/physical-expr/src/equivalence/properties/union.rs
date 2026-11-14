@@ -67,7 +67,8 @@ fn calculate_union_binary(
     for class in lhs.eq_group().iter() {
         for (i, left) in class.iter().enumerate() {
             for right in class.iter().skip(i + 1) {
-                if rhs.eq_group().exprs_equal(left, right) {
+                let rhs_class = rhs.eq_group().get_equivalence_class(left);
+                if rhs_class.is_some_and(|cls| cls.contains(right)) {
                     eq_group.add_equal_conditions(Arc::clone(left), Arc::clone(right));
                 }
             }
