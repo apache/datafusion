@@ -101,9 +101,9 @@ pub(super) struct BatchedJoinProcessor {
     hashes_buffer: Vec<u64>,
     probe_indices_buffer: Vec<u32>,
     build_indices_buffer: Vec<u64>,
-    /// Coalescer for materialized output. Also handle the fetch/limit pushed into
-    /// the hash join for early stop. (e.g. for HashJoinExec(fetch=10), the whole
-    /// execution can stop early after 10 output rows materialized)
+    /// Coalescer for materialized output. Also handles the fetch/limit pushed into
+    /// the hash join for an early stop (e.g., for HashJoinExec(fetch=10), the whole
+    /// execution can stop early after 10 output rows are materialized).
     output: LimitedBatchCoalescer,
 }
 
@@ -280,7 +280,7 @@ impl BatchedJoinProcessor {
                 }
                 Phase::Finished => return Ok(JoinStep::Finished),
             };
-            // Opeartor level limit reached, stop probing
+            // Operator-level limit reached; stop probing.
             // See comments at `output` for details.
             if self.output.push_batch(batch)? == PushBatchStatus::LimitReached {
                 self.release_probe();

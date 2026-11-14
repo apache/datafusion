@@ -23,7 +23,7 @@ use crate::joins::hash_join::shared_bounds::{
 };
 use crate::joins::utils::{BuildProbeJoinMetrics, OnceFut};
 
-/// [`RegularBuildData`] plus cross-partition coordination, only one partition is
+/// [`RegularBuildData`] plus cross-partition coordination. Only one partition is
 /// responsible for final build-side unmatched output for Left/Full joins.
 pub(super) struct JoinBuildState {
     unmatched: Option<Mutex<UnmatchedRows>>,
@@ -73,10 +73,10 @@ impl JoinBuildState {
     }
 }
 
-/// Collecting the build side data of hash join.
+/// Collecting the build-side data of a hash join.
 ///
 /// It handles coordination/synchronization among all parallel partitions for:
-/// - Input batches collecting
+/// - Input batch collection
 /// - Dynamic filter preparation
 pub(super) struct HashJoinBuild {
     partition: usize,
@@ -85,9 +85,9 @@ pub(super) struct HashJoinBuild {
     // ---------------------------------------------------
     // Shared structures for coordination among partitions.
     // ---------------------------------------------------
-    /// Coordination for dynamic filter
+    /// Coordination for the dynamic filter.
     build_accumulator: Option<Arc<SharedBuildAccumulator>>,
-    /// Coordination for buffered input batches
+    /// Coordination for buffered input batches.
     left_fut: OnceFut<JoinBuildState>,
 
     metrics: BuildProbeJoinMetrics,
@@ -110,18 +110,18 @@ impl HashJoinBuild {
         }
     }
 
-    /// Prepare the build-side data and handle coordinations.
+    /// Prepare the build-side data and handle coordination.
     ///
-    /// It handles coordination for build-side data preparation, and dynamic filters.
+    /// It handles coordination for build-side data preparation and dynamic filters.
     ///
-    /// Example for coordination for build-side data: (coordination for dynamic
-    /// filter is similar, after all partition is done, it can publish the dynamic
-    /// filter to pre-filter probe side)
+    /// Example of coordination for build-side data (coordination for the dynamic
+    /// filter is similar; after all partitions are done, it can publish the dynamic
+    /// filter to pre-filter the probe side):
     ///
     /// ```text
     /// With shared build-side configuration:
     /// - partition0: call `prepare()`, and execute and cache all build-side data
-    /// - partition1~k: call `prepare()` for synchronization, wait partition 0 finish
+    /// - partition1~k: call `prepare()` for synchronization, wait for partition 0 to finish
     ///   and reuse the shared build-side data
     /// ```
     pub(super) async fn prepare(mut self) -> Result<Arc<JoinBuildState>> {
@@ -161,7 +161,7 @@ impl HashJoinBuild {
                 }
             };
 
-            // Handle coordination for dynamic filter
+            // Handle coordination for the dynamic filter.
             accumulator.report_build_data(report).await?;
         }
         Ok(build)

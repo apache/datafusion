@@ -3,10 +3,10 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! State machine implementation for the regular hash join execution path. (Inner/
-//! Left/Right/Full join types are regular join)
+//! Left/Right/Full join types are regular joins.)
 //!
-//! HashJoinExec is getting incrementally migrated to separated streams, see issue
-//! for detail:
+//! HashJoinExec is getting incrementally migrated to separate streams; see the issue
+//! for details:
 //! - <https://github.com/apache/datafusion/issues/26361>
 
 use std::sync::Arc;
@@ -26,10 +26,10 @@ use crate::joins::utils::BuildProbeJoinMetrics;
 use crate::metrics::BaselineMetrics;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
-/// Implementation for regular (Inner/Left/Right/Full) hash join.
-/// 
-/// See [`super`] documentations for the high-level architecture.
-/// See [`Self::into_stream`] is the entry point for execution.
+/// Implementation for regular (Inner/Left/Right/Full) hash joins.
+///
+/// See the [`super`] documentation for the high-level architecture.
+/// [`Self::into_stream`] is the entry point for execution.
 pub(super) struct RegularHashJoinStream {
     schema: SchemaRef,
     metrics: BaselineMetrics,
@@ -83,10 +83,10 @@ impl RegularHashJoinStream {
     ///
     /// # Stages
     ///
-    /// - Building: Load the build-side data, and handle cross-partition synchronization,
-    ///   see [`HashJoinBuild`] for different physical strategies
-    /// - Probing: Joining probe batch with build data incrementally, until probe
-    ///   side input is exhausted.
+    /// - Building: Load the build-side data, and handle cross-partition synchronization.
+    ///   See [`HashJoinBuild`] for different physical strategies.
+    /// - Probing: Join probe batches with build data incrementally, until the
+    ///   probe-side input is exhausted.
     /// - Outputting: Drain buffered output, then emit unmatched build rows for
     ///   left/full joins.
     ///

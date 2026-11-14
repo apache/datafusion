@@ -4,9 +4,9 @@
 
 //! [`HashJoinExec`]: implementation for hash join.
 //!
-//! # Regular(inner/left/right/full) Hash Join implementation
+//! # Regular (inner/left/right/full) Hash Join implementation
 //!
-//! There are three major layers during execution
+//! There are three major layers during execution:
 //!
 //! 1. [`RegularHashJoinStream::into_stream`]: the state machine entry point,
 //!    driving the build, probe, and final output stages.

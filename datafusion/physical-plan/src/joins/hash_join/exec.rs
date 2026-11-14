@@ -266,14 +266,14 @@ pub(super) struct BuildData<M> {
     pub(super) values: Vec<ArrayRef>,
     /// Bounds computed from the build side; absent for an empty partition.
     ///
-    /// e.g. we have query `t1 JOIN t2 USING c1,c2`, the bounds can be
+    /// For example, for the query `t1 JOIN t2 USING (c1, c2)`, the bounds can be:
     /// - c1: `[0,100]`
     /// - c2: `[10,20]`
     ///
-    /// Representing each join key's range for this partition to pre-filter probing.
+    /// These represent each join key's range for this partition to pre-filter probing.
     pub(super) bounds: Option<PartitionBounds>,
     /// Used for pre-filter probing, similar to [`Self::bounds`], but in different
-    /// representations:  IN-list values or a hash-table reference.
+    /// representations: IN-list values or a hash-table reference.
     pub(super) membership: PushdownStrategy,
     // Keep the reservation after the allocations it accounts for.
     pub(super) reservation: MemoryReservation,
@@ -963,7 +963,7 @@ pub struct HashJoinExec {
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the hash table creation.
     left_fut: Arc<OnceAsync<JoinLeftData>>,
-    /// Left side future only used in regular hash join.
+    /// Left-side future used only in regular hash joins.
     regular_left_fut: Arc<OnceAsync<JoinBuildState>>,
     /// Immutable build attached by an embedding executor.
     prepared_build: Option<Arc<PreparedHashJoinBuild>>,
@@ -1857,7 +1857,7 @@ impl ExecutionPlan for HashJoinExec {
             .flatten()
             .flatten();
 
-        // See comments at `enable_migration_hash_join` for details
+        // See the comments on `enable_migration_hash_join` for details.
         let use_regular = if let Some(prepared) = &self.prepared_build {
             // Public join fields can change after builder validation.
             prepared.validate(self)?;
@@ -1921,7 +1921,7 @@ impl ExecutionPlan for HashJoinExec {
             .map(|(_, right_expr)| Arc::clone(right_expr))
             .collect::<Vec<_>>();
 
-        // For `RegularHashJoinStream` path, prepare for build-side data, and construct
+        // For the `RegularHashJoinStream` path, prepare build-side data and construct
         // the final stream.
         if let Some(kind) = regular_join {
             let left_fut = match (&self.prepared_build, self.mode) {
