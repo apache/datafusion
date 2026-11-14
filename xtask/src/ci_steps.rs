@@ -41,7 +41,7 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]",
+        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|extended-build|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
         runner: StepContext::run_test,
@@ -446,8 +446,12 @@ impl StepContext {
                     cmd_builder.args(["limit.slt"]);
                 }
             }
-            "extended" => {
-                cmd_builder.doc("Run the core extended tests.");
+            "extended" | "extended-build" => {
+                cmd_builder.doc(if variant == "extended-build" {
+                    "Build the core extended tests without running them."
+                } else {
+                    "Run the core extended tests."
+                });
                 cmd_builder
                     .program("cargo")
                     .args([
@@ -464,6 +468,9 @@ impl StepContext {
                         "avro,backtrace,extended_tests,parquet_encryption",
                     ])
                     .env("RUST_BACKTRACE", "1");
+                if variant == "extended-build" {
+                    cmd_builder.args(["--no-run"]);
+                }
             }
             "fuzz" => {
                 cmd_builder.doc("Run the centralized fuzz tests.");
@@ -583,7 +590,7 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
 
-    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]";
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|extended-build|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]";
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
@@ -961,6 +968,24 @@ cargo test \
 -p datafusion-fuzz \
 --test extended_tests \
 --features avro,backtrace,extended_tests,parquet_encryption
+")
+                },
+            },
+            Cmd {
+                command: &["test", "extended-build"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+# Build the core extended tests without running them.
+
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo test \
+--profile ci \
+-p datafusion \
+-p datafusion-fuzz \
+--test extended_tests \
+--features avro,backtrace,extended_tests,parquet_encryption \
+--no-run
 ")
                 },
             },
