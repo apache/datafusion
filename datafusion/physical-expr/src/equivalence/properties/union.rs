@@ -66,9 +66,11 @@ fn calculate_union_binary(
     let mut eq_group = EquivalenceGroup::default();
     for class in lhs.eq_group().iter() {
         for (i, left) in class.iter().enumerate() {
+            let Some(rhs_class) = rhs.eq_group().get_equivalence_class(left) else {
+                continue;
+            };
             for right in class.iter().skip(i + 1) {
-                let rhs_class = rhs.eq_group().get_equivalence_class(left);
-                if rhs_class.is_some_and(|cls| cls.contains(right)) {
+                if rhs_class.contains(right) {
                     eq_group.add_equal_conditions(Arc::clone(left), Arc::clone(right));
                 }
             }
