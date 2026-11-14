@@ -66,6 +66,10 @@ jobs:
             run: |
               sudo apt-get update
               sudo apt-get install -y protobuf-compiler
+      - name: Configure compiler cache
+        id: sccache
+        if: vars.USE_RUNS_ON == 'true'
+        uses: ./.github/actions/setup-sccache
       # For debugging, test binaries can be large.
       - name: Show available disk space
         run: |
@@ -89,6 +93,9 @@ jobs:
           # Tracker: https://github.com/apache/datafusion/issues/27082
           - name: Run unmigrated fuzzers with more iterations
             run: cargo xtask ci step test fuzz-legacy
+      - name: Report compiler cache statistics
+        if: ${{ always() && steps.sccache.outcome == 'success' }}
+        run: sccache --show-stats
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code
@@ -115,11 +122,19 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Configure compiler cache
+        id: sccache
+        if: vars.USE_RUNS_ON == 'true'
+        uses: ./.github/actions/setup-sccache
       - name: Run tests
         run: |
           cargo xtask ci step test hash-collisions
           cd datafusion
           cargo clean
+      - name: Report compiler cache statistics
+        if: ${{ always() && steps.sccache.outcome == 'success' }}
+        run: sccache --show-stats
+
 
   sqllogictest-sqlite:
     name: "Run sqllogictests with the sqlite test suite"
@@ -140,5 +155,12 @@ jobs:
           - name: Install protobuf compiler
             run: |
               apt-get update && apt-get install -y protobuf-compiler
+      - name: Configure compiler cache
+        id: sccache
+        if: vars.USE_RUNS_ON == 'true'
+        uses: ./.github/actions/setup-sccache
       - name: Run sqllogictest
         run: cargo xtask ci step test sqlite
+      - name: Report compiler cache statistics
+        if: ${{ always() && steps.sccache.outcome == 'success' }}
+        run: sccache --show-stats
