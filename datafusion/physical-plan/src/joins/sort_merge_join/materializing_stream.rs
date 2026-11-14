@@ -37,6 +37,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatchOptions;
 use datafusion_common::cast::as_uint64_array;
 use datafusion_common::instant::Instant;
+use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, exec_err, internal_err,
 };
@@ -258,7 +259,7 @@ pub(super) struct BufferedBatch {
     pub join_arrays_mem: usize,
     /// Actual amount tracked in the memory reservation for this batch.
     ///
-    /// - `InMemory`: equals `size_estimation` (full batch + join_arrays + metadata)
+    /// - `InMemory`: equals `size_estimation` (full batch + unshared join_arrays + metadata)
     /// - `Spilled`: equals `join_arrays_mem` (join key arrays stay in memory)
     ///
     /// Invariant: `free_reservation()` shrinks by exactly this amount, so we never
@@ -283,7 +284,7 @@ impl BufferedBatch {
 
         // Estimation is calculated as
         //   inner batch size
-        // + join keys size
+        // + join keys size, excluding buffers shared with the batch
         // + worst case null_joined (as vector capacity * element size)
         // + Range size
         // + size of this estimation
@@ -292,8 +293,16 @@ impl BufferedBatch {
             .map(|arr| arr.get_array_memory_size())
             .sum();
 
+        // A key that is a plain column is the batch's own array.
+        let mut counter = RecordBatchMemoryCounter::new();
+        counter.count_batch(&batch);
+        let unshared_join_arrays_mem: usize = join_arrays
+            .iter()
+            .map(|arr| counter.count_array(arr.as_ref()))
+            .sum();
+
         let size_estimation = batch.get_array_memory_size()
-            + join_arrays_mem
+            + unshared_join_arrays_mem
             + batch.num_rows().next_power_of_two() * size_of::<usize>()
             + size_of::<Range<usize>>()
             + size_of::<usize>();
@@ -1110,6 +1119,8 @@ impl MaterializingSortMergeJoinStream {
 
                 match spill_stream.next().await.transpose()? {
                     Some(batch) => {
+                        // Release the pre-spill key buffers the restored batch replaced.
+                        bb.join_arrays = join_arrays(&batch, &self.on_buffered)?;
                         // Transition the batch back to InMemory
                         bb.batch = BufferedBatchState::InMemory(batch);
                         self.spilled_batch_count -= 1;
