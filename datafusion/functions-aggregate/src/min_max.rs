@@ -56,6 +56,77 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     }
 }
 
+/// Return the physical input type accepted by min/max.
+///
+/// Dictionary-encoded Utf8 can be consumed directly by the string
+/// accumulators. Other dictionary and run-end encoded inputs retain the
+/// existing behavior and are coerced to their logical value type.
+fn get_min_max_input_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
+    if input_types.len() != 1 {
+        return exec_err!(
+            "min/max was called with {} arguments. It requires only 1.",
+            input_types.len()
+        );
+    }
+
+    match &input_types[0] {
+        DataType::Dictionary(_, value_type) if value_type.as_ref() == &DataType::Utf8 => {
+            Ok(input_types.to_vec())
+        }
+        _ => get_min_max_result_type(input_types),
+    }
+}
+
+/// Adapts the single-group accumulator when type coercion preserves a
+/// dictionary input. The inner accumulator compares dictionary values
+/// directly, while aggregate state and output use the logical value type.
+#[derive(Debug)]
+struct DictionaryInputAccumulator<A> {
+    inner: A,
+}
+
+impl<A> DictionaryInputAccumulator<A> {
+    fn new(inner: A) -> Self {
+        Self { inner }
+    }
+}
+
+impl<A: Accumulator> Accumulator for DictionaryInputAccumulator<A> {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.inner.update_batch(values)
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.inner.merge_batch(states)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(self.inner.state()?.iter().map(logical_scalar).collect())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        self.inner.evaluate().map(|value| logical_scalar(&value))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self) - size_of_val(&self.inner) + self.inner.size()
+    }
+}
+
+fn has_dictionary_input(args: &AccumulatorArgs<'_>) -> bool {
+    matches!(
+        args.expr_fields.first().map(|field| field.data_type()),
+        Some(DataType::Dictionary(_, _))
+    )
+}
+
+fn logical_scalar(value: &ScalarValue) -> ScalarValue {
+    match value {
+        ScalarValue::Dictionary(_, value) => logical_scalar(value),
+        value => value.clone(),
+    }
+}
+
 #[user_doc(
     doc_section(label = "General Functions"),
     description = "Returns the maximum value in the specified column.",
@@ -201,7 +272,7 @@ impl FromColumnStatistics for Max {
         if let Precision::Exact(ref val) = col_stats.max_value
             && !val.is_null()
         {
-            return Some(val.clone());
+            return Some(logical_scalar(val));
         }
         None
     }
@@ -217,7 +288,7 @@ impl AggregateUDFImpl for Max {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].to_owned())
+        Ok(get_min_max_result_type(arg_types)?[0].clone())
     }
 
     fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
@@ -225,9 +296,15 @@ impl AggregateUDFImpl for Max {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MaxAccumulator::try_new(
-            acc_args.return_field.data_type(),
-        )?))
+        let data_type = acc_args.return_field.data_type();
+        if has_dictionary_input(&acc_args) {
+            let input_type = acc_args.expr_fields[0].data_type();
+            Ok(Box::new(DictionaryInputAccumulator::new(
+                MaxAccumulator::try_new(input_type)?,
+            )))
+        } else {
+            Ok(Box::new(MaxAccumulator::try_new(data_type)?))
+        }
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
@@ -297,7 +374,7 @@ impl AggregateUDFImpl for Max {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        get_min_max_result_type(arg_types)
+        get_min_max_input_type(arg_types)
     }
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
         datafusion_expr::ReversedUDAF::Identical
@@ -350,6 +427,10 @@ impl Accumulator for SlidingMaxAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         for idx in 0..values[0].len() {
             let val = ScalarValue::try_from_array(&values[0], idx)?;
+            let val = match val {
+                ScalarValue::Dictionary(_, value) => *value,
+                value => value,
+            };
             if !val.is_null() {
                 self.moving_max.push(val);
             }
@@ -433,7 +514,7 @@ impl FromColumnStatistics for Min {
         if let Precision::Exact(ref val) = col_stats.min_value
             && !val.is_null()
         {
-            return Some(val.clone());
+            return Some(logical_scalar(val));
         }
         None
     }
@@ -449,7 +530,7 @@ impl AggregateUDFImpl for Min {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].to_owned())
+        Ok(get_min_max_result_type(arg_types)?[0].clone())
     }
 
     fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
@@ -457,9 +538,15 @@ impl AggregateUDFImpl for Min {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MinAccumulator::try_new(
-            acc_args.return_field.data_type(),
-        )?))
+        let data_type = acc_args.return_field.data_type();
+        if has_dictionary_input(&acc_args) {
+            let input_type = acc_args.expr_fields[0].data_type();
+            Ok(Box::new(DictionaryInputAccumulator::new(
+                MinAccumulator::try_new(input_type)?,
+            )))
+        } else {
+            Ok(Box::new(MinAccumulator::try_new(data_type)?))
+        }
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
@@ -533,7 +620,7 @@ impl AggregateUDFImpl for Min {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        get_min_max_result_type(arg_types)
+        get_min_max_input_type(arg_types)
     }
 
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
@@ -587,6 +674,10 @@ impl Accumulator for SlidingMinAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         for idx in 0..values[0].len() {
             let val = ScalarValue::try_from_array(&values[0], idx)?;
+            let val = match val {
+                ScalarValue::Dictionary(_, value) => *value,
+                value => value,
+            };
             if !val.is_null() {
                 self.moving_min.push(val);
             }
@@ -1078,6 +1169,7 @@ mod tests {
         let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
             Arc::new(expressions::Column::new("v", 0));
         let expr_field = Arc::new(Field::new("v", data_type.clone(), true));
+        let return_type = udf.return_type(std::slice::from_ref(&data_type))?;
         let args = || AccumulatorArgs {
             schema: &schema,
             expr_fields: std::slice::from_ref(&expr_field),
@@ -1086,7 +1178,7 @@ mod tests {
             name: udf.name(),
             ignore_nulls: false,
             is_reversed: false,
-            return_field: Arc::new(Field::new(udf.name(), data_type.clone(), true)),
+            return_field: Arc::new(Field::new(udf.name(), return_type.clone(), true)),
             order_bys: &[],
         };
 
@@ -1112,8 +1204,25 @@ mod tests {
         second.merge_batch(&state, &merge_group_indices, total_num_groups)?;
 
         let result = second.evaluate(EmitTo::All)?;
-        assert_eq!(result.data_type(), &data_type);
+        assert_eq!(result.data_type(), &return_type);
         Ok(result)
+    }
+
+    #[test]
+    fn dictionary_min_max_groups_accumulator_returns_plain_values() -> Result<()> {
+        let values = Arc::new(StringArray::from(vec!["z", "b", "a", "c"])) as ArrayRef;
+        let dictionary = Arc::new(DictionaryArray::try_new(
+            Int32Array::from(vec![0, 1, 2, 3]),
+            values,
+        )?) as ArrayRef;
+        let groups = [0, 1, 0, 1];
+
+        let min = evaluate_grouped(&Min::new(), &dictionary, &groups, 2)?;
+        assert_eq!(min.as_string::<i32>(), &StringArray::from(vec!["a", "b"]));
+
+        let max = evaluate_grouped(&Max::new(), &dictionary, &groups, 2)?;
+        assert_eq!(max.as_string::<i32>(), &StringArray::from(vec!["z", "c"]));
+        Ok(())
     }
 
     #[test]
@@ -1494,6 +1603,14 @@ mod tests {
                 let result = fun.coerce_types(input_type);
                 assert_eq!(*input_type, result.unwrap());
             }
+
+            let dictionary =
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+            assert_eq!(
+                fun.coerce_types(std::slice::from_ref(&dictionary)).unwrap(),
+                vec![dictionary.clone()]
+            );
+            assert_eq!(fun.return_type(&[dictionary]).unwrap(), DataType::Utf8);
         }
     }
 
@@ -1558,6 +1675,78 @@ mod tests {
         max_acc.update_batch(&[Arc::clone(&dict_array_ref)])?;
         let max_result = max_acc.evaluate()?;
         assert_eq!(max_result, ScalarValue::Utf8(Some("d".to_string())));
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_min_max_dictionary_returns_plain_values() -> Result<()> {
+        let values = Arc::new(StringArray::from(vec!["b", "a", "c"])) as ArrayRef;
+        let dictionary = Arc::new(DictionaryArray::try_new(
+            Int32Array::from(vec![0, 1, 2]),
+            values,
+        )?) as ArrayRef;
+
+        let mut min = SlidingMinAccumulator::try_new(&DataType::Utf8)?;
+        min.update_batch(std::slice::from_ref(&dictionary))?;
+        assert_eq!(min.evaluate()?, ScalarValue::Utf8(Some("a".to_string())));
+        min.retract_batch(&[dictionary.slice(0, 2)])?;
+        assert_eq!(min.evaluate()?, ScalarValue::Utf8(Some("c".to_string())));
+
+        let mut max = SlidingMaxAccumulator::try_new(&DataType::Utf8)?;
+        max.update_batch(std::slice::from_ref(&dictionary))?;
+        assert_eq!(max.evaluate()?, ScalarValue::Utf8(Some("c".to_string())));
+        Ok(())
+    }
+
+    #[test]
+    fn dictionary_input_uses_public_accumulator_contract() -> Result<()> {
+        let values = Arc::new(StringArray::from(vec!["b", "a", "c"])) as ArrayRef;
+        let dictionary = Arc::new(DictionaryArray::try_new(
+            Int32Array::from(vec![0, 1, 2, 1]),
+            values,
+        )?) as ArrayRef;
+        let dictionary_type = dictionary.data_type().clone();
+        let schema = Schema::new(vec![Field::new("v", dictionary_type.clone(), true)]);
+        let expr: Arc<dyn datafusion_physical_expr::PhysicalExpr> =
+            Arc::new(expressions::Column::new("v", 0));
+        let expr_field = Arc::new(Field::new("v", dictionary_type, true));
+
+        let min = Min::new();
+        let max = Max::new();
+        for (udf, expected) in [
+            (
+                &min as &dyn AggregateUDFImpl,
+                ScalarValue::Utf8(Some("a".to_string())),
+            ),
+            (
+                &max as &dyn AggregateUDFImpl,
+                ScalarValue::Utf8(Some("c".to_string())),
+            ),
+        ] {
+            let return_field = udf.return_field(std::slice::from_ref(&expr_field))?;
+            assert_eq!(return_field.data_type(), &DataType::Utf8);
+            let args = || AccumulatorArgs {
+                schema: &schema,
+                expr_fields: std::slice::from_ref(&expr_field),
+                exprs: std::slice::from_ref(&expr),
+                is_distinct: false,
+                name: udf.name(),
+                ignore_nulls: false,
+                is_reversed: false,
+                return_field: Arc::clone(&return_field),
+                order_bys: &[],
+            };
+
+            let mut accumulator = udf.accumulator(args())?;
+            accumulator.update_batch(&[Arc::clone(&dictionary)])?;
+            assert_eq!(accumulator.evaluate()?, expected);
+
+            let state = accumulator.state()?;
+            assert_eq!(state, vec![expected.clone()]);
+            let mut merged = udf.accumulator(args())?;
+            merged.merge_batch(&[ScalarValue::iter_to_array(state)?])?;
+            assert_eq!(merged.evaluate()?, expected);
+        }
         Ok(())
     }
 

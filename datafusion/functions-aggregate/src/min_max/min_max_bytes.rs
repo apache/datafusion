@@ -4,9 +4,12 @@
 
 use arrow::array::{
     Array, ArrayRef, AsArray, BinaryBuilder, BinaryViewBuilder, BooleanArray,
-    LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
+    DictionaryArray, LargeBinaryBuilder, LargeStringBuilder, StringArray, StringBuilder,
+    StringViewBuilder,
 };
-use arrow::datatypes::DataType;
+use arrow::compute::cast;
+use arrow::datatypes::{ArrowDictionaryKeyType, DataType};
+use arrow::downcast_dictionary_array;
 use datafusion_common::hash_map::Entry;
 use datafusion_common::{HashMap, Result, internal_err};
 use datafusion_expr::{EmitTo, GroupSelection, GroupsAccumulator};
@@ -143,6 +146,55 @@ impl MinMaxBytesAccumulator {
         assert_eq!(&self.inner.data_type, result.data_type());
         Ok(result)
     }
+
+    fn update_dictionary<K, F>(
+        &mut self,
+        dictionary: &DictionaryArray<K>,
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+        cmp: F,
+    ) -> Result<()>
+    where
+        K: ArrowDictionaryKeyType,
+        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
+    {
+        fn str_to_bytes<'a>(
+            it: impl Iterator<Item = Option<&'a str>>,
+        ) -> impl Iterator<Item = Option<&'a [u8]>> {
+            it.map(|s| s.map(str::as_bytes))
+        }
+
+        fn apply_filter<'a, T: 'a>(
+            iter: impl Iterator<Item = Option<T>> + 'a,
+            filter: Option<&'a BooleanArray>,
+        ) -> impl Iterator<Item = Option<T>> + 'a {
+            iter.enumerate().map(move |(index, value)| {
+                if filter
+                    .is_none_or(|filter| filter.is_valid(index) && filter.value(index))
+                {
+                    value
+                } else {
+                    None
+                }
+            })
+        }
+
+        self.inner.update_batch(
+            apply_filter(
+                str_to_bytes(
+                    dictionary
+                        .downcast_dict::<StringArray>()
+                        .expect("dictionary value type was checked")
+                        .into_iter(),
+                ),
+                opt_filter,
+            ),
+            group_indices,
+            total_num_groups,
+            cmp,
+        )
+    }
 }
 
 impl GroupsAccumulator for MinMaxBytesAccumulator {
@@ -155,10 +207,17 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
     ) -> Result<()> {
         let array = &values[0];
         assert_eq!(array.len(), group_indices.len());
-        assert_eq!(array.data_type(), &self.inner.data_type);
-
-        // apply filter if needed
-        let array = apply_filter_as_nulls(array, opt_filter)?;
+        let input_type = match array.data_type() {
+            DataType::Dictionary(_, value_type) => value_type.as_ref(),
+            data_type => data_type,
+        };
+        if input_type != &self.inner.data_type {
+            return internal_err!(
+                "Expected {} input for MinMaxBytesAccumulator, got {}",
+                self.inner.data_type,
+                array.data_type()
+            );
+        }
 
         // dispatch to appropriate kernel / specialized implementation
         fn string_min(a: &[u8], b: &[u8]) -> bool {
@@ -192,6 +251,31 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
         ) -> impl Iterator<Item = Option<&'a [u8]>> {
             it.map(|s| s.map(|s| s.as_bytes()))
         }
+
+        if matches!(array.data_type(), DataType::Dictionary(_, _)) {
+            if self.inner.data_type != DataType::Utf8 {
+                return internal_err!(
+                    "Unexpected dictionary value type for MinMaxBytesAccumulator: {}",
+                    self.inner.data_type
+                );
+            }
+            let cmp: fn(&[u8], &[u8]) -> bool =
+                if self.is_min { string_min } else { string_max };
+            let array = array.as_ref();
+            return downcast_dictionary_array! {
+                array => self.update_dictionary(
+                    array,
+                    group_indices,
+                    opt_filter,
+                    total_num_groups,
+                    cmp,
+                ),
+                _ => unreachable!("dictionary type was checked"),
+            };
+        }
+
+        // apply filter if needed
+        let array = apply_filter_as_nulls(array, opt_filter)?;
 
         match (self.is_min, &self.inner.data_type) {
             // Utf8/LargeUtf8/Utf8View Min
@@ -342,7 +426,12 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
     ) -> Result<Vec<ArrayRef>> {
         // Min/max do not change the values as they are their own states
         // apply the filter by combining with the null mask, if any
-        let output = apply_filter_as_nulls(&values[0], opt_filter)?;
+        let values = if matches!(values[0].data_type(), DataType::Dictionary(_, _)) {
+            cast(&values[0], &self.inner.data_type)?
+        } else {
+            Arc::clone(&values[0])
+        };
+        let output = apply_filter_as_nulls(&values, opt_filter)?;
         Ok(vec![output])
     }
     fn size(&self) -> usize {
@@ -540,7 +629,8 @@ impl MinMaxBytesState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::StringArray;
+    use arrow::array::{DictionaryArray, Int8Array, StringArray, UInt64Array};
+    use arrow::datatypes::{Int8Type, UInt64Type};
 
     fn expected_size(state: &MinMaxBytesState) -> usize {
         state.min_max.capacity() * size_of::<Option<Vec<u8>>>()
@@ -635,6 +725,66 @@ mod tests {
                 .evaluate_preserving(GroupSelection::all(4))?
                 .as_string::<i32>(),
             &expected
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dictionary_updates_filters_and_plain_state_merge() -> Result<()> {
+        let values = Arc::new(StringArray::from(vec![
+            Some("z"),
+            None,
+            Some("b"),
+            Some("ignored"),
+        ])) as ArrayRef;
+        let first_values = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![Some(0), Some(1), None, Some(2), Some(3)]),
+            values,
+        )?) as ArrayRef;
+        let first_groups = [0, 0, 1, 1, 2];
+        let filter = BooleanArray::from(vec![true, true, true, true, false]);
+
+        let converted = MinMaxBytesAccumulator::new_min(DataType::Utf8)
+            .convert_to_state(std::slice::from_ref(&first_values), Some(&filter))?;
+        assert_eq!(converted[0].data_type(), &DataType::Utf8);
+
+        let mut max = MinMaxBytesAccumulator::new_max(DataType::Utf8);
+        max.update_batch(
+            &[Arc::clone(&first_values)],
+            &first_groups,
+            Some(&filter),
+            3,
+        )?;
+        assert_eq!(
+            max.evaluate(EmitTo::All)?.as_string::<i32>(),
+            &StringArray::from(vec![Some("z"), Some("b"), None])
+        );
+
+        let mut first = MinMaxBytesAccumulator::new_min(DataType::Utf8);
+        first.update_batch(&[first_values], &first_groups, Some(&filter), 3)?;
+        let state = first.state(EmitTo::All)?;
+        assert_eq!(state[0].data_type(), &DataType::Utf8);
+        assert_eq!(
+            state[0].as_string::<i32>(),
+            &StringArray::from(vec![Some("z"), Some("b"), None])
+        );
+
+        // A different key width and value mapping must be interpreted using this
+        // batch's dictionary, rather than relying on key ordering or identity.
+        let values = Arc::new(StringArray::from(vec!["a", "y", "c"])) as ArrayRef;
+        let second_values = Arc::new(DictionaryArray::<UInt64Type>::try_new(
+            UInt64Array::from(vec![Some(1), Some(0), Some(2)]),
+            values,
+        )?) as ArrayRef;
+        let mut second = MinMaxBytesAccumulator::new_min(DataType::Utf8);
+        second.update_batch(&[second_values], &[0, 1, 2], None, 3)?;
+        second.merge_batch(&state, &[0, 1, 2], 3)?;
+
+        let result = second.evaluate(EmitTo::All)?;
+        assert_eq!(result.data_type(), &DataType::Utf8);
+        assert_eq!(
+            result.as_string::<i32>(),
+            &StringArray::from(vec![Some("y"), Some("a"), Some("c")])
         );
         Ok(())
     }
