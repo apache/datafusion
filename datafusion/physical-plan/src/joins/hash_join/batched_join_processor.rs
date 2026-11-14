@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, UInt32Array, UInt64Array};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::hash_utils::RandomState;
@@ -24,6 +23,7 @@ use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 
 use super::build::JoinBuildState;
 use super::stream::lookup_join_hashmap;
+use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::hash_utils::create_hashes;
 use crate::joins::Map;
 use crate::joins::join_hash_map::ProbeOffset;
@@ -66,9 +66,9 @@ pub(super) struct BatchedJoinProcessorConfig {
 /// key has millions of matches. The lookup offset resumes that key in the next
 /// chunk. Hash collisions are checked before applying the residual predicate.
 /// Residual predicates run before recording matches or emitting unmatched rows,
-/// and surviving rows accumulate in a [`BatchCoalescer`] across chunks and inputs.
-/// Output batches contain `batch_size` rows, except the final batch at EOF or a
-/// fetch cutoff.
+/// and surviving rows accumulate in a [`LimitedBatchCoalescer`] across chunks and
+/// inputs. Small output batches are coalesced toward `batch_size`; batches larger
+/// than half that size can bypass coalescing. The coalescer also enforces `fetch`.
 /// See the [hash join overview](super) for the build/index/probe boundary.
 ///
 /// For a full join with one probe partition, build keys `[1, 2, 2]`, and
@@ -101,10 +101,10 @@ pub(super) struct BatchedJoinProcessor {
     hashes_buffer: Vec<u64>,
     probe_indices_buffer: Vec<u32>,
     build_indices_buffer: Vec<u64>,
-    /// Materialized output retained across probe batches and join phases.
-    output: BatchCoalescer,
-    /// Tracker for a total limit pushed into hash join
-    remaining_fetch: Option<usize>,
+    /// Coalescer for materialized output. Also handle the fetch/limit pushed into
+    /// the hash join for early stop. (e.g. for HashJoinExec(fetch=10), the whole
+    /// execution can stop early after 10 output rows materialized)
+    output: LimitedBatchCoalescer,
 }
 
 /// Input and lookup progress are separate from successful ON matches: rejecting
@@ -171,8 +171,11 @@ impl BatchedJoinProcessor {
             hashes_buffer: vec![],
             probe_indices_buffer: vec![],
             build_indices_buffer: vec![],
-            output: BatchCoalescer::new(Arc::clone(&context.schema), context.batch_size),
-            remaining_fetch: context.fetch,
+            output: LimitedBatchCoalescer::new(
+                Arc::clone(&context.schema),
+                context.batch_size,
+                context.fetch,
+            ),
             context,
             metrics,
             phase,
@@ -217,7 +220,7 @@ impl BatchedJoinProcessor {
 
     /// Materialize the next joined batch.
     ///
-    /// Handles incremental computation and output coalescing to `batch_size`
+    /// Handles incremental computation and output coalescing toward `batch_size`
     /// internally. See the comments on [`BatchedJoinProcessor`] for details.
     pub(super) fn next_output_batch(&mut self) -> Result<JoinStep> {
         let join_time = self.metrics.join_time.clone();
@@ -271,21 +274,15 @@ impl BatchedJoinProcessor {
                     )?
                 }
                 Phase::DrainingOutput => {
-                    self.output.finish_buffered_batch()?;
+                    self.output.finish()?;
                     self.phase = Phase::Finished;
                     continue;
                 }
                 Phase::Finished => return Ok(JoinStep::Finished),
             };
-            let batch = if let Some(remaining) = &mut self.remaining_fetch {
-                let rows = batch.num_rows().min(*remaining);
-                *remaining -= rows;
-                batch.slice(0, rows)
-            } else {
-                batch
-            };
-            self.output.push_batch(batch)?;
-            if self.remaining_fetch == Some(0) {
+            // Opeartor level limit reached, stop probing
+            // See comments at `output` for details.
+            if self.output.push_batch(batch)? == PushBatchStatus::LimitReached {
                 self.release_probe();
                 self.phase = Phase::DrainingOutput;
             }
@@ -324,7 +321,7 @@ impl BatchedJoinProcessor {
     /// 2. Apply the join filter, record successful matches,
     ///    and add probe rows now known to be unmatched for right/full joins.
     /// 3. Materialize those pairs into a batch. [`Self::next_output_batch`]
-    ///    coalesces surviving pairs and unmatched rows to the output batch size.
+    ///    coalesces small batches of surviving pairs and unmatched rows.
     ///
     /// One call may cover part of one probe row's matches or several probe rows.
     /// An empty batch means this chunk produced no output; `None` means the
