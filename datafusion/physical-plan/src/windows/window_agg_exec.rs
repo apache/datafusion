@@ -17,9 +17,7 @@
 
 //! Stream and channel implementations for window function expressions.
 
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 #[cfg(feature = "proto")]
 use super::proto::{decode_physical_window_expr, encode_physical_window_expr};
@@ -27,7 +25,7 @@ use super::utils::create_schema;
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::statistics::{ChildStats, StatisticsArgs};
-use crate::stream::EmptyRecordBatchStream;
+use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
     window_equivalence_properties,
@@ -35,8 +33,8 @@ use crate::windows::{
 use crate::{
     ChildrenPropertiesMode, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
     ExecutionPlan, ExecutionPlanProperties, InputDistributionRequirements, PhysicalExpr,
-    PlanProperties, RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
-    Statistics, WindowExpr, validate_child_count,
+    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, Statistics,
+    WindowExpr, validate_child_count,
 };
 
 use arrow::array::ArrayRef;
@@ -48,12 +46,12 @@ use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{Result, assert_eq_or_internal_err};
-use datafusion_execution::TaskContext;
+use datafusion_execution::{TaskContext, async_try_stream};
 use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
 };
 
-use futures::{Stream, StreamExt, ready};
+use futures::StreamExt;
 
 /// Window execution plan
 #[derive(Debug, Clone)]
@@ -309,7 +307,7 @@ impl ExecutionPlan for WindowAggExec {
     ) -> Result<SendableRecordBatchStream> {
         let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, context)?;
-        let stream = Box::pin(WindowAggStream::new(
+        let stream = WindowAggStream::new(
             Arc::clone(&self.schema),
             self.window_expr.clone(),
             input,
@@ -317,7 +315,8 @@ impl ExecutionPlan for WindowAggExec {
             self.partition_by_sort_keys()?,
             self.ordered_partition_by_indices.clone(),
             batch_size,
-        )?);
+        )?
+        .into_stream();
         Ok(stream)
     }
 
@@ -505,16 +504,12 @@ pub struct WindowAggStream {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     batches: Vec<RecordBatch>,
-    finished: bool,
     window_expr: Vec<Arc<dyn WindowExpr>>,
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
     ordered_partition_by_indices: Vec<usize>,
     /// Maximum number of rows emitted in a single output batch.
     batch_size: usize,
-    /// Materialized result being emitted in zero-copy slices.
-    output: Option<RecordBatch>,
-    output_offset: usize,
 }
 
 impl WindowAggStream {
@@ -538,14 +533,11 @@ impl WindowAggStream {
             schema,
             input,
             batches: vec![],
-            finished: false,
             window_expr,
             baseline_metrics,
             partition_by_sort_keys,
             ordered_partition_by_indices,
             batch_size,
-            output: None,
-            output_offset: 0,
         })
     }
 
@@ -593,81 +585,30 @@ impl WindowAggStream {
     }
 }
 
-impl Stream for WindowAggStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let poll = self.poll_next_inner(cx);
-        self.baseline_metrics.record_poll(poll)
-    }
-}
-
 impl WindowAggStream {
-    #[inline]
-    fn poll_next_inner(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<RecordBatch>>> {
-        if self.finished {
-            return Poll::Ready(None);
-        }
-
-        if let Some(batch) = self.next_output_batch() {
-            return Poll::Ready(Some(Ok(batch)));
-        }
-        if self.finished {
-            return Poll::Ready(None);
-        }
-
-        loop {
-            return Poll::Ready(Some(match ready!(self.input.poll_next_unpin(cx)) {
-                Some(Ok(batch)) => {
-                    self.batches.push(batch);
-                    continue;
+    fn into_stream(mut self) -> SendableRecordBatchStream {
+        let schema = Arc::clone(&self.schema);
+        let metrics = self.baseline_metrics.clone();
+        let stream = async_try_stream(|mut emitter| async move {
+            while let Some(batch) = self.input.next().await.transpose()? {
+                self.batches.push(batch);
+            }
+            let input_schema = self.input.schema();
+            drop(std::mem::replace(
+                &mut self.input,
+                Box::pin(EmptyRecordBatchStream::new(input_schema)),
+            ));
+            if let Some(output) = self.compute_aggregates()? {
+                debug_assert!(output.num_rows() > 0);
+                for offset in (0..output.num_rows()).step_by(self.batch_size) {
+                    let len = self.batch_size.min(output.num_rows() - offset);
+                    emitter.emit(output.slice(offset, len)).await;
                 }
-                Some(Err(e)) => Err(e),
-                None => {
-                    // Release the input pipeline's resources before computing
-                    // the final aggregates.
-                    let input_schema = self.input.schema();
-                    self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-                    let Some(result) = self.compute_aggregates()? else {
-                        self.finished = true;
-                        return Poll::Ready(None);
-                    };
-                    self.batches.clear();
-                    // Empty record batches should not be emitted.
-                    // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
-                    debug_assert!(result.num_rows() > 0);
-                    self.output = Some(result);
-                    Ok(self.next_output_batch().expect("non-empty output"))
-                }
-            }));
-        }
-    }
-
-    fn next_output_batch(&mut self) -> Option<RecordBatch> {
-        let output = self.output.as_ref()?;
-        let remaining = output.num_rows() - self.output_offset;
-        if remaining == 0 {
-            self.finished = true;
-            self.output = None;
-            return None;
-        }
-        let len = remaining.min(self.batch_size);
-        let batch = output.slice(self.output_offset, len);
-        self.output_offset += len;
-        Some(batch)
-    }
-}
-
-impl RecordBatchStream for WindowAggStream {
-    /// Get the schema
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+            }
+            Ok(())
+        });
+        let stream = Box::pin(RecordBatchStreamAdapter::new(schema, stream));
+        Box::pin(ObservedStream::new(stream, metrics, None))
     }
 }
 

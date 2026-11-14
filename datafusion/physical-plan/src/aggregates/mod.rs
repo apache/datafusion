@@ -716,7 +716,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::ClusteredFinalAggregate(stream) => stream.into_stream(),
             StreamType::ClusteredSingleAggregate(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
-            StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
+            StreamType::GroupedPriorityQueue(stream) => stream.into_stream(),
         }
     }
 }
