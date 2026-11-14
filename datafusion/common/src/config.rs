@@ -830,53 +830,6 @@ impl Display for ConfigFilterSelectivity {
     }
 }
 
-/// Policy for handling duplicate keys in Spark-compatible map-construction
-/// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
-/// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum MapKeyDedupPolicy {
-    /// Raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
-    #[default]
-    Exception,
-    /// Keep the last occurrence of each duplicate key.
-    LastWin,
-}
-
-impl FromStr for MapKeyDedupPolicy {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_uppercase().as_str() {
-            "EXCEPTION" => Ok(Self::Exception),
-            "LAST_WIN" => Ok(Self::LastWin),
-            other => Err(DataFusionError::Configuration(format!(
-                "Invalid MapKeyDedupPolicy: {other}. Expected one of: EXCEPTION, LAST_WIN"
-            ))),
-        }
-    }
-}
-
-impl ConfigField for MapKeyDedupPolicy {
-    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
-        v.some(key, self, description)
-    }
-
-    fn set(&mut self, _: &str, value: &str) -> Result<()> {
-        *self = MapKeyDedupPolicy::from_str(value)?;
-        Ok(())
-    }
-}
-
-impl Display for MapKeyDedupPolicy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let str = match self {
-            Self::Exception => "EXCEPTION",
-            Self::LastWin => "LAST_WIN",
-        };
-        write!(f, "{str}")
-    }
-}
-
 impl From<SpillCompression> for Option<CompressionType> {
     fn from(c: SpillCompression) -> Self {
         match c {
@@ -2248,24 +2201,6 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
     }
 }
 
-config_namespace! {
-    /// Options controlling DataFusion's Spark-compatibility layer (the
-    /// `datafusion-spark` crate). Keys here mirror their `spark.sql.*`
-    /// equivalents in Apache Spark.
-    pub struct SparkOptions {
-        /// Policy for handling duplicate keys in Spark-compatible map-construction
-        /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`).
-        ///
-        /// Mirrors Spark's
-        /// [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961):
-        /// - `EXCEPTION` (default): raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
-        /// - `LAST_WIN`: keep the last occurrence of each duplicate key.
-        ///
-        /// Values are case-insensitive.
-        pub map_key_dedup_policy: MapKeyDedupPolicy, default = MapKeyDedupPolicy::Exception
-    }
-}
-
 /// A key value pair, with a corresponding description
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ConfigEntry {
@@ -2297,8 +2232,6 @@ pub struct ConfigOptions {
     pub extensions: Extensions,
     /// Formatting options when printing batches
     pub format: FormatOptions,
-    /// Spark-compatibility options (the `datafusion-spark` crate)
-    pub spark: SparkOptions,
 }
 
 impl ConfigField for ConfigOptions {
@@ -2309,7 +2242,6 @@ impl ConfigField for ConfigOptions {
         self.explain.visit(v, "datafusion.explain", "");
         self.sql_parser.visit(v, "datafusion.sql_parser", "");
         self.format.visit(v, "datafusion.format", "");
-        self.spark.visit(v, "datafusion.spark", "");
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -2322,7 +2254,6 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
             "format" => self.format.set(rem, value),
-            "spark" => self.spark.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
@@ -2362,7 +2293,6 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.reset(rem),
             "sql_parser" => self.sql_parser.reset(rem),
             "format" => self.format.reset(rem),
-            "spark" => self.spark.reset(rem),
             other => _config_err!("Config value \"{other}\" not found on ConfigOptions"),
         }
     }
@@ -4134,17 +4064,6 @@ config_namespace! {
         /// of columns, it creates a union schema containing all columns found across the files, and will
         /// pad any files missing columns with null values for their rows.
         pub truncated_rows: Option<bool>, default = None
-        /// Whether to map file columns to the table schema by header name instead of by position.
-        ///
-        /// Only applies when `has_header` is true. When enabled, each file's header row is read
-        /// and columns are matched by name: table columns missing from a file are filled with
-        /// nulls, and file columns not declared in the table are ignored. Names are matched exactly
-        /// (case-sensitive) and duplicate header names resolve to the first occurrence. Header
-        /// names containing quoted newlines are not supported. The header is located the same
-        /// way the CSV parser does: a leading UTF-8 BOM, blank lines, and comment lines are skipped.
-        ///
-        /// Defaults to `false` when `None`.
-        pub match_columns_by_header: Option<bool>, default = None
     }
 }
 
@@ -4267,13 +4186,6 @@ impl CsvOptions {
     /// If the record’s schema is not nullable, then it will still return an error.
     pub fn with_truncated_rows(mut self, allow: bool) -> Self {
         self.truncated_rows = Some(allow);
-        self
-    }
-
-    /// Whether to map file columns to the table schema by header name instead of by position.
-    /// Only applies when the file has a header.
-    pub fn with_match_columns_by_header(mut self, match_by_header: bool) -> Self {
-        self.match_columns_by_header = Some(match_by_header);
         self
     }
 
