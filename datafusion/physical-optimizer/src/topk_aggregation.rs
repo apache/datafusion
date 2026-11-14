@@ -9,7 +9,9 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::AggregateExec;
@@ -147,8 +149,10 @@ impl TopKAggregation {
             } else if plan.downcast_ref::<MaterializedCteExec>().is_some() {
                 // The output is the continuation, but the first child is the
                 // CTE body, which every reference to the CTE reads in full.
-                // A limit in the body would drop rows that they need.
+                // A limit in the body would drop rows that they need. Skip
+                // both children; the flag also keeps later siblings unchanged.
                 cardinality_preserved = false;
+                return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump));
             } else {
                 // or we continue down through types that don't reduce cardinality
                 match plan.cardinality_effect() {
