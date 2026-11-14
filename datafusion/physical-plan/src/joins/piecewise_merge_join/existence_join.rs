@@ -80,12 +80,12 @@ use std::task::{Poll, ready};
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch, UInt32Array,
-    new_null_array,
+    downcast_run_array, new_null_array,
 };
 use arrow::compute::{BatchCoalescer, take};
 use arrow_ord::ord::make_comparator;
-use arrow_schema::{SchemaRef, SortOptions};
-use datafusion_common::{NullEquality, Result, internal_err};
+use arrow_schema::{DataType, SchemaRef, SortOptions};
+use datafusion_common::{NullEquality, Result, ScalarValue, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{JoinType, Operator};
 use datafusion_functions_aggregate_common::min_max::{max_batch, min_batch};
@@ -450,7 +450,23 @@ impl ExistencePWMJStream {
 ///
 /// Nested keys use Arrow's comparator, so inner NULLs have the same ordering as
 /// sorting and range comparisons. Other keys use the typed min/max kernels.
+///
+/// Run-end encoded keys are reduced over their run values, and the result is wrapped back
+/// into a one-row run-end encoded array so that it keeps the key's type.
 pub(super) fn extreme_key(values: &ArrayRef, descending: bool) -> Result<ArrayRef> {
+    if let DataType::RunEndEncoded(run_ends_field, values_field) = values.data_type() {
+        let run_values = downcast_run_array!(
+            values => values.values_slice(),
+            dt => return internal_err!("Invalid run-ends type: {dt}")
+        );
+        let extreme = extreme_key(&run_values, descending)?;
+        let extreme = ScalarValue::RunEndEncoded(
+            Arc::clone(run_ends_field),
+            Arc::clone(values_field),
+            Box::new(ScalarValue::try_from_array(&extreme, 0)?),
+        );
+        return extreme.to_array_of_size(1);
+    }
     if values.data_type().is_nested() {
         // Reverse both value and inner-NULL ordering for max, matching SQL's
         // ascending NULLS FIRST nested comparison order.
@@ -818,6 +834,65 @@ mod tests {
             .expect("input_batches metric")
             .as_usize();
         assert_eq!(consumed, 1, "partition 1 should not have read any batch");
+        Ok(())
+    }
+
+    #[test]
+    fn extreme_key_run_end_encoded_reads_logical_slice() -> Result<()> {
+        use arrow::array::{Int32Array, Int64Array, RunArray};
+        use arrow::compute::concat;
+        use arrow::datatypes::{Int32Type, Int64Type};
+
+        fn extreme_value(keys: &ArrayRef, descending: bool) -> Result<ScalarValue> {
+            let extreme = extreme_key(keys, descending)?;
+            assert_eq!(extreme.data_type(), keys.data_type());
+            assert_eq!(extreme.len(), 1);
+            let extreme = ScalarValue::try_from_array(&extreme, 0)?;
+            let ScalarValue::RunEndEncoded(_, _, value) = extreme else {
+                panic!("expected a run-end encoded scalar, got {extreme:?}");
+            };
+            Ok(*value)
+        }
+
+        // Logical values [1, 1, 10, 10, NULL, 5, 5, 50, 50]. The slice keeps
+        // [10, NULL, 5]: it starts inside a run, and the runs holding 1 and 50 are
+        // outside it, so neither may be picked.
+        let run_values =
+            Int32Array::from(vec![Some(1), Some(10), None, Some(5), Some(50)]);
+        let array = RunArray::<Int32Type>::try_new(
+            &Int32Array::from(vec![2, 4, 5, 7, 9]),
+            &run_values,
+        )?;
+        let keys: ArrayRef = Arc::new(array.slice(3, 3));
+        assert_eq!(extreme_value(&keys, false)?, ScalarValue::Int32(Some(5)));
+        assert_eq!(extreme_value(&keys, true)?, ScalarValue::Int32(Some(10)));
+
+        // The buffered side folds per-batch extremes by concatenating and reducing them
+        // again, so a reduced key must reduce again.
+        let other: ArrayRef = Arc::new(array.slice(0, 2));
+        let pair = concat(&[
+            extreme_key(&keys, false)?.as_ref(),
+            extreme_key(&other, false)?.as_ref(),
+        ])?;
+        assert_eq!(extreme_value(&pair, false)?, ScalarValue::Int32(Some(1)));
+
+        // Only NULL runs, or no rows at all: the extreme is a NULL of the same type.
+        for keys in [array.slice(4, 1), array.slice(0, 0)] {
+            let keys: ArrayRef = Arc::new(keys);
+            for descending in [false, true] {
+                let extreme = extreme_key(&keys, descending)?;
+                assert_eq!(extreme.data_type(), keys.data_type());
+                assert_eq!(extreme.logical_null_count(), 1);
+            }
+        }
+
+        // Other run-end widths take the same path.
+        let array = RunArray::<Int64Type>::try_new(
+            &Int64Array::from(vec![1, 3]),
+            &run_values.slice(0, 2),
+        )?;
+        let keys: ArrayRef = Arc::new(array);
+        assert_eq!(extreme_value(&keys, true)?, ScalarValue::Int32(Some(10)));
         Ok(())
     }
 }
