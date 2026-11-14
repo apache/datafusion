@@ -711,7 +711,7 @@ fn cli_output_respects_maxwidth() {
     for expected in [
         "| Int64 | Utf8",
         "|       indented text",
-        "|       wrap",
+        "| wrap",
         "|         \"Utf8(",
         "| logical plan",
         "| physical plan",
@@ -720,6 +720,7 @@ fn cli_output_respects_maxwidth() {
     ] {
         assert!(stdout.contains(expected), "missing {expected}: {stdout}");
     }
+    assert!(!stdout.contains("|       wrap"), "{stdout}");
 }
 
 #[rstest]

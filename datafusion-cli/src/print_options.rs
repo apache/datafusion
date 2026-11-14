@@ -16,6 +16,7 @@ use crate::print_format::{PrintFormat, TableOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion::common::DataFusionError;
+use datafusion::common::format::ExplainFormat;
 use datafusion::common::instant::Instant;
 use datafusion::error::Result;
 use datafusion::physical_plan::RecordBatchStream;
@@ -222,7 +223,12 @@ impl PrintOptions {
         let stdout = io::stdout();
         let mut writer = stdout.lock();
         crate::print_format::print_tree_batches(&mut writer, batches, format_options)?;
-        self.write_plan_details(&mut writer, query_start_time, row_count)
+        self.write_plan_details(
+            &mut writer,
+            query_start_time,
+            row_count,
+            MaxRows::Unlimited,
+        )
     }
 
     pub(crate) fn print_plan_batches(
@@ -232,6 +238,7 @@ impl PrintOptions {
         row_count: usize,
         format_options: &FormatOptions,
         width: Option<u16>,
+        explain_format: &ExplainFormat,
     ) -> Result<()> {
         let stdout = io::stdout();
         let mut writer = stdout.lock();
@@ -240,8 +247,19 @@ impl PrintOptions {
             batches,
             format_options,
             width,
+            explain_format,
+            self.maxrows,
         )?;
-        self.write_plan_details(&mut writer, query_start_time, row_count)
+        self.write_plan_details(
+            &mut writer,
+            query_start_time,
+            row_count,
+            if *explain_format == ExplainFormat::Indent {
+                MaxRows::Unlimited
+            } else {
+                self.maxrows
+            },
+        )
     }
 
     fn write_plan_details<W: io::Write>(
@@ -249,14 +267,11 @@ impl PrintOptions {
         writer: &mut W,
         query_start_time: Instant,
         row_count: usize,
+        maxrows: MaxRows,
     ) -> Result<()> {
         self.write_output(
             writer,
-            &get_execution_details_formatted(
-                row_count,
-                MaxRows::Unlimited,
-                query_start_time,
-            ),
+            &get_execution_details_formatted(row_count, maxrows, query_start_time),
         )
     }
 

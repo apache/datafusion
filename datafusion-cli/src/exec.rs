@@ -251,15 +251,12 @@ impl StatementExecutor {
             .create_and_execute_logical_plan(ctx, print_options)
             .await?;
         let print_options = adjusted.into_inner();
-        let is_tree = matches!(df.logical_plan(), LogicalPlan::Explain(explain)
-            if explain.explain_format == ExplainFormat::Tree);
-        let is_indent = match df.logical_plan() {
-            LogicalPlan::Explain(explain) => {
-                explain.explain_format == ExplainFormat::Indent
-            }
-            LogicalPlan::Analyze(analyze) => analyze.format == ExplainFormat::Indent,
-            _ => false,
+        let explain_format = match df.logical_plan() {
+            LogicalPlan::Explain(explain) => Some(explain.explain_format.clone()),
+            LogicalPlan::Analyze(analyze) => Some(analyze.format.clone()),
+            _ => None,
         };
+        let is_tree = explain_format == Some(ExplainFormat::Tree);
         let df = if is_tree && print_options.format == PrintFormat::Table {
             let (mut state, plan) = df.into_parts();
             match print_options.maxwidth {
@@ -329,13 +326,18 @@ impl StatementExecutor {
                 }
                 row_count += curr_num_rows;
             }
-            if is_indent && print_options.format == PrintFormat::Table {
+            if print_options.format == PrintFormat::Table
+                && let Some(
+                    format @ (ExplainFormat::Indent | ExplainFormat::PostgresJSON),
+                ) = explain_format.as_ref()
+            {
                 print_options.print_plan_batches(
                     &results,
                     now,
                     row_count,
                     &options.format,
                     print_options.maxwidth.resolve(),
+                    format,
                 )?;
             } else if is_tree {
                 print_options.print_tree_batches(

@@ -13,6 +13,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use arrow::record_batch::RecordBatch;
 use arrow::util::display::ArrayFormatter;
+use datafusion::common::format::ExplainFormat;
 use datafusion::config::FormatOptions;
 use datafusion::error::Result;
 use tabled::builder::Builder;
@@ -36,6 +37,12 @@ pub enum PrintFormat {
 pub(crate) struct TableOptions {
     pub maxrows: MaxRows,
     pub width: Option<u16>,
+}
+
+#[derive(Clone, Copy)]
+struct PreserveIndent {
+    column: usize,
+    continuation_indent: usize,
 }
 
 impl FromStr for PrintFormat {
@@ -94,6 +101,7 @@ fn print_table_batches<W: std::io::Write>(
     maxrows: MaxRows,
     width: Option<u16>,
     format_options: &FormatOptions,
+    preserve_indent: Option<PreserveIndent>,
 ) -> Result<()> {
     let schema = batches
         .iter()
@@ -187,11 +195,21 @@ fn print_table_batches<W: std::io::Write>(
                 &vertical_rows,
                 Some(width),
                 over_limit && index + 1 == visible_rows,
-                None,
+                preserve_indent.map(|option| PreserveIndent {
+                    column: usize::from(width >= 11),
+                    ..option
+                }),
             )?;
         }
     } else {
-        print_table(writer, Some(&headers), &rows, width, over_limit, None)?;
+        print_table(
+            writer,
+            Some(&headers),
+            &rows,
+            width,
+            over_limit,
+            preserve_indent,
+        )?;
     }
     Ok(())
 }
@@ -202,7 +220,7 @@ fn print_table<W: std::io::Write>(
     rows: &[Vec<String>],
     width: Option<u16>,
     over_limit: bool,
-    plan_column: Option<usize>,
+    preserve_indent: Option<PreserveIndent>,
 ) -> Result<()> {
     let borderless = width.is_some_and(|width| width < 11);
     let mut builder = Builder::default();
@@ -239,33 +257,29 @@ fn print_table<W: std::io::Write>(
         }
     }
     table.with(
-        Width::wrap(width.map_or(usize::MAX, usize::from)).priority(Priority::max(false)),
+        Width::wrap(width.map_or(usize::MAX, usize::from))
+            .keep_words(true)
+            .priority(Priority::max(false)),
     );
     let widths = table
         .get_dimension()
         .get_widths()
         .expect("Width::wrap estimates column widths")
         .to_vec();
-    if width.is_some() {
+    if width.is_some()
+        && let Some(option) = preserve_indent
+    {
         let padding = if borderless { 0 } else { 2 };
-        for (row_index, row) in headers
-            .into_iter()
-            .chain(rows.iter().map(Vec::as_slice))
-            .enumerate()
-        {
-            for (column, text) in row.iter().enumerate() {
-                let continuation_indent = usize::from(
-                    plan_column == Some(column) && !(headers.is_some() && row_index == 0),
-                ) * 4;
-                let text = wrap_indented(
-                    text,
-                    widths[column].saturating_sub(padding),
-                    continuation_indent,
-                );
-                table
-                    .get_records_mut()
-                    .set(Position::new(row_index, column), text);
-            }
+        for (row_index, row) in rows.iter().enumerate() {
+            let text = wrap_indented(
+                &row[option.column],
+                widths[option.column].saturating_sub(padding),
+                option.continuation_indent,
+            );
+            table.get_records_mut().set(
+                Position::new(row_index + usize::from(headers.is_some()), option.column),
+                text,
+            );
         }
         table.get_dimension_mut().clear_height();
     }
@@ -289,7 +303,26 @@ pub(crate) fn print_plan_batches<W: std::io::Write>(
     batches: &[RecordBatch],
     format_options: &FormatOptions,
     width: Option<u16>,
+    explain_format: &ExplainFormat,
+    maxrows: MaxRows,
 ) -> Result<()> {
+    if *explain_format == ExplainFormat::PostgresJSON {
+        return match batches.first() {
+            Some(batch) => print_table_batches(
+                writer,
+                batch.schema(),
+                batches,
+                maxrows,
+                width,
+                format_options,
+                Some(PreserveIndent {
+                    column: 1,
+                    continuation_indent: 0,
+                }),
+            ),
+            None => Ok(()),
+        };
+    }
     let options = format_options.try_into()?;
     let mut rows = Vec::new();
     let mut group = None;
@@ -321,7 +354,17 @@ pub(crate) fn print_plan_batches<W: std::io::Write>(
                 )]
             })
             .collect();
-        print_table(writer, None, &rows, Some(width), false, Some(0))
+        print_table(
+            writer,
+            None,
+            &rows,
+            Some(width),
+            false,
+            Some(PreserveIndent {
+                column: 0,
+                continuation_indent: 4,
+            }),
+        )
     } else {
         let rows: Vec<_> = rows
             .into_iter()
@@ -335,7 +378,17 @@ pub(crate) fn print_plan_batches<W: std::io::Write>(
             })
             .collect();
         let headers = [type_header.to_owned(), "plan".to_owned()];
-        print_table(writer, Some(&headers), &rows, width, false, Some(1))
+        print_table(
+            writer,
+            Some(&headers),
+            &rows,
+            width,
+            false,
+            Some(PreserveIndent {
+                column: 1,
+                continuation_indent: 4,
+            }),
+        )
     }
 }
 
@@ -462,6 +515,7 @@ impl PrintFormat {
                 maxrows,
                 width,
                 format_options,
+                None,
             );
         }
         // filter out any empty batches
