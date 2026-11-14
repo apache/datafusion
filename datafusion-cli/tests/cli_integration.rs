@@ -676,14 +676,21 @@ fn test_cli_wide_result_set_no_crash() {
 }
 
 #[test]
-fn cli_explain_respects_maxwidth() {
+fn cli_output_respects_maxwidth() {
     let output = cli()
         .args([
             "-q",
             "--maxwidth",
             "80",
+            "--maxrows",
+            "2",
             "--command",
-            "SET datafusion.explain.format = 'indent'; \
+            "SET datafusion.format.types_info = true; \
+             SELECT 1 AS n, 'hello' AS s; \
+             SELECT * FROM generate_series(1, 5); \
+             SELECT '      indented text ' || repeat('wrap ', 40) AS value; \
+             EXPLAIN FORMAT PGJSON SELECT repeat('abcdefghij', 20) AS value; \
+             SET datafusion.explain.format = 'indent'; \
              EXPLAIN VERBOSE SELECT repeat('abcdefghij', 20) AS value",
         ])
         .output()
@@ -694,7 +701,18 @@ fn cli_explain_respects_maxwidth() {
         stdout.lines().all(|line| line.chars().count() <= 80),
         "{stdout}"
     );
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.starts_with("| ."))
+            .count(),
+        3
+    );
     for expected in [
+        "| Int64 | Utf8",
+        "|       indented text",
+        "|       wrap",
+        "|         \"Utf8(",
         "| logical plan",
         "| physical plan",
         "|   EmptyRelation:",

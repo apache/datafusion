@@ -28,7 +28,6 @@ aws-config = "1.8.18"
 aws-credential-types = "1.2.13"
 chrono = { workspace = true }
 clap = { version = "4.5.60", features = ["cargo", "derive"] }
-comfy-table = { version = "8.0", default-features = false }
 datafusion = { workspace = true, features = [
     "avro",
     "compression",
@@ -54,6 +53,7 @@ parking_lot = { workspace = true }
 parquet = { workspace = true, default-features = false }
 regex = { workspace = true }
 rustyline = "19.0"
+tabled = { version = "0.22", default-features = false, features = ["std"] }
 terminal_size = "0.4.4"
 textwrap = { version = "0.16.4", default-features = false, features = ["unicode-width"] }
 tokio = { workspace = true, features = ["macros", "parking_lot", "rt", "rt-multi-thread", "signal", "sync"] }
