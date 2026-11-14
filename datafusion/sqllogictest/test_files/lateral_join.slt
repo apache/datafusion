@@ -941,6 +941,49 @@ ORDER BY t1.id, sub.id;
 1 20 2 1
 2 30 1 1
 
+# --- Non-equality correlated filter below a DISTINCT ---
+# https://github.com/apache/datafusion/issues/25808
+# The pull up adds `t2.id` to the DISTINCT keys, so the t2 rows 10 and 20,
+# which both have t1_id = 1, are no longer merged.
+# Expected result once supported: sub.t1_id = 1 and 2 once each, for every
+# t1 row (6 rows).
+statement error OuterReferenceColumn
+SELECT t1.id, sub.t1_id
+FROM t1, LATERAL (SELECT DISTINCT t2.t1_id FROM t2 WHERE t2.id > t1.id) AS sub
+ORDER BY t1.id, sub.t1_id;
+
+# The same with a GROUP BY that has no aggregates, which is planned as a
+# DISTINCT.
+statement error OuterReferenceColumn
+SELECT t1.id, sub.t1_id
+FROM t1, LATERAL (SELECT t2.t1_id FROM t2 WHERE t2.id > t1.id GROUP BY t2.t1_id) AS sub;
+
+# The same with LEFT JOIN LATERAL.
+statement error OuterReferenceColumn
+SELECT t1.id, sub.t1_id
+FROM t1 LEFT JOIN LATERAL (SELECT DISTINCT t2.t1_id FROM t2 WHERE t2.id > t1.id) AS sub ON true;
+
+# With an equality filter, every row of a group has the same `t2.t1_id`,
+# so adding it to the DISTINCT keys splits nothing.
+query II
+SELECT t1.id, sub.t1_id
+FROM t1, LATERAL (SELECT DISTINCT t2.t1_id FROM t2 WHERE t2.t1_id = t1.id) AS sub
+ORDER BY t1.id, sub.t1_id;
+----
+1 1
+2 2
+
+# A non-equality filter on a column that is already a DISTINCT key adds no
+# key, so the pull up acts as a HAVING and stays decorrelated.
+query II
+SELECT t1.id, sub.id
+FROM t1, LATERAL (SELECT DISTINCT t2.id FROM t2 WHERE t2.id > t1.id * 10) AS sub
+ORDER BY t1.id, sub.id;
+----
+1 20
+1 30
+2 30
+
 # --- Implicit LATERAL (comma without LATERAL keyword) ---
 # DuckDB auto-detects lateral correlation; DataFusion requires
 # the explicit LATERAL keyword.
