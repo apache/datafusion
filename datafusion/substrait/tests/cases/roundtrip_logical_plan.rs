@@ -23,7 +23,9 @@ use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit,
 };
 use datafusion::common::tree_node::Transformed;
-use datafusion::common::{DFSchema, DFSchemaRef, Spans, not_impl_err, plan_err};
+use datafusion::common::{
+    DFSchema, DFSchemaRef, DataFusionError, Spans, not_impl_err, plan_err,
+};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -40,6 +42,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
+use substrait::proto::sort_field::{SortDirection, SortKind};
 use substrait::proto::{Plan, Rel, plan_rel};
 
 #[derive(Debug)]
@@ -255,6 +258,47 @@ async fn select_with_filter_sort_limit() -> Result<()> {
 #[tokio::test]
 async fn select_with_filter_sort_limit_offset() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE a > 1 ORDER BY b ASC LIMIT 2 OFFSET 1").await
+}
+
+#[tokio::test]
+async fn unsupported_sort_kinds_return_errors() -> Result<()> {
+    let ctx = create_context().await?;
+    let df = ctx.sql("SELECT * FROM data ORDER BY a").await?;
+    let mut proto = to_substrait_plan(&df.into_unoptimized_plan(), &ctx.state())?;
+
+    for (kind, message) in [
+        (
+            SortKind::Direction(SortDirection::Clustered as i32),
+            "Sort with direction clustered is not yet supported",
+        ),
+        (
+            SortKind::ComparisonFunctionReference(0),
+            "Sort using comparison function reference is not supported",
+        ),
+    ] {
+        {
+            let Some(plan_rel::RelType::Root(root)) =
+                proto.relations[0].rel_type.as_mut()
+            else {
+                panic!("expected root relation");
+            };
+            let Some(input) = root.input.as_mut() else {
+                panic!("expected root input");
+            };
+            let Some(RelType::Sort(sort)) = input.rel_type.as_mut() else {
+                panic!("expected root input sort relation");
+            };
+            sort.sorts[0].sort_kind = Some(kind);
+        }
+        let err = from_substrait_plan(&ctx.state(), &proto).await.unwrap_err();
+        assert!(matches!(err, DataFusionError::NotImplemented(_)));
+        assert_eq!(
+            err.strip_backtrace(),
+            format!("This feature is not implemented: {message}")
+        );
+    }
+
+    Ok(())
 }
 
 #[tokio::test]
