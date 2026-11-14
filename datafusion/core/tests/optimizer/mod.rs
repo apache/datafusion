@@ -142,6 +142,28 @@ fn expensive_regexp_like_is_deferred_to_execution() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn dictionary_literal_regex_preserves_encoding() -> Result<()> {
+    for sql in [
+        "SELECT col_dict_utf8 FROM test WHERE col_dict_utf8 ~ '^value_[0-9]+$'",
+        "SELECT col_dict_utf8 FROM test WHERE regexp_like(col_dict_utf8, '^value_[0-9]+$')",
+    ] {
+        let plan = test_sql(sql)?.display_indent().to_string();
+        assert_contains!(
+            &plan,
+            "test.col_dict_utf8 ~ Dictionary(Int32, Utf8(\"^value_[0-9]+$\"))"
+        );
+        assert!(!plan.contains("CAST(test.col_dict_utf8 AS Utf8)"), "{plan}");
+    }
+
+    let dynamic =
+        test_sql("SELECT col_dict_utf8 FROM test WHERE col_dict_utf8 ~ col_utf8")?
+            .display_indent()
+            .to_string();
+    assert_contains!(&dynamic, "CAST(test.col_dict_utf8 AS Utf8) ~ test.col_utf8");
+    Ok(())
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
@@ -193,6 +215,14 @@ impl ContextProvider for MyContextProvider {
                     Field::new("col_int32", DataType::Int32, true),
                     Field::new("col_uint32", DataType::UInt32, true),
                     Field::new("col_utf8", DataType::Utf8, true),
+                    Field::new(
+                        "col_dict_utf8",
+                        DataType::Dictionary(
+                            Box::new(DataType::Int32),
+                            Box::new(DataType::Utf8),
+                        ),
+                        true,
+                    ),
                     Field::new("col_date32", DataType::Date32, true),
                     Field::new("col_date64", DataType::Date64, true),
                     // timestamp with no timezone

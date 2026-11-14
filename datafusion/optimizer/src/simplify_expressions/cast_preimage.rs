@@ -71,6 +71,10 @@ pub(super) fn supports_cast_predicate_for_binary(
             | Operator::GtEq
             | Operator::IsDistinctFrom
             | Operator::IsNotDistinctFrom
+            | Operator::RegexMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexNotIMatch
     ) {
         return false;
     }
@@ -84,6 +88,19 @@ pub(super) fn supports_cast_predicate_for_binary(
     let Ok(source_type) = info.get_data_type(inner_expr) else {
         return false;
     };
+    if matches!(
+        op,
+        Operator::RegexMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexNotIMatch
+    ) && !matches!(
+        &source_type,
+        DataType::Dictionary(_, values)
+            if matches!(values.as_ref(), DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8)
+    ) {
+        return false;
+    }
 
     let Ok(preimage) = cast_predicate_preimage(&source_type, target_type, op, lit_value)
     else {
@@ -209,6 +226,49 @@ mod tests {
 
         let expr = cast(col("c1"), DataType::Utf8).eq(lit("0123"));
         assert_eq!(optimize_test(expr.clone(), &schema), expr);
+    }
+
+    #[test]
+    fn test_cast_preimage_dictionary_regex_literal() {
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![
+                    Field::new("dict", dictionary_type, true),
+                    Field::new("pattern", DataType::Utf8, true),
+                ]
+                .into(),
+                HashMap::new(),
+            )
+            .unwrap(),
+        );
+        let dictionary_pattern = lit(ScalarValue::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Utf8(Some("^value_[0-9]+$".to_string()))),
+        ));
+
+        for op in [
+            Operator::RegexMatch,
+            Operator::RegexIMatch,
+            Operator::RegexNotMatch,
+            Operator::RegexNotIMatch,
+        ] {
+            let expr =
+                binary_expr(cast(col("dict"), DataType::Utf8), op, lit("^value_[0-9]+$"));
+            let expected = binary_expr(col("dict"), op, dictionary_pattern.clone());
+            assert_eq!(optimize_test(expr, &schema), expected);
+        }
+
+        let dynamic_pattern = binary_expr(
+            cast(col("dict"), DataType::Utf8),
+            Operator::RegexMatch,
+            col("pattern"),
+        );
+        assert_eq!(
+            optimize_test(dynamic_pattern.clone(), &schema),
+            dynamic_pattern
+        );
     }
 
     #[test]

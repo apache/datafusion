@@ -269,7 +269,7 @@ macro_rules! regexp_is_match_flag_scalar {
     }};
 }
 
-pub(crate) fn regex_match_dyn_scalar(
+fn regex_match_string_scalar(
     left: &dyn Array,
     right: &ScalarValue,
     not_match: bool,
@@ -285,19 +285,50 @@ pub(crate) fn regex_match_dyn_scalar(
         DataType::LargeUtf8 => {
             regexp_is_match_flag_scalar!(left, right, LargeStringArray, not_match, flag)
         }
-        DataType::Dictionary(_, _) => {
-            let dictionary = left.as_any_dictionary();
-            let values = dictionary.values();
+        other => internal_err!(
+            "Data type {} not supported for operation 'regex_match_dyn_scalar' on string array",
+            other
+        ),
+    };
+    Some(result)
+}
 
-            match values.data_type() {
-                DataType::Utf8 => regexp_is_match_flag_scalar!(values, right, StringArray, not_match, flag),
-                DataType::Utf8View => regexp_is_match_flag_scalar!(values, right, StringViewArray, not_match, flag),
-                DataType::LargeUtf8 => regexp_is_match_flag_scalar!(values, right, LargeStringArray, not_match, flag),
-                other => internal_err!(
-                    "Data type {} not supported as a dictionary value type for operation 'regex_match_dyn_scalar' on string array",
-                    other
-                ),
-            }
+pub(crate) fn regex_match_dyn_scalar(
+    left: &dyn Array,
+    right: &ScalarValue,
+    not_match: bool,
+    flag: bool,
+) -> Option<Result<ArrayRef>> {
+    let DataType::Dictionary(_, _) = left.data_type() else {
+        return regex_match_string_scalar(left, right, not_match, flag);
+    };
+
+    let dictionary = left.as_any_dictionary();
+    let values = dictionary.values();
+    if !matches!(
+        values.data_type(),
+        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+    ) {
+        return Some(internal_err!(
+            "Data type {} not supported as a dictionary value type for operation 'regex_match_dyn_scalar' on string array",
+            values.data_type()
+        ));
+    }
+
+    // Sliced arrays can retain a large backing dictionary while exposing only a
+    // few rows. In that case evaluating every dictionary value is more work than
+    // materializing the visible rows.
+    if values.len() > left.len() {
+        let decoded = match arrow::compute::cast(left, values.data_type()) {
+            Ok(decoded) => decoded,
+            Err(error) => return Some(Err(error.into())),
+        };
+        return regex_match_string_scalar(decoded.as_ref(), right, not_match, flag);
+    }
+
+    Some(
+        regex_match_string_scalar(values, right, not_match, flag)
+            .expect("validated dictionary string value type")
             .and_then(|evaluated_values| {
                 // Expand back to rows while preserving nulls from both keys and values.
                 Ok(arrow::compute::take(
@@ -305,12 +336,6 @@ pub(crate) fn regex_match_dyn_scalar(
                     dictionary.keys(),
                     None,
                 )?)
-            })
-        }
-        other => internal_err!(
-            "Data type {} not supported for operation 'regex_match_dyn_scalar' on string array",
-            other
-        ),
-    };
-    Some(result)
+            }),
+    )
 }

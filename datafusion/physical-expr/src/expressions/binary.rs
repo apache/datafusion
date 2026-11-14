@@ -3844,6 +3844,10 @@ mod tests {
             Arc::new(DictionaryArray::try_new(keys, dictionary_values)?) as ArrayRef;
         let utf8 = cast(&dictionary, &DataType::Utf8)?;
         let pattern = ScalarValue::Utf8(Some("^abc$".to_string()));
+        let dictionary_pattern = ScalarValue::Dictionary(
+            Box::new(DataType::UInt32),
+            Box::new(pattern.clone()),
+        );
         let dictionary_schema = Arc::new(Schema::new(vec![Field::new(
             "a",
             dictionary.data_type().clone(),
@@ -3852,16 +3856,19 @@ mod tests {
         let utf8_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
 
-        let evaluate =
-            |schema: &SchemaRef, array: &ArrayRef, op: Operator| -> Result<ArrayRef> {
-                let expr = binary(col("a", schema)?, op, lit(pattern.clone()), schema)?;
-                let batch =
-                    RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(array)])?;
-                Ok(expr
-                    .evaluate(&batch)?
-                    .into_array(batch.num_rows())
-                    .expect("Failed to convert to array"))
-            };
+        let evaluate = |schema: &SchemaRef,
+                        array: &ArrayRef,
+                        op: Operator,
+                        pattern: ScalarValue|
+         -> Result<ArrayRef> {
+            let expr = binary(col("a", schema)?, op, lit(pattern), schema)?;
+            let batch =
+                RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(array)])?;
+            Ok(expr
+                .evaluate(&batch)?
+                .into_array(batch.num_rows())
+                .expect("Failed to convert to array"))
+        };
 
         for (op, expected) in [
             (
@@ -3893,13 +3900,56 @@ mod tests {
                 ]),
             ),
         ] {
-            let dictionary_result = evaluate(&dictionary_schema, &dictionary, op)?;
-            let utf8_result = evaluate(&utf8_schema, &utf8, op)?;
+            let dictionary_result = evaluate(
+                &dictionary_schema,
+                &dictionary,
+                op,
+                dictionary_pattern.clone(),
+            )?;
+            let utf8_result = evaluate(&utf8_schema, &utf8, op, pattern.clone())?;
 
             assert_eq!(dictionary_result.as_ref(), &expected);
             assert_eq!(&dictionary_result, &utf8_result);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn regex_scalar_with_oversized_dictionary() -> Result<()> {
+        let dictionary_values = Arc::new(StringArray::from(
+            (0..128)
+                .map(|value| format!("value_{value:03}"))
+                .collect::<Vec<_>>(),
+        ));
+        let keys = UInt32Array::from(vec![Some(0), Some(127), None]);
+        let dictionary =
+            Arc::new(DictionaryArray::try_new(keys, dictionary_values)?) as ArrayRef;
+        let utf8 = cast(&dictionary, &DataType::Utf8)?;
+        let dictionary_schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            dictionary.data_type().clone(),
+            true,
+        )]));
+        let utf8_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+        let pattern = ScalarValue::Utf8(Some("^value_0".to_string()));
+
+        let evaluate = |schema: &SchemaRef, array: &ArrayRef| -> Result<ArrayRef> {
+            let expr = binary(
+                col("a", schema)?,
+                Operator::RegexMatch,
+                lit(pattern.clone()),
+                schema,
+            )?;
+            let batch =
+                RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(array)])?;
+            expr.evaluate(&batch)?.into_array(batch.num_rows())
+        };
+
+        let dictionary_result = evaluate(&dictionary_schema, &dictionary)?;
+        let utf8_result = evaluate(&utf8_schema, &utf8)?;
+        assert_eq!(dictionary_result.as_ref(), utf8_result.as_ref());
         Ok(())
     }
 

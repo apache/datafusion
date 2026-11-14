@@ -1671,12 +1671,26 @@ impl TreeNodeRewriter for Simplifier<'_> {
             }) => {
                 // Non-constant regexes are not evaluated during planning, so
                 // avoid adding a compilation preflight to their normal path.
-                if !matches!(left.as_ref(), Expr::Literal(_, _))
+                let simplified = if !matches!(left.as_ref(), Expr::Literal(_, _))
                     || regex_is_within_planning_budget(&op, &right)
                 {
                     simplify_regex_expr(left, op, right)?
                 } else {
                     Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+                };
+                if simplified.transformed {
+                    simplified
+                } else {
+                    let Expr::BinaryExpr(BinaryExpr { left, op, right }) =
+                        simplified.data
+                    else {
+                        unreachable!("unchanged regex simplification must remain binary")
+                    };
+                    if supports_cast_predicate_for_binary(info, &left, op, &right) {
+                        rewrite_cast_predicate_for_binary(info, *left, *right, op)?
+                    } else {
+                        Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+                    }
                 }
             }
 
