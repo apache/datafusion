@@ -267,8 +267,6 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
-            // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[expect(deprecated)]
             Expr::Unnest(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Alias(_)
@@ -299,7 +297,6 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             | Expr::InSubquery(_)
             | Expr::SetComparison(_)
             | Expr::ScalarSubquery(_)
-            | Expr::Wildcard { .. }
             | Expr::Placeholder(_)
             | Expr::OuterReferenceColumn { .. }
             | Expr::HigherOrderFunction(_)
@@ -427,7 +424,7 @@ fn exclude_using_columns(plan: &LogicalPlan) -> Result<HashSet<Column>> {
     Ok(excluded)
 }
 
-/// Resolves an `Expr::Wildcard` to a collection of `Expr::Column`'s.
+/// Resolves a [`SelectExpr::Wildcard`](crate::select_expr::SelectExpr::Wildcard) to a collection of `Expr::Column`'s.
 pub fn expand_wildcard(
     schema: &DFSchema,
     plan: &LogicalPlan,
@@ -449,7 +446,7 @@ pub fn expand_wildcard(
     Ok(get_exprs_except_skipped(schema, &columns_to_skip))
 }
 
-/// Resolves an `Expr::Wildcard` to a collection of qualified `Expr::Column`'s.
+/// Resolves an [`SelectExpr::QualifiedWildcard`](crate::select_expr::SelectExpr::QualifiedWildcard) to a collection of qualified `Expr::Column`'s.
 pub fn expand_qualified_wildcard(
     qualifier: &TableReference,
     schema: &DFSchema,

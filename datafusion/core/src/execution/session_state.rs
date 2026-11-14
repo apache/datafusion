@@ -2801,8 +2801,9 @@ mod tests {
     /// an `expr_planners` method for `SessionState`.
     #[tokio::test]
     async fn test_with_expr_planners() -> Result<()> {
-        // A helper method for planning count wildcard with or without expr planners.
-        async fn plan_count_wildcard(
+        // OVERLAY has no fallback in `SqlToRel`; only `CoreFunctionPlanner`,
+        // which is always registered, can plan it.
+        async fn plan_overlay(
             with_expr_planners: bool,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             let mut context_provider = MyContextProvider::new().with_table(
@@ -2814,25 +2815,25 @@ mod tests {
             }
 
             let state = &context_provider.state;
-            let statement =
-                state.sql_to_statement("select count(*) from t", &Dialect::MySQL)?;
+            let statement = state.sql_to_statement(
+                "select overlay('abc' placing 'x' from 2) from t",
+                &Dialect::MySQL,
+            )?;
             let plan = SqlToRel::new(&context_provider).statement_to_plan(statement)?;
             state.create_physical_plan(&plan).await
         }
 
-        // Planning count wildcard without expr planners should fail.
-        let got = plan_count_wildcard(false).await;
+        let got = plan_overlay(false).await;
         assert_contains!(
             got.unwrap_err().to_string(),
-            "Physical plan does not support logical expression Wildcard"
+            "Overlay not supported by ExprPlanner"
         );
 
-        // Planning count wildcard with expr planners should succeed.
-        let got = plan_count_wildcard(true).await?;
+        let got = plan_overlay(true).await?;
         let displayable = DisplayableExecutionPlan::new(got.as_ref());
         assert_eq!(
             displayable.indent(false).to_string(),
-            "ProjectionExec: expr=[0 as count(*)]\n  PlaceholderRowExec\n"
+            "ProjectionExec: expr=[axc as overlay(Utf8(\"abc\"),Utf8(\"x\"),Int64(2))]\n  EmptyExec\n"
         );
 
         Ok(())

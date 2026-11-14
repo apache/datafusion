@@ -621,7 +621,6 @@ enum ExprMask {
     /// - [`Columns`](Expr::Column)
     /// - [`ScalarVariable`](Expr::ScalarVariable)
     /// - [`Alias`](Expr::Alias)
-    /// - [`Wildcard`](Expr::Wildcard)
     /// - [`AggregateFunction`](Expr::AggregateFunction)
     Normal,
 
@@ -773,8 +772,6 @@ impl CSEController for ExprCSEController<'_> {
             return true;
         }
 
-        // TODO: remove the next line after `Expr::Wildcard` is removed
-        #[expect(deprecated)]
         let is_normal_minus_aggregates = matches!(
             node,
             // TODO: there's an argument for removing `Literal` from here,
@@ -786,7 +783,6 @@ impl CSEController for ExprCSEController<'_> {
                 | Expr::Column(..)
                 | Expr::ScalarVariable(..)
                 | Expr::Alias(..)
-                | Expr::Wildcard { .. }
                 | Expr::Lambda(_)
                 | Expr::LambdaVariable(_)
                 | Expr::WindowFunction(..)

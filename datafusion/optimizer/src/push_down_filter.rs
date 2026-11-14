@@ -279,12 +279,9 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::HigherOrderFunction(_)
         | Expr::Lambda(_)
         | Expr::LambdaVariable(_) => Ok(false),
-        // TODO: remove the next line after `Expr::Wildcard` is removed
-        #[expect(deprecated)]
-        Expr::AggregateFunction(_)
-        | Expr::WindowFunction(_)
-        | Expr::Wildcard { .. }
-        | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
+        Expr::AggregateFunction(_) | Expr::WindowFunction(_) | Expr::GroupingSet(_) => {
+            internal_err!("Unsupported predicate type")
+        }
     })?)
 }
 

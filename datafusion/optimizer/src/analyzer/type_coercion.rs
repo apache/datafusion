@@ -1120,8 +1120,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     HigherOrderFunction::new(func, new_args),
                 )))
             }
-            // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[expect(deprecated)]
+
             Expr::Alias(_)
             | Expr::Column(_)
             | Expr::ScalarVariable(_, _)
@@ -1130,7 +1129,6 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             | Expr::IsNull(_)
             | Expr::Cast(_)
             | Expr::TryCast(_)
-            | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
             | Expr::OuterReferenceColumn(_, _)
@@ -1747,10 +1745,6 @@ fn project_with_column_index(
                 spans: _,
             }) if name != schema.field(i).name() => Ok(e.alias(schema.field(i).name())),
             Expr::Alias { .. } | Expr::Column { .. } => Ok(e),
-            #[expect(deprecated)]
-            Expr::Wildcard { .. } => {
-                plan_err!("Wildcard should be expanded before type coercion")
-            }
             _ => Ok(e.alias(schema.field(i).name())),
         })
         .collect::<Result<Vec<_>>>()?;

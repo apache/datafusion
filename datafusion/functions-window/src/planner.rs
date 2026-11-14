@@ -74,13 +74,7 @@ impl ExprPlanner for WindowFunctionPlanner {
             distinct,
         };
 
-        // TODO: remove the next line after `Expr::Wildcard` is removed
-        #[expect(deprecated)]
-        if raw_expr.func_def.name() == "count"
-            && (raw_expr.args.len() == 1
-                && matches!(raw_expr.args[0], Expr::Wildcard { .. })
-                || raw_expr.args.is_empty())
-        {
+        if raw_expr.func_def.name() == "count" && raw_expr.args.is_empty() {
             let RawWindowExpr {
                 func_def,
                 args: _,

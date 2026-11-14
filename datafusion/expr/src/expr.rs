@@ -377,19 +377,6 @@ pub enum Expr {
     SetComparison(SetComparison),
     /// Scalar subquery
     ScalarSubquery(Subquery),
-    /// Represents a reference to all available fields in a specific schema,
-    /// with an optional (schema) qualifier.
-    ///
-    /// This expr has to be resolved to a list of columns before translating logical
-    /// plan into physical plan.
-    #[deprecated(
-        since = "46.0.0",
-        note = "A wildcard needs to be resolved to concrete expressions when constructing the logical plan. See https://github.com/apache/datafusion/issues/7765"
-    )]
-    Wildcard {
-        qualifier: Option<TableReference>,
-        options: Box<WildcardOptions>,
-    },
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
@@ -1740,8 +1727,6 @@ impl Expr {
             Expr::ScalarVariable(..) => "ScalarVariable",
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
-            #[expect(deprecated)]
-            Expr::Wildcard { .. } => "Wildcard",
             Expr::Unnest { .. } => "Unnest",
             Expr::HigherOrderFunction { .. } => "HigherOrderFunction",
             Expr::Lambda { .. } => "Lambda",
@@ -2333,8 +2318,6 @@ impl Expr {
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
-            // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[expect(deprecated)]
             Expr::AggregateFunction(..)
             | Expr::Alias(..)
             | Expr::Between(..)
@@ -2362,7 +2345,6 @@ impl Expr {
             | Expr::OuterReferenceColumn(_, _)
             | Expr::TryCast(..)
             | Expr::Unnest(..)
-            | Expr::Wildcard { .. }
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
             | Expr::Placeholder(..)
@@ -2968,11 +2950,6 @@ impl HashNode for Expr {
             Expr::ScalarSubquery(subquery) => {
                 subquery.hash(state);
             }
-            #[expect(deprecated)]
-            Expr::Wildcard { qualifier, options } => {
-                qualifier.hash(state);
-                options.hash(state);
-            }
             Expr::GroupingSet(grouping_set) => {
                 mem::discriminant(grouping_set).hash(state);
                 match grouping_set {
@@ -3067,14 +3044,11 @@ impl Display for SchemaDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
             // The same as Display
-            // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[expect(deprecated)]
             Expr::Column(_)
             | Expr::Literal(_, _)
             | Expr::ScalarVariable(..)
             | Expr::OuterReferenceColumn(..)
-            | Expr::Placeholder(_)
-            | Expr::Wildcard { .. } => write!(f, "{}", self.0),
+            | Expr::Placeholder(_) => write!(f, "{}", self.0),
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.schema_name(params) {
                     Ok(name) => {
@@ -3814,11 +3788,6 @@ impl Display for Expr {
                     write!(f, "{expr} IN ([{}])", expr_vec_fmt!(list))
                 }
             }
-            #[expect(deprecated)]
-            Expr::Wildcard { qualifier, options } => match qualifier {
-                Some(qualifier) => write!(f, "{qualifier}.*{options}"),
-                None => write!(f, "*{options}"),
-            },
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
                     // ROLLUP (c0, c1, c2)

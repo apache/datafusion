@@ -116,7 +116,7 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
     })
 }
 
-/// Create an '*' [`Expr::Wildcard`] expression that matches all columns
+/// Create an '*' [`SelectExpr::Wildcard`] expression that matches all columns
 ///
 /// # Example
 ///
@@ -129,12 +129,12 @@ pub fn wildcard() -> SelectExpr {
     SelectExpr::Wildcard(WildcardOptions::default())
 }
 
-/// Create an '*' [`Expr::Wildcard`] expression with the wildcard options
+/// Create an '*' [`SelectExpr::Wildcard`] expression with the wildcard options
 pub fn wildcard_with_options(options: WildcardOptions) -> SelectExpr {
     SelectExpr::Wildcard(options)
 }
 
-/// Create an 't.*' [`Expr::Wildcard`] expression that matches all columns from a specific table
+/// Create an 't.*' [`SelectExpr::QualifiedWildcard`] expression that matches all columns from a specific table
 ///
 /// # Example
 ///
@@ -148,7 +148,7 @@ pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> SelectExpr {
     SelectExpr::QualifiedWildcard(qualifier.into(), WildcardOptions::default())
 }
 
-/// Create an 't.*' [`Expr::Wildcard`] expression with the wildcard options
+/// Create an 't.*' [`SelectExpr::QualifiedWildcard`] expression with the wildcard options
 pub fn qualified_wildcard_with_options(
     qualifier: impl Into<TableReference>,
     options: WildcardOptions,
