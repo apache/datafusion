@@ -30,8 +30,8 @@ use datafusion_expr_common::placement::ExpressionPlacement;
 use indexmap::{IndexMap, IndexSet};
 use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
-use std::hash::Hash;
-use std::sync::Arc;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, OnceLock};
 
 use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
 use arrow::compute::kernels::merge::{MergeIndex, merge, merge_n};
@@ -50,13 +50,13 @@ enum EvalMethod {
     ///      [WHEN ...]
     ///      [ELSE result]
     /// END
-    NoExpression(ProjectedCaseBody),
+    NoExpression(LazyProjectedBody),
     /// CASE expression
     ///     WHEN value THEN result
     ///     [WHEN ...]
     ///     [ELSE result]
     /// END
-    WithExpression(ProjectedCaseBody),
+    WithExpression(LazyProjectedBody),
     /// This is a specialization for a specific use case where we can take a fast path
     /// for expressions that are infallible and can be cheaply computed for the entire
     /// record batch rather than just for the rows where the predicate is true.
@@ -76,7 +76,7 @@ enum EvalMethod {
     /// `then` expressions.
     ///
     /// CASE WHEN condition THEN expression [ELSE expression] END
-    ExpressionOrExpression(ProjectedCaseBody),
+    ExpressionOrExpression(LazyProjectedBody),
 
     /// This is a specialization for [`EvalMethod::WithExpression`] when the value and results are literals
     ///
@@ -91,7 +91,7 @@ enum EvalMethod {
 ///
 /// So implementing empty hash is still valid as the data is derived from `PhysicalExpr` s which are already hashed
 impl Hash for LiteralLookupTable {
-    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
 }
 
 /// Implementing Equal so we can use `derive` on [`EvalMethod`].
@@ -107,6 +107,39 @@ impl PartialEq for LiteralLookupTable {
 }
 
 impl Eq for LiteralLookupTable {}
+
+/// A [`ProjectedCaseBody`] derived from the [`CaseBody`] on first evaluation.
+///
+/// Deriving it in [`CaseExpr::try_new`] would make rewrites of nested `CASE` expressions
+/// exponential in the nesting depth: [`CaseBody::project`] rebuilds the nested expressions,
+/// each of which would project its own body again.
+#[derive(Debug, Default)]
+struct LazyProjectedBody(
+    OnceLock<std::result::Result<ProjectedCaseBody, Arc<DataFusionError>>>,
+);
+
+impl LazyProjectedBody {
+    fn project(&self, body: &CaseBody) -> Result<&ProjectedCaseBody> {
+        self.0
+            .get_or_init(|| body.project().map_err(Arc::new))
+            .as_ref()
+            .map_err(|e| DataFusionError::Shared(Arc::clone(e)))
+    }
+}
+
+/// The projection is derived from the [`CaseBody`], which is already hashed.
+impl Hash for LazyProjectedBody {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
+}
+
+/// The projection is derived from the [`CaseBody`], which is already compared.
+impl PartialEq for LazyProjectedBody {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for LazyProjectedBody {}
 
 /// The body of a CASE expression which consists of an optional base expression, the "when/then"
 /// branches and an optional "else" branch.
@@ -428,7 +461,7 @@ pub struct CaseExpr {
 // Hash/Eq avoids redundantly hashing the expression tree twice. For
 // nested CASE chains this prevents exponential blowup (see #22173).
 impl Hash for CaseExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.body.hash(state);
     }
 }
@@ -820,38 +853,36 @@ impl CaseExpr {
             else_expr,
         };
 
-        let eval_method = Self::find_best_eval_method(&body)?;
+        let eval_method = Self::find_best_eval_method(&body);
 
         Ok(Self { body, eval_method })
     }
 
-    fn find_best_eval_method(body: &CaseBody) -> Result<EvalMethod> {
+    fn find_best_eval_method(body: &CaseBody) -> EvalMethod {
         if body.expr.is_some() {
             if let Some(mapping) = LiteralLookupTable::maybe_new(body) {
-                return Ok(EvalMethod::WithExprScalarLookupTable(mapping));
+                return EvalMethod::WithExprScalarLookupTable(mapping);
             }
 
-            return Ok(EvalMethod::WithExpression(body.project()?));
+            return EvalMethod::WithExpression(LazyProjectedBody::default());
         }
 
-        Ok(
-            if body.when_then_expr.len() == 1
-                && is_cheap_and_infallible(&(body.when_then_expr[0].1))
-                && body.else_expr.is_none()
-            {
-                EvalMethod::InfallibleExprOrNull
-            } else if body.when_then_expr.len() == 1
-                && body.when_then_expr[0].1.is::<Literal>()
-                && body.else_expr.is_some()
-                && body.else_expr.as_ref().unwrap().is::<Literal>()
-            {
-                EvalMethod::ScalarOrScalar
-            } else if body.when_then_expr.len() == 1 {
-                EvalMethod::ExpressionOrExpression(body.project()?)
-            } else {
-                EvalMethod::NoExpression(body.project()?)
-            },
-        )
+        if body.when_then_expr.len() == 1
+            && is_cheap_and_infallible(&(body.when_then_expr[0].1))
+            && body.else_expr.is_none()
+        {
+            EvalMethod::InfallibleExprOrNull
+        } else if body.when_then_expr.len() == 1
+            && body.when_then_expr[0].1.is::<Literal>()
+            && body.else_expr.is_some()
+            && body.else_expr.as_ref().unwrap().is::<Literal>()
+        {
+            EvalMethod::ScalarOrScalar
+        } else if body.when_then_expr.len() == 1 {
+            EvalMethod::ExpressionOrExpression(LazyProjectedBody::default())
+        } else {
+            EvalMethod::NoExpression(LazyProjectedBody::default())
+        }
     }
 
     /// Optional base expression that can be compared to literal values in the "when" expressions
@@ -1436,19 +1467,21 @@ impl PhysicalExpr for CaseExpr {
             EvalMethod::WithExpression(p) => {
                 // this use case evaluates "expr" and then compares the values with the "when"
                 // values
-                self.case_when_with_expr(batch, p)
+                self.case_when_with_expr(batch, p.project(&self.body)?)
             }
             EvalMethod::NoExpression(p) => {
                 // The "when" conditions all evaluate to boolean in this use case and can be
                 // arbitrary expressions
-                self.case_when_no_expr(batch, p)
+                self.case_when_no_expr(batch, p.project(&self.body)?)
             }
             EvalMethod::InfallibleExprOrNull => {
                 // Specialization for CASE WHEN expr THEN column [ELSE NULL] END
                 self.case_column_or_null(batch)
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
-            EvalMethod::ExpressionOrExpression(p) => self.expr_or_expr(batch, p),
+            EvalMethod::ExpressionOrExpression(p) => {
+                self.expr_or_expr(batch, p.project(&self.body)?)
+            }
             EvalMethod::WithExprScalarLookupTable(lookup_table) => {
                 self.with_lookup_table(batch, lookup_table)
             }
@@ -2108,6 +2141,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::WithExpression(projected) => {
+                let projected = projected.project(&expr.body)?;
                 assert!(!projected.supports_projection);
             }
             method => panic!("expected WithExpression, got {method:?}"),
@@ -2140,6 +2174,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::ExpressionOrExpression(projected) => {
+                let projected = projected.project(&expr.body)?;
                 assert!(!projected.supports_projection);
             }
             method => panic!("expected ExpressionOrExpression, got {method:?}"),
@@ -2173,6 +2208,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::ExpressionOrExpression(projected) => {
+                let projected = projected.project(&expr.body)?;
                 assert!(projected.supports_projection);
                 assert_eq!(projected.projection, vec![1, 2]);
             }
@@ -2227,6 +2263,45 @@ mod tests {
         )?))
     }
 
+    /// Building and evaluating a nested `CASE` must not be exponential in the nesting
+    /// depth when each level reads a different field.
+    #[test]
+    fn nested_case_with_distinct_struct_fields() -> Result<()> {
+        let fields = (0..=40)
+            .map(|i| Field::new(format!("f{i}"), DataType::Int32, true))
+            .collect::<Vec<_>>();
+        let columns = (0..=40)
+            .map(|i| Arc::new(Int32Array::from(vec![i, i + 1])) as ArrayRef)
+            .collect::<Vec<_>>();
+        let s = StructArray::new(fields.into(), columns, None);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            s.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s)])?;
+
+        let s = col("s", &schema)?;
+        let mut expr = get_field_expr(Arc::clone(&s), "f0", &schema)?;
+        for i in 1..=40 {
+            let when = binary(
+                get_field_expr(Arc::clone(&s), &format!("f{i}"), &schema)?,
+                Operator::Eq,
+                lit(-1i32),
+                &schema,
+            )?;
+            expr = Arc::new(CaseExpr::try_new(
+                None,
+                vec![(when, lit(1i32))],
+                Some(expr),
+            )?);
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(as_int32_array(&result)?, &Int32Array::from(vec![0, 1]));
+        Ok(())
+    }
+
     #[test]
     fn case_without_expr_precomputes_struct_fields() -> Result<()> {
         let batch = case_test_batch_with_struct()?;
@@ -2253,6 +2328,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::NoExpression(projected) => {
+                let projected = projected.project(&expr.body)?;
                 assert!(projected.supports_projection);
                 assert_eq!(projected.projection, vec![0]);
                 assert_eq!(projected.precomputed, vec![s_a, s_b]);
@@ -2284,6 +2360,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::WithExpression(projected) => {
+                let projected = projected.project(&expr.body)?;
                 assert!(projected.supports_projection);
                 assert!(projected.projection.is_empty());
                 assert_eq!(projected.precomputed, vec![s_a, s_c]);
@@ -2323,6 +2400,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::ExpressionOrExpression(projected) => {
+                let projected = projected.project(&expr.body)?;
                 assert!(projected.supports_projection);
                 assert_eq!(projected.projection, vec![0]);
                 assert_eq!(projected.precomputed, vec![s_a, s_b]);
@@ -2364,6 +2442,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::NoExpression(projected) => {
+                let projected = projected.project(&expr.body)?;
                 assert!(!projected.supports_projection);
             }
             method => panic!("expected NoExpression, got {method:?}"),
@@ -2401,6 +2480,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::NoExpression(projected) => {
+                let projected = projected.project(&expr.body)?;
                 assert!(projected.supports_projection);
                 assert_eq!(projected.projection, vec![1]);
                 assert!(projected.precomputed.is_empty());
