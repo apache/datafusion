@@ -8160,6 +8160,50 @@ reset datafusion.execution.batch_size;
 statement ok
 DROP TABLE complete_partitions;
 
+# FIRST_VALUE, LAST_VALUE and NTH_VALUE evaluate the frames of all complete
+# partitions of a batch in one call. With 8-row batches, k = 2, 3 and 4 are
+# complete in the first batch and k = 6 and 7 in the second. `o` repeats
+# across partitions, so a frame that leaves its partition changes a result.
+# https://github.com/apache/datafusion/issues/27463
+statement ok
+CREATE TABLE complete_frames(k INT, o INT, v INT) AS VALUES
+  (1, 1, 10), (2, 2, NULL), (2, 3, 20), (3, 3, NULL), (3, 4, 30), (4, 1, 40), (4, 3, 41),
+  (5, 1, 50), (5, 2, 51), (6, 2, NULL), (6, 3, NULL), (7, 1, 70), (8, 1, 80), (8, 2, 81);
+
+statement ok
+set datafusion.execution.batch_size = 8;
+
+query IIIIIIII
+SELECT k, o, v,
+  sum(v) OVER (PARTITION BY k ORDER BY o),
+  first_value(v) OVER (PARTITION BY k ORDER BY o),
+  last_value(v) IGNORE NULLS OVER (PARTITION BY k ORDER BY o),
+  nth_value(v, 2) OVER (PARTITION BY k ORDER BY o ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+  last_value(v) OVER (PARTITION BY k ORDER BY o GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM complete_frames
+ORDER BY k, o;
+----
+1 1 10 10 10 10 NULL 10
+2 2 NULL NULL NULL NULL 20 NULL
+2 3 20 20 NULL 20 20 20
+3 3 NULL NULL NULL NULL 30 NULL
+3 4 30 30 NULL 30 30 30
+4 1 40 40 40 40 41 40
+4 3 41 81 40 41 41 41
+5 1 50 50 50 50 51 50
+5 2 51 101 50 51 51 51
+6 2 NULL NULL NULL NULL NULL NULL
+6 3 NULL NULL NULL NULL NULL NULL
+7 1 70 70 70 70 NULL 70
+8 1 80 80 80 80 81 80
+8 2 81 161 80 81 81 81
+
+statement ok
+reset datafusion.execution.batch_size;
+
+statement ok
+DROP TABLE complete_frames;
+
 # The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # restore that value rather than resetting.
 statement ok

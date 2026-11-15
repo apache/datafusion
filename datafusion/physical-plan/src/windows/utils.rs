@@ -35,21 +35,27 @@ pub(crate) fn compute_window_aggregates(
     batch: &RecordBatch,
     partitions: &[Range<usize>],
 ) -> Result<Vec<ArrayRef>> {
-    let mut results = window_expr
-        .iter()
-        .map(|_| Vec::with_capacity(partitions.len()))
-        .collect::<Vec<Vec<ArrayRef>>>();
-    for range in partitions {
-        let partition = batch.slice(range.start, range.len());
-        for (expr, expr_results) in window_expr.iter().zip(&mut results) {
-            expr_results.push(expr.evaluate(&partition)?);
+    let mut results = Vec::with_capacity(window_expr.len());
+    // The expressions that are evaluated one partition at a time, and their results
+    let mut per_partition = vec![];
+    for (idx, expr) in window_expr.iter().enumerate() {
+        let result = expr.evaluate_partitions(batch, partitions)?;
+        if result.is_none() {
+            per_partition.push((idx, Vec::with_capacity(partitions.len())));
+        }
+        results.push(result);
+    }
+    if !per_partition.is_empty() {
+        for range in partitions {
+            let partition = batch.slice(range.start, range.len());
+            for (idx, arrays) in &mut per_partition {
+                arrays.push(window_expr[*idx].evaluate(&partition)?);
+            }
         }
     }
-    results
-        .iter()
-        .map(|arrays| {
-            let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
-            Ok(concat(&arrays)?)
-        })
-        .collect()
+    for (idx, arrays) in per_partition {
+        let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+        results[idx] = Some(concat(&arrays)?);
+    }
+    Ok(results.into_iter().flatten().collect())
 }

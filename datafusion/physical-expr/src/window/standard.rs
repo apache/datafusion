@@ -5,6 +5,7 @@
 //! Physical exec for standard window function expressions.
 
 use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 use super::{StandardWindowFunctionExpr, WindowExpr};
@@ -17,8 +18,8 @@ use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::WindowFrame;
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
+use datafusion_expr::{PartitionEvaluator, WindowFrame};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 /// A window expr that takes the form of a [`StandardWindowFunctionExpr`].
@@ -70,6 +71,44 @@ impl StandardWindowExpr {
         }
         Ok(())
     }
+
+    /// Evaluates `evaluator`, which uses the window frame, on the frame of every
+    /// row of `partitions`, consecutive ranges of whole partitions in `batch`,
+    /// in one call
+    fn evaluate_frames(
+        &self,
+        mut evaluator: Box<dyn PartitionEvaluator>,
+        batch: &RecordBatch,
+        partitions: &[Range<usize>],
+    ) -> Result<ArrayRef> {
+        let sort_options: Vec<_> = self.order_by.iter().map(|o| o.options).collect();
+        let mut values = self.evaluate_args(batch)?;
+        let order_bys = get_orderby_values(self.order_by_columns(batch)?);
+        let mut ranges = Vec::with_capacity(partitions.iter().map(Range::len).sum());
+        for partition in partitions {
+            let partition_order_bys = order_bys
+                .iter()
+                .map(|column| column.slice(partition.start, partition.len()))
+                .collect::<Vec<_>>();
+            let mut window_frame_ctx = WindowFrameContext::new(
+                Arc::clone(&self.window_frame),
+                sort_options.clone(),
+            );
+            // We iterate on each row to calculate its window frame range
+            let mut range = 0..0;
+            for idx in 0..partition.len() {
+                range = window_frame_ctx.calculate_range(
+                    &partition_order_bys,
+                    &range,
+                    partition.len(),
+                    idx,
+                )?;
+                ranges.push(partition.start + range.start..partition.start + range.end);
+            }
+        }
+        values.extend(order_bys);
+        evaluator.evaluate_ranges(&values, &ranges)
+    }
 }
 
 impl WindowExpr for StandardWindowExpr {
@@ -102,28 +141,7 @@ impl WindowExpr for StandardWindowExpr {
         let mut evaluator = self.expr.create_evaluator()?;
         let num_rows = batch.num_rows();
         if evaluator.uses_window_frame() {
-            let sort_options = self.order_by.iter().map(|o| o.options).collect();
-            let mut ranges = Vec::with_capacity(num_rows);
-
-            let mut values = self.evaluate_args(batch)?;
-            let order_bys = get_orderby_values(self.order_by_columns(batch)?);
-            let n_args = values.len();
-            values.extend(order_bys);
-            let order_bys_ref = &values[n_args..];
-
-            let mut window_frame_ctx =
-                WindowFrameContext::new(Arc::clone(&self.window_frame), sort_options);
-            // We iterate on each row to calculate its window frame range
-            for idx in 0..num_rows {
-                let range = window_frame_ctx.calculate_range(
-                    order_bys_ref,
-                    ranges.last().unwrap_or(&(0..0)),
-                    num_rows,
-                    idx,
-                )?;
-                ranges.push(range);
-            }
-            evaluator.evaluate_ranges(&values, &ranges)
+            self.evaluate_frames(evaluator, batch, std::slice::from_ref(&(0..num_rows)))
         } else if evaluator.include_rank() {
             let columns = self.order_by_columns(batch)?;
             let sort_partition_points = evaluate_partition_ranges(num_rows, &columns)?;
@@ -132,6 +150,19 @@ impl WindowExpr for StandardWindowExpr {
             let values = self.evaluate_args(batch)?;
             evaluator.evaluate_all(&values, num_rows)
         }
+    }
+
+    fn evaluate_partitions(
+        &self,
+        batch: &RecordBatch,
+        partitions: &[Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        let evaluator = self.expr.create_evaluator()?;
+        if !(evaluator.uses_window_frame() && evaluator.evaluates_frames_independently())
+        {
+            return Ok(None);
+        }
+        self.evaluate_frames(evaluator, batch, partitions).map(Some)
     }
 
     /// Evaluate the window function against the batch. This function facilitates

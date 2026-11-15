@@ -290,7 +290,7 @@ impl BoundedWindowAggExec {
                     ordered_partition_by_indices,
                     input_schema,
                     can_evaluate_complete: self.state_observer.is_none()
-                        && self.window_expr.iter().all(is_aggregate),
+                        && self.window_expr.iter().all(can_evaluate_complete),
                     complete_out: vec![],
                 })
             }
@@ -1062,11 +1062,14 @@ pub struct SortedSearch {
     ordered_partition_by_indices: Vec<usize>,
     input_schema: SchemaRef,
     /// Whether partitions that start and end inside one input batch are
-    /// evaluated with [`WindowExpr::evaluate`] instead of being buffered. Only
-    /// when every window expression is an aggregate, for which `evaluate` is
-    /// the calculation `evaluate_stateful` does for a whole partition (other
-    /// functions can call different `PartitionEvaluator` methods). Off when a
-    /// [`WindowStateObserver`] needs the state of each partition.
+    /// evaluated directly instead of being buffered. Only when every window
+    /// expression is an aggregate, for which [`WindowExpr::evaluate`] is the
+    /// calculation `evaluate_stateful` does for a whole partition, or a window
+    /// function that evaluates its frames independently, for which
+    /// [`WindowExpr::evaluate_partitions`] evaluates all these partitions in
+    /// one call. Other functions can call different `PartitionEvaluator`
+    /// methods in `evaluate`. Off when a [`WindowStateObserver`] needs the
+    /// state of each partition.
     can_evaluate_complete: bool,
     /// Results of the complete partitions of the latest input batch, one array
     /// per window expression, or empty. Set by `evaluate_partition_batches`
@@ -1702,6 +1705,16 @@ fn window_lookahead(exprs: &[Arc<dyn WindowExpr>]) -> Option<WindowLookahead> {
 fn is_aggregate(expr: &Arc<dyn WindowExpr>) -> bool {
     expr.as_any().is::<PlainAggregateWindowExpr>()
         || expr.as_any().is::<SlidingAggregateWindowExpr>()
+}
+
+/// See [`SortedSearch::can_evaluate_complete`]
+fn can_evaluate_complete(expr: &Arc<dyn WindowExpr>) -> bool {
+    is_aggregate(expr)
+        || expr
+            .as_any()
+            .downcast_ref::<StandardWindowExpr>()
+            .and_then(|e| e.get_standard_func_expr().create_evaluator().ok())
+            .is_some_and(|e| e.uses_window_frame() && e.evaluates_frames_independently())
 }
 
 /// The [`LimitEffect`] of one window expression. Plain and sliding aggregates

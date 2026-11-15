@@ -84,6 +84,18 @@ pub trait WindowExpr: Send + Sync + Debug {
     /// Evaluate the window function values against the batch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef>;
 
+    /// Evaluates the window function on `partitions`, consecutive ranges of
+    /// whole partitions in `batch`, in one call, and returns one result per
+    /// row of `partitions`. Returns `None` if this expression does not support
+    /// it, in which case [`Self::evaluate`] is called for each partition.
+    fn evaluate_partitions(
+        &self,
+        _batch: &RecordBatch,
+        _partitions: &[Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        Ok(None)
+    }
+
     /// Evaluate the window function against the batch. This function facilitates
     /// stateful, bounded-memory implementations.
     ///

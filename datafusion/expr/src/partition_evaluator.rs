@@ -214,6 +214,14 @@ pub trait PartitionEvaluator: Debug + Send + std::any::Any {
         ScalarValue::iter_to_array(results)
     }
 
+    /// Returns `true` if, until [`Self::memoize`] is called, the result of
+    /// [`Self::evaluate_ranges`] for a frame depends only on `values` and that
+    /// frame. A new evaluator can then evaluate the frames of several small
+    /// partitions in one call.
+    fn evaluates_frames_independently(&self) -> bool {
+        false
+    }
+
     /// [`PartitionEvaluator::evaluate_all_with_rank`] is called for window
     /// functions that only need the rank of a row within its window
     /// frame.
