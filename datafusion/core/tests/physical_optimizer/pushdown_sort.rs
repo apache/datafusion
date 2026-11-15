@@ -1240,6 +1240,50 @@ fn test_sort_pushdown_through_filter_exec() {
     );
 }
 
+// Verify that PushdownSort remaps column indices when pushing through FilterExec with projection.
+#[test]
+fn test_sort_pushdown_through_filter_exec_with_projection() {
+    use datafusion_physical_plan::filter::FilterExecBuilder;
+
+    let schema = schema();
+    let source = Arc::new(TestScan::new(schema.clone(), vec![]));
+    let predicate = expressions::binary(
+        expressions::col("a", &schema).unwrap(),
+        datafusion_expr::Operator::Gt,
+        expressions::lit(0i64),
+        &schema,
+    )
+    .unwrap();
+    // Simulates `SELECT b FROM t WHERE a > 0 ORDER BY b LIMIT 10`:
+    // Child reads [a@0, b@1, ...], FilterExec projects only `b@1` -> filter output has `b@0`
+    let filter = FilterExecBuilder::new(predicate, source)
+        .apply_projection(Some(vec![1]))
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let output_schema = filter.schema();
+    let b_output = sort_expr("b", &output_schema);
+    let ordering = LexOrdering::new(vec![b_output]).unwrap();
+    let plan = sort_exec_with_fetch(ordering, Some(10), Arc::new(filter));
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=10), expr=[b@0 ASC], preserve_partitioning=[false]
+        -   FilterExec: a@0 > 0, projection=[b@1]
+        -     TestScan
+      output:
+        Ok:
+          - SortExec: TopK(fetch=10), expr=[b@0 ASC], preserve_partitioning=[false]
+          -   FilterExec: a@0 > 0, projection=[b@1]
+          -     TestScan: requested_ordering=[b@1 ASC]
+    "
+    );
+}
+
 // Ungrouped MAX(a) pushes [a DESC NULLS LAST] down to the scan.
 #[test]
 fn test_sort_pushdown_ungrouped_max() {
