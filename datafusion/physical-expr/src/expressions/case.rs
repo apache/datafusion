@@ -119,9 +119,9 @@ struct LazyProjectedBody(
 );
 
 impl LazyProjectedBody {
-    fn project(&self, body: &CaseBody) -> Result<&ProjectedCaseBody> {
+    fn project(&self, body: &CaseBody, schema: &Schema) -> Result<&ProjectedCaseBody> {
         self.0
-            .get_or_init(|| body.project().map_err(Arc::new))
+            .get_or_init(|| body.project(schema).map_err(Arc::new))
             .as_ref()
             .map_err(|e| DataFusionError::Shared(Arc::clone(e)))
     }
@@ -155,7 +155,7 @@ struct CaseBody {
 
 impl CaseBody {
     /// Derives a [ProjectedCaseBody] from this [CaseBody].
-    fn project(&self) -> Result<ProjectedCaseBody> {
+    fn project(&self, schema: &Schema) -> Result<ProjectedCaseBody> {
         // Lambda bodies are evaluated against batches of a different shape, so
         // expressions are only precomputed when the body contains no lambdas.
         let can_precompute = !self.exprs().any(|e| {
@@ -182,7 +182,7 @@ impl CaseBody {
         if can_precompute {
             self.exprs().for_each(|expr| {
                 expr.apply(|expr| {
-                    if is_precomputable(expr) {
+                    if is_precomputable(expr, schema) {
                         precompute_candidates.insert(Arc::clone(expr));
                         return Ok(TreeNodeRecursion::Jump);
                     }
@@ -241,7 +241,7 @@ impl CaseBody {
             Arc::clone(expr)
                 .transform_down(|e| {
                     if !precomputed.is_empty()
-                        && is_precomputable(&e)
+                        && is_precomputable(&e, schema)
                         && let Some(k) = precomputed.get_index_of(&e)
                     {
                         let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(
@@ -320,9 +320,12 @@ impl CaseBody {
 ///
 /// Expressions with [`ExpressionPlacement::MoveTowardsLeafNodes`] placement may be pushed
 /// below filters by the optimizer, so evaluating them for rows a branch does not select is
-/// expected to be safe.
-fn is_precomputable(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    if expr.placement() != ExpressionPlacement::MoveTowardsLeafNodes || is_volatile(expr)
+/// expected to be safe. Map lookups are excluded: they scan the entries of every row
+/// and can fail for rows that no branch selects.
+fn is_precomputable(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
+    if expr.placement() != ExpressionPlacement::MoveTowardsLeafNodes
+        || is_volatile(expr)
+        || crosses_map(expr, schema)
     {
         return false;
     }
@@ -339,6 +342,36 @@ fn is_precomputable(expr: &Arc<dyn PhysicalExpr>) -> bool {
     })
     .expect("Closure cannot fail");
     has_column && only_supported_leaves
+}
+
+/// Returns true if `expr` contains a field access path that reaches into a `Map` value.
+fn crosses_map(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
+    expr.exists(|e| {
+        let Some(func) = e.downcast_ref::<ScalarFunctionExpr>() else {
+            return Ok(false);
+        };
+        let [base, path @ ..] = func.args() else {
+            return Ok(false);
+        };
+        let mut data_type = base.data_type(schema)?;
+        for key in path {
+            let name = key
+                .downcast_ref::<Literal>()
+                .and_then(|l| l.value().try_as_str().flatten().map(str::to_string));
+            data_type = match (&data_type, name) {
+                (DataType::Map(..), _) => return Ok(true),
+                (DataType::Struct(fields), Some(name)) => {
+                    match fields.iter().find(|f| *f.name() == name) {
+                        Some(f) => f.data_type().clone(),
+                        None => return Ok(false),
+                    }
+                }
+                _ => return Ok(false),
+            };
+        }
+        Ok(false)
+    })
+    .unwrap_or(false)
 }
 
 /// A derived case body that can be used to evaluate a case expression after projecting
@@ -1467,12 +1500,15 @@ impl PhysicalExpr for CaseExpr {
             EvalMethod::WithExpression(p) => {
                 // this use case evaluates "expr" and then compares the values with the "when"
                 // values
-                self.case_when_with_expr(batch, p.project(&self.body)?)
+                self.case_when_with_expr(
+                    batch,
+                    p.project(&self.body, batch.schema_ref())?,
+                )
             }
             EvalMethod::NoExpression(p) => {
                 // The "when" conditions all evaluate to boolean in this use case and can be
                 // arbitrary expressions
-                self.case_when_no_expr(batch, p.project(&self.body)?)
+                self.case_when_no_expr(batch, p.project(&self.body, batch.schema_ref())?)
             }
             EvalMethod::InfallibleExprOrNull => {
                 // Specialization for CASE WHEN expr THEN column [ELSE NULL] END
@@ -1480,7 +1516,7 @@ impl PhysicalExpr for CaseExpr {
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
             EvalMethod::ExpressionOrExpression(p) => {
-                self.expr_or_expr(batch, p.project(&self.body)?)
+                self.expr_or_expr(batch, p.project(&self.body, batch.schema_ref())?)
             }
             EvalMethod::WithExprScalarLookupTable(lookup_table) => {
                 self.with_lookup_table(batch, lookup_table)
@@ -2141,7 +2177,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::WithExpression(projected) => {
-                let projected = projected.project(&expr.body)?;
+                let projected = projected.project(&expr.body, &schema)?;
                 assert!(!projected.supports_projection);
             }
             method => panic!("expected WithExpression, got {method:?}"),
@@ -2174,7 +2210,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::ExpressionOrExpression(projected) => {
-                let projected = projected.project(&expr.body)?;
+                let projected = projected.project(&expr.body, &schema)?;
                 assert!(!projected.supports_projection);
             }
             method => panic!("expected ExpressionOrExpression, got {method:?}"),
@@ -2208,7 +2244,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::ExpressionOrExpression(projected) => {
-                let projected = projected.project(&expr.body)?;
+                let projected = projected.project(&expr.body, &schema)?;
                 assert!(projected.supports_projection);
                 assert_eq!(projected.projection, vec![1, 2]);
             }
@@ -2302,6 +2338,118 @@ mod tests {
         Ok(())
     }
 
+    /// A batch with a column `s: Struct<a: Int32, m: Map<Utf8, Int32>>`.
+    fn case_test_batch_with_struct_map() -> Result<RecordBatch> {
+        let mut map_builder =
+            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        for (key, value) in [("k", 1), ("k", 2), ("j", 3)] {
+            map_builder.keys().append_value(key);
+            map_builder.values().append_value(value);
+            map_builder.append(true)?;
+        }
+        let map_array = map_builder.finish();
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("m", map_array.data_type().clone(), true)),
+                Arc::new(map_array) as ArrayRef,
+            ),
+        ]);
+        let schema = Schema::new(vec![Field::new(
+            "s",
+            struct_array.data_type().clone(),
+            true,
+        )]);
+        Ok(RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(struct_array)],
+        )?)
+    }
+
+    /// `CASE WHEN s['a'] = 1 THEN <then> WHEN s['a'] = 2 THEN <then> END`
+    fn case_with_struct_map_lookup(
+        then: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<CaseExpr> {
+        let s_a = get_field_expr(col("s", schema)?, "a", schema)?;
+        CaseExpr::try_new(
+            None,
+            vec![
+                (
+                    binary(Arc::clone(&s_a), Operator::Eq, lit(1i32), schema)?,
+                    Arc::clone(&then),
+                ),
+                (binary(s_a, Operator::Eq, lit(2i32), schema)?, then),
+            ],
+            None,
+        )
+    }
+
+    #[test]
+    fn case_does_not_precompute_flat_map_lookup() -> Result<()> {
+        let batch = case_test_batch_with_struct_map()?;
+        let schema = batch.schema();
+
+        // get_field(s, 'm', 'k')
+        let s_m_k: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            datafusion_functions::core::get_field(),
+            vec![col("s", &schema)?, lit("m"), lit("k")],
+            &schema,
+            Arc::new(ConfigOptions::default()),
+        )?);
+        let expr = case_with_struct_map_lookup(s_m_k, &schema)?;
+
+        match &expr.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
+                assert!(projected.supports_projection);
+                assert_eq!(projected.projection, vec![0]);
+                assert!(projected.precomputed.is_empty());
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_int32_array(&result)?,
+            &Int32Array::from(vec![Some(1), Some(2), None])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn case_precomputes_map_base_of_nested_lookup() -> Result<()> {
+        let batch = case_test_batch_with_struct_map()?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+        let s_m = get_field_expr(s, "m", &schema)?;
+
+        // get_field(get_field(s, 'm'), 'k')
+        let s_m_k = get_field_expr(Arc::clone(&s_m), "k", &schema)?;
+        let expr = case_with_struct_map_lookup(s_m_k, &schema)?;
+
+        match &expr.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
+                assert!(projected.supports_projection);
+                assert!(projected.projection.is_empty());
+                assert_eq!(projected.precomputed, vec![s_a, s_m]);
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_int32_array(&result)?,
+            &Int32Array::from(vec![Some(1), Some(2), None])
+        );
+        Ok(())
+    }
+
     #[test]
     fn case_without_expr_precomputes_struct_fields() -> Result<()> {
         let batch = case_test_batch_with_struct()?;
@@ -2328,7 +2476,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::NoExpression(projected) => {
-                let projected = projected.project(&expr.body)?;
+                let projected = projected.project(&expr.body, &schema)?;
                 assert!(projected.supports_projection);
                 assert_eq!(projected.projection, vec![0]);
                 assert_eq!(projected.precomputed, vec![s_a, s_b]);
@@ -2360,7 +2508,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::WithExpression(projected) => {
-                let projected = projected.project(&expr.body)?;
+                let projected = projected.project(&expr.body, &schema)?;
                 assert!(projected.supports_projection);
                 assert!(projected.projection.is_empty());
                 assert_eq!(projected.precomputed, vec![s_a, s_c]);
@@ -2400,7 +2548,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::ExpressionOrExpression(projected) => {
-                let projected = projected.project(&expr.body)?;
+                let projected = projected.project(&expr.body, &schema)?;
                 assert!(projected.supports_projection);
                 assert_eq!(projected.projection, vec![0]);
                 assert_eq!(projected.precomputed, vec![s_a, s_b]);
@@ -2442,7 +2590,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::NoExpression(projected) => {
-                let projected = projected.project(&expr.body)?;
+                let projected = projected.project(&expr.body, &schema)?;
                 assert!(!projected.supports_projection);
             }
             method => panic!("expected NoExpression, got {method:?}"),
@@ -2480,7 +2628,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::NoExpression(projected) => {
-                let projected = projected.project(&expr.body)?;
+                let projected = projected.project(&expr.body, &schema)?;
                 assert!(projected.supports_projection);
                 assert_eq!(projected.projection, vec![1]);
                 assert!(projected.precomputed.is_empty());
