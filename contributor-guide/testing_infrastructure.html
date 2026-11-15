@@ -494,10 +494,12 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 <p>This page covers checks for CI workflows, documentation, repository maintenance, and benchmarks. For tests of DataFusion’s query behavior, see <a class="reference internal" href="testing.html"><span class="std std-doc">Testing</span></a>.</p>
 <section id="ci-workflow-tests">
 <h2>CI Workflow Tests<a class="headerlink" href="#ci-workflow-tests" title="Link to this heading">#</a></h2>
-<p>The <a class="reference external" href="https://github.com/apache/datafusion/blob/main/ci/scripts/test_rust_workflow_skips.py">Rust workflow validator tests</a> and <a class="reference external" href="https://github.com/apache/datafusion/blob/main/ci/scripts/test_fork_ci_status.cjs">fork status bridge tests</a> run in CI and in <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code>.
+<p>The <a class="reference external" href="https://github.com/apache/datafusion/blob/main/ci/scripts/test_rust_workflow_skips.py">Rust workflow validator tests</a>, <a class="reference external" href="https://github.com/apache/datafusion/blob/main/ci/scripts/test_fork_ci_status.cjs">fork status bridge tests</a>, <a class="reference external" href="https://github.com/apache/datafusion/blob/main/ci/scripts/test_cancel_merge_queue_runs.cjs">merge queue cleanup tests</a> and <a class="reference external" href="https://github.com/apache/datafusion/blob/main/ci/scripts/test_release_version_labeler.cjs">release version labeler tests</a> run in CI and in <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code>.
 Run them locally:</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>python3<span class="w"> </span>ci/scripts/test_rust_workflow_skips.py
 node<span class="w"> </span>--test<span class="w"> </span>ci/scripts/test_fork_ci_status.cjs
+node<span class="w"> </span>--test<span class="w"> </span>ci/scripts/test_cancel_merge_queue_runs.cjs
+node<span class="w"> </span>--test<span class="w"> </span>ci/scripts/test_release_version_labeler.cjs
 </pre></div>
 </div>
 </section>
