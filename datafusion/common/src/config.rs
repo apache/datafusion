@@ -1659,13 +1659,10 @@ config_namespace! {
         pub enable_window_limits: bool, default = true
 
         /// When set to true, the optimizer will replace
-        /// Filter(rn<=K) → Window(ROW_NUMBER) → Sort patterns with a
-        /// PartitionedTopKExec that maintains per-partition heaps, avoiding
-        /// a full sort of the input.
-        /// When the window partition key has low cardinality, enabling this optimization
-        /// can improve performance. However, for high cardinality keys, it may
-        /// cause regressions in both memory usage and runtime.
-        pub enable_window_topn: bool, default = false
+        /// Filter(rn<=K) → Window(ROW_NUMBER, RANK or DENSE_RANK) → Sort
+        /// patterns with a PartitionedTopKExec that keeps only the top K rows
+        /// of each window partition, avoiding a full sort of the input.
+        pub enable_window_topn: bool, default = true
 
         /// When set to true, the optimizer will rewrite a "top-1 per group"
         /// pattern of the form `Filter(row_number() = 1)` over a `PARTITION BY` window into an
