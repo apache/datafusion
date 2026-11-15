@@ -91,3 +91,82 @@ SELECT "column1" from test
 
 statement ok
 SELECT "Column1" from test
+
+# A table name without a schema must not silently pick one of two
+# relations that share it (https://github.com/apache/datafusion/issues/6012)
+
+statement ok
+CREATE SCHEMA s1;
+
+statement ok
+CREATE SCHEMA s2;
+
+statement ok
+CREATE TABLE s1.t AS SELECT 1 AS a, 2 AS b;
+
+statement ok
+CREATE TABLE s2.t AS SELECT 1 AS a, 3 AS b;
+
+query error
+SELECT t.b FROM s1.t JOIN s2.t USING (a);
+----
+DataFusion error: Schema error: Ambiguous reference to t.b, it matches s1.t.b and s2.t.b
+
+
+query error
+SELECT t.b FROM s2.t JOIN s1.t USING (a);
+----
+DataFusion error: Schema error: Ambiguous reference to t.b, it matches s2.t.b and s1.t.b
+
+
+query error
+SELECT s1.t.b FROM s1.t JOIN s2.t USING (a) WHERE t.b > 0;
+----
+DataFusion error: Schema error: Ambiguous reference to t.b, it matches s1.t.b and s2.t.b
+
+
+query error
+SELECT s1.t.b FROM s1.t JOIN s2.t USING (a) ORDER BY t.b;
+----
+DataFusion error: Schema error: Ambiguous reference to t.b, it matches s1.t.b and s2.t.b
+
+
+# Join columns are ambiguous too when the qualifier matches both sides
+query error
+SELECT t.a FROM s1.t JOIN s2.t USING (a);
+----
+DataFusion error: Schema error: Ambiguous reference to t.a, it matches s1.t.a and s2.t.a
+
+
+query II
+SELECT s1.t.b, s2.t.b FROM s1.t JOIN s2.t USING (a);
+----
+2 3
+
+query I
+SELECT t.b FROM s1.t JOIN s2.t AS u USING (a);
+----
+2
+
+# A relation written exactly as `t` wins over `s1.t`, whatever the join order
+statement ok
+CREATE TABLE t AS SELECT 1 AS a, 4 AS b;
+
+query I
+SELECT t.b FROM t JOIN s1.t USING (a);
+----
+4
+
+query I
+SELECT t.b FROM s1.t JOIN t USING (a);
+----
+4
+
+statement ok
+DROP TABLE t;
+
+statement ok
+DROP TABLE s1.t;
+
+statement ok
+DROP TABLE s2.t;

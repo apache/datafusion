@@ -5,8 +5,9 @@
 use arrow::datatypes::FieldRef;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    Column, DFSchema, Result, Span, TableReference, assert_or_internal_err,
-    exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
+    Column, DFSchema, DataFusionError, Result, SchemaError, Span, TableReference,
+    assert_or_internal_err, exec_datafusion_err, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::LambdaVariable;
 use datafusion_expr::planner::PlannerResult;
@@ -136,7 +137,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .map(|id| self.ident_normalizer.normalize(id))
                 .collect::<Vec<_>>();
 
-            let search_result = search_dfschema(&ids, schema);
+            let search_result = search_dfschema(&ids, schema)?;
             match search_result {
                 // Found matching field with spare identifier(s) for nested field(s) in structure
                 Some((field, qualifier, nested_names)) if !nested_names.is_empty() => {
@@ -175,7 +176,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     } else {
                         // Check the outer_query_schema and try to find a match
                         for outer in planner_context.outer_schemas_iter() {
-                            let search_result = search_dfschema(&ids, outer);
+                            let search_result = search_dfschema(&ids, outer)?;
                             let result = match search_result {
                                 // Found matching field with spare identifier(s) for nested field(s) in structure
                                 Some((field, qualifier, nested_names))
@@ -294,20 +295,32 @@ fn form_identifier(idents: &[String]) -> Result<(Option<TableReference>, &String
     }
 }
 
-fn search_dfschema<'ids, 'schema>(
-    ids: &'ids [String],
-    schema: &'schema DFSchema,
-) -> Option<(
+/// A matched field, its qualifier, and the remaining identifiers that name
+/// nested fields inside it
+type SchemaSearchMatch<'ids, 'schema> = (
     &'schema FieldRef,
     Option<&'schema TableReference>,
     &'ids [String],
-)> {
-    generate_schema_search_terms(ids).find_map(|(qualifier, column, nested_names)| {
-        let qualifier_and_field = schema
-            .qualified_field_with_name(qualifier.as_ref(), column)
-            .ok();
-        qualifier_and_field.map(|(qualifier, field)| (field, qualifier, nested_names))
-    })
+);
+
+fn search_dfschema<'ids, 'schema>(
+    ids: &'ids [String],
+    schema: &'schema DFSchema,
+) -> Result<Option<SchemaSearchMatch<'ids, 'schema>>> {
+    for (qualifier, column, nested_names) in generate_schema_search_terms(ids) {
+        match schema.qualified_field_with_name(qualifier.as_ref(), column) {
+            Ok((qualifier, field)) => return Ok(Some((field, qualifier, nested_names))),
+            // Trying the next search term would treat `t.b` as a nested field
+            // `b` of a column `t`, hiding the ambiguity
+            Err(DataFusionError::SchemaError(err, backtrace))
+                if matches!(*err, SchemaError::AmbiguousQualifiedReference { .. }) =>
+            {
+                return Err(DataFusionError::SchemaError(err, backtrace));
+            }
+            Err(_) => {}
+        }
+    }
+    Ok(None)
 }
 
 // Possibilities we search with, in order from top to bottom for each len:

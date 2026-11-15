@@ -171,6 +171,12 @@ macro_rules! context {
 pub enum SchemaError {
     /// Schema contains a (possibly) qualified and unqualified field with same unqualified name
     AmbiguousReference { field: Box<Column> },
+    /// A qualified reference such as `t.b` matches fields of more than one
+    /// relation, for example `s1.t.b` and `s2.t.b`
+    AmbiguousQualifiedReference {
+        field: Box<Column>,
+        candidates: Vec<Column>,
+    },
     /// Schema contains duplicate qualified field name
     DuplicateQualifiedField {
         qualifier: Box<TableReference>,
@@ -342,6 +348,21 @@ impl Display for SchemaError {
                         "Ambiguous reference to unqualified field {}",
                         field.quoted_flat_name()
                     )
+                }
+            }
+            Self::AmbiguousQualifiedReference { field, candidates } => {
+                let candidates = candidates
+                    .iter()
+                    .map(|c| c.quoted_flat_name())
+                    .collect::<Vec<_>>();
+                match candidates.split_last() {
+                    Some((last, rest)) if !rest.is_empty() => write!(
+                        f,
+                        "Ambiguous reference to {}, it matches {} and {last}",
+                        field.quoted_flat_name(),
+                        rest.join(", ")
+                    ),
+                    _ => write!(f, "Ambiguous reference to {}", field.quoted_flat_name()),
                 }
             }
         }

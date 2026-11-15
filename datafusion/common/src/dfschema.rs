@@ -415,22 +415,58 @@ impl DFSchema {
         )
     }
 
+    /// Find the index of the field with the given optional qualifier and name.
+    ///
+    /// An unqualified lookup returns the first field with that name. A
+    /// qualified lookup returns `None` if the qualifier is ambiguous, for
+    /// example `t` when the schema has both `s1.t` and `s2.t`.
     pub fn index_of_column_by_name(
         &self,
         qualifier: Option<&TableReference>,
         name: &str,
     ) -> Option<usize> {
-        self.indices_of_name(name).find(|&idx| {
-            match (qualifier, &self.field_qualifiers[idx]) {
-                // field to lookup is qualified.
-                // current field is qualified and not shared between relations, compare both
-                // qualifier and name.
-                (Some(q), Some(field_q)) => q.resolved_eq(field_q),
-                // field to lookup is qualified but current field is unqualified.
-                (Some(_), None) => false,
-                // field to lookup is unqualified, no need to compare qualifier
-                (None, Some(_)) | (None, None) => true,
-            }
+        match qualifier {
+            Some(qualifier) => self
+                .index_of_qualified_column(qualifier, name)
+                .ok()
+                .flatten(),
+            None => self.indices_of_name(name).next(),
+        }
+    }
+
+    /// Find the index of the field with the given qualifier and name,
+    /// returning an error if the qualifier matches more than one relation.
+    fn index_of_qualified_column(
+        &self,
+        qualifier: &TableReference,
+        name: &str,
+    ) -> Result<Option<usize>> {
+        let mut matches = self.indices_of_name(name).filter(|&idx| {
+            self.field_qualifiers[idx]
+                .as_ref()
+                .is_some_and(|field_q| qualifier.resolved_eq(field_q))
+        });
+        let Some(first) = matches.next() else {
+            return Ok(None);
+        };
+        let Some(second) = matches.next() else {
+            return Ok(Some(first));
+        };
+        let candidates: Vec<usize> = [first, second].into_iter().chain(matches).collect();
+        // Columns keep the qualifier as written in the query, so `t` must still
+        // find `t.b` when the schema also has `s1.t.b`
+        if let Some(&idx) = candidates
+            .iter()
+            .find(|&&idx| self.field_qualifiers[idx].as_ref() == Some(qualifier))
+        {
+            return Ok(Some(idx));
+        }
+        _schema_err!(SchemaError::AmbiguousQualifiedReference {
+            field: Box::new(Column::new(Some(qualifier.clone()), name)),
+            candidates: candidates
+                .into_iter()
+                .map(|idx| Column::new(self.field_qualifiers[idx].clone(), name))
+                .collect(),
         })
     }
 
@@ -444,13 +480,16 @@ impl DFSchema {
     }
 
     /// Find the index of the column with the given qualifier and name,
-    /// returning `Err` if not found
+    /// returning `Err` if not found or if the qualifier is ambiguous
     ///
     /// See [Self::maybe_index_of_column] for a version that returns `None` if
     /// the column is not found
     pub fn index_of_column(&self, col: &Column) -> Result<usize> {
-        self.maybe_index_of_column(col)
-            .ok_or_else(|| field_not_found(col.relation.clone(), &col.name, self))
+        let idx = match &col.relation {
+            Some(qualifier) => self.index_of_qualified_column(qualifier, &col.name)?,
+            None => self.index_of_column_by_name(None, &col.name),
+        };
+        idx.ok_or_else(|| field_not_found(col.relation.clone(), &col.name, self))
     }
 
     /// Check if the column is in the current schema
@@ -480,7 +519,7 @@ impl DFSchema {
     ) -> Result<(Option<&TableReference>, &FieldRef)> {
         if let Some(qualifier) = qualifier {
             let idx = self
-                .index_of_column_by_name(Some(qualifier), name)
+                .index_of_qualified_column(qualifier, name)?
                 .ok_or_else(|| field_not_found(Some(qualifier.clone()), name, self))?;
             Ok((self.field_qualifiers[idx].as_ref(), self.field(idx)))
         } else {
@@ -588,7 +627,7 @@ impl DFSchema {
         name: &str,
     ) -> Result<&FieldRef> {
         let idx = self
-            .index_of_column_by_name(Some(qualifier), name)
+            .index_of_qualified_column(qualifier, name)?
             .ok_or_else(|| field_not_found(Some(qualifier.clone()), name, self))?;
 
         Ok(self.field(idx))
@@ -1803,6 +1842,44 @@ mod tests {
     }
 
     #[test]
+    fn ambiguous_qualifier() -> Result<()> {
+        let mut schema = DFSchema::try_from_qualified_schema(
+            TableReference::partial("s1", "t"),
+            &test_schema_1(),
+        )?;
+        schema.merge(&DFSchema::try_from_qualified_schema(
+            TableReference::partial("s2", "t"),
+            &test_schema_1(),
+        )?);
+
+        let col = Column::from_qualified_name("t.c0");
+        let expected =
+            "Schema error: Ambiguous reference to t.c0, it matches s1.t.c0 and s2.t.c0";
+        assert_eq!(
+            schema.index_of_column(&col).unwrap_err().strip_backtrace(),
+            expected
+        );
+        assert_eq!(
+            schema
+                .qualified_field_from_column(&col)
+                .unwrap_err()
+                .strip_backtrace(),
+            expected
+        );
+        assert!(schema.maybe_index_of_column(&col).is_none());
+
+        let col = Column::from_qualified_name("s2.t.c0");
+        assert_eq!(schema.index_of_column(&col)?, 2);
+
+        // An exact qualifier match is not ambiguous
+        schema.merge(&DFSchema::try_from_qualified_schema("t", &test_schema_1())?);
+        let col = Column::from_qualified_name("t.c0");
+        assert_eq!(schema.index_of_column(&col)?, 4);
+
+        Ok(())
+    }
+
+    #[test]
     fn select_without_valid_fields() {
         let schema = DFSchema::empty();
 
@@ -1948,11 +2025,22 @@ mod tests {
         qualifier: Option<&TableReference>,
         name: &str,
     ) -> Option<usize> {
-        schema.iter().position(|(q, f)| match (qualifier, q) {
-            (Some(q), Some(field_q)) => q.resolved_eq(field_q) && f.name() == name,
-            (Some(_), None) => false,
-            (None, _) => f.name() == name,
-        })
+        let matches = schema
+            .iter()
+            .enumerate()
+            .filter(|(_, (q, f))| match (qualifier, q) {
+                (Some(q), Some(field_q)) => q.resolved_eq(field_q) && f.name() == name,
+                (Some(_), None) => false,
+                (None, _) => f.name() == name,
+            })
+            .map(|(idx, _)| idx)
+            .collect::<Vec<_>>();
+        match qualifier {
+            Some(q) if matches.len() > 1 => matches
+                .into_iter()
+                .find(|&idx| schema.qualified_field(idx).0 == Some(q)),
+            _ => matches.first().copied(),
+        }
     }
 
     #[test]
