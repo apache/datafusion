@@ -777,6 +777,12 @@ cargo check \
                 },
             },
             Cmd {
+                command: &["test", "workspace"],
+                expected: |actual| {
+                    insta::assert_snapshot!("workspace_coverage_explain", actual);
+                },
+            },
+            Cmd {
                 command: &["test", "slt-coverage"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"

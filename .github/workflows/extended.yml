@@ -76,6 +76,7 @@ jobs:
           df -h
       # Give the longest-running suite the build lock before the other Cargo commands.
       - name: Build extended tests
+        shell: bash
         run: |
           extended_test_binary="$(cargo xtask ci step test extended-build |
             jq -r 'select(.reason == "compiler-artifact" and .target.name == "extended_tests" and .executable != null) | .executable')"

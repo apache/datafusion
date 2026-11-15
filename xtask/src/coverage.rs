@@ -6,7 +6,7 @@
 
 use crate::Result;
 use crate::command::{CommandSpec, system_env};
-use serde::Deserialize;
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -17,25 +17,6 @@ const EXCLUDES: &[&str] = &[
     "ffi_example_table_provider",
     "datafusion-cli",
 ];
-
-#[derive(Deserialize)]
-struct Metadata {
-    packages: Vec<Package>,
-}
-
-#[derive(Deserialize)]
-struct Package {
-    name: String,
-    targets: Vec<Target>,
-}
-
-#[derive(Deserialize)]
-struct Target {
-    name: String,
-    kind: Vec<String>,
-    #[serde(rename = "required-features", default)]
-    required_features: Vec<String>,
-}
 
 fn package_args() -> Vec<String> {
     let mut args = vec!["--workspace".to_string()];
@@ -60,24 +41,19 @@ fn cargo(root: &Path, args: &[String]) -> Result<CommandSpec> {
         .current_dir(root)
         .env("RUST_BACKTRACE", "1")
         .failure_message("Workspace coverage failed");
+    if args.first().is_some_and(|arg| arg == "llvm-cov") {
+        builder.requires_executable(
+            "cargo-llvm-cov",
+            "install it with `cargo install cargo-llvm-cov --locked`",
+        );
+    }
     builder.build()
 }
 
 fn llvm_cov(root: &Path, args: &[String]) -> Result<CommandSpec> {
     let mut command = vec!["llvm-cov".to_string()];
     command.extend_from_slice(args);
-    let mut builder = CommandSpec::builder(system_env);
-    builder
-        .program("cargo")
-        .args(command)
-        .current_dir(root)
-        .env("RUST_BACKTRACE", "1")
-        .requires_executable(
-            "cargo-llvm-cov",
-            "install it with `cargo install cargo-llvm-cov --locked`",
-        )
-        .failure_message("Workspace coverage failed");
-    builder.build()
+    cargo(root, &command)
 }
 
 fn workspace_tests(
@@ -89,7 +65,7 @@ fn workspace_tests(
         &strings(&["metadata", "--no-deps", "--format-version", "1", "--locked"]),
     )?
     .output()?;
-    let metadata: Metadata = serde_json::from_slice(&metadata)
+    let metadata: Value = serde_json::from_slice(&metadata)
         .map_err(|error| format!("invalid Cargo metadata: {error}"))?;
 
     // Unlike metadata's workspace-wide resolve graph, tree honors --exclude.
@@ -129,30 +105,46 @@ fn workspace_tests(
     }
     let mut packages = Vec::new();
     let mut tests = BTreeSet::new();
-    for package in metadata.packages {
-        let Some(enabled) = features.get(&package.name) else {
+    for package in array(&metadata["packages"])? {
+        let name = string(&package["name"])?;
+        let Some(enabled) = features.get(name) else {
             continue;
         };
-        packages.push(package.name);
-        for target in package.targets {
-            if target.kind.iter().any(|kind| kind == "test")
-                && target.required_features.iter().all(|f| enabled.contains(f))
+        packages.push(name.to_string());
+        for target in array(&package["targets"])? {
+            let is_test = array(&target["kind"])?.iter().any(|kind| kind == "test");
+            let required = target
+                .get("required-features")
+                .map(array)
+                .transpose()?
+                .unwrap_or_default();
+            if is_test
+                && required
+                    .iter()
+                    .all(|feature| feature.as_str().is_some_and(|f| enabled.contains(f)))
             {
-                tests.insert(target.name);
+                tests.insert(string(&target["name"])?.to_string());
             }
         }
     }
-    if packages.len() != features.len() || !tests.contains("sqllogictests") {
+    if packages.len() != features.len() {
+        return Err("Cargo tree selected packages absent from Cargo metadata".to_string());
+    }
+    if !tests.contains("sqllogictests") {
         return Err("Cargo selection must include the sqllogictests target".to_string());
     }
     Ok((packages, tests))
 }
 
-fn commands(root: &Path, selection: &[String]) -> Result<Vec<CommandSpec>> {
-    let (packages, tests) = workspace_tests(root, selection)?;
+fn commands(
+    root: &Path,
+    selection: &[String],
+    packages: &[String],
+    tests: &BTreeSet<String>,
+) -> Result<Vec<CommandSpec>> {
     let mut report = strings(&["report", "--profile", "ci", "--codecov"]);
     for package in packages {
-        report.extend(["--package".to_string(), package]);
+        report.extend(["--package".to_string(), package.clone()]);
     }
     let write_report = |path: &str| {
         let mut args = report.clone();
@@ -172,7 +164,7 @@ fn commands(root: &Path, selection: &[String]) -> Result<Vec<CommandSpec>> {
     args.extend(strings(&["--no-report", "--lib", "--bins"]));
     for test in tests {
         if test != "sqllogictests" {
-            args.extend(["--test".to_string(), test]);
+            args.extend(["--test".to_string(), test.clone()]);
         }
     }
     commands.push(llvm_cov(root, &args)?);
@@ -181,18 +173,42 @@ fn commands(root: &Path, selection: &[String]) -> Result<Vec<CommandSpec>> {
 }
 
 pub(crate) fn run(root: &Path) -> Result<()> {
-    for command in commands(root, &package_args())? {
+    let selection = package_args();
+    let (packages, tests) = workspace_tests(root, &selection)?;
+    for command in commands(root, &selection, &packages, &tests)? {
         command.execute()?;
     }
     Ok(())
 }
 
 pub(crate) fn explanation(root: &Path) -> Result<String> {
-    Ok(commands(root, &package_args())?
-        .iter()
-        .map(CommandSpec::explanation)
-        .collect::<Vec<_>>()
-        .join("\n\n"))
+    let commands = commands(
+        root,
+        &package_args(),
+        &["<selected-package>".to_string()],
+        &BTreeSet::from(["<enabled-integration-target-except-SLT>".to_string()]),
+    )?;
+    Ok(format!(
+        "# Package and integration-target placeholders are resolved by Cargo at execution time.\n{}",
+        commands
+            .iter()
+            .map(CommandSpec::explanation)
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    ))
+}
+
+fn array(value: &Value) -> Result<&[Value]> {
+    value
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| "expected an array in Cargo metadata".to_string())
+}
+
+fn string(value: &Value) -> Result<&str> {
+    value
+        .as_str()
+        .ok_or_else(|| "expected a string in Cargo metadata".to_string())
 }
 
 fn strings(args: &[&str]) -> Vec<String> {
@@ -266,21 +282,18 @@ coverage-core = { path = "../core", features = ["excluded-only"] }
             tests,
             BTreeSet::from(["enabled".to_string(), "sqllogictests".to_string()])
         );
-        let commands = commands(root, &selection)?;
+        let commands = commands(root, &selection, &packages, &tests)?;
         let rendered = commands
             .iter()
             .map(CommandSpec::full_command)
             .collect::<Vec<_>>();
-        assert_eq!(rendered.len(), 5);
-        assert!(rendered[1].contains("--test sqllogictests"));
-        assert!(rendered[2].ends_with("target/codecov-slt.json"));
-        assert!(rendered[3].contains("--test enabled"));
-        assert!(!rendered[3].contains("--test sqllogictests"));
-        assert!(!rendered[3].contains("--test excluded"));
-        assert!(rendered[4].ends_with("target/codecov.json"));
+        let rendered = rendered
+            .join("\n\n")
+            .replace(root.to_str().unwrap(), "/workspace");
+        insta::assert_snapshot!("workspace_coverage_commands", rendered);
         let (_, tests) =
             workspace_tests(root, &strings(&["--workspace", "--features", "enabled"]))?;
         assert!(tests.contains("excluded"));
-        Ok::<(), String>(())
+        Ok(())
     }
 }
