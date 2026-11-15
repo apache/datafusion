@@ -102,6 +102,8 @@ fn workspace_tests(
         "--prefix",
         "none",
         "--no-dedupe",
+        "--color",
+        "never",
         "--format",
         "{p}|{f}",
     ]));
