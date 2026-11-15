@@ -2014,10 +2014,15 @@ pub fn check_not_null_constraints(
 ///
 /// While this function enables plan reuse, it does not allow the same plan to be executed if it (OR):
 ///
-/// * uses dynamic filters and the original plan (or another reset copy) is still
-///   executing, because operators such as `HashJoinExec` and `AggregateExec`
-///   reset their shared dynamic filter in place,
+/// * uses dynamic filters and the original plan runs after the copy was made
+///   (or is still running), because a scan keeps the dynamic filter it was
+///   given at planning time, which the original plan updates,
+/// * uses a `HashJoinExec` dynamic filter and another reset copy is still
+///   executing, because `HashJoinExec` resets its shared dynamic filter in place,
 /// * represents a recursive query.
+///
+/// For the same reason, the dynamic filters of `SortExec` and `AggregateExec`
+/// in a reset copy do not prune rows in the scan below.
 ///
 pub fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     plan.transform_up(|plan| {
