@@ -369,6 +369,43 @@ async fn test_udwf_bounded_window_returns_null() {
     assert_eq!(test_state.evaluate_all_called(), 0);
 }
 
+/// A partition that starts and ends inside an input batch is evaluated with
+/// the same calls as one that is buffered
+#[tokio::test]
+async fn test_udwf_bounded_window_complete_partition() {
+    let test_state = TestState::new().with_supports_bounded_execution();
+    let TestContext { ctx, test_state } = TestContext::new(test_state);
+    execute(&ctx, "SET datafusion.execution.target_partitions = 1")
+        .await
+        .unwrap();
+
+    // `val % 3 = 1` (rows b and e) is the middle of three partitions in one batch
+    let sql = "SELECT x, y, val, \
+         odd_counter(val) OVER (PARTITION BY val % 3 ORDER BY y) AS odd \
+         from t ORDER BY val % 3, y";
+    let actual = execute(&ctx, sql).await.unwrap();
+
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
+    +---+---+-----+-----+
+    | x | y | val | odd |
+    +---+---+-----+-----+
+    | 1 | a | 0   | 0   |
+    | 2 | d | 3   | 1   |
+    | 2 | g | 6   | 0   |
+    | 2 | h | 6   | 0   |
+    | 2 | i | 6   | 0   |
+    | 2 | j | 6   | 0   |
+    | 1 | b | 1   | 1   |
+    | 2 | e | 4   | 0   |
+    | 1 | c | 2   | 0   |
+    | 2 | f | 5   | 1   |
+    +---+---+-----+-----+
+    ");
+
+    assert_eq!(test_state.evaluate_called(), 10);
+    assert_eq!(test_state.evaluate_all_called(), 0);
+}
+
 async fn execute(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
 }

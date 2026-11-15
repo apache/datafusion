@@ -8126,6 +8126,40 @@ DROP TABLE ordered_through_cast;
 statement ok
 DROP TABLE per_partition_constant;
 
+# Partitions of aggregate windows that start and end inside an input batch are
+# evaluated without being buffered. With 4-row batches, k = 3 spans both
+# batches, so the second batch starts inside a buffered partition and ends
+# inside another one.
+# https://github.com/apache/datafusion/issues/26541
+statement ok
+CREATE TABLE complete_partitions(k INT, v INT) AS VALUES
+  (1, 1), (1, 2), (2, 3), (3, 4), (3, 5), (4, 6), (5, 7), (5, 8);
+
+statement ok
+set datafusion.execution.batch_size = 4;
+
+query IIII
+SELECT k, v,
+  sum(v) OVER (PARTITION BY k ORDER BY v),
+  sum(v) OVER (PARTITION BY k ORDER BY v ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING)
+FROM complete_partitions
+ORDER BY k, v;
+----
+1 1 1 3
+1 2 3 2
+2 3 3 3
+3 4 4 9
+3 5 9 5
+4 6 6 6
+5 7 7 15
+5 8 15 8
+
+statement ok
+reset datafusion.execution.batch_size;
+
+statement ok
+DROP TABLE complete_partitions;
+
 # The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # restore that value rather than resetting.
 statement ok
