@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Reexports the [`datafusion_datasource_json::source`] module, containing JSON based [`FileSource`].
 //!
@@ -610,6 +597,60 @@ mod tests {
                 "+-----+------------------+---------------+------+",
             ],
             &res?
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn json_exec_coerce_primitive() -> Result<()> {
+        use crate::physical_plan::collect;
+        use crate::test::object_store::local_unpartitioned_file;
+        use arrow::datatypes::{DataType, Schema};
+        use datafusion_common::assert_contains;
+        use datafusion_datasource::PartitionedFile;
+
+        let tmp_dir = TempDir::new()?;
+        let path = tmp_dir.path().join("coerce.json");
+        fs::write(
+            &path,
+            "{\"a\": false}\n{\"a\": 3.5}\n{\"a\": \"text\"}\n{\"a\": null}\n{}\n",
+        )?;
+        let file = PartitionedFile::from(local_unpartitioned_file(&path));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+
+        let read = |coerce| {
+            let source =
+                JsonSource::new(Arc::clone(&schema)).with_coerce_primitive(coerce);
+            let conf = FileScanConfigBuilder::new(
+                ObjectStoreUrl::local_filesystem(),
+                Arc::new(source),
+            )
+            .with_file(file.clone())
+            .build();
+            collect(
+                DataSourceExec::from_data_source(conf),
+                SessionContext::new().task_ctx(),
+            )
+        };
+
+        let batches = read(true).await?;
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +-------+
+        | a     |
+        +-------+
+        | false |
+        | 3.5   |
+        | text  |
+        |       |
+        |       |
+        +-------+
+        ");
+        // The snapshot shows NULL as an empty cell, the same as an empty string.
+        let nulls: usize = batches.iter().map(|b| b.column(0).null_count()).sum();
+        assert_eq!(nulls, 2);
+        assert_contains!(
+            read(false).await.unwrap_err().to_string(),
+            "expected string got false"
         );
         Ok(())
     }

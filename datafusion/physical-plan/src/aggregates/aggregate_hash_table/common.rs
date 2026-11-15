@@ -1,31 +1,18 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, new_empty_array, new_null_array,
-};
-use arrow::compute::{filter_record_batch, prep_null_mask_filter};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, new_null_array};
+use arrow::compute::prep_null_mask_filter;
 use arrow::datatypes::SchemaRef;
+use arrow::downcast_dictionary_array;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::compact_dictionary;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{AggregateMetrics, EmitTo, GroupsAccumulator};
@@ -34,7 +21,7 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use log::debug;
 
 use crate::PhysicalExpr;
-use crate::aggregates::aggregate_argument::AggregateArgument;
+use crate::aggregates::aggregate_argument::{AggregateArgument, AggregateFilter};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
@@ -170,6 +157,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             .map(|(((agg_expr, arguments), filter), submetrics)| {
                 let accumulator =
                     create_group_accumulator(agg_expr, Arc::clone(submetrics))?;
+                let arguments = arguments
+                    .into_iter()
+                    .map(|expr| AggregateArgument::try_new(expr, &input_schema))
+                    .collect::<Result<_>>()?;
                 Ok(HashAggregateAccumulator::new(
                     Arc::clone(agg_expr),
                     arguments,
@@ -331,7 +322,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 }
             };
 
-        let batch = output.next_batch(batch_size);
+        let batch = output.next_batch(batch_size)?;
         if output.is_exhausted() {
             self.state = AggregateHashTableState::Done;
         } else {
@@ -398,11 +389,14 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         debug_assert!(batch.num_rows() > 0);
 
         // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
-        // key/index buffers too so the memory reservation can be released
-        // before the batch is sorted for spilling.
+        // key/index buffers and accumulator scratch too so the memory
+        // reservation can be released before the batch is sorted for spilling.
         state.group_values.clear_shrink(0);
         state.batch_group_indices.clear();
         state.batch_group_indices.shrink_to_fit();
+        for acc in &mut state.accumulators {
+            acc.shrink_to_fit();
+        }
 
         Ok(Some(batch))
     }
@@ -490,13 +484,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             let values = state
                 .accumulators
                 .iter()
-                .map(|acc| {
-                    Ok(CompactedAccumulatorArgs {
-                        arguments: acc.null_arguments(&self.input_schema, 0)?,
-                        selection: None,
-                    })
+                .map(|acc| CompactedAccumulatorArgs {
+                    arguments: acc.null_arguments(0),
+                    selection: None,
                 })
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Vec<_>>();
             group_by_metrics.time_aggregation(|| {
                 for (idx, (acc, values)) in
                     state.accumulators.iter_mut().zip(values.iter()).enumerate()
@@ -527,10 +519,10 @@ pub(super) struct HashAggregateAccumulator {
     /// Example: `CORR(x, y)` stores two arguments here, while `SUM(x)` stores one.
     arguments: Vec<AggregateArgument>,
 
-    /// Optional `FILTER` expression for this accumulator.
+    /// Optional `FILTER` clause for this accumulator.
     ///
     /// Example: `SUM(x) FILTER (WHERE x > 10)` stores the `x > 10` predicate.
-    filter: Option<Arc<dyn PhysicalExpr>>,
+    filter: Option<AggregateFilter>,
 
     /// Accumulator state for all groups for one aggregate expression.
     accumulator: Box<dyn GroupsAccumulator>,
@@ -651,16 +643,19 @@ impl MaterializedAggregateOutput {
         Self { batch, offset: 0 }
     }
 
-    pub(super) fn next_batch(&mut self, batch_size: usize) -> Option<RecordBatch> {
+    pub(super) fn next_batch(
+        &mut self,
+        batch_size: usize,
+    ) -> Result<Option<RecordBatch>> {
         debug_assert!(batch_size > 0);
         if self.is_exhausted() {
-            return None;
+            return Ok(None);
         }
 
         let length = batch_size.min(self.batch.num_rows() - self.offset);
         let batch = self.batch.slice(self.offset, length);
         self.offset += length;
-        Some(batch)
+        compact_dictionaries(batch).map(Some)
     }
 
     pub(super) fn is_exhausted(&self) -> bool {
@@ -670,6 +665,36 @@ impl MaterializedAggregateOutput {
     pub(super) fn memory_size(&self) -> usize {
         self.batch.get_array_memory_size()
     }
+}
+
+/// Gives each dictionary column of an emitted slice only the values its rows
+/// reference, when it has more values than rows. A slice otherwise keeps the
+/// values of every group, so work after this operator would grow with the group
+/// count. Each group is emitted once, so this costs O(rows) overall.
+fn compact_dictionaries(batch: RecordBatch) -> Result<RecordBatch> {
+    let rows = batch.num_rows();
+    let oversized = |column: &ArrayRef| {
+        column
+            .as_any_dictionary_opt()
+            .is_some_and(|dictionary| dictionary.values().len() > rows)
+    };
+    if !batch.columns().iter().any(oversized) {
+        return Ok(batch);
+    }
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| {
+            if !oversized(column) {
+                return Ok(Arc::clone(column));
+            }
+            downcast_dictionary_array! {
+                column => Ok(Arc::new(compact_dictionary(column)?) as ArrayRef),
+                dt => internal_err!("expected a dictionary array, got {dt}"),
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(RecordBatch::try_new(batch.schema(), columns)?)
 }
 
 /// Compacts row-aligned group indices using an aggregate filter.
@@ -711,14 +736,15 @@ fn compact_group_indices(
 impl HashAggregateAccumulator {
     pub(super) fn new(
         aggregate_expr: Arc<AggregateFunctionExpr>,
-        arguments: Vec<Arc<dyn PhysicalExpr>>,
+        arguments: Vec<AggregateArgument>,
         filter: Option<Arc<dyn PhysicalExpr>>,
         accumulator: Box<dyn GroupsAccumulator>,
         submetrics: Arc<dyn AggregateMetrics>,
     ) -> Self {
+        let filter = filter.map(|predicate| AggregateFilter::new(predicate, &arguments));
         Self {
             aggregate_expr,
-            arguments: arguments.into_iter().map(AggregateArgument::new).collect(),
+            arguments,
             filter,
             accumulator,
             submetrics,
@@ -734,9 +760,11 @@ impl HashAggregateAccumulator {
             Arc::clone(&self.aggregate_expr),
             self.arguments
                 .iter()
-                .map(|argument| Arc::clone(argument.expr()))
+                .map(AggregateArgument::empty_like)
                 .collect(),
-            self.filter.clone(),
+            self.filter
+                .as_ref()
+                .map(|filter| Arc::clone(filter.predicate())),
             accumulator,
             Arc::clone(&self.submetrics),
         ))
@@ -747,6 +775,8 @@ impl HashAggregateAccumulator {
     /// For example, `AVG(2 / x) FILTER (WHERE x > 0)` evaluates `x > 0`
     /// first, then evaluates `2 / x` against a compact batch containing only
     /// selected rows. Filtered rows won't trigger errors such as divide by zero.
+    /// Only the columns that the arguments read are copied into the compact
+    /// batch (see [`AggregateFilter::select`]).
     ///
     /// Before updating [`GroupsAccumulator`], the retained selection is used to
     /// compact the matching group IDs and is not passed through.
@@ -754,32 +784,28 @@ impl HashAggregateAccumulator {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<CompactedAccumulatorArgs> {
-        let selection = self.evaluate_filter(batch)?;
-        let selected_rows = selection.as_ref().map(|selection| selection.true_count());
-        let filtered_batch = match (selection.as_ref(), selected_rows) {
-            (Some(selection), Some(selected_rows))
-                if selected_rows > 0 && selected_rows < batch.num_rows() =>
-            {
-                Some(filter_record_batch(batch, selection)?)
+        let (selection, argument_batch) = match &mut self.filter {
+            None => (None, Some(Cow::Borrowed(batch))),
+            Some(filter) => {
+                let selection = filter.evaluate(batch)?;
+                let argument_batch = match selection.true_count() {
+                    0 => None,
+                    selected_rows if selected_rows == batch.num_rows() => {
+                        Some(Cow::Borrowed(batch))
+                    }
+                    _ => Some(Cow::Owned(filter.select(batch, &selection)?)),
+                };
+                (Some(selection), argument_batch)
             }
-            _ => None,
-        };
-        let argument_batch = match selected_rows {
-            None => Some(batch),
-            Some(0) => None,
-            Some(selected_rows) if selected_rows == batch.num_rows() => Some(batch),
-            Some(_) => filtered_batch.as_ref(),
         };
         let arguments = self
             .arguments
             .iter_mut()
             .map(|argument| {
-                if let Some(argument_batch) = argument_batch {
+                if let Some(argument_batch) = &argument_batch {
                     argument.evaluate(argument_batch)
                 } else {
-                    let data_type =
-                        argument.expr().data_type(batch.schema_ref().as_ref())?;
-                    Ok(new_empty_array(&data_type))
+                    Ok(argument.null_array(0))
                 }
             })
             .collect::<Result<_>>()?;
@@ -799,34 +825,47 @@ impl HashAggregateAccumulator {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<RowAlignedAccumulatorArgs> {
-        let filter = self.evaluate_filter(batch)?;
-        let selection = filter.as_ref();
+        let Some(filter) = &mut self.filter else {
+            let arguments = self
+                .arguments
+                .iter_mut()
+                .map(|argument| argument.evaluate(batch))
+                .collect::<Result<_>>()?;
+            return Ok(RowAlignedAccumulatorArgs {
+                arguments,
+                filter: None,
+            });
+        };
+
+        let selection = filter.evaluate(batch)?;
+        if !selection.has_true() {
+            // No argument will be evaluated, so avoid constructing an empty
+            // selected batch (or slicing every unused input column).
+            return Ok(RowAlignedAccumulatorArgs {
+                arguments: self.null_arguments(batch.num_rows()),
+                filter: Some(selection),
+            });
+        }
+        let selected = filter.select(batch, &selection)?;
         let arguments = self
             .arguments
             .iter_mut()
-            .map(|argument| match selection {
-                Some(selection) => argument.evaluate_selection(batch, selection),
-                None => argument.evaluate(batch),
-            })
+            .map(|argument| argument.evaluate_selection(batch, &selection, &selected))
             .collect::<Result<_>>()?;
 
-        Ok(RowAlignedAccumulatorArgs { arguments, filter })
-    }
-
-    fn evaluate_filter(&self, batch: &RecordBatch) -> Result<Option<BooleanArray>> {
-        self.filter
-            .as_ref()
-            .map(|filter| {
-                filter
-                    .evaluate(batch)
-                    .and_then(|value| value.into_array(batch.num_rows()))
-                    .map(|filter| filter.as_boolean().clone())
-            })
-            .transpose()
+        Ok(RowAlignedAccumulatorArgs {
+            arguments,
+            filter: Some(selection),
+        })
     }
 
     pub(super) fn size(&self) -> usize {
         self.accumulator.size()
+    }
+
+    /// See [`GroupsAccumulator::shrink_to_fit`].
+    pub(super) fn shrink_to_fit(&mut self) {
+        self.accumulator.shrink_to_fit();
     }
 
     pub(super) fn update_batch(
@@ -889,17 +928,10 @@ impl HashAggregateAccumulator {
             .convert_to_state(&values.arguments, values.filter.as_ref())
     }
 
-    pub(super) fn null_arguments(
-        &self,
-        input_schema: &SchemaRef,
-        num_rows: usize,
-    ) -> Result<Vec<ArrayRef>> {
+    pub(super) fn null_arguments(&self, num_rows: usize) -> Vec<ArrayRef> {
         self.arguments
             .iter()
-            .map(|argument| {
-                let data_type = argument.expr().data_type(input_schema)?;
-                Ok(new_null_array(&data_type, num_rows))
-            })
+            .map(|argument| argument.null_array(num_rows))
             .collect()
     }
 }
@@ -924,8 +956,16 @@ impl AggregateHashTableState {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Array, BooleanArray, Int32Array, Int64Array};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{
+        Array, BooleanArray, DictionaryArray, Int32Array, Int64Array, PrimitiveArray,
+        StringArray,
+    };
+    use arrow::buffer::ScalarBuffer;
+    use arrow::compute::cast;
+    use arrow::datatypes::{
+        ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Int8Type, Schema,
+        UInt8Type,
+    };
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::Column;
@@ -968,13 +1008,86 @@ mod tests {
         )?;
         let mut output = MaterializedAggregateOutput::new(batch);
 
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![1, 2]);
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![3, 4]);
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![5]);
-        assert!(output.next_batch(2).is_none());
+        assert_eq!(int32_values(&output.next_batch(2)?.unwrap(), 0), vec![1, 2]);
+        assert_eq!(int32_values(&output.next_batch(2)?.unwrap(), 0), vec![3, 4]);
+        assert_eq!(int32_values(&output.next_batch(2)?.unwrap(), 0), vec![5]);
+        assert!(output.next_batch(2)?.is_none());
         assert!(output.is_exhausted());
 
         Ok(())
+    }
+
+    fn dictionary_batch<K: ArrowDictionaryKeyType>(
+        keys: PrimitiveArray<K>,
+        num_values: usize,
+    ) -> Result<RecordBatch> {
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..num_values).map(|i| format!("v{i}")),
+        ));
+        let dictionary: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values)?);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group_col",
+            dictionary.data_type().clone(),
+            true,
+        )]));
+        Ok(RecordBatch::try_new(schema, vec![dictionary])?)
+    }
+
+    fn num_dictionary_values(batch: &RecordBatch) -> usize {
+        batch.column(0).as_any_dictionary().values().len()
+    }
+
+    fn decoded(batch: &RecordBatch) -> Result<ArrayRef> {
+        Ok(cast(batch.column(0), &DataType::Utf8)?)
+    }
+
+    #[test]
+    fn next_batch_gives_a_slice_only_the_dictionary_values_it_references() -> Result<()> {
+        // Multi-column group keys repeat dictionary keys, and a group can be NULL
+        let keys =
+            Int32Array::from(vec![Some(5), Some(5), None, Some(7), Some(1), Some(9)]);
+        let batch = dictionary_batch(keys, 20)?;
+        let mut output = MaterializedAggregateOutput::new(batch.clone());
+
+        let first = output.next_batch(4)?.unwrap();
+        assert_eq!(num_dictionary_values(&first), 2);
+        assert_eq!(&decoded(&first)?, &decoded(&batch.slice(0, 4))?);
+
+        let second = output.next_batch(4)?.unwrap();
+        assert_eq!(num_dictionary_values(&second), 2);
+        assert_eq!(&decoded(&second)?, &decoded(&batch.slice(4, 2))?);
+        Ok(())
+    }
+
+    #[test]
+    fn next_batch_keeps_a_dictionary_with_no_more_values_than_rows() -> Result<()> {
+        let batch = dictionary_batch(Int32Array::from(vec![0, 1, 2, 3]), 4)?;
+        let mut output = MaterializedAggregateOutput::new(batch.clone());
+        let slice = output.next_batch(4)?.unwrap();
+        assert!(Arc::ptr_eq(
+            slice.column(0).as_any_dictionary().values(),
+            batch.column(0).as_any_dictionary().values(),
+        ));
+        Ok(())
+    }
+
+    // Arrow doesn't require the key type to be able to index every value, so
+    // a slice can have more rows than the key type holds.
+    #[test]
+    fn next_batch_with_more_rows_than_the_key_type_holds() -> Result<()> {
+        fn check<K: ArrowDictionaryKeyType>(distinct_keys: usize) -> Result<()> {
+            let keys: ScalarBuffer<K::Native> = (0..300)
+                .map(|i| K::Native::usize_as(i % distinct_keys))
+                .collect();
+            let batch = dictionary_batch(PrimitiveArray::<K>::new(keys, None), 1000)?;
+            let mut output = MaterializedAggregateOutput::new(batch.clone());
+            let slice = output.next_batch(300)?.unwrap();
+            assert_eq!(num_dictionary_values(&slice), distinct_keys);
+            assert_eq!(&decoded(&slice)?, &decoded(&batch)?);
+            Ok(())
+        }
+        check::<UInt8Type>(250)?;
+        check::<Int8Type>(120)
     }
 
     #[test]
@@ -1049,7 +1162,7 @@ mod tests {
             create_group_accumulator(&aggregate_expr, Arc::clone(&submetrics))?;
         Ok(HashAggregateAccumulator::new(
             aggregate_expr,
-            vec![argument],
+            vec![AggregateArgument::try_new(argument, schema)?],
             Some(Arc::new(Column::new(filter_name, filter_index))),
             accumulator,
             submetrics,

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::*;
 
@@ -1244,4 +1231,43 @@ fn test_comparison_coercion_with_session_timezone() {
         comparison_coercion(&DataType::Null, &dict),
         Some(DataType::Utf8)
     );
+}
+
+#[test]
+fn union_variants_match_by_type_id_not_position() {
+    use arrow::datatypes::{UnionFields, UnionMode};
+
+    // Exercises `struct_field_names_match`, the guard on the
+    // `equals_datatype` fast paths. Union variants are identified by type id,
+    // not by listing order.
+    fn struct_type(name: &str) -> DataType {
+        DataType::Struct(Fields::from(vec![Field::new(name, DataType::Utf8, true)]))
+    }
+    fn union_type(variants: &[(i8, &str, DataType)]) -> DataType {
+        DataType::Union(
+            UnionFields::try_new(
+                variants.iter().map(|(id, _, _)| *id),
+                variants.iter().map(|(_, name, data_type)| {
+                    Field::new(*name, data_type.clone(), true)
+                }),
+            )
+            .unwrap(),
+            UnionMode::Dense,
+        )
+    }
+
+    // Same child types throughout, so `equals_datatype` holds for every pair
+    // below and the guard is what decides.
+    let foo = struct_type("foo");
+    let bar = struct_type("bar");
+
+    let ordered = union_type(&[(0, "v0", foo.clone()), (1, "v1", bar.clone())]);
+    let reordered = union_type(&[(1, "v1", bar.clone()), (0, "v0", foo.clone())]);
+    // Same id -> variant mapping, different listing order: a match.
+    assert!(struct_field_names_match(&ordered, &reordered));
+
+    // Positions line up by name, but the id-matched variants have swapped
+    // struct names: not a match.
+    let swapped_ids = union_type(&[(1, "v0", foo.clone()), (0, "v1", bar)]);
+    assert!(!struct_field_names_match(&ordered, &swapped_ids));
 }

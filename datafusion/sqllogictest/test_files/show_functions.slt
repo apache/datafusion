@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# SHOW FUNCTIONS fetches it source data directly so it does not require information_schema.routines/.parameters to
+# be present.
+statement ok
+set datafusion.catalog.information_schema = false;
+
+# A LIKE filter that doesn't match any function returns the empty set
+query TT??TTT
+SHOW FUNCTIONS LIKE 'this_function_does_not_exist'
+----
+
+# Unsupported (non-LIKE) filter kinds are rejected
+statement error DataFusion error: Error during planning: Unsupported SHOW FUNCTIONS filter
+SHOW FUNCTIONS WHERE function_name = 'abs'
+
+# A function with multiple overloads should report all signatures
+query TT??TTT rowsort
+SHOW FUNCTIONS LIKE 'string_agg'
+----
+string_agg String [expression, delimiter] [String, Null] AGGREGATE Concatenates the values of string expressions and places separator values between them. If ordering is required, strings are concatenated in the specified order. This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the first argument expression. string_agg([DISTINCT] expression, delimiter [ORDER BY expression])
+string_agg String [expression, delimiter] [String, String] AGGREGATE Concatenates the values of string expressions and places separator values between them. If ordering is required, strings are concatenated in the specified order. This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the first argument expression. string_agg([DISTINCT] expression, delimiter [ORDER BY expression])
+
+# Functions without parameters should be reported
+query TT??TTT rowsort
+SHOW FUNCTIONS LIKE 'pi'
+----
+pi NULL [] [] SCALAR Returns an approximate value of π. pi()
+
+# Config reset
+statement ok
+reset datafusion.catalog.information_schema;

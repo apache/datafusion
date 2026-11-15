@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ##########
 ## UNION Tests
@@ -365,14 +352,14 @@ EXPLAIN SELECT id, name FROM t1 WHERE id = 1 UNION SELECT id, name FROM t1 WHERE
 ----
 logical_plan
 01)Aggregate: groupBy=[[id, name]], aggr=[[]]
-02)--Filter: t1.id = Int32(1) OR t1.id = Int32(2)
+02)--Filter: t1.id IN ([Int32(1), Int32(2)])
 03)----TableScan: t1 projection=[id, name]
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
 02)--RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
 03)----AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------FilterExec: id@0 = 1 OR id@0 = 2
+05)--------FilterExec: id@0 IN (SET) ([1, 2])
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Regression: schema recomputation must preserve the unqualified UNION
@@ -415,14 +402,14 @@ SELECT x.id FROM t1 AS x WHERE x.id = 2
 logical_plan
 01)Aggregate: groupBy=[[id]], aggr=[[]]
 02)--SubqueryAlias: x
-03)----Filter: t1.id = Int32(1) OR t1.id = Int32(2)
+03)----Filter: t1.id IN ([Int32(1), Int32(2)])
 04)------TableScan: t1 projection=[id]
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
 02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=4
 03)----AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------FilterExec: id@0 = 1 OR id@0 = 2
+05)--------FilterExec: id@0 IN (SET) ([1, 2])
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Matching computed projections remain eligible for the rewrite and must
@@ -1144,6 +1131,166 @@ query TITT
 ----
 ns3 4 t3 m
 
+# repro for https://github.com/apache/datafusion/issues/26516
+# should not error when only a later union input remains
+query I
+SELECT 1 WHERE false UNION ALL (SELECT 2 LIMIT 1);
+----
+2
+
+query I
+SELECT a FROM (VALUES (1)) t(a) WHERE false
+UNION ALL
+(SELECT b FROM (VALUES (2)) s(b) LIMIT 1);
+----
+2
+
+# Coercing same-named columns from different join inputs must retain their qualifiers.
+query II rowsort
+SELECT 1::BIGINT AS a, 2::BIGINT AS b
+UNION ALL
+SELECT x.a, y.a
+FROM (VALUES (3::INT)) AS x(a) CROSS JOIN (VALUES (4::INT)) AS y(a);
+----
+1 2
+3 4
+
 # Config reset
 statement ok
 RESET datafusion.execution.batch_size;
+
+# Type inference must preserve timestamp precision in either input order.
+query TI rowsort
+SELECT arrow_typeof(x), arrow_cast(x, 'Int64') FROM (
+  SELECT arrow_cast(1, 'Timestamp(Microsecond, None)') AS x
+  UNION ALL
+  SELECT arrow_cast(1001, 'Timestamp(Nanosecond, None)') AS x
+) u;
+----
+Timestamp(ns) 1000
+Timestamp(ns) 1001
+
+query TI rowsort
+SELECT arrow_typeof(x), arrow_cast(x, 'Int64') FROM (
+  SELECT arrow_cast(1001, 'Timestamp(Nanosecond, None)') AS x
+  UNION DISTINCT
+  SELECT arrow_cast(1, 'Timestamp(Microsecond, None)') AS x
+) u;
+----
+Timestamp(ns) 1000
+Timestamp(ns) 1001
+
+# https://github.com/apache/datafusion/issues/27023
+query TI rowsort
+SELECT arrow_typeof(x), arrow_cast(x, 'Int64') FROM (
+  SELECT arrow_cast(1, 'Timestamp(Microsecond, Some("UTC"))') AS x
+  UNION ALL
+  SELECT CAST(NULL AS TIMESTAMP) AS x
+) u;
+----
+Timestamp(ns, "UTC") 1000
+Timestamp(ns, "UTC") NULL
+
+query TI rowsort
+SELECT arrow_typeof(x), arrow_cast(x, 'Int64') FROM (
+  SELECT CAST(NULL AS TIMESTAMP) AS x
+  UNION DISTINCT
+  SELECT arrow_cast(1, 'Timestamp(Microsecond, Some("UTC"))') AS x
+) u;
+----
+Timestamp(ns, "UTC") 1000
+Timestamp(ns, "UTC") NULL
+
+query TT rowsort
+SELECT arrow_typeof(x), x FROM (
+  SELECT arrow_cast('a', 'Utf8') AS x
+  UNION ALL
+  SELECT arrow_cast('b', 'LargeUtf8') AS x
+) u;
+----
+LargeUtf8 a
+LargeUtf8 b
+
+query TT rowsort
+SELECT arrow_typeof(x), x FROM (
+  SELECT arrow_cast('b', 'Utf8View') AS x
+  UNION DISTINCT
+  SELECT arrow_cast('a', 'Utf8') AS x
+) u;
+----
+Utf8View a
+Utf8View b
+
+query TR rowsort
+SELECT arrow_typeof(x), x FROM (
+  SELECT CAST(1 AS SMALLINT) AS x
+  UNION ALL
+  SELECT 2.5 AS x
+) u;
+----
+Float64 1
+Float64 2.5
+
+query TR rowsort
+SELECT arrow_typeof(x), x FROM (
+  SELECT 2.5 AS x
+  UNION DISTINCT
+  SELECT CAST(1 AS SMALLINT) AS x
+) u;
+----
+Float64 1
+Float64 2.5
+
+query TR rowsort
+SELECT arrow_typeof(x), x FROM (
+  SELECT CASE WHEN false THEN 1 ELSE 2.5 END AS x
+  UNION ALL
+  SELECT CAST(3 AS INT) AS x
+) u;
+----
+Float64 2.5
+Float64 3
+
+query TR rowsort
+SELECT arrow_typeof(x), x FROM (
+  SELECT NULL AS x
+  UNION DISTINCT
+  SELECT CASE WHEN false THEN 1 WHEN true THEN 2.5 END AS x
+) u;
+----
+Float64 2.5
+Float64 NULL
+
+# The inferred output type must not seed coercion of dictionary inputs again.
+query TT rowsort
+SELECT arrow_typeof(x), x FROM (
+  SELECT NULL AS x
+  UNION ALL
+  SELECT arrow_cast('a', 'Dictionary(Int32, Utf8)') AS x
+) u;
+----
+Utf8 NULL
+Utf8 a
+
+query TI rowsort
+SELECT arrow_typeof(x), x FROM (
+  SELECT CAST(1 AS SMALLINT) AS x
+  UNION ALL
+  SELECT arrow_cast(2, 'Dictionary(Int32, Int32)') AS x
+) u;
+----
+Int32 1
+Int32 2
+
+query TR
+SELECT arrow_typeof(max(x)), max(x) FROM (
+  SELECT 1 AS x UNION ALL SELECT 2.5 AS x UNION ALL SELECT 3 AS x
+) u;
+----
+Float64 3
+
+query I
+SELECT CAST(NULL AS SMALLINT) AS x WHERE false
+UNION ALL
+SELECT CAST(NULL AS BIGINT) AS x WHERE false;
+----

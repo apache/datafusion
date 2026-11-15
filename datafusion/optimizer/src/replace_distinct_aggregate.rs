@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ReplaceDistinctWithAggregate`] replaces `DISTINCT ...` with `GROUP BY ...`
 
@@ -102,8 +89,11 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     // is a no-op and we can simply remove it. The dependency mode
                     // must be `Single`: a `Multi` dependence (e.g. a former key
                     // downgraded by a join) means equal rows may occur multiple
-                    // times, so the DISTINCT still has work to do.
+                    // times, so the DISTINCT still has work to do. Uniqueness
+                    // must also hold across NULLs: a nullable UNIQUE key can
+                    // contain multiple NULL rows that DISTINCT must collapse.
                     if dep.mode == Dependency::Single
+                        && dep.is_valid_across_nulls(input.schema())
                         && dep.source_indices.len() >= field_count
                         && dep.source_indices[..field_count]
                             .iter()

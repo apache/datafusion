@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 // This lint violation is acceptable for tests, so suppress for now
 // Issue: <https://github.com/apache/datafusion/issues/18503>
@@ -3998,6 +3985,40 @@ fn plan_merge_into_preserves_target_qualifier_and_quoted_columns() {
     };
     assert_eq!(columns, &["id".to_string(), "Age".to_string()]);
     assert_eq!(values[0].to_string(), "s.j2_id");
+
+    let display = plan.display_indent().to_string();
+    assert_contains!(
+        &display,
+        r#"Dml: op=[MergeInto] table=[person_quoted_cols] on=[t.id = s.j2_id] clauses=[WHEN MATCHED THEN UPDATE SET "First Name" = s.j2_string, WHEN NOT MATCHED THEN INSERT (id, "Age") VALUES (s.j2_id, Int64(42))]"#
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_str(&plan.display_pg_json().to_string()).unwrap();
+    let root = &json[0]["Plan"];
+    assert_eq!(root["Node Type"], "Dml");
+    assert_eq!(root["Operation"], "MergeInto");
+    assert_eq!(root["Table Name"], "person_quoted_cols");
+    assert_eq!(root["On"], "t.id = s.j2_id");
+    assert_eq!(
+        root["Clauses"],
+        serde_json::json!([
+            r#"WHEN MATCHED THEN UPDATE SET "First Name" = s.j2_string"#,
+            r#"WHEN NOT MATCHED THEN INSERT (id, "Age") VALUES (s.j2_id, Int64(42))"#,
+        ])
+    );
+}
+
+#[test]
+fn plan_update_json_has_dml_node_without_merge_fields() {
+    let plan = logical_plan("UPDATE person SET age = 42").unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&plan.display_pg_json().to_string()).unwrap();
+    let root = json[0]["Plan"].as_object().unwrap();
+    assert_eq!(root["Node Type"], "Dml");
+    assert_eq!(root["Operation"], "Update");
+    assert_eq!(root["Table Name"], "person");
+    assert!(!root.contains_key("On"));
+    assert!(!root.contains_key("Clauses"));
 }
 
 #[rstest]
@@ -5652,10 +5673,13 @@ fn test_custom_type_plan() -> Result<()> {
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result.unwrap();
-    let err = planner.statement_to_plan(ast.pop_front().unwrap());
-    assert_contains!(
-        err.unwrap_err().to_string(),
-        "This feature is not implemented: Unsupported SQL type DATETIME"
+    let plan = planner.statement_to_plan(ast.pop_front().unwrap())?;
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns))
+      EmptyRelation: rows=1
+    "#
     );
 
     fn plan_sql(sql: &str) -> LogicalPlan {
@@ -5677,7 +5701,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns))
+    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns, "UTC"))
       EmptyRelation: rows=1
     "#
     );
@@ -5687,7 +5711,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)) AS Timestamp(ns))
+    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)) AS Timestamp(ns, "UTC"))
       EmptyRelation: rows=1
     "#
     );
@@ -5699,7 +5723,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(ns)))
+    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns, "UTC")), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(ns, "UTC")))
       EmptyRelation: rows=1
     "#
     );

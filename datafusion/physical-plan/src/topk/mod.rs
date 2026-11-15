@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! TopK: Combination of Sort / LIMIT
 
@@ -34,11 +21,11 @@ use super::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
     RecordOutput,
 };
-use crate::spill::get_record_batch_memory_size;
 use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
 
 use arrow::array::{ArrayRef, RecordBatch, UInt32Array, UInt64Array};
 use arrow::datatypes::{FieldRef, Schema, SchemaRef};
+use datafusion_common::utils::memory::RecordBatchMemoryTracker;
 use datafusion_common::{
     HashMap, Result, ScalarValue, internal_datafusion_err, internal_err,
 };
@@ -631,6 +618,18 @@ impl TopK {
 
         let mut prev_sort_expr: Option<Arc<dyn PhysicalExpr>> = None;
         for (sort_expr, value) in sort_exprs.iter().zip(thresholds.iter()) {
+            // Comparisons on nested types (List, Struct, ...) order NULL elements
+            // with fixed default options rather than the sort's `nulls_first`, so
+            // `col < threshold` could drop rows that belong in the TopK. Stop at
+            // the first nested key: keep rows whose earlier keys equal the
+            // threshold and do not filter on this or any later key.
+            if value.data_type().is_nested() {
+                if let Some(prev) = prev_sort_expr.take() {
+                    filters.push(prev);
+                }
+                break;
+            }
+
             // Create the appropriate operator based on sort order
             let op = if sort_expr.options.descending {
                 // For descending sort, we want col > threshold (exclude smaller values)
@@ -1189,6 +1188,10 @@ struct RecordBatchStore {
     next_id: u32,
     /// storage
     batches: HashMap<u32, RecordBatchEntry>,
+    /// Counts the buffers of the stored batches. Stored input batches can be
+    /// zero-copy slices of one larger batch, which keep all of its buffers
+    /// alive, so each shared buffer is counted once.
+    batch_memory: RecordBatchMemoryTracker,
     /// total size of all record batches tracked by this store
     batches_size: usize,
     /// row count of all the batches
@@ -1200,6 +1203,7 @@ impl RecordBatchStore {
         Self {
             next_id: 0,
             batches: HashMap::new(),
+            batch_memory: RecordBatchMemoryTracker::new(),
             batches_size: 0,
             total_rows: 0,
         }
@@ -1246,7 +1250,7 @@ impl RecordBatchStore {
     pub fn insert(&mut self, entry: RecordBatchEntry) {
         // uses of 0 means that none of the rows in the batch were stored in the topk
         if entry.uses > 0 {
-            self.batches_size += get_record_batch_memory_size(&entry.batch);
+            self.batches_size += self.batch_memory.count_batch(&entry.batch);
             self.total_rows += entry.batch.num_rows();
             self.batches.insert(entry.id, entry);
         }
@@ -1284,6 +1288,7 @@ impl RecordBatchStore {
     /// Clear all values in this store, invalidating all previous batch ids
     fn clear(&mut self) {
         self.batches.clear();
+        self.batch_memory = RecordBatchMemoryTracker::new();
         self.batches_size = 0;
         self.total_rows = 0;
     }
@@ -1335,7 +1340,7 @@ impl RecordBatchStore {
             let old_entry = self.batches.remove(&id).unwrap();
             self.batches_size = self
                 .batches_size
-                .checked_sub(get_record_batch_memory_size(&old_entry.batch))
+                .checked_sub(self.batch_memory.uncount_batch(&old_entry.batch))
                 .unwrap();
 
             self.total_rows = self
@@ -3202,12 +3207,14 @@ impl PartitionedTopKDenseRank {
 mod tests {
     use super::*;
     use crate::metrics::MetricValue;
+    use crate::spill::get_record_batch_memory_size;
     use arrow::array::{
-        AsArray, BooleanArray, Float64Array, Int32Array, StringArray,
+        AsArray, BooleanArray, Float64Array, Int32Array, Int64Array, StringArray,
         StringDictionaryBuilder,
     };
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema, UInt64Type};
+    use arrow::datatypes::{DataType, Field, Int32Type, Int64Type, Schema, UInt64Type};
     use arrow_schema::SortOptions;
+    use datafusion_common::utils::memory::RecordBatchMemoryCounter;
     use datafusion_common::{assert_batches_eq, exec_datafusion_err};
     use datafusion_execution::memory_pool::GreedyMemoryPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -3938,6 +3945,181 @@ mod tests {
         .await
         .expect("the final shared TopK emitter should mark the dynamic filter complete");
 
+        Ok(())
+    }
+
+    /// Schema for the `UNION ALL` fixture: `c0` is constant within each
+    /// partition but differs between partitions, and `c1` orders the rows.
+    fn make_c0_c1_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("c0", DataType::Int64, false),
+            Field::new("c1", DataType::Int64, false),
+        ]))
+    }
+
+    fn make_c0_c1_batch(schema: SchemaRef, rows: &[(i64, i64)]) -> Result<RecordBatch> {
+        let c0: ArrayRef =
+            Arc::new(Int64Array::from_iter_values(rows.iter().map(|row| row.0)));
+        let c1: ArrayRef =
+            Arc::new(Int64Array::from_iter_values(rows.iter().map(|row| row.1)));
+        Ok(RecordBatch::try_new(schema, vec![c0, c1])?)
+    }
+
+    fn c0_c1_sort_exprs(
+        schema: &SchemaRef,
+    ) -> Result<(PhysicalSortExpr, PhysicalSortExpr)> {
+        Ok((
+            PhysicalSortExpr {
+                expr: col("c0", schema.as_ref())?,
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: col("c1", schema.as_ref())?,
+                options: SortOptions::default(),
+            },
+        ))
+    }
+
+    fn make_c0_c1_topk(
+        partition_id: usize,
+        schema: SchemaRef,
+        common_sort_prefix: Vec<PhysicalSortExpr>,
+        expr: LexOrdering,
+        filter: Arc<RwLock<TopKDynamicFilters>>,
+    ) -> Result<TopK> {
+        TopK::try_new(
+            partition_id,
+            schema,
+            common_sort_prefix,
+            expr,
+            2,
+            8192,
+            Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
+            filter,
+        )
+    }
+
+    /// Inserts the `c0 = 5` and `c0 = 1` partitions into two TopKs that share
+    /// `filter`, in the requested order, then returns the top 2 rows after
+    /// merging the partition outputs on the full `[c0, c1]` key (what the
+    /// `SortPreservingMergeExec` above the TopK does).
+    async fn merged_c0_c1_top2(
+        schema: &SchemaRef,
+        topk_ordering: LexOrdering,
+        common_sort_prefix: Vec<PhysicalSortExpr>,
+        five_first: bool,
+    ) -> Result<Vec<(i64, i64)>> {
+        let filter = make_shared_topk_filter(2);
+        let mut five = make_c0_c1_topk(
+            0,
+            Arc::clone(schema),
+            common_sort_prefix.clone(),
+            topk_ordering.clone(),
+            Arc::clone(&filter),
+        )?;
+        let mut one = make_c0_c1_topk(
+            1,
+            Arc::clone(schema),
+            common_sort_prefix,
+            topk_ordering,
+            filter,
+        )?;
+
+        let five_batch = make_c0_c1_batch(Arc::clone(schema), &[(5, 0), (5, 1)])?;
+        let one_batch = make_c0_c1_batch(Arc::clone(schema), &[(1, 0), (1, 1)])?;
+        if five_first {
+            five.insert_batch(five_batch)?;
+            one.insert_batch(one_batch)?;
+        } else {
+            one.insert_batch(one_batch)?;
+            five.insert_batch(five_batch)?;
+        }
+
+        collect_c0_c1_top2([five, one]).await
+    }
+
+    async fn collect_c0_c1_top2(topks: [TopK; 2]) -> Result<Vec<(i64, i64)>> {
+        let mut rows = Vec::new();
+        for topk in topks {
+            let batches: Vec<RecordBatch> = topk.emit()?.try_collect().await?;
+            for batch in batches {
+                let c0 = batch.column(0).as_primitive::<Int64Type>();
+                let c1 = batch.column(1).as_primitive::<Int64Type>();
+                rows.extend((0..batch.num_rows()).map(|i| (c0.value(i), c1.value(i))));
+            }
+        }
+        // `SortPreservingMergeExec` merges on the full `[c0, c1]` key. With
+        // four rows, sorting and truncating is equivalent.
+        rows.sort_unstable();
+        rows.truncate(2);
+        Ok(rows)
+    }
+
+    /// The shared TopK threshold is comparable across partitions only when the
+    /// sort key covers the constant that differs between them. With `[c0, c1]`
+    /// as the TopK key and `[c0]` as the input sort prefix, both feeding orders
+    /// keep both rows of the `c0 = 1` partition that the top 2 needs.
+    #[tokio::test]
+    async fn test_shared_filter_keeps_heterogeneous_constant_in_key() -> Result<()> {
+        let schema = make_c0_c1_schema();
+        let (sort_c0, sort_c1) = c0_c1_sort_exprs(&schema)?;
+
+        for five_first in [true, false] {
+            let rows = merged_c0_c1_top2(
+                &schema,
+                LexOrdering::from([sort_c0.clone(), sort_c1.clone()]),
+                vec![sort_c0.clone()],
+                five_first,
+            )
+            .await?;
+            assert_eq!(rows, vec![(1, 0), (1, 1)], "five_first={five_first}");
+        }
+
+        Ok(())
+    }
+
+    /// A better partition must keep reading until it has enough rows, while a
+    /// worse partition can stop once the shared prefix threshold passes it.
+    #[tokio::test]
+    async fn test_shared_filter_heterogeneous_prefix_across_batches() -> Result<()> {
+        let schema = make_c0_c1_schema();
+        let (sort_c0, sort_c1) = c0_c1_sort_exprs(&schema)?;
+        let ordering = LexOrdering::from([sort_c0.clone(), sort_c1]);
+        let filter = make_shared_topk_filter(2);
+        let mut five = make_c0_c1_topk(
+            0,
+            Arc::clone(&schema),
+            vec![sort_c0.clone()],
+            ordering.clone(),
+            Arc::clone(&filter),
+        )?;
+        let mut one = make_c0_c1_topk(
+            1,
+            Arc::clone(&schema),
+            vec![sort_c0],
+            ordering,
+            Arc::clone(&filter),
+        )?;
+
+        five.insert_batch(make_c0_c1_batch(Arc::clone(&schema), &[(5, 0), (5, 1)])?)?;
+        assert!(filter.read().shared_threshold.is_some());
+        assert!(!five.finished);
+
+        one.insert_batch(make_c0_c1_batch(Arc::clone(&schema), &[(1, 0)])?)?;
+        assert!(!one.finished);
+        assert_eq!(one.heap.inner.len(), 1);
+
+        // The first batch must not stop this partition before its second row.
+        one.insert_batch(make_c0_c1_batch(Arc::clone(&schema), &[(1, 1)])?)?;
+        assert!(!one.finished);
+        assert_eq!(one.heap.inner.len(), 2);
+
+        // The better partition now has k rows, so the worse one may stop.
+        five.insert_batch(make_c0_c1_batch(schema, &[(5, 2)])?)?;
+        assert!(five.finished);
+        assert_eq!(five.metrics.row_replacements.value(), 2);
+        assert_eq!(collect_c0_c1_top2([five, one]).await?, vec![(1, 0), (1, 1)]);
         Ok(())
     }
 
@@ -5258,10 +5440,11 @@ mod tests {
         // 3. The store's two running totals are exact, not estimates.
         let rows: usize = store.batches.values().map(|e| e.batch.num_rows()).sum();
         assert_eq!(rows, store.total_rows, "{label}: store.total_rows drifted");
+        let mut counter = RecordBatchMemoryCounter::new();
         let bytes: usize = store
             .batches
             .values()
-            .map(|e| get_record_batch_memory_size(&e.batch))
+            .map(|e| counter.count_batch(&e.batch))
             .sum();
         assert_eq!(
             bytes, store.batches_size,

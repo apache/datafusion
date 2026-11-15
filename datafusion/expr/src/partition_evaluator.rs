@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Partition evaluation module
 
@@ -198,6 +185,33 @@ pub trait PartitionEvaluator: Debug + Send + std::any::Any {
         _range: &Range<usize>,
     ) -> Result<ScalarValue> {
         not_impl_err!("evaluate is not implemented by default")
+    }
+
+    /// Evaluate window function on the window frames of consecutive rows
+    /// in an input partition, returning one result per range.
+    ///
+    /// This is called instead of [`Self::evaluate`] for window functions
+    /// that [use the window frame](Self::uses_window_frame), with the same
+    /// `values`.
+    ///
+    /// The default implementation calls [`Self::evaluate`] for each range.
+    /// Implementing this function is an optimization: a function such as
+    /// `FIRST_VALUE`, whose result is one of the input rows, can gather
+    /// all results with a single `take` instead of creating a
+    /// [`ScalarValue`] for every row.
+    fn evaluate_ranges(
+        &mut self,
+        values: &[ArrayRef],
+        ranges: &[Range<usize>],
+    ) -> Result<ArrayRef> {
+        if let [range] = ranges {
+            return self.evaluate(values, range)?.to_array();
+        }
+        let mut results = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            results.push(self.evaluate(values, range)?);
+        }
+        ScalarValue::iter_to_array(results)
     }
 
     /// [`PartitionEvaluator::evaluate_all_with_rank`] is called for window

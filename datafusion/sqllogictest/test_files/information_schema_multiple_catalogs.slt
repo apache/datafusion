@@ -1,26 +1,17 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Verify the information schema does not exit by default
 statement error DataFusion error: Error during planning: table 'datafusion.information_schema.tables' not found
 SELECT * from information_schema.tables
 
-statement error DataFusion error: Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
-show all
+# SHOW resolves its content directly (like DESCRIBE/SHOW COLUMNS), so it
+# works regardless of whether information_schema is enabled.
+query TT
+SHOW datafusion.catalog.information_schema
+----
+datafusion.catalog.information_schema false
 
 # Turn it on
 
@@ -76,6 +67,24 @@ set datafusion.catalog.default_schema = my_other_schema;
 statement ok
 create table t3 as values(1);
 
+query TTT rowsort
+SELECT table_catalog, table_schema, table_name
+FROM my_catalog.information_schema.tables
+WHERE table_schema <> 'information_schema';
+----
+my_catalog my_schema t1
+my_catalog my_schema t2
+my_other_catalog my_other_schema t3
+
+query TTT rowsort
+SELECT table_catalog, table_schema, table_name
+FROM my_other_catalog.information_schema.tables
+WHERE table_schema <> 'information_schema';
+----
+my_catalog my_schema t1
+my_catalog my_schema t2
+my_other_catalog my_other_schema t3
+
 query TTTT rowsort
 SELECT * from information_schema.tables;
 ----
@@ -103,6 +112,144 @@ my_other_catalog information_schema schemata VIEW
 my_other_catalog information_schema tables VIEW
 my_other_catalog information_schema views VIEW
 my_other_catalog my_other_schema t3 BASE TABLE
+
+############
+# Enable information schema partitioning so that the `information_schema`
+# of each catalog only describes the objects in that catalog.
+###########
+statement ok
+set datafusion.catalog.partition_information_schema = true;
+
+query TTTT rowsort
+SELECT * FROM my_catalog.information_schema.tables;
+----
+my_catalog information_schema columns VIEW
+my_catalog information_schema df_settings VIEW
+my_catalog information_schema parameters VIEW
+my_catalog information_schema routines VIEW
+my_catalog information_schema schemata VIEW
+my_catalog information_schema tables VIEW
+my_catalog information_schema views VIEW
+my_catalog my_schema t1 BASE TABLE
+my_catalog my_schema t2 BASE TABLE
+
+query TTTT rowsort
+SELECT * FROM my_other_catalog.information_schema.tables;
+----
+my_other_catalog information_schema columns VIEW
+my_other_catalog information_schema df_settings VIEW
+my_other_catalog information_schema parameters VIEW
+my_other_catalog information_schema routines VIEW
+my_other_catalog information_schema schemata VIEW
+my_other_catalog information_schema tables VIEW
+my_other_catalog information_schema views VIEW
+my_other_catalog my_other_schema t3 BASE TABLE
+
+query TTTT rowsort
+SELECT * FROM datafusion.information_schema.tables;
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
+datafusion information_schema schemata VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+
+# Unqualified `information_schema` resolves against the default catalog
+query TTTT rowsort
+SELECT * FROM information_schema.tables;
+----
+my_other_catalog information_schema columns VIEW
+my_other_catalog information_schema df_settings VIEW
+my_other_catalog information_schema parameters VIEW
+my_other_catalog information_schema routines VIEW
+my_other_catalog information_schema schemata VIEW
+my_other_catalog information_schema tables VIEW
+my_other_catalog information_schema views VIEW
+my_other_catalog my_other_schema t3 BASE TABLE
+
+query TTTTTTT rowsort
+SELECT * FROM my_catalog.information_schema.schemata;
+----
+my_catalog my_schema NULL NULL NULL NULL NULL
+
+query TTTTTTT rowsort
+SELECT * FROM my_other_catalog.information_schema.schemata;
+----
+my_other_catalog my_other_schema NULL NULL NULL NULL NULL
+
+query TTTT rowsort
+SELECT table_catalog, table_schema, table_name, column_name
+FROM my_catalog.information_schema.columns;
+----
+my_catalog my_schema t1 column1
+my_catalog my_schema t2 column1
+
+query TTTT rowsort
+SELECT table_catalog, table_schema, table_name, column_name
+FROM my_other_catalog.information_schema.columns;
+----
+my_other_catalog my_other_schema t3 column1
+
+query TTT rowsort
+SELECT table_catalog, table_schema, table_name
+FROM my_catalog.information_schema.views
+WHERE table_schema <> 'information_schema';
+----
+my_catalog my_schema t1
+my_catalog my_schema t2
+
+# SHOW statements are not affected by partition_information_schema and describe all catalogs
+query TTTT rowsort
+SHOW TABLES;
+----
+datafusion information_schema columns VIEW
+datafusion information_schema df_settings VIEW
+datafusion information_schema parameters VIEW
+datafusion information_schema routines VIEW
+datafusion information_schema schemata VIEW
+datafusion information_schema tables VIEW
+datafusion information_schema views VIEW
+my_catalog information_schema columns VIEW
+my_catalog information_schema df_settings VIEW
+my_catalog information_schema parameters VIEW
+my_catalog information_schema routines VIEW
+my_catalog information_schema schemata VIEW
+my_catalog information_schema tables VIEW
+my_catalog information_schema views VIEW
+my_catalog my_schema t1 BASE TABLE
+my_catalog my_schema t2 BASE TABLE
+my_other_catalog information_schema columns VIEW
+my_other_catalog information_schema df_settings VIEW
+my_other_catalog information_schema parameters VIEW
+my_other_catalog information_schema routines VIEW
+my_other_catalog information_schema schemata VIEW
+my_other_catalog information_schema tables VIEW
+my_other_catalog information_schema views VIEW
+my_other_catalog my_other_schema t3 BASE TABLE
+
+query TTTTTT
+SHOW COLUMNS FROM my_catalog.my_schema.t1;
+----
+my_catalog my_schema t1 column1 Int64 NO
+
+# The information schema of a catalog that does not exist cannot be queried
+statement error DataFusion error: Error during planning: table 'no_such_catalog.information_schema.tables' not found
+SELECT * FROM no_such_catalog.information_schema.tables;
+
+# Resetting partition_information_schema makes every information schema global again
+statement ok
+RESET datafusion.catalog.partition_information_schema;
+
+query TTT rowsort
+SELECT table_catalog, table_schema, table_name
+FROM my_other_catalog.information_schema.tables
+WHERE table_schema <> 'information_schema';
+----
+my_catalog my_schema t1
+my_catalog my_schema t2
+my_other_catalog my_other_schema t3
 
 # Cleanup
 

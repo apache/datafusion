@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::aggregates::group_values::GroupValues;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
@@ -23,6 +10,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
+use datafusion_common::float_semantics::normalize_float;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -39,11 +27,10 @@ pub trait HashValue {
 
     /// Return a canonical representative whose bit pattern is identical for
     /// all values that should be grouped together. Default is the identity;
-    /// floats override this to fold `-0.0` into `+0.0` so the bit-equal
-    /// `is_eq` check used during insertion treats them as the same group.
-    /// NaN payload bits are preserved.
+    /// floats override this with [`normalize_float`] so the bit-equal
+    /// `is_eq` check used during insertion follows SQL equality.
     #[inline]
-    fn canonicalize(self) -> Self
+    fn normalize_key(self) -> Self
     where
         Self: Sized,
     {
@@ -75,7 +62,7 @@ macro_rules! hash_float {
         $(impl HashValue for $t {
             #[cfg(not(feature = "force_hash_collisions"))]
             fn hash(&self, state: &RandomState) -> u64 {
-                state.hash_one(self.canonicalize().to_bits())
+                state.hash_one(datafusion_common::float_semantics::hash_input(*self).to_bits())
             }
 
             #[cfg(feature = "force_hash_collisions")]
@@ -84,10 +71,8 @@ macro_rules! hash_float {
             }
 
             #[inline]
-            fn canonicalize(self) -> Self {
-                let bits = self.to_bits();
-                let bits = if bits << 1 == 0 { 0 } else { bits };
-                Self::from_bits(bits)
+            fn normalize_key(self) -> Self {
+                normalize_float(self)
             }
         })+
     };
@@ -149,7 +134,7 @@ where
                     // Fold equivalence-class duplicates (e.g. `-0.0` → `+0.0`)
                     // so the bit-equal `is_eq` matches and the stored value is
                     // the canonical representative.
-                    let key = key.canonicalize();
+                    let key = key.normalize_key();
                     let state = &self.random_state;
                     let hash = key.hash(state);
                     let insert = self.map.entry(
@@ -265,6 +250,11 @@ where
 
     fn supports_values_preserving(&self) -> bool {
         true
+    }
+
+    fn shrink_to_fit(&mut self) {
+        self.map.shrink_to_fit(|&(_, hash)| hash);
+        self.values.shrink_to_fit();
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -234,6 +221,13 @@ impl SessionConfig {
         self.options.catalog.information_schema
     }
 
+    /// Get [`partition_information_schema`]
+    ///
+    /// [`partition_information_schema`]: datafusion_common::config::CatalogOptions::partition_information_schema
+    pub fn partition_information_schema(&self) -> bool {
+        self.options.catalog.partition_information_schema
+    }
+
     /// Get [`create_default_catalog_and_schema`]
     ///
     /// [`create_default_catalog_and_schema`]: datafusion_common::config::CatalogOptions::create_default_catalog_and_schema
@@ -309,6 +303,14 @@ impl SessionConfig {
     /// [`create_default_catalog_and_schema`]: datafusion_common::config::CatalogOptions::create_default_catalog_and_schema
     pub fn with_create_default_catalog_and_schema(mut self, create: bool) -> Self {
         self.options_mut().catalog.create_default_catalog_and_schema = create;
+        self
+    }
+
+    /// Set [`partition_information_schema`]
+    ///
+    /// [`partition_information_schema`]: datafusion_common::config::CatalogOptions::partition_information_schema
+    pub fn with_partition_information_schema(mut self, partition: bool) -> Self {
+        self.options_mut().catalog.partition_information_schema = partition;
         self
     }
 

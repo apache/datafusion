@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines the LIMIT plan
 
@@ -26,6 +13,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::execution_plan::LimitBehavior;
 use crate::execution_plan::{Boundedness, CardinalityEffect};
 use crate::statistics::{ChildStats, StatisticsArgs, with_per_partition_fetch};
 use crate::{
@@ -103,9 +91,13 @@ impl GlobalLimitExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(input: &Arc<dyn ExecutionPlan>) -> PlanProperties {
+        let mut eq_properties = input.equivalence_properties().clone();
+        if input.output_partitioning().partition_count() > 1 {
+            eq_properties.clear_groupings();
+        }
         PlanProperties::new(
-            input.equivalence_properties().clone(), // Equivalence Properties
-            Partitioning::UnknownPartitioning(1),   // Output Partitioning
+            eq_properties,                        // Equivalence Properties
+            Partitioning::UnknownPartitioning(1), // Output Partitioning
             input.pipeline_behavior(),
             // Limit operations are always bounded since they output a finite number of rows
             Boundedness::Bounded,
@@ -285,6 +277,13 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Limit {
+            skip: self.skip,
+            fetch: self.fetch,
+        }
     }
 
     #[cfg(feature = "proto")]
@@ -565,6 +564,13 @@ impl ExecutionPlan for LocalLimitExec {
         true
     }
 
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Limit {
+            skip: 0,
+            fetch: Some(self.fetch),
+        }
+    }
+
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
     }
@@ -768,6 +774,41 @@ mod tests {
     use datafusion_common::stats::Precision;
     use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::col;
+
+    #[test]
+    fn limits_preserve_grouping_without_merging_partitions() -> Result<()> {
+        let input = test::mem_exec(2);
+        let grouping = col("i", &input.schema())?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(
+            input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
+        );
+        assert!(
+            input
+                .equivalence_properties()
+                .grouping_satisfy([Arc::clone(&grouping)])?
+        );
+
+        let local = LocalLimitExec::new(Arc::clone(&input), 10);
+        let properties = local.properties().equivalence_properties();
+        assert_eq!(properties.geq_class().len(), 1);
+        assert!(properties.grouping_satisfy([Arc::clone(&grouping)])?);
+
+        let global = GlobalLimitExec::new(input, 0, Some(10));
+        let properties = global.properties().equivalence_properties();
+        assert!(properties.geq_class().is_empty());
+        assert!(!properties.grouping_satisfy([grouping])?);
+
+        let input = test::mem_exec(1);
+        let grouping = col("i", &input.schema())?;
+        let input = Arc::new(
+            input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
+        );
+        let global = GlobalLimitExec::new(input, 0, Some(10));
+        let properties = global.properties().equivalence_properties();
+        assert_eq!(properties.geq_class().len(), 1);
+        assert!(properties.grouping_satisfy([grouping])?);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn limit() -> Result<()> {

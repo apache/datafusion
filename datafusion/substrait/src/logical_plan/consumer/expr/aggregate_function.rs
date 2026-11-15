@@ -1,19 +1,8 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+use crate::logical_plan::consumer::SubstraitConsumerContext;
 
 use crate::logical_plan::consumer::{
     SubstraitConsumer, from_substrait_func_args, substrait_fun_name,
@@ -49,6 +38,7 @@ pub async fn from_substrait_agg_func(
     filter: Option<Box<Expr>>,
     order_by: Vec<SortExpr>,
     distinct: bool,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Arc<Expr>> {
     validate_aggregation_phase(f.phase)?;
     let Some(fn_signature) = consumer
@@ -72,7 +62,8 @@ pub async fn from_substrait_agg_func(
         )
     })?;
 
-    let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
+    let args =
+        from_substrait_func_args(consumer, &f.arguments, input_schema, context).await?;
 
     // Datafusion does not support aggregate functions with no arguments, so
     // we inject a dummy argument that does not affect the query, but allows

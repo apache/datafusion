@@ -1,21 +1,8 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::{DFSchema, not_impl_err, substrait_err};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::Expr;
@@ -32,6 +19,7 @@ pub async fn from_nested(
     consumer: &impl SubstraitConsumer,
     nested: &Nested,
     input_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Expr> {
     let Some(nested_type) = &nested.nested_type else {
         return substrait_err!("Nested expression requires a nested_type");
@@ -47,7 +35,11 @@ pub async fn from_nested(
 
             let mut args = Vec::with_capacity(list.values.len());
             for value in &list.values {
-                args.push(consumer.consume_expression(value, input_schema).await?);
+                args.push(
+                    consumer
+                        .consume_expression(value, input_schema, context)
+                        .await?,
+                );
             }
 
             let make_array_udf = consumer.get_function_registry().udf("make_array")?;
@@ -101,7 +93,13 @@ mod tests {
             })),
         };
 
-        let expr = from_nested(&consumer, &nested, &schema).await?;
+        let expr = from_nested(
+            &consumer,
+            &nested,
+            &schema,
+            &SubstraitConsumerContext::default(),
+        )
+        .await?;
         assert_eq!(
             format!("{expr}"),
             "make_array(Int64(1), Int64(2), Int64(3))"
@@ -120,7 +118,13 @@ mod tests {
             nested_type: Some(NestedType::List(List { values: vec![] })),
         };
 
-        let result = from_nested(&consumer, &nested, &schema).await;
+        let result = from_nested(
+            &consumer,
+            &nested,
+            &schema,
+            &SubstraitConsumerContext::default(),
+        )
+        .await;
         assert!(result.is_err());
         assert!(
             result
@@ -142,7 +146,13 @@ mod tests {
             nested_type: None,
         };
 
-        let result = from_nested(&consumer, &nested, &schema).await;
+        let result = from_nested(
+            &consumer,
+            &nested,
+            &schema,
+            &SubstraitConsumerContext::default(),
+        )
+        .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("nested_type"));
 

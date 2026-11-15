@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::mem;
 
@@ -179,6 +166,12 @@ impl GroupValues for GroupValuesClustered {
 
     fn supports_values_preserving(&self) -> bool {
         true
+    }
+
+    fn shrink_to_fit(&mut self) {
+        // Scratch for one `intern` call.
+        self.new_groups.clear();
+        self.new_groups.shrink_to_fit();
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
@@ -403,35 +396,38 @@ mod tests {
         }
         for key_type in key_types {
             for nullable in [false, true] {
-                let rows = 1025;
-                let first: ArrayRef =
-                    Arc::new(Int32Array::from_iter((0..rows).map(|row| {
-                        let group = (row / 7) as i32;
-                        let key = group / 4;
-                        // Swap neighboring key values while keeping each run contiguous.
-                        (!nullable || group >= 4).then_some(if unsorted {
-                            key ^ 1
-                        } else {
-                            key
-                        })
-                    })));
-                let second = clustered_key_array(&key_type, rows, nullable)?;
-                for descending in [false, true] {
-                    let mut input = vec![Arc::clone(&first), Arc::clone(&second)];
-                    if descending {
-                        let reverse =
-                            UInt32Array::from_iter_values((0..rows as u32).rev());
-                        input = input
-                            .iter()
-                            .map(|array| take(array, &reverse, None))
-                            .collect::<std::result::Result<_, _>>()?;
-                    }
-                    let schema = Arc::new(Schema::new(vec![
-                        Field::new("a", DataType::Int32, nullable),
-                        Field::new("b", key_type.clone(), nullable),
-                    ]));
-                    assert!(GroupValuesClustered::supports_schema(&schema), "{key_type}");
-                    for batch_size in [1, 2, 7, 8, 63, 1024] {
+                for batch_size in [1, 2, 7, 8, 63, 1024] {
+                    let rows = 129.max(batch_size + 1);
+                    let first: ArrayRef =
+                        Arc::new(Int32Array::from_iter((0..rows).map(|row| {
+                            let group = (row / 7) as i32;
+                            let key = group / 4;
+                            // Swap neighboring key values while keeping each run contiguous.
+                            (!nullable || group >= 4).then_some(if unsorted {
+                                key ^ 1
+                            } else {
+                                key
+                            })
+                        })));
+                    let second = clustered_key_array(&key_type, rows, nullable)?;
+                    for descending in [false, true] {
+                        let mut input = vec![Arc::clone(&first), Arc::clone(&second)];
+                        if descending {
+                            let reverse =
+                                UInt32Array::from_iter_values((0..rows as u32).rev());
+                            input = input
+                                .iter()
+                                .map(|array| take(array, &reverse, None))
+                                .collect::<std::result::Result<_, _>>()?;
+                        }
+                        let schema = Arc::new(Schema::new(vec![
+                            Field::new("a", DataType::Int32, nullable),
+                            Field::new("b", key_type.clone(), nullable),
+                        ]));
+                        assert!(
+                            GroupValuesClustered::supports_schema(&schema),
+                            "{key_type}"
+                        );
                         for emit_limit in [0, 1, 17, usize::MAX] {
                             let mut clustered =
                                 GroupValuesClustered::try_new(Arc::clone(&schema))?;
