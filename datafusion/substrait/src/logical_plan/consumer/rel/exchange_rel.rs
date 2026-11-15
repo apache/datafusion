@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::from_substrait_field_reference;
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::{not_impl_err, substrait_err};
 use datafusion::logical_expr::{LogicalPlan, Partitioning, Repartition};
 use std::sync::Arc;
@@ -13,11 +13,12 @@ use substrait::proto::exchange_rel::ExchangeKind;
 pub async fn from_exchange_rel(
     consumer: &impl SubstraitConsumer,
     exchange: &ExchangeRel,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
     let Some(input) = exchange.input.as_ref() else {
         return substrait_err!("Unexpected empty input in ExchangeRel");
     };
-    let input = Arc::new(consumer.consume_rel(input).await?);
+    let input = Arc::new(consumer.consume_rel(input, context).await?);
 
     let Some(exchange_kind) = &exchange.exchange_kind else {
         return substrait_err!("Unexpected empty input in ExchangeRel");
@@ -29,8 +30,12 @@ pub async fn from_exchange_rel(
             let mut partition_columns = Vec::with_capacity(scatter_fields.fields.len());
             let input_schema = input.schema();
             for field_ref in &scatter_fields.fields {
-                let column =
-                    from_substrait_field_reference(consumer, field_ref, input_schema)?;
+                let column = from_substrait_field_reference(
+                    consumer,
+                    field_ref,
+                    input_schema,
+                    context,
+                )?;
                 partition_columns.push(column);
             }
             Partitioning::Hash(partition_columns, exchange.partition_count as usize)

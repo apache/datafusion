@@ -7834,3 +7834,299 @@ DROP TABLE range_null_peers;
 
 statement ok
 DROP TABLE range_nan_peers;
+
+# A window ordered by `(total DESC, k)` over an input sorted by `[k, total]`,
+# where `k` is constant within each partition (`lower(g)` under `WHERE g = 'a'`).
+# Within a partition `k` has one value, so the input ordering satisfies the
+# window's requirement and no sort is added.
+# https://github.com/apache/datafusion/issues/26762
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE per_partition_constant(g VARCHAR, v BIGINT) AS VALUES ('a', 1), ('b', 2);
+
+query TI
+SELECT k, DENSE_RANK() OVER (ORDER BY total DESC, k) AS r
+FROM (
+  SELECT k, SUM(s) OVER (PARTITION BY k) AS total
+  FROM (SELECT lower(g) AS k, SUM(v) AS s FROM per_partition_constant WHERE g = 'a' GROUP BY lower(g))
+);
+----
+a 1
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT k, DENSE_RANK() OVER (ORDER BY total DESC, k) AS r
+FROM (
+  SELECT k, SUM(s) OVER (PARTITION BY k) AS total
+  FROM (SELECT lower(g) AS k, SUM(v) AS s FROM per_partition_constant WHERE g = 'a' GROUP BY lower(g))
+);
+----
+physical_plan
+01)ProjectionExec: expr=[k@0 as k, dense_rank() ORDER BY [total DESC NULLS FIRST, k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as r]
+02)--BoundedWindowAggExec: wdw=[dense_rank() ORDER BY [total DESC NULLS FIRST, k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() ORDER BY [total DESC NULLS FIRST, k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----ProjectionExec: expr=[k@0 as k, sum(s) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as total]
+04)------WindowAggExec: wdw=[sum(s) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(s) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+05)--------ProjectionExec: expr=[lower(per_partition_constant.g)@0 as k, sum(per_partition_constant.v)@1 as s]
+06)----------AggregateExec: mode=Single, gby=[lower(g@0) as lower(per_partition_constant.g)], aggr=[sum(per_partition_constant.v)]
+07)------------FilterExec: g@0 = a
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+# Same, with `k` a per-partition constant that is not derived from a filter
+# (one row per partition), at more than one target partition.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+query IIII
+SELECT k, c, total, DENSE_RANK() OVER (ORDER BY total DESC, k) AS r
+FROM (
+  SELECT k, c, SUM(c) OVER (PARTITION BY k) AS total
+  FROM (SELECT SUM(v) AS k, COUNT(*) AS c FROM per_partition_constant)
+);
+----
+3 2 2 1
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT k, c, total, DENSE_RANK() OVER (ORDER BY total DESC, k) AS r
+FROM (
+  SELECT k, c, SUM(c) OVER (PARTITION BY k) AS total
+  FROM (SELECT SUM(v) AS k, COUNT(*) AS c FROM per_partition_constant)
+);
+----
+physical_plan
+01)ProjectionExec: expr=[k@0 as k, c@1 as c, total@2 as total, dense_rank() ORDER BY [total DESC NULLS FIRST, k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as r]
+02)--BoundedWindowAggExec: wdw=[dense_rank() ORDER BY [total DESC NULLS FIRST, k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() ORDER BY [total DESC NULLS FIRST, k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----ProjectionExec: expr=[k@0 as k, c@1 as c, sum(c) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as total]
+04)------WindowAggExec: wdw=[sum(c) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(c) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+05)--------ProjectionExec: expr=[sum(per_partition_constant.v)@0 as k, count(Int64(1))@1 as c]
+06)----------AggregateExec: mode=Single, gby=[], aggr=[sum(per_partition_constant.v), count(Int64(1))]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+# When a projection drops the leading constant, it can no longer prove the
+# ordering that its input has. The input satisfies `[total]`, because within a
+# partition `k` has one value, so a sort pushed below the projection would be
+# removed, and `SanityCheckPlan` would reject the window. The sort stays above
+# the projection.
+query II
+SELECT total, DENSE_RANK() OVER (ORDER BY total DESC) AS r
+FROM (
+  SELECT SUM(s) OVER (PARTITION BY k) AS total
+  FROM (SELECT lower(g) AS k, SUM(v) AS s FROM per_partition_constant WHERE g = 'a' GROUP BY lower(g))
+);
+----
+1 1
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT total, DENSE_RANK() OVER (ORDER BY total DESC) AS r
+FROM (
+  SELECT SUM(s) OVER (PARTITION BY k) AS total
+  FROM (SELECT lower(g) AS k, SUM(v) AS s FROM per_partition_constant WHERE g = 'a' GROUP BY lower(g))
+);
+----
+physical_plan
+01)ProjectionExec: expr=[total@0 as total, dense_rank() ORDER BY [total DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as r]
+02)--BoundedWindowAggExec: wdw=[dense_rank() ORDER BY [total DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() ORDER BY [total DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[total@0 DESC], preserve_partitioning=[false]
+04)------ProjectionExec: expr=[sum(s) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as total]
+05)--------WindowAggExec: wdw=[sum(s) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(s) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+06)----------ProjectionExec: expr=[lower(per_partition_constant.g)@0 as k, sum(per_partition_constant.v)@1 as s]
+07)------------AggregateExec: mode=Single, gby=[lower(g@0) as lower(per_partition_constant.g)], aggr=[sum(per_partition_constant.v)]
+08)--------------FilterExec: g@0 = a
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+# A key that is a function of the keys after it can be left out, after any
+# prefix: `[k, a, c]` with `a = CAST(c AS DATE)` implies `[k, c]`. That ordering
+# is stored, so a projection that drops `a` keeps it, and neither the window nor
+# an `ORDER BY k, c` above the projection needs a sort.
+statement ok
+CREATE TABLE ordered_through_cast(k VARCHAR, a DATE, c TIMESTAMP) AS VALUES
+  ('a', DATE '2026-01-02', TIMESTAMP '2026-01-02 05:00:00'),
+  ('a', DATE '2026-01-01', TIMESTAMP '2026-01-01 09:00:00'),
+  ('a', DATE '2026-01-02', TIMESTAMP '2026-01-02 01:00:00'),
+  ('b', DATE '2026-01-03', TIMESTAMP '2026-01-03 01:00:00');
+
+query TPI
+SELECT k, c, ROW_NUMBER() OVER (ORDER BY k, c) AS r
+FROM (SELECT k, a, c FROM ordered_through_cast WHERE a = CAST(c AS DATE) ORDER BY k, a, c LIMIT 10)
+ORDER BY r;
+----
+a 2026-01-01T09:00:00 1
+a 2026-01-02T01:00:00 2
+a 2026-01-02T05:00:00 3
+b 2026-01-03T01:00:00 4
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT k, c, ROW_NUMBER() OVER (ORDER BY k, c) AS r
+FROM (SELECT k, a, c FROM ordered_through_cast WHERE a = CAST(c AS DATE) ORDER BY k, a, c LIMIT 10)
+ORDER BY r;
+----
+physical_plan
+01)ProjectionExec: expr=[k@0 as k, c@1 as c, row_number() ORDER BY [ordered_through_cast.k ASC NULLS LAST, ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as r]
+02)--BoundedWindowAggExec: wdw=[row_number() ORDER BY [ordered_through_cast.k ASC NULLS LAST, ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [ordered_through_cast.k ASC NULLS LAST, ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----ProjectionExec: expr=[k@0 as k, c@2 as c]
+04)------SortExec: TopK(fetch=10), expr=[k@0 ASC NULLS LAST, a@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------FilterExec: a@1 = CAST(c@2 AS Date32)
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT k, c
+FROM (SELECT k, a, c FROM ordered_through_cast WHERE a = CAST(c AS DATE) ORDER BY k, a, c LIMIT 10)
+ORDER BY k, c;
+----
+physical_plan
+01)ProjectionExec: expr=[k@0 as k, c@2 as c]
+02)--SortExec: TopK(fetch=10), expr=[k@0 ASC NULLS LAST, a@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[false]
+03)----FilterExec: a@1 = CAST(c@2 AS Date32)
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+# An ordering that a sort adds implies other orderings through known equalities,
+# as it does when the equality comes after the sort: `[a, c]` with
+# `a = CAST(c AS DATE)` has `[c]`, so the window needs no sort of its own.
+query DPI
+SELECT a, c, ROW_NUMBER() OVER (ORDER BY c) AS r
+FROM (SELECT a, c FROM ordered_through_cast WHERE a = CAST(c AS DATE) ORDER BY a, c LIMIT 10)
+ORDER BY r;
+----
+2026-01-01 2026-01-01T09:00:00 1
+2026-01-02 2026-01-02T01:00:00 2
+2026-01-02 2026-01-02T05:00:00 3
+2026-01-03 2026-01-03T01:00:00 4
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT a, c, ROW_NUMBER() OVER (ORDER BY c) AS r
+FROM (SELECT a, c FROM ordered_through_cast WHERE a = CAST(c AS DATE) ORDER BY a, c LIMIT 10)
+ORDER BY r;
+----
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, c@1 as c, row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as r]
+02)--BoundedWindowAggExec: wdw=[row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: TopK(fetch=10), expr=[a@0 ASC NULLS LAST, c@1 ASC NULLS LAST], preserve_partitioning=[false]
+04)------FilterExec: a@0 = CAST(c@1 AS Date32)
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The same with a constant leading the sort. `lower(k)` under `k = 'a'` has the
+# same value in every partition, so the TopK leaves it out of its sort keys.
+query TDPI
+SELECT k, a, c, ROW_NUMBER() OVER (ORDER BY c) AS r
+FROM (SELECT lower(k) AS k, a, c FROM ordered_through_cast WHERE k = 'a' AND a = CAST(c AS DATE) ORDER BY k, a, c LIMIT 10)
+ORDER BY r;
+----
+a 2026-01-01 2026-01-01T09:00:00 1
+a 2026-01-02 2026-01-02T01:00:00 2
+a 2026-01-02 2026-01-02T05:00:00 3
+
+query TT
+EXPLAIN SELECT k, a, c, ROW_NUMBER() OVER (ORDER BY c) AS r
+FROM (SELECT lower(k) AS k, a, c FROM ordered_through_cast WHERE k = 'a' AND a = CAST(c AS DATE) ORDER BY k, a, c LIMIT 10)
+ORDER BY r;
+----
+physical_plan
+01)ProjectionExec: expr=[k@0 as k, a@1 as a, c@2 as c, row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as r]
+02)--BoundedWindowAggExec: wdw=[row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: TopK(fetch=10), expr=[a@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[false]
+04)------ProjectionExec: expr=[lower(k@0) as k, a@1 as a, c@2 as c]
+05)--------FilterExec: k@0 = a AND a@1 = CAST(c@2 AS Date32)
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The same when a projection drops `a`: the implied `[c]` is stored, so the
+# projection can prove it and no sort is added above the projection.
+query TPI
+SELECT k, c, ROW_NUMBER() OVER (ORDER BY c) AS r
+FROM (SELECT lower(k) AS k, a, c FROM ordered_through_cast WHERE k = 'a' AND a = CAST(c AS DATE) ORDER BY k, a, c LIMIT 10)
+ORDER BY r;
+----
+a 2026-01-01T09:00:00 1
+a 2026-01-02T01:00:00 2
+a 2026-01-02T05:00:00 3
+
+query TT
+EXPLAIN SELECT k, c, ROW_NUMBER() OVER (ORDER BY c) AS r
+FROM (SELECT lower(k) AS k, a, c FROM ordered_through_cast WHERE k = 'a' AND a = CAST(c AS DATE) ORDER BY k, a, c LIMIT 10)
+ORDER BY r;
+----
+physical_plan
+01)ProjectionExec: expr=[k@0 as k, c@1 as c, row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as r]
+02)--BoundedWindowAggExec: wdw=[row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----ProjectionExec: expr=[k@0 as k, c@2 as c]
+04)------SortExec: TopK(fetch=10), expr=[a@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------ProjectionExec: expr=[lower(k@0) as k, a@1 as a, c@2 as c]
+06)----------FilterExec: k@0 = a AND a@1 = CAST(c@2 AS Date32)
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# And when a merge of partitions is added above the sort, which keeps only its
+# merge key. `lower(k)` is computed, so the input is repartitioned and needs the
+# merge.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+query TDPI
+SELECT l, a, c, ROW_NUMBER() OVER (ORDER BY c) AS r
+FROM (SELECT lower(k) AS l, a, c FROM ordered_through_cast WHERE a = CAST(c AS DATE) ORDER BY a, c LIMIT 10)
+ORDER BY r;
+----
+a 2026-01-01 2026-01-01T09:00:00 1
+a 2026-01-02 2026-01-02T01:00:00 2
+a 2026-01-02 2026-01-02T05:00:00 3
+b 2026-01-03 2026-01-03T01:00:00 4
+
+query TT
+EXPLAIN SELECT l, a, c, ROW_NUMBER() OVER (ORDER BY c) AS r
+FROM (SELECT lower(k) AS l, a, c FROM ordered_through_cast WHERE a = CAST(c AS DATE) ORDER BY a, c LIMIT 10)
+ORDER BY r;
+----
+physical_plan
+01)ProjectionExec: expr=[l@0 as l, a@1 as a, c@2 as c, row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as r]
+02)--BoundedWindowAggExec: wdw=[row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortPreservingMergeExec: [a@1 ASC NULLS LAST, c@2 ASC NULLS LAST], fetch=10
+04)------SortExec: TopK(fetch=10), expr=[a@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------ProjectionExec: expr=[lower(k@0) as l, a@1 as a, c@2 as c]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------FilterExec: a@1 = CAST(c@2 AS Date32)
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+DROP TABLE ordered_through_cast;
+
+statement ok
+DROP TABLE per_partition_constant;
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# restore that value rather than resetting.
+statement ok
+set datafusion.execution.target_partitions = 4;

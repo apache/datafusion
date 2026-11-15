@@ -2127,6 +2127,10 @@ pub struct ParquetScanExecNode {
     /// Source-specific footer prefetch size. Absent means no hint.
     #[prost(uint64, optional, tag = "7")]
     pub metadata_size_hint: ::core::option::Option<u64>,
+    /// Reverse the rows within each row group too, making a reversed scan
+    /// exactly ordered. Only meaningful with `reverse_row_groups`.
+    #[prost(bool, tag = "8")]
+    pub reverse_rows: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvScanExecNode {
@@ -2145,6 +2149,8 @@ pub struct CsvScanExecNode {
     /// Custom one-byte line terminator. Absent means the default newline terminator.
     #[prost(bytes = "vec", optional, tag = "9")]
     pub terminator: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bool, tag = "10")]
+    pub match_columns_by_header: bool,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
     #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
@@ -2170,6 +2176,9 @@ pub struct JsonScanExecNode {
     /// Absent means newline-delimited JSON for compatibility with older payloads.
     #[prost(bool, optional, tag = "2")]
     pub newline_delimited: ::core::option::Option<bool>,
+    /// Absent means false: a JSON number or boolean in a string column is an error.
+    #[prost(bool, optional, tag = "3")]
+    pub coerce_primitive: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvroScanExecNode {

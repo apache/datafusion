@@ -66,7 +66,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::float_semantics::normalize_floats;
+use datafusion_common::float_semantics;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::memory::{
@@ -160,30 +160,25 @@ fn subtree_max_len(data: &ArrayData) -> usize {
 ///
 /// On `Some`, the memory of the [`ArrayMap`] has already been added to
 /// `reservation`; the caller creates the map with [`ArrayMap::try_new`].
-#[expect(clippy::too_many_arguments)]
 fn array_map_key_range(
     bounds: Option<&PartitionBounds>,
-    schema: &SchemaRef,
-    batches: &[RecordBatch],
-    on_left: &[PhysicalExprRef],
+    keys: &[ArrayRef],
     reservation: &mut MemoryReservation,
     perfect_hash_join_small_build_threshold: usize,
     perfect_hash_join_min_key_density: f64,
     null_equality: NullEquality,
 ) -> Result<Option<(u64, u64)>> {
+    let [key] = keys else {
+        return Ok(None);
+    };
     // `bounds` are also collected for dynamic filters, on any key type, so the
     // key type cannot be inferred from their presence.
-    if !is_perfect_hash_join_candidate(on_left, schema)? {
+    if !ArrayMap::is_supported_type(key.data_type()) {
         return Ok(None);
     }
 
-    if null_equality == NullEquality::NullEqualsNull {
-        for batch in batches.iter() {
-            let arrays = evaluate_expressions_to_arrays(on_left, batch)?;
-            if arrays[0].null_count() > 0 {
-                return Ok(None);
-            }
-        }
+    if null_equality == NullEquality::NullEqualsNull && key.null_count() > 0 {
+        return Ok(None);
     }
 
     let (min_val, max_val) = if let Some(bounds) = bounds {
@@ -213,10 +208,10 @@ fn array_map_key_range(
     };
 
     let range = ArrayMap::calculate_range(min_val, max_val);
-    let num_row: usize = batches.iter().map(|x| x.num_rows()).sum();
+    let num_rows = key.len();
 
     // TODO: support create ArrayMap<u64>
-    if num_row >= u32::MAX as usize {
+    if num_rows >= u32::MAX as usize {
         return Ok(None);
     }
 
@@ -226,7 +221,7 @@ fn array_map_key_range(
         return Ok(None);
     }
 
-    let dense_ratio = (num_row as f64) / ((range + 1) as f64);
+    let dense_ratio = (num_rows as f64) / ((range + 1) as f64);
 
     if range >= perfect_hash_join_small_build_threshold as u64
         && dense_ratio <= perfect_hash_join_min_key_density
@@ -234,7 +229,7 @@ fn array_map_key_range(
         return Ok(None);
     }
 
-    let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_row);
+    let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_rows);
     reservation.try_grow(mem_size)?;
 
     Ok(Some((min_val, max_val)))
@@ -3269,9 +3264,7 @@ fn build_in_memory(
 
     let join_hash_map = if let Some((min_val, max_val)) = array_map_key_range(
         bounds.as_ref(),
-        schema,
-        std::slice::from_ref(&batch),
-        on_left,
+        &left_values,
         &mut map_reservation,
         config.execution.perfect_hash_join_small_build_threshold,
         config.execution.perfect_hash_join_min_key_density,
@@ -3343,8 +3336,10 @@ fn build_in_memory(
     // Rewrite float `-0.0` to `+0.0` once here, so the per probe batch key
     // comparison does not rescan the build side. Arrays without `-0.0`, and
     // non-float keys, are shared rather than copied.
-    let normalized_values: Vec<ArrayRef> =
-        left_values.iter().map(normalize_floats).collect();
+    let normalized_values: Vec<ArrayRef> = left_values
+        .iter()
+        .map(|values| float_semantics::normalize(Arc::clone(values)))
+        .collect();
 
     // Join keys that are plain columns share the buffers of `batch`, any other
     // expression evaluates to new arrays that are kept for the whole join.
@@ -10547,8 +10542,8 @@ mod tests {
     /// Here the build-side logical NULL lives in exactly one build partition, so
     /// the `keys_have_null` flag has to survive the per-partition aggregation in
     /// `build_partitioned_filter` and widen the *routed* filter as a whole: the
-    /// probe NULL is routed to a single `CASE` branch, and OR-ing `IS NULL` into
-    /// that one branch would still drop it for every other route.
+    /// probe NULL is routed to a single partition, and OR-ing `IS NULL` into
+    /// that one partition's check would still drop it for every other route.
     #[tokio::test]
     async fn test_partitioned_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null()
     -> Result<()> {

@@ -4,6 +4,40 @@
 
 # Test push down filter
 
+# Regression test for https://github.com/apache/datafusion/issues/26545
+# Pushing the filter below COUNT(*) would return one row containing zero.
+query I
+SELECT c FROM (
+  SELECT 'all' AS k, COUNT(*) AS c FROM (VALUES (1)) AS t(a)
+) AS s WHERE k = 'none';
+----
+
+# The empty grouping set in ROLLUP also produces a grand total on empty input.
+query II
+SELECT a, c FROM (
+  SELECT a, 'all' AS k, COUNT(*) AS c FROM (VALUES (1)) AS t(a)
+  GROUP BY ROLLUP(a)
+) AS s WHERE k = 'none';
+----
+
+# A HAVING predicate without column references must not filter the
+# aggregate's input either.
+query I
+SELECT COUNT(*) FROM (VALUES (1)) AS t(a)
+HAVING (SELECT max(b) FROM (VALUES (5)) AS u(b)) > 100;
+----
+
+# The filter reaches each UNION ALL branch; the 'one' branch must not
+# leave a row with a count of zero.
+query I
+SELECT c FROM (
+  SELECT 'one' AS k, COUNT(*) AS c FROM (VALUES (1), (2)) AS t(a) WHERE a = 1
+  UNION ALL
+  SELECT 'all' AS k, COUNT(*) AS c FROM (VALUES (1), (2)) AS t(a)
+) AS s WHERE k = 'all';
+----
+2
+
 # Regression test for https://github.com/apache/datafusion/issues/17188
 query I
 COPY (select i as k, i as v from generate_series(1, 10000000) as t(i))

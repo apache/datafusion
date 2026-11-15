@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::push_down_filter::lr_is_preserved;
 use crate::simplify_expressions::ExprSimplifier;
-use crate::utils::replace_qualified_name;
+use crate::utils::{aggregate_emits_on_empty_input, replace_qualified_name};
 
 use datafusion_common::nested_struct::is_injective_cast;
 use datafusion_common::tree_node::{
@@ -889,10 +889,7 @@ impl PullUpCorrelatedExpr {
             return GroupingSetsPullUp::NoColumnsToAdd;
         }
 
-        let has_empty_set = grouping_sets.iter().any(|grouping_set| match grouping_set {
-            GroupingSet::Rollup(_) | GroupingSet::Cube(_) => true,
-            GroupingSet::GroupingSets(sets) => sets.iter().any(|set| set.is_empty()),
-        });
+        let has_empty_set = aggregate_emits_on_empty_input(group_expr);
         // `GROUPING`/`GROUPING_ID` are resolved to bit tests on `__grouping_id`
         // above the aggregate by `ResolveGroupingFunction` before this rule
         // runs, so `aggregate.aggr_expr` never holds a `GROUPING` call by the

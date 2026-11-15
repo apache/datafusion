@@ -9,7 +9,9 @@ use arrow::compute::take;
 use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType};
 
 pub(super) fn is_cached(cached: Option<&Weak<dyn Array>>, values: &ArrayRef) -> bool {
-    cached.is_some_and(|cached| std::ptr::addr_eq(cached.as_ptr(), Arc::as_ptr(values)))
+    cached
+        .and_then(Weak::upgrade)
+        .is_some_and(|cached| Arc::ptr_eq(&cached, values))
 }
 
 pub(super) fn key_type_fits<K: ArrowDictionaryKeyType>(num_values: usize) -> bool {
