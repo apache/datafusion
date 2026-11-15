@@ -1,0 +1,577 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+name: Cargo check cache study
+'on':
+  push:
+    branches:
+    - db/ci-check-cache-measure
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+jobs:
+  prepare:
+    name: Prepare identical check artifacts and cache
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+    - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: 375bf976f58831cb438422c804045289af119870
+    - name: Setup Rust toolchain
+      uses: ./.github/actions/setup-builder
+      with:
+        rust-version: stable
+    - name: Record fixed environment
+      run: |-
+        git rev-parse HEAD
+        rustc -Vv
+        cargo -V
+        nproc
+        lscpu
+        sha256sum Cargo.lock
+    - name: Rust Dependency Cache
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      with:
+        shared-key: check-cache-study-v1
+        save-if: true
+      id: seed-cache
+    - name: Prepare cargo build
+      run: cargo xtask ci step check workspace
+    - name: Archive Cargo check artifacts
+      id: archive-check
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/cargo-check"
+        # Preserve source timestamps so Cargo can reuse workspace crates.
+        git ls-files -z | tar --null -T - -cf "$RUNNER_TEMP/cargo-check/check-workspace.tar" target
+        # -C incremental=false creates per-crate caches named "false".
+        tar --anchored --no-wildcards-match-slash \
+          --exclude='registry/src/*/*/false' \
+          -cf "$RUNNER_TEMP/cargo-check/check-registry.tar" -C "$CARGO_HOME" registry
+    - name: Upload Cargo check artifacts
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: cargo-check
+        path: ${{ runner.temp }}/cargo-check/
+        compression-level: 1
+        retention-days: 1
+        if-no-files-found: error
+        overwrite: true
+  datafusion:
+    name: datafusion / same-runner comparison
+    needs: prepare
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: 375bf976f58831cb438422c804045289af119870
+    - name: Setup Rust toolchain
+      uses: ./.github/actions/setup-builder
+      with:
+        rust-version: stable
+    - name: Record fixed environment
+      run: |-
+        git rev-parse HEAD
+        rustc -Vv
+        cargo -V
+        nproc
+        lscpu
+        sha256sum Cargo.lock
+    - name: artifact-first / Reset build data
+      run: |-
+        git reset --hard 375bf976f58831cb438422c804045289af119870
+        git clean -ffdx
+        rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
+        test ! -e target
+        test ! -e "$CARGO_HOME/registry"
+      if: github.run_attempt == '1'
+    - name: artifact-first / Download artifact
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: cargo-check
+        path: ${{ runner.temp }}/cargo-check
+      if: github.run_attempt == '1'
+    - name: artifact-first / Restore artifact
+      run: |-
+        tar -xf "$RUNNER_TEMP/cargo-check/check-workspace.tar"
+        tar -xf "$RUNNER_TEMP/cargo-check/check-registry.tar" -C "$CARGO_HOME"
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (default features)
+      run: cargo xtask ci step check datafusion default
+      env:
+        CARGO_LOG: cargo::core::compiler::fingerprint=info
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (no-default-features)
+      run: cargo xtask ci step check datafusion no-default
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (nested_expressions)
+      run: cargo xtask ci step check datafusion nested_expressions
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (array_expressions)
+      run: cargo xtask ci step check datafusion array_expressions
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (avro)
+      run: cargo xtask ci step check datafusion avro
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (backtrace)
+      run: cargo xtask ci step check datafusion backtrace
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (compression)
+      run: cargo xtask ci step check datafusion compression
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (crypto_expressions)
+      run: cargo xtask ci step check datafusion crypto_expressions
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (datetime_expressions)
+      run: cargo xtask ci step check datafusion datetime_expressions
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (encoding_expressions)
+      run: cargo xtask ci step check datafusion encoding_expressions
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (force_hash_collisions)
+      run: cargo xtask ci step check datafusion force_hash_collisions
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (math_expressions)
+      run: cargo xtask ci step check datafusion math_expressions
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (parquet)
+      run: cargo xtask ci step check datafusion parquet
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (regex_expressions)
+      run: cargo xtask ci step check datafusion regex_expressions
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (recursive_protection)
+      run: cargo xtask ci step check datafusion recursive_protection
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (serde)
+      run: cargo xtask ci step check datafusion serde
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (sql)
+      run: cargo xtask ci step check datafusion sql
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (string_expressions)
+      run: cargo xtask ci step check datafusion string_expressions
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion (unicode_expressions)
+      run: cargo xtask ci step check datafusion unicode_expressions
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check parquet encryption (parquet_encryption)
+      run: cargo xtask ci step check datafusion parquet_encryption
+      if: github.run_attempt == '1'
+    - name: warm-cache / Reset build data
+      run: |-
+        git reset --hard 375bf976f58831cb438422c804045289af119870
+        git clean -ffdx
+        rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
+        test ! -e target
+        test ! -e "$CARGO_HOME/registry"
+      if: success()
+    - name: warm-cache / Restore check cache
+      id: warm-cache
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      with:
+        shared-key: check-cache-study-v1
+        save-if: false
+      if: success()
+    - name: warm-cache / Verify cache state
+      env:
+        CACHE_HIT: ${{ steps.warm-cache.outputs.cache-hit }}
+      run: test "$CACHE_HIT" = "true"
+      if: success()
+    - name: warm-cache / Check datafusion (default features)
+      run: cargo xtask ci step check datafusion default
+      env:
+        CARGO_LOG: cargo::core::compiler::fingerprint=info
+      if: success()
+    - name: warm-cache / Check datafusion (no-default-features)
+      run: cargo xtask ci step check datafusion no-default
+      if: success()
+    - name: warm-cache / Check datafusion (nested_expressions)
+      run: cargo xtask ci step check datafusion nested_expressions
+      if: success()
+    - name: warm-cache / Check datafusion (array_expressions)
+      run: cargo xtask ci step check datafusion array_expressions
+      if: success()
+    - name: warm-cache / Check datafusion (avro)
+      run: cargo xtask ci step check datafusion avro
+      if: success()
+    - name: warm-cache / Check datafusion (backtrace)
+      run: cargo xtask ci step check datafusion backtrace
+      if: success()
+    - name: warm-cache / Check datafusion (compression)
+      run: cargo xtask ci step check datafusion compression
+      if: success()
+    - name: warm-cache / Check datafusion (crypto_expressions)
+      run: cargo xtask ci step check datafusion crypto_expressions
+      if: success()
+    - name: warm-cache / Check datafusion (datetime_expressions)
+      run: cargo xtask ci step check datafusion datetime_expressions
+      if: success()
+    - name: warm-cache / Check datafusion (encoding_expressions)
+      run: cargo xtask ci step check datafusion encoding_expressions
+      if: success()
+    - name: warm-cache / Check datafusion (force_hash_collisions)
+      run: cargo xtask ci step check datafusion force_hash_collisions
+      if: success()
+    - name: warm-cache / Check datafusion (math_expressions)
+      run: cargo xtask ci step check datafusion math_expressions
+      if: success()
+    - name: warm-cache / Check datafusion (parquet)
+      run: cargo xtask ci step check datafusion parquet
+      if: success()
+    - name: warm-cache / Check datafusion (regex_expressions)
+      run: cargo xtask ci step check datafusion regex_expressions
+      if: success()
+    - name: warm-cache / Check datafusion (recursive_protection)
+      run: cargo xtask ci step check datafusion recursive_protection
+      if: success()
+    - name: warm-cache / Check datafusion (serde)
+      run: cargo xtask ci step check datafusion serde
+      if: success()
+    - name: warm-cache / Check datafusion (sql)
+      run: cargo xtask ci step check datafusion sql
+      if: success()
+    - name: warm-cache / Check datafusion (string_expressions)
+      run: cargo xtask ci step check datafusion string_expressions
+      if: success()
+    - name: warm-cache / Check datafusion (unicode_expressions)
+      run: cargo xtask ci step check datafusion unicode_expressions
+      if: success()
+    - name: warm-cache / Check parquet encryption (parquet_encryption)
+      run: cargo xtask ci step check datafusion parquet_encryption
+      if: success()
+    - name: artifact-second / Reset build data
+      run: |-
+        git reset --hard 375bf976f58831cb438422c804045289af119870
+        git clean -ffdx
+        rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
+        test ! -e target
+        test ! -e "$CARGO_HOME/registry"
+      if: github.run_attempt != '1'
+    - name: artifact-second / Download artifact
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: cargo-check
+        path: ${{ runner.temp }}/cargo-check
+      if: github.run_attempt != '1'
+    - name: artifact-second / Restore artifact
+      run: |-
+        tar -xf "$RUNNER_TEMP/cargo-check/check-workspace.tar"
+        tar -xf "$RUNNER_TEMP/cargo-check/check-registry.tar" -C "$CARGO_HOME"
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (default features)
+      run: cargo xtask ci step check datafusion default
+      env:
+        CARGO_LOG: cargo::core::compiler::fingerprint=info
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (no-default-features)
+      run: cargo xtask ci step check datafusion no-default
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (nested_expressions)
+      run: cargo xtask ci step check datafusion nested_expressions
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (array_expressions)
+      run: cargo xtask ci step check datafusion array_expressions
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (avro)
+      run: cargo xtask ci step check datafusion avro
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (backtrace)
+      run: cargo xtask ci step check datafusion backtrace
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (compression)
+      run: cargo xtask ci step check datafusion compression
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (crypto_expressions)
+      run: cargo xtask ci step check datafusion crypto_expressions
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (datetime_expressions)
+      run: cargo xtask ci step check datafusion datetime_expressions
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (encoding_expressions)
+      run: cargo xtask ci step check datafusion encoding_expressions
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (force_hash_collisions)
+      run: cargo xtask ci step check datafusion force_hash_collisions
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (math_expressions)
+      run: cargo xtask ci step check datafusion math_expressions
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (parquet)
+      run: cargo xtask ci step check datafusion parquet
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (regex_expressions)
+      run: cargo xtask ci step check datafusion regex_expressions
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (recursive_protection)
+      run: cargo xtask ci step check datafusion recursive_protection
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (serde)
+      run: cargo xtask ci step check datafusion serde
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (sql)
+      run: cargo xtask ci step check datafusion sql
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (string_expressions)
+      run: cargo xtask ci step check datafusion string_expressions
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion (unicode_expressions)
+      run: cargo xtask ci step check datafusion unicode_expressions
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check parquet encryption (parquet_encryption)
+      run: cargo xtask ci step check datafusion parquet_encryption
+      if: github.run_attempt != '1'
+    - name: cold-cache / Reset build data
+      run: |-
+        git reset --hard 375bf976f58831cb438422c804045289af119870
+        git clean -ffdx
+        rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
+        test ! -e target
+        test ! -e "$CARGO_HOME/registry"
+      if: github.run_attempt == '1'
+    - name: cold-cache / Restore check cache
+      id: cold-cache
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      with:
+        shared-key: check-cache-study-v1
+        save-if: false
+        prefix-key: v0-cold-study-${{ github.run_id }}-datafusion
+      if: github.run_attempt == '1'
+    - name: cold-cache / Verify cache state
+      env:
+        CACHE_HIT: ${{ steps.cold-cache.outputs.cache-hit }}
+      run: test "$CACHE_HIT" != "true"
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (default features)
+      run: cargo xtask ci step check datafusion default
+      env:
+        CARGO_LOG: cargo::core::compiler::fingerprint=info
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (no-default-features)
+      run: cargo xtask ci step check datafusion no-default
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (nested_expressions)
+      run: cargo xtask ci step check datafusion nested_expressions
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (array_expressions)
+      run: cargo xtask ci step check datafusion array_expressions
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (avro)
+      run: cargo xtask ci step check datafusion avro
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (backtrace)
+      run: cargo xtask ci step check datafusion backtrace
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (compression)
+      run: cargo xtask ci step check datafusion compression
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (crypto_expressions)
+      run: cargo xtask ci step check datafusion crypto_expressions
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (datetime_expressions)
+      run: cargo xtask ci step check datafusion datetime_expressions
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (encoding_expressions)
+      run: cargo xtask ci step check datafusion encoding_expressions
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (force_hash_collisions)
+      run: cargo xtask ci step check datafusion force_hash_collisions
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (math_expressions)
+      run: cargo xtask ci step check datafusion math_expressions
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (parquet)
+      run: cargo xtask ci step check datafusion parquet
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (regex_expressions)
+      run: cargo xtask ci step check datafusion regex_expressions
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (recursive_protection)
+      run: cargo xtask ci step check datafusion recursive_protection
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (serde)
+      run: cargo xtask ci step check datafusion serde
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (sql)
+      run: cargo xtask ci step check datafusion sql
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (string_expressions)
+      run: cargo xtask ci step check datafusion string_expressions
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion (unicode_expressions)
+      run: cargo xtask ci step check datafusion unicode_expressions
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check parquet encryption (parquet_encryption)
+      run: cargo xtask ci step check datafusion parquet_encryption
+      if: github.run_attempt == '1'
+  substrait:
+    name: substrait / same-runner comparison
+    needs: prepare
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: 375bf976f58831cb438422c804045289af119870
+    - name: Setup Rust toolchain
+      uses: ./.github/actions/setup-builder
+      with:
+        rust-version: stable
+    - name: Record fixed environment
+      run: |-
+        git rev-parse HEAD
+        rustc -Vv
+        cargo -V
+        nproc
+        lscpu
+        sha256sum Cargo.lock
+    - name: Install CMake for all variants
+      run: apt-get install -y cmake
+    - name: artifact-first / Reset build data
+      run: |-
+        git reset --hard 375bf976f58831cb438422c804045289af119870
+        git clean -ffdx
+        rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
+        test ! -e target
+        test ! -e "$CARGO_HOME/registry"
+      if: github.run_attempt == '1'
+    - name: artifact-first / Download artifact
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: cargo-check
+        path: ${{ runner.temp }}/cargo-check
+      if: github.run_attempt == '1'
+    - name: artifact-first / Restore artifact
+      run: |-
+        tar -xf "$RUNNER_TEMP/cargo-check/check-workspace.tar"
+        tar -xf "$RUNNER_TEMP/cargo-check/check-registry.tar" -C "$CARGO_HOME"
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion-substrait (default features)
+      run: cargo xtask ci step check datafusion-substrait default
+      env:
+        CARGO_LOG: cargo::core::compiler::fingerprint=info
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion-substrait (no-default-features)
+      run: cargo xtask ci step check datafusion-substrait no-default
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion-substrait (physical)
+      run: cargo xtask ci step check datafusion-substrait physical
+      if: github.run_attempt == '1'
+    - name: artifact-first / Check datafusion-substrait (protoc)
+      run: cargo xtask ci step check datafusion-substrait protoc
+      if: github.run_attempt == '1'
+    - name: warm-cache / Reset build data
+      run: |-
+        git reset --hard 375bf976f58831cb438422c804045289af119870
+        git clean -ffdx
+        rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
+        test ! -e target
+        test ! -e "$CARGO_HOME/registry"
+      if: success()
+    - name: warm-cache / Restore check cache
+      id: warm-cache
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      with:
+        shared-key: check-cache-study-v1
+        save-if: false
+      if: success()
+    - name: warm-cache / Verify cache state
+      env:
+        CACHE_HIT: ${{ steps.warm-cache.outputs.cache-hit }}
+      run: test "$CACHE_HIT" = "true"
+      if: success()
+    - name: warm-cache / Check datafusion-substrait (default features)
+      run: cargo xtask ci step check datafusion-substrait default
+      env:
+        CARGO_LOG: cargo::core::compiler::fingerprint=info
+      if: success()
+    - name: warm-cache / Check datafusion-substrait (no-default-features)
+      run: cargo xtask ci step check datafusion-substrait no-default
+      if: success()
+    - name: warm-cache / Check datafusion-substrait (physical)
+      run: cargo xtask ci step check datafusion-substrait physical
+      if: success()
+    - name: warm-cache / Check datafusion-substrait (protoc)
+      run: cargo xtask ci step check datafusion-substrait protoc
+      if: success()
+    - name: artifact-second / Reset build data
+      run: |-
+        git reset --hard 375bf976f58831cb438422c804045289af119870
+        git clean -ffdx
+        rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
+        test ! -e target
+        test ! -e "$CARGO_HOME/registry"
+      if: github.run_attempt != '1'
+    - name: artifact-second / Download artifact
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: cargo-check
+        path: ${{ runner.temp }}/cargo-check
+      if: github.run_attempt != '1'
+    - name: artifact-second / Restore artifact
+      run: |-
+        tar -xf "$RUNNER_TEMP/cargo-check/check-workspace.tar"
+        tar -xf "$RUNNER_TEMP/cargo-check/check-registry.tar" -C "$CARGO_HOME"
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion-substrait (default features)
+      run: cargo xtask ci step check datafusion-substrait default
+      env:
+        CARGO_LOG: cargo::core::compiler::fingerprint=info
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion-substrait (no-default-features)
+      run: cargo xtask ci step check datafusion-substrait no-default
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion-substrait (physical)
+      run: cargo xtask ci step check datafusion-substrait physical
+      if: github.run_attempt != '1'
+    - name: artifact-second / Check datafusion-substrait (protoc)
+      run: cargo xtask ci step check datafusion-substrait protoc
+      if: github.run_attempt != '1'
+    - name: cold-cache / Reset build data
+      run: |-
+        git reset --hard 375bf976f58831cb438422c804045289af119870
+        git clean -ffdx
+        rm -rf "$CARGO_HOME/registry" "$CARGO_HOME/git"
+        test ! -e target
+        test ! -e "$CARGO_HOME/registry"
+      if: github.run_attempt == '1'
+    - name: cold-cache / Restore check cache
+      id: cold-cache
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+      with:
+        shared-key: check-cache-study-v1
+        save-if: false
+        prefix-key: v0-cold-study-${{ github.run_id }}-substrait
+      if: github.run_attempt == '1'
+    - name: cold-cache / Verify cache state
+      env:
+        CACHE_HIT: ${{ steps.cold-cache.outputs.cache-hit }}
+      run: test "$CACHE_HIT" != "true"
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion-substrait (default features)
+      run: cargo xtask ci step check datafusion-substrait default
+      env:
+        CARGO_LOG: cargo::core::compiler::fingerprint=info
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion-substrait (no-default-features)
+      run: cargo xtask ci step check datafusion-substrait no-default
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion-substrait (physical)
+      run: cargo xtask ci step check datafusion-substrait physical
+      if: github.run_attempt == '1'
+    - name: cold-cache / Check datafusion-substrait (protoc)
+      run: cargo xtask ci step check datafusion-substrait protoc
+      if: github.run_attempt == '1'

@@ -56,6 +56,7 @@ concurrency:
 on:
   push:
     branches-ignore:
+      - 'db/ci-check-cache-measure' # Isolated cache study; not part of the production change.
       - 'gh-readonly-queue/**'
       - 'dependabot/**'
     paths-ignore:
