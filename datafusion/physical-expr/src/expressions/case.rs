@@ -212,7 +212,10 @@ impl CaseBody {
         let mut used_column_indices = BTreeSet::<usize>::new();
         self.exprs().for_each(|expr| {
             expr.apply(|expr| {
-                if !precomputed.is_empty() && precomputed.contains(expr) {
+                if !precomputed.is_empty()
+                    && is_precomputable(expr, schema)
+                    && precomputed.contains(expr)
+                {
                     return Ok(TreeNodeRecursion::Jump);
                 }
                 if let Some(column) = expr.downcast_ref::<Column>() {
