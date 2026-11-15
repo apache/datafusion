@@ -1304,7 +1304,7 @@ fn test_sort_pushdown_ungrouped_max() {
 
     let plan = Arc::new(
         AggregateExec::try_new(
-            AggregateMode::Single,
+            AggregateMode::Partial,
             PhysicalGroupBy::default(),
             vec![Arc::new(max_expr)],
             vec![None],
@@ -1319,11 +1319,11 @@ fn test_sort_pushdown_ungrouped_max() {
         @r"
     OptimizationTest:
       input:
-        - AggregateExec: mode=Single, gby=[], aggr=[max_a]
+        - AggregateExec: mode=Partial, gby=[], aggr=[max_a]
         -   TestScan
       output:
         Ok:
-          - AggregateExec: mode=Single, gby=[], aggr=[max_a]
+          - AggregateExec: mode=Partial, gby=[], aggr=[max_a]
           -   TestScan: requested_ordering=[a@0 DESC NULLS LAST]
     "
     );
@@ -1349,7 +1349,7 @@ fn test_sort_pushdown_ungrouped_min() {
 
     let plan = Arc::new(
         AggregateExec::try_new(
-            AggregateMode::Single,
+            AggregateMode::Partial,
             PhysicalGroupBy::default(),
             vec![Arc::new(min_expr)],
             vec![None],
@@ -1364,11 +1364,11 @@ fn test_sort_pushdown_ungrouped_min() {
         @r"
     OptimizationTest:
       input:
-        - AggregateExec: mode=Single, gby=[], aggr=[min_a]
+        - AggregateExec: mode=Partial, gby=[], aggr=[min_a]
         -   TestScan
       output:
         Ok:
-          - AggregateExec: mode=Single, gby=[], aggr=[min_a]
+          - AggregateExec: mode=Partial, gby=[], aggr=[min_a]
           -   TestScan: requested_ordering=[a@0 ASC NULLS LAST]
     "
     );

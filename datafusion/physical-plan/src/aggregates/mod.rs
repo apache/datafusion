@@ -1853,11 +1853,7 @@ impl AggregateExec {
     /// - If yes, init one inside `AggregateExec`'s `dynamic_filter` field.
     /// - If not supported, `self.dynamic_filter` should be kept `None`
     fn init_dynamic_filter(&mut self) {
-        // Both `Partial` and `Single` (single-partition) modes can scan multiple
-        // files or row groups and benefit from dynamic filter pruning.
-        if (!self.group_by().is_empty())
-            || (!matches!(self.mode, AggregateMode::Partial | AggregateMode::Single))
-        {
+        if (!self.group_by().is_empty()) || (self.mode != AggregateMode::Partial) {
             debug_assert!(
                 self.dynamic_filter.is_none(),
                 "The current operator node does not support dynamic filter"
