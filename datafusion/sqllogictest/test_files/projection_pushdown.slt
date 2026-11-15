@@ -2872,21 +2872,12 @@ SET datafusion.execution.batch_size = 8192;
 statement ok
 SET datafusion.execution.target_partitions = 4;
 
-# An `OFFSET` the source pushes down puts a `GlobalLimitExec` between the scan
-# and the leaf projection, and a second node under it when the scan has more
-# than one file group, which strands `get_field` above them and reads the whole
-# struct again. See `try_split_leaf_projection` in
-# `datafusion/physical-optimizer/src/projection_pushdown.rs`.
+# With an `OFFSET` the source pushes down, a leaf expression must still reach
+# the scan. Without that the scan reads the whole struct again.
 
-# Every `OFFSET` below sets a skip that differs from the fetch -- `OFFSET 1
-# LIMIT 3` for the single-file queries, `OFFSET 1 LIMIT 2` for the multi-file
-# ones -- never `OFFSET n LIMIT n`: the split rebuilds the limit, and with the
-# two numbers equal nothing here would notice them being swapped.
+# Every `OFFSET` below sets a skip that differs from the fetch: with the two
+# numbers equal, nothing here would notice them being swapped.
 
-# Values first: these pin the rows, which no plan assertion shows. They are not
-# the only cover for a misplaced `skip`, which reddens the plans below as well,
-# and they are no cover at all for a dropped `fetch`, which nothing in this file
-# notices. The unit tests carry that one.
 query I
 SELECT v FROM (SELECT s['value'] AS v FROM leaf_split OFFSET 1 LIMIT 3) ORDER BY v;
 ----
@@ -2931,9 +2922,8 @@ physical_plan
 02)--GlobalLimitExec: skip=1, fetch=3
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], limit=4, file_type=parquet
 
-# A leaf nested inside a `KeepInPlace` expression. `upper` stays above the
-# limit, so the rows the limit skips do not pay for it, and the scan still
-# reads only the two fields.
+# A leaf nested inside a `KeepInPlace` expression: `upper` stays above the
+# limit and the scan still reads only the two fields.
 query TT
 EXPLAIN SELECT s['value'] AS v, upper(s['label']) AS l FROM leaf_split OFFSET 1 LIMIT 3;
 ----
@@ -2947,11 +2937,8 @@ physical_plan
 02)--GlobalLimitExec: skip=1, fetch=3
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[get_field(s@1, value) as __datafusion_leaf_0, get_field(s@1, label) as __datafusion_leaf_1], limit=4, file_type=parquet
 
-# No leaf expression in the projection. This is a control, not a guard: the
-# scan prunes to `[id]` either way, so the plan is the same whether or not the
-# rule bails out early. What pins the bail-out is
-# `split_declines_global_limit_without_leaf` in
-# `datafusion/core/tests/physical_optimizer/projection_pushdown.rs`.
+# No leaf expression: a control, not a guard. The plan is the same either way,
+# so `split_declines_global_limit_without_leaf` pins the early bail-out.
 query TT
 EXPLAIN SELECT id + 1 AS w FROM leaf_split OFFSET 1 LIMIT 3;
 ----
@@ -2965,13 +2952,9 @@ physical_plan
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[id], limit=4, file_type=parquet
 
 # A marker inside a lambda body, under an `OFFSET`. The lambda queries further
-# up cover the body without a limit, and the queries just above cover the limit
-# without a lambda; nothing covered both, and this errors before the fix. It is
-# also what pins `rebase_lambda_variable`: the parameter index is rebased
-# against the chain's bottom schema, which the split has just widened.
-# The lambda section above runs with `batch_size = 2`, which inserts a
-# repartition; this one has to stay here, where `batch_size` is high enough that
-# the only node between the projection and the scan is the limit.
+# up have no limit and the limit queries above have no lambda, so nothing
+# covered both; this errors before the fix. It stays here rather than in the
+# lambda section above, which runs with a `batch_size` that inserts a repartition.
 statement ok
 SET datafusion.sql_parser.dialect = databricks;
 
@@ -2989,9 +2972,8 @@ SELECT a, v, l FROM (
 statement ok
 SET datafusion.sql_parser.dialect = generic;
 
-# More than one file group: a `CoalescePartitionsExec` sits between the limit
-# and the scan, so the leaf has to descend past two nodes. Stopping at the
-# first one leaves the scan reading the whole struct.
+# More than one file group puts a second node between the limit and the scan,
+# so the leaf has to descend past two.
 
 statement ok
 COPY (
