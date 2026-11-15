@@ -383,24 +383,17 @@ impl Range {
             }
             let neg = interval_step_is_negative(self.name(), months, days, nanoseconds)?;
 
-            let stop = if !self.include_upper_bound {
-                Date32Type::subtract_month_day_nano_opt(stop, step).ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "Cannot generate date range where stop {} - {step:?}) overflows",
-                        date32_to_string(stop)
-                    )
-                })?
-            } else {
-                stop
-            };
-
             let mut new_date = Some(start);
 
             let values = from_fn(|| {
                 let Some(current_date) = new_date else {
                     return None; // previous overflow
                 };
-                if (neg && current_date < stop) || (!neg && current_date > stop) {
+                let generate_series_should_end = self.include_upper_bound
+                    && ((neg && current_date < stop) || (!neg && current_date > stop));
+                let range_should_end = !self.include_upper_bound
+                    && ((neg && current_date <= stop) || (!neg && current_date >= stop));
+                if generate_series_should_end || range_should_end {
                     None
                 } else {
                     new_date = Date32Type::add_month_day_nano_opt(current_date, step);
@@ -615,12 +608,4 @@ fn parse_tz(tz: Option<&str>) -> Result<Tz> {
 
     Tz::from_str(tz)
         .map_err(|op| exec_datafusion_err!("failed to parse timezone {tz}: {:?}", op))
-}
-
-fn date32_to_string(value: i32) -> String {
-    if let Some(d) = Date32Type::to_naive_date_opt(value) {
-        format!("{value} ({d})")
-    } else {
-        format!("{value} (unknown date)")
-    }
 }
