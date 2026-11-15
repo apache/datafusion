@@ -20,8 +20,6 @@
 //! `xtask` is an internal Rust binary in this workspace. The `cargo xtask` alias
 //! builds and runs that binary, forwarding the remaining arguments to it.
 //!
-//! There is no external dependency required.
-//!
 //! ## Reference
 //!
 //! The [`xtask` convention](https://github.com/matklad/cargo-xtask) keeps project
@@ -68,6 +66,7 @@
 
 mod ci_steps;
 mod command;
+mod coverage;
 
 use std::env;
 use std::path::PathBuf;

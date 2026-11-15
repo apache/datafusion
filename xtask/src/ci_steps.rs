@@ -10,7 +10,28 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 type StepResult<T> = std::result::Result<T, StepError>;
-type StepRunner = fn(&StepContext, &[String]) -> StepResult<CommandSpec>;
+type StepRunner = fn(&StepContext, &[String]) -> StepResult<StepCommand>;
+
+enum StepCommand {
+    External(CommandSpec),
+    WorkspaceCoverage(PathBuf),
+}
+
+impl StepCommand {
+    fn execute(self) -> Result<()> {
+        match self {
+            Self::External(command) => command.execute(),
+            Self::WorkspaceCoverage(root) => crate::coverage::run(&root),
+        }
+    }
+
+    fn explanation(&self) -> Result<String> {
+        match self {
+            Self::External(command) => Ok(command.explanation()),
+            Self::WorkspaceCoverage(root) => crate::coverage::explanation(root),
+        }
+    }
+}
 
 const CI_COMMAND: &str = "cargo xtask ci step";
 const CI_SHORTCUT: &str = "cargo ci-step";
@@ -143,7 +164,7 @@ impl StepContext {
                 match action {
                     StepAction::Execute => command.execute(),
                     StepAction::Explain => {
-                        command.explain();
+                        println!("{}", command.explanation()?);
                         Ok(())
                     }
                 }
@@ -152,7 +173,7 @@ impl StepContext {
     }
 
     /// Parses a CI step into an action and its complete command description.
-    fn ci_step(&self, args: &[String]) -> Result<(StepAction, CommandSpec)> {
+    fn ci_step(&self, args: &[String]) -> Result<(StepAction, StepCommand)> {
         let (action, args) = match args.split_last() {
             Some((arg, args)) if arg == "--explain" => (StepAction::Explain, args),
             _ => (StepAction::Execute, args),
@@ -167,7 +188,7 @@ impl StepContext {
     }
 
     /// Implementation for `cargo xtask ci step check [args]`
-    fn run_check(&self, args: &[String]) -> StepResult<CommandSpec> {
+    fn run_check(&self, args: &[String]) -> StepResult<StepCommand> {
         let args = args.iter().map(String::as_str).collect::<Vec<_>>();
         let mut builder = CommandSpec::builder(self.env_reader);
         builder
@@ -222,11 +243,14 @@ impl StepContext {
             _ => return Err(StepError::Usage),
         }
 
-        builder.build().map_err(StepError::InvalidCommand)
+        builder
+            .build()
+            .map(StepCommand::External)
+            .map_err(StepError::InvalidCommand)
     }
 
     /// Implementation for `cargo xtask ci step test [args]`
-    fn run_test(&self, args: &[String]) -> StepResult<CommandSpec> {
+    fn run_test(&self, args: &[String]) -> StepResult<StepCommand> {
         let [variant] = args else {
             return Err(StepError::Usage);
         };
@@ -237,45 +261,26 @@ impl StepContext {
             .failure_message("CI test step failed");
 
         match variant.as_str() {
-            "workspace" | "slt-coverage" => {
-                if variant == "workspace" {
-                    cmd_builder
-                        .program("python3")
-                        .args(["ci/scripts/rust_coverage.py"])
-                        .requires_executable("python3", "install Python 3");
-                } else {
-                    cmd_builder.program("cargo").args(["llvm-cov"]);
-                }
-                cmd_builder.args([
-                    "--profile",
-                    "ci",
-                    "--exclude",
-                    "datafusion-examples",
-                    "--exclude",
-                    "ffi_example_table_provider",
-                    "--exclude",
-                    "datafusion-cli",
-                ]);
-                if variant == "slt-coverage" {
-                    cmd_builder.args(["--workspace", "--test", "sqllogictests"]);
-                }
+            "workspace" => {
+                return Ok(StepCommand::WorkspaceCoverage(self.root.clone()));
+            }
+            "slt-coverage" => {
                 cmd_builder
+                    .program("cargo")
+                    .args(["llvm-cov"])
+                    .args(crate::coverage::test_args())
                     .args([
-                        "--features",
-                        "serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait",
+                        "--test",
+                        "sqllogictests",
+                        "--codecov",
+                        "--output-path",
+                        "target/codecov-slt.json",
                     ])
                     .env("RUST_BACKTRACE", "1")
                     .requires_executable(
                         "cargo-llvm-cov",
                         "install it with `cargo install cargo-llvm-cov --locked`",
                     );
-                if variant == "slt-coverage" {
-                    cmd_builder.args([
-                        "--codecov",
-                        "--output-path",
-                        "target/codecov-slt.json",
-                    ]);
-                }
             }
             "cli" => {
                 cmd_builder.doc(
@@ -562,7 +567,10 @@ impl StepContext {
             _ => return Err(StepError::Usage),
         }
 
-        cmd_builder.build().map_err(StepError::InvalidCommand)
+        cmd_builder
+            .build()
+            .map(StepCommand::External)
+            .map_err(StepError::InvalidCommand)
     }
 }
 
@@ -628,8 +636,8 @@ mod tests {
         assert_eq!(execute_action, StepAction::Execute);
         assert_eq!(explain_action, StepAction::Explain);
         assert_eq!(
-            execute_command.full_command(),
-            explain_command.full_command()
+            execute_command.explanation().unwrap(),
+            explain_command.explanation().unwrap()
         );
     }
 
@@ -769,23 +777,6 @@ cargo check \
                 },
             },
             Cmd {
-                command: &["test", "workspace"],
-                expected: |actual| {
-                    insta::assert_snapshot!(actual, @r"
-# Requires executable `python3` (install Python 3)
-# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
-cd /workspace && \
-RUST_BACKTRACE=1 \
-python3 ci/scripts/rust_coverage.py \
---profile ci \
---exclude datafusion-examples \
---exclude ffi_example_table_provider \
---exclude datafusion-cli \
---features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait
-")
-                },
-            },
-            Cmd {
                 command: &["test", "slt-coverage"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
@@ -794,12 +785,12 @@ cd /workspace && \
 RUST_BACKTRACE=1 \
 cargo llvm-cov \
 --profile ci \
+--workspace \
 --exclude datafusion-examples \
 --exclude ffi_example_table_provider \
 --exclude datafusion-cli \
---workspace \
---test sqllogictests \
 --features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
+--test sqllogictests \
 --codecov \
 --output-path target/codecov-slt.json
 ")
@@ -1080,7 +1071,7 @@ cargo test \
             let (action, actual) = context.ci_step(&args(&explain_args)).unwrap();
 
             assert_eq!(action, StepAction::Explain);
-            expected(&actual.explanation());
+            expected(&actual.explanation().unwrap());
         }
     }
 }

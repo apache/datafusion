@@ -77,8 +77,8 @@ jobs:
       # Give the longest-running suite the build lock before the other Cargo commands.
       - name: Build extended tests
         run: |
-          cargo xtask ci step test extended-build > "$RUNNER_TEMP/extended-tests.json"
-          extended_test_binary="$(jq -Rr 'fromjson? | select(.reason == "compiler-artifact" and .target.name == "extended_tests" and .executable != null) | .executable' "$RUNNER_TEMP/extended-tests.json")"
+          extended_test_binary="$(cargo xtask ci step test extended-build |
+            jq -r 'select(.reason == "compiler-artifact" and .target.name == "extended_tests" and .executable != null) | .executable')"
           test -x "$extended_test_binary"
           printf 'EXTENDED_TEST_BINARY=%s\n' "$extended_test_binary" >> "$GITHUB_ENV"
       - parallel:
@@ -121,7 +121,6 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Configure compiler cache
-        id: sccache
         if: vars.USE_RUNS_ON == 'true'
         uses: ./.github/actions/setup-sccache
       - name: Run tests
@@ -129,9 +128,6 @@ jobs:
           cargo xtask ci step test hash-collisions
           cd datafusion
           cargo clean
-      - name: Report compiler cache statistics
-        if: ${{ always() && steps.sccache.outcome == 'success' }}
-        run: sccache --show-stats
 
   sqllogictest-sqlite:
     name: "Run sqllogictests with the sqlite test suite"
@@ -153,11 +149,7 @@ jobs:
             run: |
               apt-get update && apt-get install -y protobuf-compiler
       - name: Configure compiler cache
-        id: sccache
         if: vars.USE_RUNS_ON == 'true'
         uses: ./.github/actions/setup-sccache
       - name: Run sqllogictest
         run: cargo xtask ci step test sqlite
-      - name: Report compiler cache statistics
-        if: ${{ always() && steps.sccache.outcome == 'success' }}
-        run: sccache --show-stats

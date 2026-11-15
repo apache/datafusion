@@ -394,8 +394,6 @@ jobs:
         uses: ./.github/actions/checkout-test-data
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
-      - name: Install Python
-        run: ci/scripts/retry timeout 120 apt-get install -y python3
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
         with:
@@ -480,14 +478,10 @@ jobs:
           ci/scripts/retry timeout 120 docker pull "$RUSTFS_IMAGE" \
             || echo "::warning::Could not pre-pull $RUSTFS_IMAGE, the tests will pull it themselves"
       - name: Configure compiler cache
-        id: sccache
         if: vars.USE_RUNS_ON == 'true'
         uses: ./.github/actions/setup-sccache
       - name: Run tests (excluding doctests)
         run: cargo xtask ci step test cli
-      - name: Report compiler cache statistics
-        if: ${{ always() && steps.sccache.outcome == 'success' }}
-        run: sccache --show-stats
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -514,7 +508,6 @@ jobs:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci-linux-test-example"
       - name: Configure compiler cache
-        id: sccache
         if: vars.USE_RUNS_ON == 'true'
         uses: ./.github/actions/setup-sccache
       - name: Run examples
@@ -523,9 +516,6 @@ jobs:
           cargo run --profile ci --example sql
           # test datafusion-examples
           ci/scripts/rust_example.sh
-      - name: Report compiler cache statistics
-        if: ${{ always() && steps.sccache.outcome == 'success' }}
-        run: sccache --show-stats
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -547,14 +537,10 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Configure compiler cache
-        id: sccache
         if: vars.USE_RUNS_ON == 'true'
         uses: ./.github/actions/setup-sccache
       - name: Run doctests
         run: cargo xtask ci step test doctest
-      - name: Report compiler cache statistics
-        if: ${{ always() && steps.sccache.outcome == 'success' }}
-        run: sccache --show-stats
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -675,7 +661,6 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Configure compiler cache
-        id: sccache
         if: vars.USE_RUNS_ON == 'true'
         uses: ./.github/actions/setup-sccache
       - name: Run sqllogictest
@@ -684,9 +669,6 @@ jobs:
           # use postgres for the host here because we have specified a container for the job
           POSTGRES_HOST: postgres
           POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
-      - name: Report compiler cache statistics
-        if: ${{ always() && steps.sccache.outcome == 'success' }}
-        run: sccache --show-stats
 
   sqllogictest-substrait:
     name: "Run sqllogictest in Substrait round-trip mode"
@@ -705,7 +687,6 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Configure compiler cache
-        id: sccache
         if: vars.USE_RUNS_ON == 'true'
         uses: ./.github/actions/setup-sccache
       - name: Run sqllogictest
@@ -716,9 +697,6 @@ jobs:
         run: |
           cargo xtask ci step test substrait
           cargo xtask ci step test substrait-optimized
-      - name: Report compiler cache statistics
-        if: ${{ always() && steps.sccache.outcome == 'success' }}
-        run: sccache --show-stats
 
   #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
   #  Waiting for new Windows 2025 github runner
@@ -812,18 +790,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 1
-      - name: Checkout test data
-        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-      - parallel:
-          - name: Install Clippy
-            run: rustup component add clippy
-          - name: Rust Dependency Cache
-            uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
-            with:
-              save-if: ${{ github.ref_name == 'main' }}
-              shared-key: "amd-ci-clippy"
+      - name: Rust Dependency Cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
+        with:
+          save-if: ${{ github.ref_name == 'main' }}
+          shared-key: "amd-ci-clippy"
       - name: Install CMake
         # The all-features check builds snmalloc-sys, which requires CMake.
         run: apt-get install -y --no-install-recommends cmake
@@ -867,16 +840,12 @@ jobs:
         with:
           node-version: "20"
       - name: Configure compiler cache
-        id: sccache
         if: vars.USE_RUNS_ON == 'true'
         uses: ./.github/actions/setup-sccache
       - name: Check generated config and function docs
         run: |
           ./ci/scripts/check_generated_docs.sh
           git diff --exit-code
-      - name: Report compiler cache statistics
-        if: ${{ always() && steps.sccache.outcome == 'success' }}
-        run: sccache --show-stats
 
 # This job ensures `datafusion-examples/README.md` stays in sync with the source code:
 # 1. Generates README automatically using the Rust examples docs generator
@@ -895,8 +864,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
-      - name: Checkout test data
-        uses: ./.github/actions/checkout-test-data
       - parallel:
           - name: Mark repository as safe for git
             # Required for git commands inside container (avoids "dubious ownership" error)

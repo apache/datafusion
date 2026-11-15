@@ -2805,6 +2805,9 @@ name = "datafusion-xtask"
 version = "0.1.0"
 dependencies = [
  "insta",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

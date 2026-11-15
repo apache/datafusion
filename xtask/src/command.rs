@@ -375,10 +375,6 @@ impl CommandSpecBuilder {
 }
 
 impl CommandSpec {
-    pub(crate) fn explain(&self) {
-        println!("{}", self.explanation());
-    }
-
     pub(crate) fn explanation(&self) -> String {
         let mut lines = Vec::new();
         if let Some(doc) = self.doc {
@@ -394,21 +390,28 @@ impl CommandSpec {
         lines.join("\n")
     }
 
-    pub(crate) fn execute(self) -> Result<()> {
+    fn process(&self) -> Result<Command> {
         self.validate_requirements()
             .map_err(|error| format!("{}: {error}", self.failure_message))?;
         let env = self
             .resolve_env()
             .map_err(|error| format!("{}: {error}", self.failure_message))?;
-        println!("+ {}", self.render_command(&env));
+        eprintln!("+ {}", self.render_command(&env));
 
-        let status = Command::new(&self.program)
+        let mut command = Command::new(&self.program);
+        command
             .args(&self.args)
             .current_dir(&self.current_dir)
             .envs(env)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        Ok(command)
+    }
+
+    pub(crate) fn execute(self) -> Result<()> {
+        let status = self
+            .process()?
             .status()
             .map_err(|error| format!("{}: {error}", self.failure_message))?;
 
@@ -416,6 +419,19 @@ impl CommandSpec {
             Ok(())
         } else {
             Err(format!("{}: {status}", self.failure_message))
+        }
+    }
+
+    pub(crate) fn output(self) -> Result<Vec<u8>> {
+        let output = self
+            .process()?
+            .stdout(Stdio::piped())
+            .output()
+            .map_err(|error| format!("{}: {error}", self.failure_message))?;
+        if output.status.success() {
+            Ok(output.stdout)
+        } else {
+            Err(format!("{}: {}", self.failure_message, output.status))
         }
     }
 
