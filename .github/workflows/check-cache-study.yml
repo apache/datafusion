@@ -10,12 +10,13 @@ name: Cargo check cache study
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}
+  group: ${{ github.repository }}-${{ github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 jobs:
   prepare:
     name: Prepare identical check artifacts and cache
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=8,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion',
+      github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
@@ -66,12 +67,14 @@ jobs:
   datafusion:
     name: datafusion / same-runner comparison
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion',
+      github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     env:
       CARGO_INCREMENTAL: '0'
     steps:
+    - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: 375bf976f58831cb438422c804045289af119870
@@ -417,12 +420,14 @@ jobs:
   substrait:
     name: substrait / same-runner comparison
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion',
+      github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     env:
       CARGO_INCREMENTAL: '0'
     steps:
+    - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: 375bf976f58831cb438422c804045289af119870
