@@ -472,7 +472,7 @@ impl ProjectedCaseBody {
         }
         let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
         Ok(Some(RecordBatch::try_new_with_options(
-            Arc::new(Schema::new(fields)),
+            Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
             columns,
             &options,
         )?))
