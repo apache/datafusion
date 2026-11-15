@@ -453,8 +453,19 @@ impl ProjectedCaseBody {
             columns.push(Arc::clone(batch.column(index)));
         }
         for expr in &self.precomputed {
-            fields.push(expr.return_field(&schema)?);
-            columns.push(expr.evaluate(batch)?.into_array(batch.num_rows())?);
+            let column = expr.evaluate(batch)?.into_array(batch.num_rows())?;
+            // The array may not match the plan-time field exactly (nested nullability or
+            // metadata); only the expressions in the body read this schema.
+            let field = expr.return_field(&schema)?;
+            let nullable = field.is_nullable() || column.null_count() > 0;
+            fields.push(Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(column.data_type().clone())
+                    .with_nullable(nullable),
+            ));
+            columns.push(column);
         }
         let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
         Ok(Some(RecordBatch::try_new_with_options(
@@ -2446,6 +2457,67 @@ mod tests {
         assert_eq!(
             as_int32_array(&result)?,
             &Int32Array::from(vec![Some(1), Some(2), None])
+        );
+        Ok(())
+    }
+
+    /// The plan may declare a struct column non-nullable while the batch has null
+    /// structs, which makes the precomputed fields nullable.
+    #[test]
+    fn case_precomputes_fields_of_null_structs_declared_non_nullable() -> Result<()> {
+        let fields = arrow::datatypes::Fields::from(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let struct_array = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+            ],
+            Some(arrow::buffer::NullBuffer::from(vec![true, true, false])),
+        );
+        let batch_schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(fields.clone()),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(batch_schema, vec![Arc::new(struct_array)])?;
+        let plan_schema =
+            Schema::new(vec![Field::new("s", DataType::Struct(fields), false)]);
+
+        let s = col("s", &plan_schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &plan_schema)?;
+        let s_b = get_field_expr(s, "b", &plan_schema)?;
+
+        // CASE WHEN s['a'] = 1 THEN s['b'] WHEN s['a'] > 1 THEN 0 END
+        let expr = CaseExpr::try_new(
+            None,
+            vec![
+                (
+                    binary(Arc::clone(&s_a), Operator::Eq, lit(1i32), &plan_schema)?,
+                    Arc::clone(&s_b),
+                ),
+                (
+                    binary(Arc::clone(&s_a), Operator::Gt, lit(1i32), &plan_schema)?,
+                    lit(0i32),
+                ),
+            ],
+            None,
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                let projected = projected.project(&expr.body, &plan_schema)?;
+                assert_eq!(projected.precomputed, vec![s_a, s_b]);
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_int32_array(&result)?,
+            &Int32Array::from(vec![Some(10), Some(0), None])
         );
         Ok(())
     }
