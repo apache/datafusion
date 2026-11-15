@@ -114,16 +114,16 @@ impl Eq for LiteralLookupTable {}
 /// exponential in the nesting depth: [`CaseBody::project`] rebuilds the nested expressions,
 /// each of which would project its own body again.
 #[derive(Debug, Default)]
-struct LazyProjectedBody(
-    OnceLock<std::result::Result<ProjectedCaseBody, Arc<DataFusionError>>>,
-);
+struct LazyProjectedBody(OnceLock<ProjectedCaseBody>);
 
 impl LazyProjectedBody {
     fn project(&self, body: &CaseBody, schema: &Schema) -> Result<&ProjectedCaseBody> {
-        self.0
-            .get_or_init(|| body.project(schema).map_err(Arc::new))
-            .as_ref()
-            .map_err(|e| DataFusionError::Shared(Arc::clone(e)))
+        if let Some(projected) = self.0.get() {
+            return Ok(projected);
+        }
+        // Concurrent first evaluations may each derive the body; one of them is kept.
+        let projected = body.project(schema)?;
+        Ok(self.0.get_or_init(|| projected))
     }
 }
 
