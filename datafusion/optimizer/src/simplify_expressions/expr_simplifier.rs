@@ -828,17 +828,19 @@ impl<'a> Simplifier<'a> {
     }
 }
 
-/// Simplifies `expr {=, !=} literal` in either operand order after checking
-/// that both operands have boolean type.
+/// Simplifies `expr {=, !=} literal` in either operand order.
+///
+/// Callers must ensure both operands are boolean.
 fn simplify_boolean_comparison(
     literal: &Expr,
     other: Box<Expr>,
     op: Operator,
 ) -> Result<Expr> {
-    Ok(match (as_bool_lit(literal)?, op) {
-        (Some(true), Operator::Eq) | (Some(false), Operator::NotEq) => *other,
-        (Some(_), _) => Expr::Not(other),
-        (None, _) => lit_bool_null(),
+    Ok(match (op, as_bool_lit(literal)?) {
+        (Operator::Eq, Some(true)) | (Operator::NotEq, Some(false)) => *other,
+        (Operator::Eq, Some(false)) | (Operator::NotEq, Some(true)) => Expr::Not(other),
+        (Operator::Eq | Operator::NotEq, None) => lit_bool_null(),
+        _ => return internal_err!("unexpected operator {op} for boolean comparison"),
     })
 }
 
@@ -4061,6 +4063,12 @@ mod tests {
         // true = false -> false
         assert_eq!(simplify(lit(true).eq(lit(false))), lit(false),);
 
+        // c2 = true -> c2
+        assert_eq!(simplify(col("c2").eq(lit(true))), col("c2"));
+
+        // c2 = false => !c2
+        assert_eq!(simplify(col("c2").eq(lit(false))), col("c2").not(),);
+
         for name in ["c2", "c2_non_null"] {
             for (literal, expected) in [
                 (lit(true), col(name)),
@@ -4088,6 +4096,9 @@ mod tests {
         // Make sure c1 column to be used in tests is not boolean type
         assert_eq!(col("c1").get_type(&schema).unwrap(), DataType::Utf8);
 
+        // don't fold c1 = foo
+        assert_eq!(simplify(col("c1").eq(lit("foo"))), col("c1").eq(lit("foo")),);
+
         for literal in [lit("foo"), lit(true), lit(false)] {
             for expr in [col("c1").eq(literal.clone()), literal.eq(col("c1"))] {
                 assert_eq!(simplify_no_canonicalize(expr.clone()), expr);
@@ -4100,6 +4111,12 @@ mod tests {
         let schema = expr_test_schema();
 
         assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
+
+        // c2 != true -> !c2
+        assert_eq!(simplify(col("c2").not_eq(lit(true))), col("c2").not(),);
+
+        // c2 != false -> c2
+        assert_eq!(simplify(col("c2").not_eq(lit(false))), col("c2"),);
 
         for name in ["c2", "c2_non_null"] {
             for (literal, expected) in [
@@ -4132,6 +4149,11 @@ mod tests {
         // other boolean constant will change return type of
         // expression to non-boolean.
         assert_eq!(col("c1").get_type(&schema).unwrap(), DataType::Utf8);
+
+        assert_eq!(
+            simplify(col("c1").not_eq(lit("foo"))),
+            col("c1").not_eq(lit("foo")),
+        );
 
         for literal in [lit("foo"), lit(true), lit(false)] {
             for expr in [col("c1").not_eq(literal.clone()), literal.not_eq(col("c1"))] {
