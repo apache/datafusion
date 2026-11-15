@@ -12,8 +12,7 @@ it belongs to, joined with ` && ` in the order of SKIP_POLICIES, and a job
 in no set carries no job-level `if:`. A new job therefore runs everywhere
 by default, and changing a set is a deliberate edit to both files.
 
-The Cargo check artifact steps in `linux-build-lib` and the jobs that
-download the artifact must follow the same sets.
+The feature checks must restore the workspace check's dependency cache.
 """
 
 import os
@@ -111,40 +110,13 @@ def expected_condition(job):
     return "${{ " + " && ".join(f"!({clause})" for clause in clauses) + " }}"
 
 
-# `linux-build-lib` uploads Cargo check artifacts for two consumers. Its steps
-# skip on a push to main and the whole job skips on a fork PR.
-ARTIFACT_JOB = "linux-build-lib"
-ARTIFACT_ARCHIVE_STEP = "archive-check"
-ARTIFACT_NAME = "cargo-check"
-ARTIFACT_ARCHIVE_CONDITION = "${{ !(" + POST_MERGE_PUSH + ") }}"
-ARTIFACT_UPLOAD_CONDITION = (
-    "${{ steps." + ARTIFACT_ARCHIVE_STEP + ".outcome == 'success'"
-    " && !(" + POST_MERGE_PUSH + ") }}"
-)
-
-
-def iter_steps(job_config):
-    """Yield the steps of a job, flattening `parallel:` groups."""
-    for step in job_config.get("steps") or []:
-        if not isinstance(step, dict):
-            continue
-        if "parallel" in step:
-            yield from (s for s in step["parallel"] or [] if isinstance(s, dict))
-        else:
-            yield step
-
-
-def uses_action(step, action):
-    return str(step.get("uses", "")).startswith(action)
-
-
 def job_needs(config):
     needs = config.get("needs") or []
     return [needs] if isinstance(needs, str) else list(needs)
 
 
 def check_skip_conditions(workflow, required_checks):
-    """Return the problems with rust.yml's skip conditions and artifact steps."""
+    """Return the problems with rust.yml's skip conditions and check caches."""
     errors = []
     jobs = {
         key: config
@@ -196,54 +168,24 @@ def check_skip_conditions(workflow, required_checks):
                         f"run would gate it before it lands on main"
                     )
 
-    build = jobs.get(ARTIFACT_JOB)
-    if build is None:
-        errors.append(f"  - job `{ARTIFACT_JOB}` does not exist in {RUST_WORKFLOW}")
-    else:
-        steps = list(iter_steps(build))
-        archive = [s for s in steps if s.get("id") == ARTIFACT_ARCHIVE_STEP]
-        uploads = [
-            s
-            for s in steps
-            if uses_action(s, "actions/upload-artifact")
-            and (s.get("with") or {}).get("name") == ARTIFACT_NAME
+    def cache_key(job):
+        caches = [
+            step
+            for step in jobs.get(job, {}).get("steps", [])
+            if str(step.get("uses", "")).startswith("Swatinem/rust-cache@")
         ]
-        if len(archive) != 1 or archive[0].get("if") != ARTIFACT_ARCHIVE_CONDITION:
-            found = [s.get("if") for s in archive]
-            errors.append(
-                f"  - the step `id: {ARTIFACT_ARCHIVE_STEP}` in `{ARTIFACT_JOB}` "
-                f"must exist once and carry exactly "
-                f"`if: {ARTIFACT_ARCHIVE_CONDITION}`, found {found!r}"
-            )
-        if len(uploads) != 1 or uploads[0].get("if") != ARTIFACT_UPLOAD_CONDITION:
-            found = [s.get("if") for s in uploads]
-            errors.append(
-                f"  - the `{ARTIFACT_NAME}` upload step in `{ARTIFACT_JOB}` must "
-                f"exist once and carry exactly `if: {ARTIFACT_UPLOAD_CONDITION}`, "
-                f"found {found!r}"
-            )
+        if len(caches) != 1:
+            return None
+        return (caches[0].get("with") or {}).get("shared-key")
 
-    # The artifact is missing on both events, so every consumer must skip on both.
-    consumer_sets = [
-        (name, members)
-        for name, members, _ in SKIP_POLICIES
-        if name == "POST_MERGE_SKIPPED_JOBS" or ARTIFACT_JOB in members
-    ]
-    for job, config in sorted(jobs.items()):
-        downloads = [
-            s
-            for s in iter_steps(config)
-            if uses_action(s, "actions/download-artifact")
-            and (s.get("with") or {}).get("name") == ARTIFACT_NAME
-        ]
-        if not downloads:
-            continue
-        for set_name, members in consumer_sets:
-            if job not in members:
-                errors.append(
-                    f"  - job `{job}` downloads the `{ARTIFACT_NAME}` artifact "
-                    f"but is not in {set_name}, where its producer skips"
-                )
+    producer_key = cache_key("linux-build-lib")
+    if not producer_key:
+        errors.append("  - linux-build-lib must configure a shared dependency cache")
+    for job in ("linux-cargo-check-datafusion", "linux-datafusion-substrait-features"):
+        if not cache_key(job) or cache_key(job) != producer_key:
+            errors.append(
+                f"  - job `{job}` must restore the workspace check's dependency cache"
+            )
     return errors
 
 

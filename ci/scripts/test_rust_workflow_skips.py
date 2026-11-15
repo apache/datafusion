@@ -41,17 +41,18 @@ class RustWorkflowSkipsTest(unittest.TestCase):
             self.errors(),
         )
 
-    def test_missing_artifact_upload_guard(self):
-        upload = next(
-            step
-            for step in self.workflow["jobs"]["linux-build-lib"]["steps"]
-            if step.get("uses", "").startswith("actions/upload-artifact")
-            and step.get("with", {}).get("name") == "cargo-check"
-        )
-        del upload["if"]
-        self.assertTrue(
-            any("`cargo-check` upload step" in error for error in self.errors())
-        )
+    def test_feature_check_uses_workspace_cache(self):
+        for job in ("linux-cargo-check-datafusion", "linux-datafusion-substrait-features"):
+            with self.subTest(job=job):
+                cache = next(
+                    step
+                    for step in self.workflow["jobs"][job]["steps"]
+                    if step.get("uses", "").startswith("Swatinem/rust-cache@")
+                )
+                cache["with"]["shared-key"] = "amd-ci"
+                self.assertTrue(
+                    any(f"job `{job}` must restore" in error for error in self.errors())
+                )
 
 
 if __name__ == "__main__":
