@@ -1016,3 +1016,29 @@ FROM (VALUES ('abc')) t(s);
 
 statement ok
 DROP VIEW guarded_cast;
+
+# CASE nullability with a column comparison in WHEN agrees between the logical
+# and physical planners (https://github.com/apache/datafusion/issues/26284)
+statement ok
+CREATE TABLE case_nullability(a INT, b INT) AS VALUES (NULL, 1), (0, 5), (7, 2);
+
+query I rowsort
+SELECT DISTINCT CASE WHEN a < b THEN a ELSE 1 END AS x FROM case_nullability;
+----
+0
+1
+
+query I
+SELECT sum(x) FROM (SELECT CASE WHEN a < b THEN a ELSE 1 END AS x FROM case_nullability);
+----
+2
+
+query I rowsort
+SELECT CASE WHEN a < b THEN a ELSE 1 END AS x FROM case_nullability UNION SELECT 2;
+----
+0
+1
+2
+
+statement ok
+DROP TABLE case_nullability;
