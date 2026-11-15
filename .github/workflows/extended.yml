@@ -120,8 +120,6 @@ jobs:
         uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Configure compiler cache
         id: sccache
         if: vars.USE_RUNS_ON == 'true'

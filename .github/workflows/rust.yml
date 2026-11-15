@@ -87,7 +87,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: stable
+          disk-cleanup-threshold-gb: 20
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
@@ -136,8 +136,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
@@ -170,8 +168,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Download Cargo check artifacts
         id: download-check
         continue-on-error: true
@@ -216,8 +212,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
@@ -253,8 +247,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
@@ -282,8 +274,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Download Cargo check artifacts
         id: download-check
         continue-on-error: true
@@ -355,8 +345,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
@@ -402,8 +390,6 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Checkout test data
         uses: ./.github/actions/checkout-test-data
       - name: Install llvm-tools-preview
@@ -472,7 +458,7 @@ jobs:
       - name: Checkout test data
         uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
-        run: rustup toolchain install stable
+        run: rustup toolchain install
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
@@ -522,8 +508,6 @@ jobs:
         uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
@@ -562,8 +546,6 @@ jobs:
         uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Configure compiler cache
         id: sccache
         if: vars.USE_RUNS_ON == 'true'
@@ -589,8 +571,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Run cargo doc
         run: ci/scripts/rust_docs.sh
 
@@ -642,8 +622,6 @@ jobs:
       - parallel:
           - name: Setup Rust toolchain
             uses: ./.github/actions/setup-builder
-            with:
-              rust-version: stable
           - name: Generate benchmark data and expected query results
             run: |
               mkdir -p datafusion/sqllogictest/test_files/tpch/data
@@ -696,8 +674,6 @@ jobs:
         uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Configure compiler cache
         id: sccache
         if: vars.USE_RUNS_ON == 'true'
@@ -728,8 +704,6 @@ jobs:
         uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Configure compiler cache
         id: sccache
         if: vars.USE_RUNS_ON == 'true'
@@ -842,8 +816,6 @@ jobs:
         uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - parallel:
           - name: Install Clippy
             run: rustup component add clippy
@@ -891,8 +863,6 @@ jobs:
         uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: "20"
