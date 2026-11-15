@@ -88,6 +88,8 @@ impl AggregateHashTable<PartialMarker> {
                 batch_group_indices: Default::default(),
                 accumulators,
             }),
+            recycle_buffer: false,
+            recycled_buffer: None,
             _mode: PhantomData,
         })
     }

@@ -201,11 +201,13 @@ pub use order::GroupClusteringMode;
 mod aggregate_argument;
 mod aggregate_hash_table;
 mod aggregate_stream;
+mod bucketed_aggregation;
 mod clustered_final_stream;
 mod clustered_partial_stream;
 mod clustered_single_stream;
 #[cfg(test)]
 mod clustered_test_util;
+mod final_buckets;
 pub mod group_values;
 mod grouped_hash_stream;
 mod grouped_topk_stream;
