@@ -1,0 +1,123 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# On PR open, reopen, or update, check the author's account with AgentScan.
+#
+# For positive agents-like user:
+# 1. Add the "Prolific Author" label and
+# 2. Post this comment once per PR (with links to the policy and account report):
+#
+#   Please see our AI policy. AgentScan flagged this account for possible agent
+#   activity. This PR may be closed without notice.
+#
+# How it works
+# A PR signal starts this workflow with permission to label and comment on fork PRs.
+# 1. Install `@unveil/identity` (AgentScan's scoring engine) and `@unveil/vk`.
+# 2. Use `@unveil/vk` to fetch the author's public GitHub activity and score it
+#    locally with `@unveil/identity` (e.g. 24/7 activity can suggest automation).
+# 3. Label and notify authors classified as "mixed" or "automation".
+name: AgentScan
+
+on:
+  workflow_run:
+    workflows: ["Pull request signal"]
+    types: [requested]
+
+permissions: {}
+
+concurrency:
+  group: agentscan-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    if: >-
+      github.repository == 'apache/datafusion' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install AgentScan's analyzer
+        # Pin both packages so the classification rules do not change between runs.
+        run: >-
+          npm install --prefix "$RUNNER_TEMP/agentscan" --ignore-scripts --no-audit --no-fund
+          @unveil/vk@1.0.0 @unveil/identity@3.0.0
+
+      - name: Label and notify non-organic authors
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          script: |
+            const { createRequire } = require('node:module');
+            const { analyze } = createRequire(`${process.env.RUNNER_TEMP}/agentscan/package.json`)('@unveil/vk');
+            const run = context.payload.workflow_run;
+            const label = 'Prolific Author';
+            const marker = '<!-- datafusion-agentscan -->';
+            const policy = 'https://datafusion.apache.org/contributor-guide/ai-policy.html';
+
+            // step1: Find every open PR for this branch and commit, including forks.
+            // The event's pull_requests can be empty; a newer head makes this run stale.
+            const prs = await github.paginate(github.rest.pulls.list, {
+              ...context.repo, state: 'open', per_page: 100,
+              head: `${run.head_repository.owner.login}:${run.head_branch}`,
+            });
+            for (const pr of prs.filter(pr => pr.head.sha === run.head_sha)) {
+              const username = pr.user.login;
+
+              // step2: Let AgentScan fetch public GitHub activity and classify the author.
+              let result;
+              try {
+                result = await analyze(username, { token: process.env.GITHUB_TOKEN });
+              } catch (error) {
+                core.warning(`AgentScan unavailable for ${username}: ${error.message}`);
+                continue;
+              }
+
+              // step3: For mixed or automation, add the label and one policy reminder.
+              if (result.user.id !== pr.user.id ||
+                  !['mixed', 'automation'].includes(result.report.classification)) continue;
+
+              const issue = { ...context.repo, issue_number: pr.number };
+              if (!pr.labels.some(existing => existing.name === label)) {
+                await github.rest.issues.addLabels({ ...issue, labels: [label] });
+              }
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                ...issue, per_page: 100,
+              });
+              const alreadyNotified = comments.some(comment =>
+                comment.user?.login === 'github-actions[bot]' &&
+                comment.user?.type === 'Bot' &&
+                comment.body?.includes(marker),
+              );
+              if (alreadyNotified) continue;
+
+              await github.rest.issues.createComment({
+                ...issue,
+                body: `${marker}\nPlease see our [AI policy](${policy}). ` +
+                  `[AgentScan](https://agentscan.tools/user/${encodeURIComponent(username)}) ` +
+                  'flagged this account for possible agent activity. ' +
+                  'This PR may be closed without notice.',
+              });
+            }
