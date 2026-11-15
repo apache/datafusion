@@ -6,6 +6,7 @@
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use async_trait::async_trait;
+use datafusion_common::TableReadSelector;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -136,6 +137,14 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         }
 
         self.factory.try_new(name).await
+    }
+
+    async fn table_with_read_selector(
+        &self,
+        name: &str,
+        selector: &TableReadSelector,
+    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
+        self.inner.table_with_read_selector(name, selector).await
     }
 
     fn register_table(

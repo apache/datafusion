@@ -93,6 +93,8 @@ message ListingTableScanNode {
   optional uint64 fetch = 17;
   // Optional number of rows to skip.
   optional uint64 skip = 18;
+  // The selector of the table to read, such as a specific version.
+  TableReadSelector read_selector = 19;
 }
 
 message ViewTableScanNode {
@@ -106,6 +108,8 @@ message ViewTableScanNode {
   optional uint64 fetch = 7;
   // Optional number of rows to skip.
   optional uint64 skip = 8;
+  // The selector of the table to read, such as a specific version.
+  TableReadSelector read_selector = 9;
 }
 
 // Logical Plan to Scan a CustomTableProvider registered at runtime
@@ -120,6 +124,8 @@ message CustomTableScanNode {
   optional uint64 fetch = 7;
   // Optional number of rows to skip.
   optional uint64 skip = 8;
+  // The selector of the table to read, such as a specific version.
+  TableReadSelector read_selector = 9;
 }
 
 message ProjectionNode {
@@ -880,6 +886,21 @@ message TableReference {
     BareTableReference bare = 1;
     PartialTableReference partial = 2;
     FullTableReference full = 3;
+  }
+}
+
+// Selects which read of a table to perform, such as reading the table as of a
+// version or point in time for time travel queries
+message TableReadSelector {
+  oneof table_read_selector_enum {
+    // A catalog specific version identifier, such as a snapshot id, a tag or
+    // a commit hash
+    datafusion_common.ScalarValue as_of_version = 1;
+    // A point in time, in nanoseconds since the Unix epoch (UTC)
+    int64 as_of_timestamp = 2;
+    // A selector defined outside DataFusion, encoded by a
+    // LogicalExtensionCodec
+    bytes extension = 3;
   }
 }
 
@@ -1772,6 +1793,8 @@ message EmptyTableScanNode {
   datafusion_common.Schema schema = 2;
   ProjectionColumns projection = 3;
   repeated LogicalExprNode filters = 4;
+  // The selector of the table to read, such as a specific version.
+  TableReadSelector read_selector = 5;
 }
 
 enum GenerateSeriesName {

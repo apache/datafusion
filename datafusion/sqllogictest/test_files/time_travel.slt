@@ -1,0 +1,559 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+##########
+## Time travel queries
+##
+## The test context registers a schema `versioned` containing a table `t` with
+## three versions:
+##
+## | version | committed at         | rows                   |
+## |---------|----------------------|------------------------|
+## | 1       | 2024-01-01T00:00:00Z | (1, a)                 |
+## | 2       | 2024-02-01T00:00:00Z | (1, a), (2, b)         |
+## | 3       | 2024-03-01T00:00:00Z | (1, a), (2, b), (3, c) |
+##
+## Version 1 is tagged 'first' and version 3 is tagged 'latest'.
+##########
+
+# The generic dialect does not parse time travel clauses (yet)
+statement error DataFusion error: SQL error: ParserError
+SELECT * FROM versioned.t VERSION AS OF 1
+
+# The Snowflake dialect parses all supported time travel syntaxes
+statement ok
+set datafusion.sql_parser.dialect = 'Snowflake';
+
+# Without a time travel clause, the current version is read
+query IT rowsort
+SELECT * FROM versioned.t
+----
+1 a
+2 b
+3 c
+
+##########
+## Versions
+##########
+
+query IT rowsort
+SELECT * FROM versioned.t VERSION AS OF 1
+----
+1 a
+
+query IT rowsort
+SELECT * FROM versioned.t AT (VERSION => 2)
+----
+1 a
+2 b
+
+# Version names are case insensitive
+query IT rowsort
+SELECT * FROM versioned.t at (version => 2)
+----
+1 a
+2 b
+
+# Versions can be any scalar value, such as a tag
+query IT rowsort
+SELECT * FROM versioned.t AT (VERSION => 'first')
+----
+1 a
+
+# Versions are constant expressions that are evaluated during planning
+query IT rowsort
+SELECT * FROM versioned.t AT (VERSION => 1 + 1)
+----
+1 a
+2 b
+
+query IT rowsort
+SELECT * FROM versioned.t AT (VERSION => concat('lat', 'est'))
+----
+1 a
+2 b
+3 c
+
+##########
+## Timestamps
+##########
+
+query IT rowsort
+SELECT * FROM versioned.t TIMESTAMP AS OF '2024-01-15'
+----
+1 a
+
+query IT rowsort
+SELECT * FROM versioned.t FOR SYSTEM_TIME AS OF '2024-02-15T12:00:00Z'
+----
+1 a
+2 b
+
+# A timestamp in another time zone is converted to UTC
+query IT rowsort
+SELECT * FROM versioned.t AT (TIMESTAMP => '2024-02-29T23:30:00-01:00')
+----
+1 a
+2 b
+3 c
+
+query IT rowsort
+SELECT * FROM versioned.t AT (TIMESTAMP => '2024-03-01'::timestamp)
+----
+1 a
+2 b
+3 c
+
+query IT rowsort
+SELECT * FROM versioned.t AT (TIMESTAMP => now() - INTERVAL '1 hour')
+----
+1 a
+2 b
+3 c
+
+# The syntax produced by the unparser
+query IT rowsort
+SELECT * FROM versioned.t AT(TIMESTAMP => CAST('2024-01-01T00:00:00+00:00' AS TIMESTAMP WITH TIME ZONE))
+----
+1 a
+
+query IT rowsort
+SELECT * FROM versioned.t AT (TIMESTAMP => DATE '2024-02-01')
+----
+1 a
+2 b
+
+##########
+## Combining versions
+##########
+
+# The time travel clause does not change how columns are qualified
+query IT rowsort
+SELECT t.id, t.name FROM versioned.t VERSION AS OF 2 WHERE t.id > 1
+----
+2 b
+
+query IT rowsort
+SELECT * FROM versioned.t AT (VERSION => 1) AS old WHERE old.id = 1
+----
+1 a
+
+# Different versions of the same table can be read in one query
+query ITT rowsort
+SELECT cur.id, cur.name, old.name
+FROM versioned.t AS cur
+LEFT JOIN versioned.t AT (VERSION => 2) AS old ON cur.id = old.id
+----
+1 a a
+2 b b
+3 c NULL
+
+query IT rowsort
+SELECT * FROM versioned.t EXCEPT SELECT * FROM versioned.t AT (VERSION => 1)
+----
+2 b
+3 c
+
+query I
+SELECT count(*) FROM versioned.t
+WHERE id IN (SELECT id FROM versioned.t TIMESTAMP AS OF '2024-01-01')
+----
+1
+
+# The same version requested with different syntaxes
+query I
+SELECT count(*) FROM versioned.t VERSION AS OF 2 a
+JOIN versioned.t AT (VERSION => 2) b ON a.id = b.id
+JOIN versioned.t TIMESTAMP AS OF '2024-02-01' c ON a.id = c.id
+----
+2
+
+# Scans of different versions of a table must not be treated as equal, for
+# example when the optimizer deduplicates identical subqueries
+query II
+SELECT
+  (SELECT count(*) FROM versioned.t AT (VERSION => 1)) AS v1,
+  (SELECT count(*) FROM versioned.t AT (VERSION => 2)) AS v2
+----
+1 2
+
+query II
+SELECT
+  (SELECT max(id) FROM versioned.t AT (VERSION => 1)) + 0 AS v1,
+  (SELECT max(id) FROM versioned.t AT (VERSION => 2)) + 0 AS v2
+----
+1 2
+
+query I
+SELECT count(*) FROM versioned.t
+WHERE id IN (SELECT id FROM versioned.t AT (VERSION => 1))
+   OR id IN (SELECT id FROM versioned.t AT (VERSION => 2))
+----
+2
+
+# Views capture the version they were defined with
+statement ok
+CREATE VIEW first_version AS SELECT * FROM versioned.t AT (VERSION => 'first');
+
+query IT rowsort
+SELECT * FROM first_version
+----
+1 a
+
+statement ok
+DROP VIEW first_version;
+
+# Time travel clauses in CTE bodies
+query IT rowsort
+WITH old AS (SELECT * FROM versioned.t VERSION AS OF 1) SELECT * FROM old
+----
+1 a
+
+statement ok
+SET datafusion.catalog.default_schema = 'versioned'
+
+# A CTE body is not in the scope of its own name, so `t` in the body is the
+# table, while `t` in the query is the CTE
+query IT rowsort
+WITH t AS (SELECT * FROM t VERSION AS OF 1) SELECT * FROM t
+----
+1 a
+
+# Nor in the scope of CTEs defined after it: `t VERSION AS OF 2` in the body
+# of `a` is the table, not the CTE `t`
+query IT rowsort
+WITH a AS (
+  WITH b AS (SELECT * FROM t VERSION AS OF 1)
+  SELECT * FROM b UNION ALL SELECT * FROM t VERSION AS OF 2
+),
+t AS (SELECT * FROM a)
+SELECT * FROM t
+----
+1 a
+1 a
+2 b
+
+statement ok
+SET datafusion.catalog.default_schema = 'public'
+
+##########
+## Schema evolution
+##
+## Table `evolving` has five versions with different schemas, as created by
+## the schema evolution of table formats such as Iceberg:
+##
+## | version | change                                                        |
+## |---------|---------------------------------------------------------------|
+## | 1       | created as (id INT, name VARCHAR NOT NULL, score FLOAT)       |
+## | 2       | email added                                                   |
+## | 3       | name renamed to full_name, id and score widened               |
+## | 4       | score dropped, full_name nullable, struct address(city) added |
+## | 5       | email moved first, field zip added to address                 |
+##########
+
+# Each version is read with its own schema
+query ITR rowsort
+SELECT * FROM versioned.evolving VERSION AS OF 1
+----
+1 a 1.5
+2 b 2.5
+
+query ITRT rowsort
+SELECT * FROM versioned.evolving VERSION AS OF 2
+----
+1 a 1.5 NULL
+2 b 2.5 b@example.com
+3 c 3.5 c@example.com
+
+query ITRT rowsort
+SELECT * FROM versioned.evolving VERSION AS OF 3
+----
+1 a 1.5 NULL
+2 b 2.5 b@example.com
+3 c 3.5 c@example.com
+
+query ITT? rowsort
+SELECT * FROM versioned.evolving VERSION AS OF 4
+----
+1 a NULL {city: Ghent}
+2 b b@example.com {city: Leuven}
+3 c c@example.com {city: NULL}
+4 NULL d@example.com {city: Brussels}
+
+# The current version, with email moved first
+query TIT? rowsort
+SELECT * FROM versioned.evolving
+----
+NULL 1 a {city: Ghent, zip: 9000}
+b@example.com 2 b {city: Leuven, zip: 3000}
+c@example.com 3 c {city: NULL, zip: NULL}
+d@example.com 4 NULL {city: Brussels, zip: 1000}
+
+# An added column does not exist in earlier versions
+statement error No field named email
+SELECT email FROM versioned.evolving VERSION AS OF 1
+
+# A renamed column has its old name in earlier versions, and its new name in
+# later versions
+statement error No field named full_name
+SELECT full_name FROM versioned.evolving VERSION AS OF 2
+
+statement error No field named name
+SELECT name FROM versioned.evolving VERSION AS OF 3
+
+# A dropped column does not exist in later versions
+statement error No field named score
+SELECT score FROM versioned.evolving VERSION AS OF 4
+
+# Widened types
+query TT
+SELECT arrow_typeof(id), arrow_typeof(score) FROM versioned.evolving VERSION AS OF 2 LIMIT 1
+----
+Int32 Float32
+
+query TT
+SELECT arrow_typeof(id), arrow_typeof(score) FROM versioned.evolving VERSION AS OF 3 LIMIT 1
+----
+Int64 Float64
+
+# A required column that became optional
+query I
+SELECT count(*) FROM versioned.evolving VERSION AS OF 4 WHERE full_name IS NULL
+----
+1
+
+# A field added to a struct does not exist in earlier versions
+statement error DataFusion error: Error during planning: Field zip not found in struct
+SELECT address['zip'] FROM versioned.evolving VERSION AS OF 4
+
+query TT rowsort
+SELECT address['city'], address['zip'] FROM versioned.evolving
+----
+Brussels 1000
+Ghent 9000
+Leuven 3000
+NULL NULL
+
+# Versions with different schemas can be combined in one query: a column
+# renamed between the versions
+query ITT rowsort
+SELECT old.id, old.name, cur.full_name
+FROM versioned.evolving VERSION AS OF 2 AS old
+JOIN versioned.evolving AS cur ON old.id = cur.id
+----
+1 a a
+2 b b
+3 c c
+
+# A column widened between the versions
+query IT rowsort
+SELECT id, arrow_typeof(id) FROM (
+  SELECT id FROM versioned.evolving VERSION AS OF 1
+  UNION ALL
+  SELECT id FROM versioned.evolving
+)
+----
+1 Int64
+1 Int64
+2 Int64
+2 Int64
+3 Int64
+4 Int64
+
+# Rows added between the versions, while id was widened and moved
+query I rowsort
+SELECT id FROM versioned.evolving EXCEPT SELECT id FROM versioned.evolving VERSION AS OF 1
+----
+3
+4
+
+# Views capture the schema of their version
+statement ok
+CREATE VIEW evolving_v1 AS SELECT * FROM versioned.evolving VERSION AS OF 1;
+
+query TTT
+DESCRIBE evolving_v1
+----
+id Int32 NO
+name Utf8 NO
+score Float32 NO
+
+statement ok
+DROP VIEW evolving_v1;
+
+##########
+## EXPLAIN shows the resolved version
+##########
+
+query TT
+EXPLAIN SELECT * FROM versioned.t AT (VERSION => 1 + 1)
+----
+logical_plan TableScan: versioned.t@2 projection=[id, name]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The tag 'first' resolves to version 1
+query TT
+EXPLAIN SELECT name FROM versioned.t AT (VERSION => 'first') WHERE id = 1
+----
+logical_plan
+01)Projection: versioned.t.name
+02)--Filter: versioned.t.id = Int64(1)
+03)----TableScan: versioned.t@1 projection=[id, name]
+physical_plan
+01)FilterExec: id@0 = 1, projection=[name@1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The timestamp resolves to version 1, the latest version committed at or
+# before it
+query TT
+EXPLAIN SELECT * FROM versioned.t TIMESTAMP AS OF '2024-01-15T12:30:00+01:00'
+----
+logical_plan TableScan: versioned.t@1 projection=[id, name]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## Errors
+##########
+
+statement error DataFusion error: Error during planning: Table t has no version 7
+SELECT * FROM versioned.t VERSION AS OF 7
+
+statement error DataFusion error: Error during planning: Table t has no tag 'nope'
+SELECT * FROM versioned.t AT (VERSION => 'nope')
+
+statement error DataFusion error: Error during planning: Table t did not exist at 2023-01-01T00:00:00Z
+SELECT * FROM versioned.t TIMESTAMP AS OF '2023-01-01'
+
+statement error DataFusion error: Error during planning: table 'datafusion.versioned.unknown@1' not found
+SELECT * FROM versioned.unknown VERSION AS OF 1
+
+# Catalogs must return a table that reports the selector it reads
+statement error DataFusion error: Error during planning: The table provider of 'datafusion\.versioned\.no_version@1' must report the selector it reads
+SELECT * FROM versioned.no_version VERSION AS OF 1
+
+# Tables that do not support time travel
+statement ok
+CREATE TABLE plain AS VALUES (1);
+
+statement error DataFusion error: This feature is not implemented: Table read selectors are not supported for table 'plain@1'
+SELECT * FROM plain VERSION AS OF 1
+
+statement ok
+DROP TABLE plain;
+
+# The version must be a constant, which is not NULL
+statement error DataFusion error: Schema error: No field named id\.
+SELECT * FROM versioned.t AT (VERSION => id)
+
+statement error DataFusion error: Error during planning: The version of a time travel clause must not be NULL: versioned\.t AT\(VERSION => NULL\)
+SELECT * FROM versioned.t AT (VERSION => NULL)
+
+statement error DataFusion error: Error during planning: The timestamp of a time travel clause must not be NULL: versioned\.t TIMESTAMP AS OF NULL
+SELECT * FROM versioned.t TIMESTAMP AS OF NULL
+
+statement error DataFusion error: Error during planning: Expression must evaluate to a constant, got: random\(\)
+SELECT * FROM versioned.t AT (VERSION => random())
+
+# Errors evaluating the expression are reported as is
+statement error DataFusion error: Arrow error: Divide by zero error
+SELECT * FROM versioned.t AT (VERSION => 1 / 0)
+
+statement error Error parsing timestamp from 'yesterday'
+SELECT * FROM versioned.t AT (TIMESTAMP => 'yesterday')
+
+# Unsupported time travel clauses
+statement error DataFusion error: This feature is not implemented: Unsupported time travel clause: AT\(OFFSET => -60\)
+SELECT * FROM versioned.t AT (OFFSET => -60)
+
+statement error DataFusion error: This feature is not implemented: Unsupported time travel clause: BEFORE\(STATEMENT => 'abc'\)
+SELECT * FROM versioned.t BEFORE (STATEMENT => 'abc')
+
+statement error DataFusion error: This feature is not implemented: Unsupported time travel clause: AT\(VERSION => 1, TIMESTAMP => '2024-01-01'\)
+SELECT * FROM versioned.t AT (VERSION => 1, TIMESTAMP => '2024-01-01')
+
+# Time travel is not supported for CTEs
+statement error DataFusion error: Error during planning: Time travel is not supported for CTE 'c'
+WITH c AS (SELECT 1) SELECT * FROM c VERSION AS OF 1
+
+# Time travel is not supported for DML targets
+statement error DataFusion error: This feature is not implemented: Time travel is not supported for DELETE targets
+DELETE FROM versioned.t VERSION AS OF 1
+
+##########
+## Prepared statements
+##########
+
+# Constant time travel clauses are resolved when the statement is prepared
+statement ok
+PREPARE versioned_lookup AS
+SELECT name FROM versioned.t AT (VERSION => concat('fir', 'st')) WHERE id = $1;
+
+query T
+EXECUTE versioned_lookup(1)
+----
+a
+
+query T
+EXECUTE versioned_lookup(2)
+----
+
+statement ok
+DEALLOCATE versioned_lookup;
+
+# Parameters are not supported in time travel clauses
+statement error DataFusion error: This feature is not implemented: Parameters are not supported in table read selectors: versioned\.t AT\(VERSION => \$1\)
+PREPARE p AS SELECT * FROM versioned.t AT (VERSION => $1)
+
+# Clauses that depend on the time of execution would be evaluated when the
+# statement is prepared instead
+statement error DataFusion error: This feature is not implemented: Table read selectors in prepared statements must not depend on the time of execution, such as with now\(\): versioned\.t AT\(TIMESTAMP => now\(\) \- INTERVAL '1 hour'\)
+PREPARE p AS SELECT * FROM versioned.t AT (TIMESTAMP => now() - INTERVAL '1 hour')
+
+# Also within subqueries and DML statements
+statement error DataFusion error: This feature is not implemented: Table read selectors in prepared statements must not depend on the time of execution
+PREPARE p AS SELECT * FROM (SELECT * FROM versioned.t AT (TIMESTAMP => now()))
+
+# References to CTEs are read without a selector, so their time travel clause is
+# rejected as for unprepared statements
+statement error DataFusion error: Error during planning: Time travel is not supported for CTE 'c'
+PREPARE p AS WITH c AS (SELECT 1) SELECT * FROM c AT (TIMESTAMP => now())
+
+statement ok
+CREATE TABLE copied (id BIGINT, name VARCHAR);
+
+statement error DataFusion error: This feature is not implemented: Table read selectors in prepared statements must not depend on the time of execution
+PREPARE p AS INSERT INTO copied SELECT * FROM versioned.t AT (TIMESTAMP => now())
+
+statement ok
+DROP TABLE copied;
+
+##########
+## Other dialects
+##########
+
+statement ok
+set datafusion.sql_parser.dialect = 'Databricks';
+
+query IT rowsort
+SELECT * FROM versioned.t VERSION AS OF 2
+----
+1 a
+2 b
+
+query IT rowsort
+SELECT * FROM versioned.t TIMESTAMP AS OF '2024-01-15'
+----
+1 a
+
+statement ok
+set datafusion.sql_parser.dialect = 'BigQuery';
+
+query IT rowsort
+SELECT * FROM versioned.t FOR SYSTEM_TIME AS OF '2024-02-15'
+----
+1 a
+2 b
+
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';

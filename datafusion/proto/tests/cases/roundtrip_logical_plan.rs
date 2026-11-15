@@ -26,8 +26,10 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
 use std::any::Any;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
+use std::hash::{Hash, Hasher};
 use std::mem::size_of_val;
 use std::sync::Arc;
 use std::vec;
@@ -64,8 +66,8 @@ use datafusion_common::format::{
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    SplitPoint, TableReference, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err,
+    SplitPoint, TableReadSelector, TableReadSelectorExtension, TableReference,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::CopyTo;
@@ -3838,6 +3840,166 @@ async fn roundtrip_empty_table_scan() -> Result<()> {
     assert_eq!(
         format!("{}", plan.display_indent_schema()),
         format!("{}", restored.display_indent_schema()),
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_table_scan_with_read_selector() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let ctx = SessionContext::new();
+
+    for selector in [
+        TableReadSelector::AsOfVersion(ScalarValue::Int64(Some(3))),
+        TableReadSelector::AsOfVersion(ScalarValue::from("v1")),
+        TableReadSelector::AsOfTimestamp(1_704_067_200_000_000_000),
+    ] {
+        let table = Arc::new(
+            EmptyTable::new(Arc::clone(&schema))
+                .with_read_selector(Some(selector.clone())),
+        );
+        let plan = LogicalPlanBuilder::scan(
+            "empty",
+            Arc::new(DefaultTableSource::new(table)),
+            None,
+        )?
+        .build()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let restored = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+        // `TableScan` equality includes the selector of its source
+        assert_eq!(plan, restored);
+        let LogicalPlan::TableScan(scan) = restored else {
+            panic!("expected a TableScan");
+        };
+        assert_eq!(scan.source.read_selector(), Some(&selector));
+    }
+    Ok(())
+}
+
+/// A table read selector for a number of seconds before the start of the query
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
+struct OffsetSelector(i64);
+
+impl fmt::Display for OffsetSelector {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "offset {}", self.0)
+    }
+}
+
+impl TableReadSelectorExtension for OffsetSelector {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn dyn_eq(&self, other: &dyn TableReadSelectorExtension) -> bool {
+        other.as_any().downcast_ref::<Self>() == Some(self)
+    }
+
+    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
+        self.hash(&mut state)
+    }
+
+    fn dyn_ord(&self, other: &dyn TableReadSelectorExtension) -> Option<Ordering> {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .and_then(|other| self.partial_cmp(other))
+    }
+}
+
+/// Encodes [`OffsetSelector`]s
+#[derive(Debug)]
+struct OffsetSelectorCodec {}
+
+impl LogicalExtensionCodec for OffsetSelectorCodec {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[LogicalPlan],
+        _ctx: &TaskContext,
+    ) -> Result<Extension> {
+        not_impl_err!("No extension codec provided")
+    }
+
+    fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
+        not_impl_err!("No extension codec provided")
+    }
+
+    fn try_decode_table_provider(
+        &self,
+        _buf: &[u8],
+        _table_ref: &TableReference,
+        _schema: SchemaRef,
+        _ctx: &TaskContext,
+    ) -> Result<Arc<dyn TableProvider>> {
+        not_impl_err!("No table provider codec provided")
+    }
+
+    fn try_encode_table_provider(
+        &self,
+        _table_ref: &TableReference,
+        _node: Arc<dyn TableProvider>,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        not_impl_err!("No table provider codec provided")
+    }
+
+    fn try_decode_read_selector(
+        &self,
+        buf: &[u8],
+    ) -> Result<Arc<dyn TableReadSelectorExtension>> {
+        let offset = buf
+            .try_into()
+            .map_err(|_| internal_datafusion_err!("Invalid offset selector"))?;
+        Ok(Arc::new(OffsetSelector(i64::from_le_bytes(offset))))
+    }
+
+    fn try_encode_read_selector(
+        &self,
+        selector: &dyn TableReadSelectorExtension,
+        buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        let Some(OffsetSelector(offset)) = selector.as_any().downcast_ref() else {
+            return not_impl_err!("Unsupported table read selector {selector}");
+        };
+        buf.extend_from_slice(&offset.to_le_bytes());
+        Ok(())
+    }
+}
+
+// Table read selector extensions are encoded with the `LogicalExtensionCodec`
+#[tokio::test]
+async fn roundtrip_table_scan_with_read_selector_extension() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+    let selector = TableReadSelector::Extension(Arc::new(OffsetSelector(-60)));
+    let table =
+        Arc::new(EmptyTable::new(schema).with_read_selector(Some(selector.clone())));
+    let plan = LogicalPlanBuilder::scan(
+        "empty",
+        Arc::new(DefaultTableSource::new(table)),
+        None,
+    )?
+    .build()?;
+    let ctx = SessionContext::new();
+    let codec = OffsetSelectorCodec {};
+
+    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
+    let restored =
+        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
+    assert_eq!(plan, restored);
+    let LogicalPlan::TableScan(scan) = restored else {
+        panic!("expected a TableScan");
+    };
+    assert_eq!(scan.source.read_selector(), Some(&selector));
+
+    // Without a codec for it, the selector cannot be encoded
+    let err = logical_plan_to_bytes(&plan).unwrap_err().strip_backtrace();
+    assert_eq!(
+        err,
+        "This feature is not implemented: LogicalExtensionCodec is not provided for table read selector offset -60"
     );
     Ok(())
 }

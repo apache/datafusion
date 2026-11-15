@@ -12,7 +12,7 @@ use super::{
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use chrono::DateTime;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, TableReadSelectorExtension, internal_err};
 use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::tokenizer::Span;
@@ -90,6 +90,25 @@ pub trait Dialect: Send + Sync {
     /// The character length extraction style to use: `CharacterLengthStyle`
     fn character_length_style(&self) -> CharacterLengthStyle {
         CharacterLengthStyle::CharacterLength
+    }
+
+    /// The syntax to use when unparsing the time travel clause of a table
+    /// scan, such as `VERSION AS OF 3`
+    fn table_version_style(&self) -> TableVersionStyle {
+        TableVersionStyle::At
+    }
+
+    /// Unparses a [`TableReadSelector::Extension`] to the time travel clause of a
+    /// table scan. Returns `None` if the dialect does not support the
+    /// selector, in which case unparsing fails.
+    ///
+    /// [`TableReadSelector::Extension`]: datafusion_common::TableReadSelector::Extension
+    fn read_selector_extension_to_sql(
+        &self,
+        _unparser: &Unparser,
+        _selector: &dyn TableReadSelectorExtension,
+    ) -> Result<Option<ast::TableVersion>> {
+        Ok(None)
     }
 
     /// The SQL type to use for Arrow Int64 unparsing
@@ -354,6 +373,19 @@ pub enum DateFieldExtractStyle {
 pub enum CharacterLengthStyle {
     Length,
     CharacterLength,
+}
+
+/// Syntax to use for unparsing the time travel clause of a table scan, such as
+/// `VERSION AS OF 3`
+#[derive(Clone, Copy, PartialEq)]
+pub enum TableVersionStyle {
+    /// `AT (VERSION => v)` and `AT (TIMESTAMP => t)`, as used by DuckDB
+    At,
+    /// `VERSION AS OF v` and `TIMESTAMP AS OF t`, as used by Databricks
+    AsOf,
+    /// `FOR SYSTEM_TIME AS OF t`, as used by BigQuery and SQL Server. Only
+    /// timestamps are supported.
+    ForSystemTime,
 }
 
 /// `DistinctFromStyle` to use for unparsing `IsDistinctFrom` and `IsNotDistinctFrom` operators
@@ -742,6 +774,10 @@ impl Dialect for BigQueryDialect {
         Some('`')
     }
 
+    fn table_version_style(&self) -> TableVersionStyle {
+        TableVersionStyle::ForSystemTime
+    }
+
     fn col_alias_overrides(&self, alias: &str) -> Result<Option<String>> {
         // Check if alias contains any special characters not supported by BigQuery col names
         // https://cloud.google.com/bigquery/docs/schemas#flexible-column-names
@@ -890,6 +926,7 @@ pub struct CustomDialect {
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
     character_length_style: CharacterLengthStyle,
+    table_version_style: TableVersionStyle,
     int8_cast_dtype: ast::DataType,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
@@ -922,6 +959,7 @@ impl Default for CustomDialect {
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             character_length_style: CharacterLengthStyle::CharacterLength,
+            table_version_style: TableVersionStyle::At,
             int8_cast_dtype: ast::DataType::TinyInt(None),
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
@@ -982,6 +1020,10 @@ impl Dialect for CustomDialect {
 
     fn character_length_style(&self) -> CharacterLengthStyle {
         self.character_length_style
+    }
+
+    fn table_version_style(&self) -> TableVersionStyle {
+        self.table_version_style
     }
 
     fn int64_cast_dtype(&self) -> ast::DataType {
@@ -1107,6 +1149,7 @@ pub struct CustomDialectBuilder {
     large_utf8_cast_dtype: ast::DataType,
     date_field_extract_style: DateFieldExtractStyle,
     character_length_style: CharacterLengthStyle,
+    table_version_style: TableVersionStyle,
     int8_cast_dtype: ast::DataType,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
@@ -1145,6 +1188,7 @@ impl CustomDialectBuilder {
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             character_length_style: CharacterLengthStyle::CharacterLength,
+            table_version_style: TableVersionStyle::At,
             int8_cast_dtype: ast::DataType::TinyInt(None),
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
@@ -1180,6 +1224,7 @@ impl CustomDialectBuilder {
             large_utf8_cast_dtype: self.large_utf8_cast_dtype,
             date_field_extract_style: self.date_field_extract_style,
             character_length_style: self.character_length_style,
+            table_version_style: self.table_version_style,
             int8_cast_dtype: self.int8_cast_dtype,
             int64_cast_dtype: self.int64_cast_dtype,
             int32_cast_dtype: self.int32_cast_dtype,
@@ -1238,6 +1283,15 @@ impl CustomDialectBuilder {
         character_length_style: CharacterLengthStyle,
     ) -> Self {
         self.character_length_style = character_length_style;
+        self
+    }
+
+    /// Customize the dialect with a specific time travel syntax listed in [`TableVersionStyle`]
+    pub fn with_table_version_style(
+        mut self,
+        table_version_style: TableVersionStyle,
+    ) -> Self {
+        self.table_version_style = table_version_style;
         self
     }
 

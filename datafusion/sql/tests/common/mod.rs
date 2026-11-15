@@ -12,7 +12,10 @@ use arrow::datatypes::*;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::{DFSchema, GetExt, Result, TableReference, plan_err};
+use datafusion_common::{
+    DFSchema, GetExt, Result, ScalarValue, TableReadSelector, TableReference,
+    not_impl_err, plan_err,
+};
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, TypePlanner};
 use datafusion_expr::{
     AggregateUDF, Expr, HigherOrderUDF, ScalarUDF, TableSource, WindowUDF,
@@ -331,6 +334,25 @@ impl ContextProvider for MockContextProvider {
         schema: SchemaRef,
     ) -> Result<Arc<dyn TableSource>> {
         Ok(Arc::new(EmptyTable::new(schema)))
+    }
+
+    /// Only literals are supported, as evaluating expressions requires an
+    /// `ExprSimplifier`
+    fn evaluate_const_expr(&self, expr: Expr) -> Result<ScalarValue> {
+        match expr {
+            Expr::Literal(value, _) => Ok(value),
+            expr => not_impl_err!("Unsupported constant: {expr:?}"),
+        }
+    }
+
+    /// Returns the current table without reporting a selector, which is
+    /// invalid. The planner must reject it.
+    fn get_table_source_with_read_selector(
+        &self,
+        name: TableReference,
+        _selector: &TableReadSelector,
+    ) -> Result<Arc<dyn TableSource>> {
+        self.get_table_source(name)
     }
 
     fn udf_names(&self) -> Vec<String> {

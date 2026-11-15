@@ -2,21 +2,29 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use std::cell::Cell;
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::resolve::ResolvedReference;
 
+use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    DFSchema, Diagnostic, Result, Span, Spans, TableReference, not_impl_err, plan_err,
+    DFSchema, Diagnostic, Result, ScalarValue, Span, Spans, TableReadSelector,
+    TableReference, internal_err, not_impl_err, plan_err,
 };
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::planner::{
-    PlannedRelation, RelationPlannerContext, RelationPlanning,
+    PlannedRelation, RelationPlannerContext, RelationPlanning, TableReadSelectorContext,
+    TableReadSelectorPlanning,
 };
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, expr::Unnest};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Volatility, expr::Unnest};
 use datafusion_expr::{Subquery, SubqueryAlias};
-use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
+use sqlparser::ast::{
+    Expr as SQLExpr, FunctionArg, FunctionArgExpr, FunctionArguments, Spanned, Statement,
+    TableFactor, TableVersion,
+};
 
 mod join;
 
@@ -32,6 +40,41 @@ fn get_cte_for_table_reference<'a>(
     name: &TableReference,
 ) -> Option<&'a LogicalPlan> {
     planner_context.get_cte(&name.to_string())
+}
+
+/// Returns the argument name and value of an `AT (<name> => <expr>)` time
+/// travel clause, or `None` if `func` has any other form.
+fn at_clause_argument(func: &SQLExpr) -> Option<(&str, &SQLExpr)> {
+    let SQLExpr::Function(func) = func else {
+        return None;
+    };
+    let is_at = matches!(
+        func.name.0.as_slice(),
+        [part] if part.as_ident().is_some_and(|i| i.value.eq_ignore_ascii_case("AT"))
+    );
+    let FunctionArguments::List(list) = &func.args else {
+        return None;
+    };
+    if !is_at || list.duplicate_treatment.is_some() || !list.clauses.is_empty() {
+        return None;
+    }
+    match list.args.as_slice() {
+        [
+            FunctionArg::Named {
+                name,
+                arg: FunctionArgExpr::Expr(expr),
+                ..
+            },
+        ]
+        | [
+            FunctionArg::ExprNamed {
+                name: SQLExpr::Identifier(name),
+                arg: FunctionArgExpr::Expr(expr),
+                ..
+            },
+        ] => Some((name.value.as_str(), expr)),
+        _ => None,
+    }
 }
 
 // Implement RelationPlannerContext
@@ -74,6 +117,123 @@ impl<S: ContextProvider> RelationPlannerContext for SqlToRelRelationContext<'_, 
         name: sqlparser::ast::ObjectName,
     ) -> Result<TableReference> {
         self.planner.object_name_to_table_reference(name)
+    }
+}
+
+struct SqlToRelTableReadSelectorContext<'a, 'b, S: ContextProvider> {
+    planner: &'a SqlToRel<'b, S>,
+    /// The table factor whose selector is determined
+    relation: &'a TableFactor,
+    /// Whether the statement is being prepared, in which case expressions
+    /// must not depend on the time of execution
+    prepared: bool,
+    /// The error message for an expression that depends on the time of
+    /// execution, in a prepared statement
+    execution_dependent: Cell<Option<String>>,
+}
+
+impl<'a, 'b, S: ContextProvider> SqlToRelTableReadSelectorContext<'a, 'b, S> {
+    fn new(
+        planner: &'a SqlToRel<'b, S>,
+        relation: &'a TableFactor,
+        prepared: bool,
+    ) -> Self {
+        Self {
+            planner,
+            relation,
+            prepared,
+            execution_dependent: Cell::new(None),
+        }
+    }
+}
+
+impl<S: ContextProvider> TableReadSelectorContext
+    for SqlToRelTableReadSelectorContext<'_, '_, S>
+{
+    fn evaluate_const_expr(&self, expr: SQLExpr) -> Result<ScalarValue> {
+        // A fresh planner context, so planning the expression can neither
+        // depend on nor affect the planning of the query that references the
+        // table, and the selector is the same before and during planning
+        let expr = self.planner.sql_to_expr(
+            expr,
+            &DFSchema::empty(),
+            &mut PlannerContext::new(),
+        )?;
+        if expr.exists(|e| Ok(matches!(e, Expr::Placeholder(_))))? {
+            return not_impl_err!(
+                "Parameters are not supported in table read selectors: {}",
+                self.relation
+            );
+        }
+        // The selector is determined when the statement is prepared, so
+        // functions such as `now()` would return the time of preparation
+        // rather than of execution
+        if self.prepared
+            && expr.exists(|e| {
+                Ok(matches!(
+                    e,
+                    Expr::ScalarFunction(f)
+                        if f.func.signature().volatility != Volatility::Immutable
+                ))
+            })?
+        {
+            let message = format!(
+                "Table read selectors in prepared statements must not depend on the \
+                 time of execution, such as with now(): {}",
+                self.relation
+            );
+            self.execution_dependent.set(Some(message.clone()));
+            return not_impl_err!("{message}");
+        }
+        self.planner.context_provider.evaluate_const_expr(expr)
+    }
+}
+
+/// Determines the [`TableReadSelector`] of a table factor with a time travel
+/// clause, as DataFusion does by default. See [`SqlToRel::read_selector`]
+/// for the mapping.
+fn default_read_selector(
+    relation: &TableFactor,
+    context: &dyn TableReadSelectorContext,
+) -> Result<Option<TableReadSelector>> {
+    let TableFactor::Table {
+        version: Some(version),
+        ..
+    } = relation
+    else {
+        return Ok(None);
+    };
+    let (is_timestamp, expr) = match version {
+        TableVersion::VersionAsOf(expr) => (false, expr),
+        TableVersion::TimestampAsOf(expr) | TableVersion::ForSystemTimeAsOf(expr) => {
+            (true, expr)
+        }
+        TableVersion::Function(func) => match at_clause_argument(func) {
+            Some((name, expr)) if name.eq_ignore_ascii_case("VERSION") => (false, expr),
+            Some((name, expr)) if name.eq_ignore_ascii_case("TIMESTAMP") => (true, expr),
+            _ => return not_impl_err!("Unsupported time travel clause: {func}"),
+        },
+        TableVersion::Changes { .. } => {
+            return not_impl_err!("CHANGES clauses are not supported");
+        }
+    };
+    let value = context.evaluate_const_expr(expr.clone())?;
+    if value.is_null() {
+        let kind = if is_timestamp { "timestamp" } else { "version" };
+        return plan_err!(
+            "The {kind} of a time travel clause must not be NULL: {relation}"
+        );
+    }
+    if !is_timestamp {
+        return Ok(Some(TableReadSelector::AsOfVersion(value)));
+    }
+
+    let timestamp_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
+    match value.cast_to(&timestamp_type)? {
+        ScalarValue::TimestampNanosecond(Some(ns), _) => {
+            Ok(Some(TableReadSelector::AsOfTimestamp(ns)))
+        }
+        value => internal_err!("Expected a timestamp, got: {value:?}"),
     }
 }
 
@@ -146,11 +306,35 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<PlannedRelation> {
         let relation_span = relation.span();
+        // References to CTEs are read without a selector
+        let (table_ref, selector) = match &relation {
+            TableFactor::Table {
+                name, args: None, ..
+            } => {
+                let table_ref = self.object_name_to_table_reference(name.clone())?;
+                let selector =
+                    match get_cte_for_table_reference(planner_context, &table_ref) {
+                        Some(_) => None,
+                        None => self.read_selector(&table_ref, &relation)?,
+                    };
+                (Some(table_ref), selector)
+            }
+            _ => (None, None),
+        };
         let (plan, alias) = match relation {
             TableFactor::Table {
-                name, alias, args, ..
+                name,
+                alias,
+                args,
+                version,
+                ..
             } => {
                 if let Some(func_args) = args {
+                    if version.is_some() {
+                        return not_impl_err!(
+                            "Time travel is not supported for table functions"
+                        );
+                    }
                     let tbl_func_name =
                         name.0.first().unwrap().as_ident().unwrap().to_string();
                     let args = func_args
@@ -182,9 +366,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .build()?;
                     (plan, alias)
                 } else {
-                    // Normalize name and alias
-                    let table_ref = self.object_name_to_table_reference(name)?;
+                    let Some(table_ref) = table_ref else {
+                        return internal_err!(
+                            "The name of table '{name}' was not normalized"
+                        );
+                    };
                     let cte = get_cte_for_table_reference(planner_context, &table_ref);
+                    if cte.is_some() && version.is_some() {
+                        return plan_err!(
+                            "Time travel is not supported for CTE '{table_ref}'"
+                        );
+                    }
+                    if let Some(selector) = selector {
+                        let plan = self.selected_table_scan(
+                            table_ref,
+                            &selector,
+                            relation_span,
+                        )?;
+                        return Ok(PlannedRelation::new(plan, alias));
+                    }
                     (
                         match (
                             cte,
@@ -299,6 +499,128 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         };
         Ok(PlannedRelation::new(plan, alias))
+    }
+
+    /// Derives a [`TableReadSelector`] from a table factor that references
+    /// `table`. The returned [`TableReadSelector`], if present, describes
+    /// which read of the table is requested by the table factor.
+    ///
+    /// The registered [`TableReadSelectorPlanner`]s are asked first, in order. If none
+    /// of them handles the table factor, its time travel clause, if any, is
+    /// mapped to a selector. The different syntaxes used by SQL dialects are
+    /// normalized to either a version or a timestamp:
+    ///
+    /// | SQL                                          | [`TableReadSelector`] |
+    /// |----------------------------------------------|----------------------|
+    /// | `t VERSION AS OF 3`                          | [`AsOfVersion`]      |
+    /// | `t AT (VERSION => 'v1')`                     | [`AsOfVersion`]      |
+    /// | `t TIMESTAMP AS OF '2024-01-01'`             | [`AsOfTimestamp`]    |
+    /// | `t FOR SYSTEM_TIME AS OF now()`              | [`AsOfTimestamp`]    |
+    /// | `t AT (TIMESTAMP => now() - INTERVAL '1 h')` | [`AsOfTimestamp`]    |
+    ///
+    /// The expressions in these clauses are evaluated during planning and are
+    /// required to be constant expressions. Other clauses,
+    /// such as Snowflake's `BEFORE (...)`, `AT (OFFSET => ...)` or
+    /// `CHANGES (...)`, are not supported.
+    ///
+    /// Returns `None` if the table is to be read without a selector.
+    ///
+    /// [`TableReadSelectorPlanner`]: datafusion_expr::planner::TableReadSelectorPlanner
+    /// [`AsOfVersion`]: TableReadSelector::AsOfVersion
+    /// [`AsOfTimestamp`]: TableReadSelector::AsOfTimestamp
+    pub fn read_selector(
+        &self,
+        table: &TableReference,
+        relation: &TableFactor,
+    ) -> Result<Option<TableReadSelector>> {
+        let context = SqlToRelTableReadSelectorContext::new(self, relation, false);
+        self.plan_read_selector(table, relation, &context)
+    }
+
+    fn plan_read_selector(
+        &self,
+        table: &TableReference,
+        relation: &TableFactor,
+        context: &SqlToRelTableReadSelectorContext<'_, '_, S>,
+    ) -> Result<Option<TableReadSelector>> {
+        for planner in self.context_provider.get_table_read_selector_planners() {
+            match planner.plan_read_selector(table, relation, context)? {
+                TableReadSelectorPlanning::Planned(selector) => return Ok(selector),
+                TableReadSelectorPlanning::Original => {}
+            }
+        }
+        default_read_selector(relation, context)
+    }
+
+    /// Plans a scan of a table with a [`TableReadSelector`].
+    fn selected_table_scan(
+        &self,
+        table_ref: TableReference,
+        selector: &TableReadSelector,
+        relation_span: sqlparser::tokenizer::Span,
+    ) -> Result<LogicalPlan> {
+        let provider = self
+            .context_provider
+            .get_table_source_with_read_selector(table_ref.clone(), selector)
+            .map_err(|e| {
+                e.with_diagnostic(Diagnostic::new_error(
+                    format!("cannot read table '{table_ref}@{selector}'"),
+                    Span::try_from_sqlparser_span(relation_span),
+                ))
+            })?;
+        // The source reports the selector it reads, which may differ from the
+        // requested selector, e.g. a snapshot id for a timestamp
+        if provider.read_selector().is_none() {
+            return plan_err!(
+                "The source of table '{table_ref}@{selector}' must report the \
+                 selector it reads"
+            );
+        }
+        LogicalPlanBuilder::scan(table_ref, provider, None)?.build()
+    }
+
+    /// Rejects table read selectors in a prepared statement that depend on the
+    /// time of execution, such as `AT (TIMESTAMP => now())`.
+    ///
+    /// Table read selectors are determined, and the table is retrieved from the
+    /// catalog, when the statement is prepared. Functions such as `now()`
+    /// would therefore return the time of preparation rather than of
+    /// execution.
+    pub(crate) fn check_prepared_read_selectors(
+        &self,
+        statement: &Statement,
+    ) -> Result<()> {
+        // Visit the same table factors as are retrieved from the catalog
+        // before planning, which excludes references to CTEs
+        let mut execution_dependent = false;
+        let result = crate::resolve::resolve_sql_references(
+            statement,
+            self.options.enable_ident_normalization,
+            |reference| {
+                let ResolvedReference::TableFactor(table, table_factor) = reference
+                else {
+                    return Ok(());
+                };
+                let context =
+                    SqlToRelTableReadSelectorContext::new(self, table_factor, true);
+                // Other errors are reported when the statement is planned
+                let _ = self.plan_read_selector(&table, table_factor, &context);
+                match context.execution_dependent.into_inner() {
+                    Some(message) => {
+                        execution_dependent = true;
+                        not_impl_err!("{message}")
+                    }
+                    None => Ok(()),
+                }
+            },
+        );
+        // Other errors, such as for invalid table names, are reported when the
+        // statement is planned
+        if execution_dependent {
+            result.map(|_| ())
+        } else {
+            Ok(())
+        }
     }
 
     pub(crate) fn create_relation_subquery(

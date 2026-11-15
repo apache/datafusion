@@ -28,8 +28,9 @@ use datafusion_common::format::{
 };
 use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{
-    NullEquality, Result, TableReference, assert_or_internal_err, context,
-    internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    NullEquality, Result, TableReadSelector, TableReadSelectorExtension, TableReference,
+    assert_or_internal_err, context, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err,
 };
 use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::file_format::{
@@ -208,6 +209,27 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync + std::any::Any {
     fn try_encode_udwf(&self, _node: &WindowUDF, _buf: &mut Vec<u8>) -> Result<()> {
         Ok(())
     }
+
+    /// Decodes a [`TableReadSelector::Extension`] encoded by
+    /// [`Self::try_encode_read_selector`]
+    fn try_decode_read_selector(
+        &self,
+        _buf: &[u8],
+    ) -> Result<Arc<dyn TableReadSelectorExtension>> {
+        not_impl_err!("LogicalExtensionCodec is not provided for table read selectors")
+    }
+
+    /// Encodes a [`TableReadSelector::Extension`], to be decoded by
+    /// [`Self::try_decode_read_selector`]
+    fn try_encode_read_selector(
+        &self,
+        selector: &dyn TableReadSelectorExtension,
+        _buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        not_impl_err!(
+            "LogicalExtensionCodec is not provided for table read selector {selector}"
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -358,6 +380,41 @@ fn from_table_reference(
     })?;
 
     Ok(TableReference::try_from(table_ref.clone())?)
+}
+
+fn from_read_selector(
+    selector: Option<&protobuf::TableReadSelector>,
+    extension_codec: &dyn LogicalExtensionCodec,
+) -> Result<Option<TableReadSelector>> {
+    use protobuf::table_read_selector::TableReadSelectorEnum;
+    let Some(selector) = selector else {
+        return Ok(None);
+    };
+    if let Some(TableReadSelectorEnum::Extension(buf)) =
+        &selector.table_read_selector_enum
+    {
+        let extension = extension_codec.try_decode_read_selector(buf)?;
+        return Ok(Some(TableReadSelector::Extension(extension)));
+    }
+    Ok(Some(TableReadSelector::try_from(selector)?))
+}
+
+fn to_read_selector(
+    selector: Option<&TableReadSelector>,
+    extension_codec: &dyn LogicalExtensionCodec,
+) -> Result<Option<protobuf::TableReadSelector>> {
+    use protobuf::table_read_selector::TableReadSelectorEnum;
+    let Some(selector) = selector else {
+        return Ok(None);
+    };
+    if let TableReadSelector::Extension(extension) = selector {
+        let mut buf = vec![];
+        extension_codec.try_encode_read_selector(extension.as_ref(), &mut buf)?;
+        return Ok(Some(protobuf::TableReadSelector {
+            table_read_selector_enum: Some(TableReadSelectorEnum::Extension(buf)),
+        }));
+    }
+    Ok(Some(protobuf::TableReadSelector::try_from(selector)?))
 }
 
 /// Converts [LogicalPlan::TableScan] to [TableSource]
@@ -672,9 +729,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .with_listing_options(options)
                         .with_schema(Arc::new(schema));
 
-                let provider = ListingTable::try_new(config)?.with_cache(
-                    ctx.runtime_env().cache_manager.get_file_statistic_cache(),
-                );
+                let provider = ListingTable::try_new(config)?
+                    .with_cache(
+                        ctx.runtime_env().cache_manager.get_file_statistic_cache(),
+                    )
+                    .with_read_selector(from_read_selector(
+                        scan.read_selector.as_ref(),
+                        extension_codec,
+                    )?);
 
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ListingTableScan")?;
@@ -725,6 +787,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                     schema,
                     ctx,
                 )?;
+                // The codec restores the selector as part of the provider's
+                // state. Fail rather than silently reading another state.
+                let selector =
+                    from_read_selector(scan.read_selector.as_ref(), extension_codec)?;
+                if provider.read_selector() != selector.as_ref() {
+                    return internal_err!(
+                        "Decoded table provider for '{table_name}' reads selector {:?}, \
+                         but {:?} was encoded",
+                        provider.read_selector(),
+                        selector
+                    );
+                }
 
                 let table_scan =
                     TableScanBuilder::new(table_name, provider_as_source(provider))
@@ -1223,7 +1297,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     None
                 };
 
-                let provider = ViewTable::new(input, definition);
+                let provider = ViewTable::new(input, definition).with_read_selector(
+                    from_read_selector(scan.read_selector.as_ref(), extension_codec)?,
+                );
 
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ViewScan")?;
@@ -1371,7 +1447,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "EmptyTableScan")?;
 
-                let provider = Arc::new(EmptyTable::new(Arc::clone(&schema)));
+                let provider =
+                    Arc::new(EmptyTable::new(Arc::clone(&schema)).with_read_selector(
+                        from_read_selector(scan.read_selector.as_ref(), extension_codec)?,
+                    ));
 
                 let table_scan =
                     TableScanBuilder::new(table_name, provider_as_source(provider))
@@ -1434,6 +1513,8 @@ impl AsLogicalPlan for LogicalPlanNode {
             }) => {
                 let provider = source_as_provider(source)?;
                 let schema = provider.schema();
+                let read_selector =
+                    to_read_selector(source.read_selector(), extension_codec)?;
 
                 let projection = match projection {
                     None => None,
@@ -1565,6 +1646,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 file_sort_order: exprs_vec,
                                 fetch: fetch.map(|f| f as u64),
                                 skip: skip.map(|o| o as u64),
+                                read_selector,
                             },
                         )),
                     })
@@ -1590,6 +1672,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .unwrap_or_default(),
                                 fetch: fetch.map(|f| f as u64),
                                 skip: skip.map(|o| o as u64),
+                                read_selector,
                             },
                         ))),
                     })
@@ -1620,6 +1703,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 schema: Some(schema),
                                 projection,
                                 filters,
+                                read_selector,
                             },
                         )),
                     })
@@ -1639,6 +1723,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         custom_table_data: bytes,
                         fetch: fetch.map(|f| f as u64),
                         skip: skip.map(|o| o as u64),
+                        read_selector,
                     });
                     let node = LogicalPlanNode {
                         logical_plan_type: Some(scan),

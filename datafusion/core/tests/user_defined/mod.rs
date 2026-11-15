@@ -26,6 +26,9 @@ mod expr_planner;
 /// Tests for Relation Planner extensions
 mod relation_planner;
 
+/// Tests for Table Read Selector Planner extensions
+mod table_read_selector_planner;
+
 /// Tests for insert operations
 mod insert_operation;
 

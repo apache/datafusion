@@ -7,7 +7,7 @@
 use crate::{Expr, LogicalPlan};
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{Constraints, Result};
+use datafusion_common::{Constraints, Result, TableReadSelector};
 
 use std::{any::Any, borrow::Cow};
 
@@ -119,6 +119,22 @@ pub trait TableSource: Any + Sync + Send {
 
     /// Get the default value for a column, if available.
     fn get_column_default(&self, _column: &str) -> Option<&Expr> {
+        None
+    }
+
+    /// The [`TableReadSelector`] this source reads, such as a specific version of
+    /// the table. `None` means the source does not identify which read of
+    /// the table it performs.
+    ///
+    /// Sources returned by
+    /// [`ContextProvider::get_table_source_with_read_selector`] must report
+    /// the selector they read, which may differ from the requested selector.
+    /// Scans of the same table with equal selectors are assumed to read the
+    /// same data. See [`TableProvider::read_selector`].
+    ///
+    /// [`TableProvider::read_selector`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.read_selector
+    /// [`ContextProvider::get_table_source_with_read_selector`]: crate::planner::ContextProvider::get_table_source_with_read_selector
+    fn read_selector(&self) -> Option<&TableReadSelector> {
         None
     }
 }

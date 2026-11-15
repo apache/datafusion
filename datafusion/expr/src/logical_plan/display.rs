@@ -387,6 +387,13 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Relation Name": table_name.table(),
                 );
 
+                if let Some(selector) = source.read_selector() {
+                    object.push(
+                        "Read Selector",
+                        serde_json::Value::String(selector.to_string()),
+                    );
+                }
+
                 if let Some(s) = table_name.schema() {
                     object.push("Schema", serde_json::Value::String(s.to_string()));
                 }

@@ -21,8 +21,8 @@ use datafusion_common::parquet_config::RowGroupRangeAssignment;
 use datafusion_common::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use datafusion_common::utils::usize_from_wire;
 use datafusion_common::{
-    JoinConstraint, JoinType, NullEquality, RecursionUnnestOption, TableReference,
-    UnnestOptions,
+    JoinConstraint, JoinType, NullEquality, RecursionUnnestOption, TableReadSelector,
+    TableReference, UnnestOptions,
 };
 use datafusion_proto_common::FromProtoError as Error;
 
@@ -95,6 +95,28 @@ impl TryFrom<protobuf::TableReference> for TableReference {
                 schema,
                 table,
             }) => Ok(TableReference::full(catalog, schema, table)),
+        }
+    }
+}
+
+impl TryFrom<&protobuf::TableReadSelector> for TableReadSelector {
+    type Error = Error;
+
+    fn try_from(value: &protobuf::TableReadSelector) -> Result<Self, Self::Error> {
+        use protobuf::table_read_selector::TableReadSelectorEnum;
+        match value
+            .table_read_selector_enum
+            .as_ref()
+            .ok_or_else(|| Error::required("table_read_selector_enum"))?
+        {
+            TableReadSelectorEnum::AsOfVersion(value) => {
+                Ok(TableReadSelector::AsOfVersion(value.try_into()?))
+            }
+            TableReadSelectorEnum::AsOfTimestamp(ns) => Ok(TableReadSelector::AsOfTimestamp(*ns)),
+            TableReadSelectorEnum::Extension(_) => Err(Error::General(
+                "Table read selector extensions must be decoded with a LogicalExtensionCodec"
+                    .to_string(),
+            )),
         }
     }
 }
