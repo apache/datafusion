@@ -81,20 +81,30 @@ impl StandardWindowExpr {
         batch: &RecordBatch,
         partitions: &[Range<usize>],
     ) -> Result<ArrayRef> {
-        let sort_options: Vec<_> = self.order_by.iter().map(|o| o.options).collect();
-        let mut values = self.evaluate_args(batch)?;
-        let order_bys = get_orderby_values(self.order_by_columns(batch)?);
-        let mut ranges = Vec::with_capacity(partitions.iter().map(Range::len).sum());
+        // Rows outside `partitions` are not evaluated
+        let offset = partitions.first().map_or(0, |p| p.start);
+        let num_rows = partitions.last().map_or(0, |p| p.end) - offset;
+        let batch = batch.slice(offset, num_rows);
+        let mut values = self.evaluate_args(&batch)?;
+        let order_bys = get_orderby_values(self.order_by_columns(&batch)?);
+        let sort_options = self.order_by.iter().map(|o| o.options).collect();
+        let mut window_frame_ctx =
+            WindowFrameContext::new(Arc::clone(&self.window_frame), sort_options);
+        let mut partition_order_bys = Vec::with_capacity(order_bys.len());
+        let mut ranges = Vec::with_capacity(num_rows);
         for partition in partitions {
-            let partition_order_bys = order_bys
-                .iter()
-                .map(|column| column.slice(partition.start, partition.len()))
-                .collect::<Vec<_>>();
-            let mut window_frame_ctx = WindowFrameContext::new(
-                Arc::clone(&self.window_frame),
-                sort_options.clone(),
+            let start = partition.start - offset;
+            partition_order_bys.clear();
+            partition_order_bys.extend(
+                order_bys
+                    .iter()
+                    .map(|column| column.slice(start, partition.len())),
             );
-            // We iterate on each row to calculate its window frame range
+            // Only the state of a GROUPS frame is specific to a partition
+            if let WindowFrameContext::Groups { state, .. } = &mut window_frame_ctx {
+                state.group_end_indices.clear();
+                state.current_group_idx = 0;
+            }
             let mut range = 0..0;
             for idx in 0..partition.len() {
                 range = window_frame_ctx.calculate_range(
@@ -103,7 +113,7 @@ impl StandardWindowExpr {
                     partition.len(),
                     idx,
                 )?;
-                ranges.push(partition.start + range.start..partition.start + range.end);
+                ranges.push(start + range.start..start + range.end);
             }
         }
         values.extend(order_bys);
