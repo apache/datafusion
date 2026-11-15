@@ -779,7 +779,60 @@ cargo check \
             Cmd {
                 command: &["test", "workspace"],
                 expected: |actual| {
-                    insta::assert_snapshot!("workspace_coverage_explain", actual);
+                    insta::assert_snapshot!(actual, @r"
+# Package and integration-target placeholders are resolved by Cargo at execution time.
+# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo llvm-cov clean \
+--workspace
+
+# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo llvm-cov \
+--profile ci \
+--workspace \
+--exclude datafusion-examples \
+--exclude ffi_example_table_provider \
+--exclude datafusion-cli \
+--features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
+--no-report \
+--test sqllogictests
+
+# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo llvm-cov report \
+--profile ci \
+--codecov \
+--package '<selected-package>' \
+--output-path target/codecov-slt.json
+
+# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo llvm-cov \
+--profile ci \
+--workspace \
+--exclude datafusion-examples \
+--exclude ffi_example_table_provider \
+--exclude datafusion-cli \
+--features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
+--no-report \
+--lib \
+--bins \
+--test '<enabled-integration-target-except-SLT>'
+
+# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo llvm-cov report \
+--profile ci \
+--codecov \
+--package '<selected-package>' \
+--output-path target/codecov.json
+");
                 },
             },
             Cmd {

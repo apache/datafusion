@@ -290,7 +290,50 @@ coverage-core = { path = "../core", features = ["excluded-only"] }
         let rendered = rendered
             .join("\n\n")
             .replace(root.to_str().unwrap(), "/workspace");
-        insta::assert_snapshot!("workspace_coverage_commands", rendered);
+        insta::assert_snapshot!(rendered, @r"
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo llvm-cov clean \
+--workspace
+
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo llvm-cov \
+--profile ci \
+--workspace \
+--exclude datafusion-examples \
+--features enabled \
+--no-report \
+--test sqllogictests
+
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo llvm-cov report \
+--profile ci \
+--codecov \
+--package coverage-core \
+--output-path target/codecov-slt.json
+
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo llvm-cov \
+--profile ci \
+--workspace \
+--exclude datafusion-examples \
+--features enabled \
+--no-report \
+--lib \
+--bins \
+--test enabled
+
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo llvm-cov report \
+--profile ci \
+--codecov \
+--package coverage-core \
+--output-path target/codecov.json
+");
         let (_, tests) =
             workspace_tests(root, &strings(&["--workspace", "--features", "enabled"]))?;
         assert!(tests.contains("excluded"));
