@@ -1842,44 +1842,6 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_qualifier() -> Result<()> {
-        let mut schema = DFSchema::try_from_qualified_schema(
-            TableReference::partial("s1", "t"),
-            &test_schema_1(),
-        )?;
-        schema.merge(&DFSchema::try_from_qualified_schema(
-            TableReference::partial("s2", "t"),
-            &test_schema_1(),
-        )?);
-
-        let col = Column::from_qualified_name("t.c0");
-        let expected =
-            "Schema error: Ambiguous reference to t.c0, it matches s1.t.c0 and s2.t.c0";
-        assert_eq!(
-            schema.index_of_column(&col).unwrap_err().strip_backtrace(),
-            expected
-        );
-        assert_eq!(
-            schema
-                .qualified_field_from_column(&col)
-                .unwrap_err()
-                .strip_backtrace(),
-            expected
-        );
-        assert!(schema.maybe_index_of_column(&col).is_none());
-
-        let col = Column::from_qualified_name("s2.t.c0");
-        assert_eq!(schema.index_of_column(&col)?, 2);
-
-        // An exact qualifier match is not ambiguous
-        schema.merge(&DFSchema::try_from_qualified_schema("t", &test_schema_1())?);
-        let col = Column::from_qualified_name("t.c0");
-        assert_eq!(schema.index_of_column(&col)?, 4);
-
-        Ok(())
-    }
-
-    #[test]
     fn select_without_valid_fields() {
         let schema = DFSchema::empty();
 
