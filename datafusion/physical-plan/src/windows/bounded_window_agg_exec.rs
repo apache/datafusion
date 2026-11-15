@@ -9,12 +9,11 @@
 
 use std::cmp::{Ordering, min};
 use std::collections::VecDeque;
-use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::utils::create_schema;
+use super::utils::{compute_window_aggregates, create_schema};
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SplitMetrics,
 };
@@ -49,7 +48,7 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::window_state::{PartitionBatchState, WindowAggState};
+use datafusion_expr::window_state::PartitionBatchState;
 use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowEvalContext,
     WindowState,
@@ -290,12 +289,9 @@ impl BoundedWindowAggExec {
                     partition_by_sort_keys,
                     ordered_partition_by_indices,
                     input_schema,
-                    evaluate_complete: self.state_observer.is_none()
-                        && self.window_expr.iter().all(|expr| {
-                            expr.as_any().is::<PlainAggregateWindowExpr>()
-                                || expr.as_any().is::<SlidingAggregateWindowExpr>()
-                        }),
-                    complete_out: None,
+                    can_evaluate_complete: self.state_observer.is_none()
+                        && self.window_expr.iter().all(is_aggregate),
+                    complete_out: vec![],
                 })
             }
             InputOrderMode::Linear | InputOrderMode::PartiallySorted(_) => Box::new(
@@ -1066,14 +1062,18 @@ pub struct SortedSearch {
     ordered_partition_by_indices: Vec<usize>,
     input_schema: SchemaRef,
     /// Whether partitions that start and end inside one input batch are
-    /// evaluated without being buffered, see [`evaluate_complete_partitions`].
-    /// Only when every window expression is an aggregate, and off when a
+    /// evaluated with [`WindowExpr::evaluate`] instead of being buffered. Only
+    /// when every window expression is an aggregate, for which `evaluate` is
+    /// the calculation `evaluate_stateful` does for a whole partition (other
+    /// functions can call different `PartitionEvaluator` methods). Off when a
     /// [`WindowStateObserver`] needs the state of each partition.
-    evaluate_complete: bool,
-    /// Window expression results for the complete partitions of the latest
-    /// input batch, one array per window expression. Their rows come after
-    /// every buffered partition but the last.
-    complete_out: Option<Vec<ArrayRef>>,
+    can_evaluate_complete: bool,
+    /// Results of the complete partitions of the latest input batch, one array
+    /// per window expression, or empty. Set by `evaluate_partition_batches`
+    /// and taken by the `calculate_out_columns` call that follows. Their rows
+    /// come after every buffered partition but the last, all of which have
+    /// ended and have all their results.
+    complete_out: Vec<ArrayRef>,
 }
 
 impl PartitionSearcher for SortedSearch {
@@ -1085,8 +1085,8 @@ impl PartitionSearcher for SortedSearch {
         partition_buffers: &mut PartitionBatches,
         _window_expr: &[Arc<dyn WindowExpr>],
     ) -> Result<Option<Vec<ArrayRef>>> {
-        let complete_out = self.complete_out.take();
-        let n_complete = complete_out.as_ref().map_or(0, |out| out[0].len());
+        let complete_out = std::mem::take(&mut self.complete_out);
+        let n_complete = complete_out.first().map_or(0, |out| out.len());
         let n_out =
             self.calculate_n_out_row(window_agg_states, partition_buffers) + n_complete;
         if n_out == 0 {
@@ -1096,8 +1096,8 @@ impl PartitionSearcher for SortedSearch {
                 .iter()
                 .enumerate()
                 .map(|(idx, map)| {
-                    let complete = complete_out.as_ref().map(|out| &out[idx]);
-                    get_aggregate_result_out_column(map, complete, n_out).map(Some)
+                    get_aggregate_result_out_column(map, complete_out.get(idx), n_out)
+                        .map(Some)
                 })
                 .collect()
         }
@@ -1127,15 +1127,15 @@ impl PartitionSearcher for SortedSearch {
 
         // Only the first partition, which may continue a buffered one, and the
         // last, which may continue in the next batch, need to be buffered.
-        if self.evaluate_complete && partition_points.len() > 2 {
-            let last = partition_points.split_off(partition_points.len() - 1);
-            let complete = partition_points.split_off(1);
-            self.complete_out = Some(evaluate_complete_partitions(
-                record_batch,
-                &complete,
+        let n_partitions = partition_points.len();
+        if self.can_evaluate_complete && n_partitions > 2 {
+            let complete = 1..n_partitions - 1;
+            self.complete_out = compute_window_aggregates(
                 window_expr,
-            )?);
-            partition_points.extend(last);
+                record_batch,
+                &partition_points[complete.clone()],
+            )?;
+            partition_points.drain(complete);
         }
 
         partition_points
@@ -1286,6 +1286,8 @@ impl BoundedWindowAggStream {
     ///
     /// Exactly-once per group is enforced by [`WindowState::aggregate_state`],
     /// which errors on second call; the `published` early-skip below avoids reaching the error.
+    ///
+    /// [`WindowAggState::is_end`]: datafusion_expr::window_state::WindowAggState::is_end
     fn publish_finalized_states(
         &mut self,
         observer: &dyn WindowStateObserver,
@@ -1619,23 +1621,15 @@ fn get_aggregate_result_out_column(
     complete: Option<&ArrayRef>,
     len_to_show: usize,
 ) -> Result<ArrayRef> {
-    let mut out_cols = partition_window_agg_states
-        .values()
-        .map(
-            |WindowState {
-                 state: WindowAggState { out_col, .. },
-                 ..
-             }| out_col,
-        )
-        .collect::<Vec<_>>();
-    if let Some(complete) = complete {
-        out_cols.insert(out_cols.len().saturating_sub(1), complete);
-    }
     let mut result = None;
     let mut running_length = 0;
-    let mut batches_to_concat = Vec::with_capacity(out_cols.len());
+    let mut batches_to_concat = Vec::with_capacity(partition_window_agg_states.len() + 1);
     // We assume that iteration order is according to insertion order
-    for out_col in out_cols {
+    let mut out_cols = partition_window_agg_states
+        .values()
+        .map(|WindowState { state, .. }| &state.out_col);
+    let last = complete.and_then(|_| out_cols.next_back());
+    for out_col in out_cols.chain(complete).chain(last) {
         if running_length < len_to_show {
             let n_to_use = min(len_to_show - running_length, out_col.len());
             let slice_to_use = if n_to_use == out_col.len() {
@@ -1663,31 +1657,6 @@ fn get_aggregate_result_out_column(
         );
     }
     result.ok_or_else(|| exec_datafusion_err!("Should contain something"))
-}
-
-/// Evaluates aggregate window expressions on partitions that start and end
-/// inside `batch`. For an aggregate, `evaluate` is the calculation
-/// `evaluate_stateful` does for a whole partition, without building a state.
-/// Returns one array per window expression, covering `ranges` in order.
-fn evaluate_complete_partitions(
-    batch: &RecordBatch,
-    ranges: &[Range<usize>],
-    window_expr: &[Arc<dyn WindowExpr>],
-) -> Result<Vec<ArrayRef>> {
-    let mut results = vec![Vec::with_capacity(ranges.len()); window_expr.len()];
-    for range in ranges {
-        let partition = batch.slice(range.start, range.len());
-        for (expr, results) in window_expr.iter().zip(&mut results) {
-            results.push(expr.evaluate(&partition)?);
-        }
-    }
-    results
-        .iter()
-        .map(|arrays| {
-            let arrays = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
-            Ok(concat(&arrays)?)
-        })
-        .collect()
 }
 
 /// Constructs a batch from the last row of batch in the argument.
@@ -1730,12 +1699,15 @@ fn window_lookahead(exprs: &[Arc<dyn WindowExpr>]) -> Option<WindowLookahead> {
     Some(lookahead)
 }
 
+fn is_aggregate(expr: &Arc<dyn WindowExpr>) -> bool {
+    expr.as_any().is::<PlainAggregateWindowExpr>()
+        || expr.as_any().is::<SlidingAggregateWindowExpr>()
+}
+
 /// The [`LimitEffect`] of one window expression. Plain and sliding aggregates
 /// never read ahead; window functions declare it.
 fn limit_effect(expr: &Arc<dyn WindowExpr>) -> LimitEffect {
-    if expr.as_any().is::<PlainAggregateWindowExpr>()
-        || expr.as_any().is::<SlidingAggregateWindowExpr>()
-    {
+    if is_aggregate(expr) {
         return LimitEffect::None;
     }
     expr.as_any()
