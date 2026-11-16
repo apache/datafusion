@@ -684,19 +684,16 @@ impl ListingTable {
             return false;
         }
 
+        let Some(projection) = projection else {
+            return false;
+        };
         let file_fields = self.file_schema.fields();
-        match projection {
-            Some(projection) => projection.iter().any(|index| {
-                file_fields.get(*index).is_some_and(|field| {
-                    field.data_type() == &DataType::Utf8View
-                        && !excluded_columns.contains(field.name().as_str())
-                })
-            }),
-            None => file_fields.iter().any(|field| {
+        projection.iter().any(|index| {
+            file_fields.get(*index).is_some_and(|field| {
                 field.data_type() == &DataType::Utf8View
                     && !excluded_columns.contains(field.name().as_str())
-            }),
-        }
+            })
+        })
     }
 
     fn scan_with_args_boxed<'a>(
