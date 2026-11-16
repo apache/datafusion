@@ -15,16 +15,13 @@ use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeIterator, TreeNodeRecursion,
 };
 use datafusion_common::{JoinSide, JoinType, Result, internal_datafusion_err};
 use datafusion_expr::ExpressionPlacement;
-use datafusion_expr_common::operator::Operator;
-use datafusion_physical_expr::expressions::{
-    BinaryExpr, CaseExpr, Column, LambdaExpr, LambdaVariable,
-};
+use datafusion_physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
 use datafusion_physical_expr::projection::ProjectionExpr;
-use datafusion_physical_expr::{HigherOrderFunctionExpr, ScalarFunctionExpr};
+use datafusion_physical_expr::{conjunction, split_conjunction};
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -198,7 +195,6 @@ fn try_push_down_projection(
     join_filter: JoinFilter,
     alias_generator: &AliasGenerator,
 ) -> Result<Transformed<(Arc<dyn ExecutionPlan>, JoinFilter)>> {
-    let expr = Arc::clone(join_filter.expression());
     let original_plan_schema = plan.schema();
     let mut rewriter = JoinFilterRewriter::new(
         join_side,
@@ -206,7 +202,14 @@ fn try_push_down_projection(
         join_filter.column_indices().to_vec(),
         alias_generator,
     );
-    let new_expr = rewriter.rewrite(expr, true)?;
+    // The conjuncts of the filter carry no evaluation order: the logical optimizer splits the
+    // filter into conjuncts, reorders them and may push single-side ones below the join. Each
+    // one is rewritten on its own, so only an `AND` nested below them short-circuits.
+    let new_expr = split_conjunction(join_filter.expression())
+        .into_iter()
+        .map(Arc::clone)
+        .map_until_stop_and_collect(|conjunct| rewriter.rewrite(conjunct))?
+        .update_data(conjunction);
 
     if new_expr.transformed {
         let new_join_side =
@@ -307,9 +310,12 @@ fn minimize_join_filter(
 /// subexpression that can be computed using only one side of the join, the entire subexpression is
 /// pushed down to the join side.
 ///
-/// The top-level conjuncts of the filter are searched in full. Below them, children that an
-/// expression evaluates only for some rows, such as the branches of a `CASE`, are not searched: a
-/// projection below the join would evaluate them for every row of that side.
+/// The rewriter does not descend into an expression that [short-circuits], because a projection
+/// below the join evaluates what it holds for every row of that side. For example, the cast in
+/// `CASE WHEN r.v > 100 THEN CAST(l.s AS INT) ELSE 0 END > 1` stays in the filter, where it is
+/// only evaluated for the rows with `r.v > 100`.
+///
+/// [short-circuits]: PhysicalExpr::short_circuits
 struct JoinFilterRewriter<'a> {
     join_side: JoinSide,
     join_side_schema: &'a Schema,
@@ -351,13 +357,10 @@ impl<'a> JoinFilterRewriter<'a> {
 
     /// Executes the push-down machinery on `expr`.
     ///
-    /// `conjunct` is true while `expr` is the filter or one of its top-level conjuncts.
-    ///
     /// See the [JoinFilterRewriter] for further information.
     fn rewrite(
         &mut self,
         expr: Arc<dyn PhysicalExpr>,
-        conjunct: bool,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
         // A lambda is evaluated by its enclosing high-order function. Keep its
         // body in that scope; a complete high-order function may still be moved.
@@ -374,28 +377,10 @@ impl<'a> JoinFilterRewriter<'a> {
         let depends_on_other_side =
             self.depends_on_join_side(&expr, self.join_side.negate())?;
         if depends_on_other_side || is_volatile(&expr) {
-            // The top-level conjuncts carry no evaluation order: the logical optimizer splits the
-            // filter into conjuncts, reorders them and may push single-side ones below the join.
-            // Below them, children that the expression evaluates only for some rows stay in the
-            // filter, because a projection below the join would evaluate them for every row.
-            let conjunct = conjunct
-                && expr
-                    .downcast_ref::<BinaryExpr>()
-                    .is_some_and(|binary| *binary.op() == Operator::And);
-            let always_evaluated = if conjunct {
-                None
-            } else {
-                always_evaluated_child_count(expr.as_ref())
-            };
-            let mut position = 0;
-            return expr.map_children(|child| {
-                position += 1;
-                if always_evaluated.is_some_and(|count| position > count) {
-                    Ok(Transformed::no(child))
-                } else {
-                    self.rewrite(child, conjunct)
-                }
-            });
+            if expr.short_circuits() {
+                return Ok(Transformed::no(expr));
+            }
+            return expr.map_children(|expr| self.rewrite(expr));
         }
 
         // There is only a dependency on this side.
@@ -462,29 +447,6 @@ impl<'a> JoinFilterRewriter<'a> {
                 self.intermediate_column_indices[c.index()].side == join_side
             }))
         })
-    }
-}
-
-/// Returns the number of leading children of `expr` that are evaluated for every row, or `None`
-/// if all children are. The remaining children may be skipped for some rows.
-///
-/// Mirrors `conditional_children` in the logical `CommonSubexprEliminate` rule.
-fn always_evaluated_child_count(expr: &dyn PhysicalExpr) -> Option<usize> {
-    if expr.downcast_ref::<CaseExpr>().is_some() {
-        // For a searched CASE (no base expression), only the first WHEN is evaluated for every row.
-        // For a simple CASE (with a base expression), only the base expression is evaluated for
-        // every row, because WHEN evaluation is skipped when the base expression is NULL.
-        Some(1)
-    } else if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
-        matches!(binary.op(), Operator::And | Operator::Or).then_some(1)
-    } else if let Some(func) = expr.downcast_ref::<ScalarFunctionExpr>() {
-        // `conditional_arguments` only accepts logical expressions, so every argument of a
-        // short-circuiting function is treated as conditional.
-        func.fun().short_circuits().then_some(0)
-    } else if let Some(func) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
-        func.fun().short_circuits().then_some(0)
-    } else {
-        None
     }
 }
 

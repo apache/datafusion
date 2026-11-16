@@ -3,10 +3,11 @@
 # SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Projection pushdown must not move a part of a nested loop join filter that
-# is evaluated only for some rows into a projection below the join. Each
-# query returns the same rows as its filter applied to the cross product of
-# the inputs; evaluating the cast for every row of `cond_l` fails on 'x'.
-# The top-level conjuncts of the filter are still searched in full.
+# a short-circuiting expression may skip for some rows into a projection below
+# the join. Each query returns the same rows as its filter applied to the
+# cross product of the inputs; evaluating the cast for every row of `cond_l`
+# fails on 'x'.
+# The conjuncts of the filter are still rewritten one by one.
 
 statement ok
 SET datafusion.execution.target_partitions = 1
@@ -85,45 +86,49 @@ x 0
 statement ok
 SET datafusion.explain.physical_plan_only = true
 
-# The first WHEN is evaluated for every row and is still pushed below the join.
-# The THEN branch stays in the join filter.
+# Nothing is moved out of the CASE: its branches stay in the join filter.
 query TT
 EXPLAIN SELECT l.s, r.v FROM cond_l l JOIN cond_r r
 ON CASE WHEN r.v > 100 THEN CAST(l.s AS INT) ELSE 0 END > 1
 ----
 physical_plan
-01)ProjectionExec: expr=[s@1 as s, v@0 as v]
-02)--NestedLoopJoinExec: join_type=Inner, filter=CASE WHEN join_proj_push_down_1@1 THEN CAST(CAST(s@0 AS Int32) AS Int64) ELSE 0 END > 1, projection=[v@0, s@2]
-03)----ProjectionExec: expr=[v@0 as v, v@0 > 100 as join_proj_push_down_1]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)NestedLoopJoinExec: join_type=Inner, filter=CASE WHEN v@1 > 100 THEN CAST(CAST(s@0 AS Int32) AS Int64) ELSE 0 END > 1, projection=[s@1, v@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-# coalesce is planned as a CASE. Only the null test of its first argument is
-# pushed below the join.
+# coalesce is planned as a CASE and stays in the join filter as well.
 query TT
 EXPLAIN SELECT l.s, r.v FROM cond_l l JOIN cond_r r
 ON coalesce(CAST(r.v AS VARCHAR), CAST(CAST(l.s AS INT) AS VARCHAR)) = '0'
 ----
 physical_plan
-01)ProjectionExec: expr=[s@1 as s, v@0 as v]
-02)--NestedLoopJoinExec: join_type=Inner, filter=CASE WHEN join_proj_push_down_1@2 THEN CAST(v@1 AS Utf8View) ELSE CAST(CAST(s@0 AS Int32) AS Utf8View) END = 0, projection=[v@0, s@2]
-03)----ProjectionExec: expr=[v@0 as v, CAST(v@0 AS Utf8View) IS NOT NULL as join_proj_push_down_1]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)NestedLoopJoinExec: join_type=Inner, filter=CASE WHEN CAST(v@1 AS Utf8View) IS NOT NULL THEN CAST(v@1 AS Utf8View) ELSE CAST(CAST(s@0 AS Int32) AS Utf8View) END = 0, projection=[s@1, v@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-# The left operand of the nested AND is still pushed below the join. Its right
-# operand and the right operand of OR stay in the join filter.
+# Nothing is moved out of an OR, or out of an AND nested in it.
 query TT
 EXPLAIN SELECT l.s, r.v FROM cond_l l JOIN cond_r2 r
 ON (r.v > 100 AND CAST(l.s AS INT) > 1) OR r.v = -1
 ----
 physical_plan
+01)NestedLoopJoinExec: join_type=Inner, filter=v@1 > 100 AND CAST(s@0 AS Int32) > 1 OR v@1 = -1, projection=[s@1, v@0]
+02)--FilterExec: v@0 > 100 OR v@0 = -1
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A conjunct next to the CASE is still pushed below the join.
+query TT
+EXPLAIN SELECT l.s, r.v FROM cond_l l JOIN cond_r r
+ON CASE WHEN r.v > 100 THEN CAST(l.s AS INT) ELSE 0 END > 1 AND length(l.s) + 1 > r.v
+----
+physical_plan
 01)ProjectionExec: expr=[s@1 as s, v@0 as v]
-02)--NestedLoopJoinExec: join_type=Inner, filter=join_proj_push_down_1@2 AND CAST(s@0 AS Int32) > 1 OR v@1 = -1, projection=[v@0, s@2]
-03)----ProjectionExec: expr=[v@0 as v, v@0 > 100 as join_proj_push_down_1]
-04)------FilterExec: v@0 > 100 OR v@0 = -1
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)----DataSourceExec: partitions=1, partition_sizes=[1]
+02)--NestedLoopJoinExec: join_type=Inner, filter=CASE WHEN v@1 > 100 THEN CAST(CAST(s@0 AS Int32) AS Int64) ELSE 0 END > 1 AND join_proj_push_down_2@3 > join_proj_push_down_1@2, projection=[v@0, s@2]
+03)----ProjectionExec: expr=[v@0 as v, CAST(v@0 AS Int64) as join_proj_push_down_1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----ProjectionExec: expr=[s@0 as s, CAST(character_length(s@0) AS Int64) + 1 as join_proj_push_down_2]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 RESET datafusion.explain.physical_plan_only
