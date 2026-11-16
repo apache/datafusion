@@ -23,7 +23,7 @@ use datafusion_common::{
 use datafusion_common::{
     HashMap,
     cast::{as_large_list_array, as_list_array},
-    metadata::FieldMetadata,
+    metadata::{FieldMetadata, coerced_fields_metadata},
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_expr::expr::HigherOrderFunction;
@@ -1483,14 +1483,58 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 .any(|(when, _)| is_true(when.as_ref()) || is_false(when.as_ref())) =>
             {
                 // Dropping a branch must not change the field metadata of the CASE,
-                // which merges the metadata of all its value branches
-                let original = Expr::Case(Case::new(
-                    None,
-                    when_then_expr.clone(),
-                    else_expr.clone(),
-                ));
+                // which merges the metadata of all its value branches. Each branch's
+                // field is read once, before any branch is dropped.
                 let schema = info.schema().as_ref();
-                let (_, field) = original.to_field(schema)?;
+                let fields = when_then_expr
+                    .iter()
+                    .map(|(_, then)| then.as_ref())
+                    .chain(else_expr.as_deref())
+                    .map(|expr| expr.to_field(schema).map(|(_, field)| field))
+                    .collect::<Result<Vec<_>>>()?;
+                let metadata =
+                    coerced_fields_metadata(fields.iter().map(|f| f.as_ref()))?;
+
+                // The value branches that are left, as indices into `fields`: the THEN
+                // of each WHEN that is not false, up to the first WHEN true, whose THEN
+                // becomes the ELSE
+                let first_true = when_then_expr
+                    .iter()
+                    .position(|(when, _)| is_true(when.as_ref()));
+                let mut kept = (0..first_true.unwrap_or(when_then_expr.len()))
+                    .filter(|&i| !is_false(when_then_expr[i].0.as_ref()))
+                    .collect::<Vec<_>>();
+                let new_else = first_true
+                    .or_else(|| else_expr.is_some().then_some(when_then_expr.len()));
+                let keeps_metadata = match (kept.is_empty(), new_else) {
+                    // A literal takes the CASE's field metadata, such as an extension type
+                    (true, None) => true,
+                    (true, Some(i)) => {
+                        let branch = when_then_expr
+                            .get(i)
+                            .map(|(_, then)| then)
+                            .or(else_expr.as_ref());
+                        matches!(branch.map(|e| e.as_ref()), Some(Expr::Literal(..)))
+                            || FieldMetadata::new_from_field(&fields[i]) == metadata
+                    }
+                    (false, _) => {
+                        kept.extend(new_else);
+                        coerced_fields_metadata(kept.iter().map(|&i| fields[i].as_ref()))?
+                            == metadata
+                    }
+                };
+                if !keeps_metadata {
+                    return Ok(Transformed::no(Expr::Case(Case {
+                        expr: None,
+                        when_then_expr,
+                        else_expr,
+                    })));
+                }
+                let data_type = fields
+                    .iter()
+                    .map(|f| f.data_type())
+                    .find(|t| !t.is_null())
+                    .unwrap_or(&DataType::Null);
 
                 let mut new_when_then_expr = Vec::with_capacity(when_then_expr.len());
 
@@ -1510,7 +1554,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 let simplified = match (new_when_then_expr.is_empty(), else_expr) {
                     // CASE WHEN false THEN A END --> NULL
                     (true, None) => {
-                        Expr::Literal(ScalarValue::try_new_null(field.data_type())?, None)
+                        Expr::Literal(ScalarValue::try_new_null(data_type)?, None)
                     }
                     // CASE WHEN false THEN A ELSE B END --> B
                     (true, Some(else_expr)) => *else_expr,
@@ -1522,21 +1566,11 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 };
 
                 match simplified {
-                    // A literal takes the CASE's field metadata, such as an extension type
-                    Expr::Literal(value, _) => {
-                        let metadata = FieldMetadata::new_from_field(&field);
-                        Transformed::yes(Expr::Literal(
-                            value,
-                            (!metadata.is_empty()).then_some(metadata),
-                        ))
-                    }
-                    simplified
-                        if simplified.to_field(schema)?.1.metadata()
-                            == field.metadata() =>
-                    {
-                        Transformed::yes(simplified)
-                    }
-                    _ => Transformed::no(original),
+                    Expr::Literal(value, _) => Transformed::yes(Expr::Literal(
+                        value,
+                        (!metadata.is_empty()).then_some(metadata),
+                    )),
+                    simplified => Transformed::yes(simplified),
                 }
             }
 
@@ -4690,6 +4724,26 @@ mod tests {
                 Expr::Literal(expected, Some(metadata.clone()))
             );
         }
+
+        // Dropping a branch without metadata still simplifies, also when the metadata
+        // comes from the ELSE:
+        // CASE WHEN b1 THEN plain WHEN false THEN plain ELSE ext END
+        //   --> CASE WHEN b1 THEN plain ELSE ext END
+        assert_eq!(
+            simplifier.simplify(Expr::Case(Case::new(
+                None,
+                vec![
+                    (Box::new(col("b1")), Box::new(col("plain"))),
+                    (Box::new(lit(false)), Box::new(col("plain"))),
+                ],
+                Some(Box::new(col("ext"))),
+            )))?,
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("b1")), Box::new(col("plain")))],
+                Some(Box::new(col("ext"))),
+            ))
+        );
 
         // Rewrites that would drop the metadata of a branch leave the CASE as is
         let unchanged = [
