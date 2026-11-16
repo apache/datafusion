@@ -5,10 +5,7 @@
 # Tests for sort pushdown that require a custom physical optimizer rule.
 #
 # NOTE: for this file only, the test harness adds `CustomLimitRule` to the
-# physical optimizer just before `EnsureRequirements` (see `test_context.rs`
-# and `test_context/custom_sort_pushdown.rs`). The rule replaces a redundant
-# `SortExec` with a fetch on `custom_ordered_input` with a custom limit node
-# (`CustomLocalLimitExec` in the plans below), which SQL cannot otherwise plan.
+# physical optimizer just before `EnsureRequirements`
 
 statement ok
 SET datafusion.execution.target_partitions = 1;
