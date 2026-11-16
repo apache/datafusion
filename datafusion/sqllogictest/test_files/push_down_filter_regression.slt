@@ -1055,10 +1055,10 @@ statement ok
 set datafusion.explain.logical_plan_only = false;
 
 # Regression test for https://github.com/apache/datafusion/issues/27287
-# A scan's exact filter `complex_expr = literal` must not put the literal in an
-# equivalence class. Otherwise normalization rewrites the literal inside
-# `complex_expr`, and an aggregate that relies on the constant group key fails
-# `SanityCheckPlan`.
+# A scan's exact filter `complex_expr = literal` puts `complex_expr` and the
+# literal in one equivalence class. Normalization must not rewrite the literal
+# inside `complex_expr` itself. Otherwise an aggregate that relies on the
+# constant group key fails `SanityCheckPlan`.
 
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;
