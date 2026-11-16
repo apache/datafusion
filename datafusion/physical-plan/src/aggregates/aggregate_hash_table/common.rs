@@ -7,9 +7,12 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, new_null_array};
+use arrow::array::{
+    Array, ArrayRef, AsArray, BooleanArray, DictionaryArray, PrimitiveBuilder,
+    new_null_array,
+};
 use arrow::compute::prep_null_mask_filter;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, SchemaRef};
 use arrow::downcast_dictionary_array;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::compact_dictionary;
@@ -242,6 +245,17 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
         for group_values in &evaluated_batch.grouping_set_args {
             group_by_metrics.time_group_key_preparation(|| {
+                // A group-by without accumulators is DISTINCT. Dictionary keys can
+                // repeat within a batch, but only one row per key can add a group.
+                let deduplicated = if state.accumulators.is_empty() {
+                    deduplicate_dictionary_group_keys(group_values)
+                } else {
+                    None
+                };
+                let group_values = match deduplicated.as_ref() {
+                    Some(array) => std::slice::from_ref(array),
+                    None => group_values.as_slice(),
+                };
                 state
                     .group_values
                     .intern(group_values, &mut state.batch_group_indices)
@@ -697,6 +711,56 @@ fn compact_dictionaries(batch: RecordBatch) -> Result<RecordBatch> {
     Ok(RecordBatch::try_new(batch.schema(), columns)?)
 }
 
+/// Reduces a single dictionary group column to one row per referenced key.
+///
+/// Normal group interning still resolves duplicate dictionary values and nulls.
+/// This only removes repeated keys when doing so saves at least 25% of the rows.
+fn deduplicate_dictionary_group_keys(group_values: &[ArrayRef]) -> Option<ArrayRef> {
+    let [array] = group_values else {
+        return None;
+    };
+    let dictionary = array.as_ref();
+    downcast_dictionary_array! {
+        dictionary => deduplicate_dictionary_keys(dictionary),
+        _ => None,
+    }
+}
+
+fn deduplicate_dictionary_keys<K: ArrowDictionaryKeyType>(
+    dictionary: &DictionaryArray<K>,
+) -> Option<ArrayRef> {
+    let rows = dictionary.len();
+    if rows == 0 {
+        return None;
+    }
+
+    let has_null = dictionary.null_count() != 0;
+    let max_kept = dictionary
+        .values()
+        .len()
+        .saturating_add(usize::from(has_null));
+    let minimum_savings = rows / 4 + usize::from(!rows.is_multiple_of(4));
+    if max_kept > rows.saturating_sub(minimum_savings) {
+        return None;
+    }
+
+    let mut keys = PrimitiveBuilder::<K>::with_capacity(max_kept);
+    for index in dictionary.occupancy().set_indices() {
+        keys.append_value(
+            K::Native::from_usize(index)
+                .expect("an occupied dictionary index must fit its key type"),
+        );
+    }
+    if has_null {
+        keys.append_null();
+    }
+
+    Some(Arc::new(DictionaryArray::new(
+        keys.finish(),
+        Arc::clone(dictionary.values()),
+    )))
+}
+
 /// Compacts row-aligned group indices using an aggregate filter.
 ///
 /// Returns `None` when every row is selected so callers can reuse the input
@@ -963,8 +1027,8 @@ mod tests {
     use arrow::buffer::ScalarBuffer;
     use arrow::compute::cast;
     use arrow::datatypes::{
-        ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Int8Type, Schema,
-        UInt8Type,
+        ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Int8Type, Int32Type,
+        Schema, UInt8Type,
     };
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -972,6 +1036,8 @@ mod tests {
 
     use super::*;
     use crate::aggregates::group_values::aggregate_sub_metrics;
+    use crate::aggregates::{AggregateMode, PhysicalGroupBy};
+    use crate::empty::EmptyExec;
     use crate::metrics::ExecutionPlanMetricsSet;
 
     #[test]
@@ -1039,6 +1105,113 @@ mod tests {
 
     fn decoded(batch: &RecordBatch) -> Result<ArrayRef> {
         Ok(cast(batch.column(0), &DataType::Utf8)?)
+    }
+
+    fn string_dictionary(
+        keys: impl IntoIterator<Item = Option<i32>>,
+        values: impl IntoIterator<Item = Option<&'static str>>,
+    ) -> ArrayRef {
+        Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from_iter(keys),
+            Arc::new(StringArray::from_iter(values)),
+        ))
+    }
+
+    fn interned_dictionary_values(array: ArrayRef) -> Result<Vec<Option<String>>> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group_col",
+            array.data_type().clone(),
+            true,
+        )]));
+        let mut group_values = new_group_values(schema, &GroupClustering::None)?;
+        let reduced = deduplicate_dictionary_group_keys(std::slice::from_ref(&array))
+            .expect("test input should pass the reduction gate");
+        group_values.intern(&[reduced], &mut vec![])?;
+        let output = group_values.emit(EmitTo::All)?;
+        let decoded = cast(&output[0], &DataType::Utf8)?;
+        let mut values = decoded
+            .as_string::<i32>()
+            .iter()
+            .map(|value| value.map(str::to_owned))
+            .collect::<Vec<_>>();
+        values.sort();
+        Ok(values)
+    }
+
+    #[test]
+    fn distinct_dictionary_reduction_preserves_null_key_and_value_semantics() -> Result<()>
+    {
+        let array = string_dictionary(
+            [
+                Some(0),
+                None,
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(0),
+            ],
+            [Some("same"), None, Some("same"), Some("other")],
+        );
+        assert_eq!(
+            interned_dictionary_values(array)?,
+            vec![None, Some("other".to_string()), Some("same".to_string())]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_dictionary_reduction_requires_enough_duplicate_keys() {
+        let below_threshold = string_dictionary(
+            [0, 1, 2, 3, 4, 5, 6, 0].map(Some),
+            ["v0", "v1", "v2", "v3", "v4", "v5", "v6"].map(Some),
+        );
+        assert!(deduplicate_dictionary_group_keys(&[below_threshold]).is_none());
+
+        let at_threshold = string_dictionary(
+            [0, 1, 2, 3, 4, 5, 0, 1].map(Some),
+            ["v0", "v1", "v2", "v3", "v4", "v5"].map(Some),
+        );
+        assert!(deduplicate_dictionary_group_keys(&[at_threshold]).is_some());
+    }
+
+    #[test]
+    fn distinct_dictionary_reduction_runs_in_partial_distinct_aggregate() -> Result<()> {
+        let array: ArrayRef = Arc::new(DictionaryArray::<UInt8Type>::new(
+            PrimitiveArray::<UInt8Type>::from_iter([0, 1, 0, 1, 0, 1, 0, 1].map(Some)),
+            Arc::new(StringArray::from(vec!["a", "b"])),
+        ));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group_col",
+            array.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array])?;
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let group_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("group_col", 0));
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![(group_expr, "group_col".to_string())]),
+            vec![],
+            vec![],
+            input,
+            schema,
+        )?;
+        let output_schema = Arc::clone(&aggregate.schema);
+        let mut table =
+            AggregateHashTable::<PartialMarker>::new(&aggregate, 0, output_schema, 8192)?;
+
+        table.aggregate_batch(&batch)?;
+
+        let state = table.state.building();
+        assert_eq!(state.batch_group_indices.len(), 2);
+        assert_eq!(state.group_values.len(), 2);
+        Ok(())
     }
 
     #[test]
