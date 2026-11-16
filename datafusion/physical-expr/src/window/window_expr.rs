@@ -368,6 +368,13 @@ pub trait AggregateWindowExpr: WindowExpr {
                 return Ok(None);
             }
         }
+        if !partitions.iter().all(|partition| {
+            frames
+                .get(partition.clone())
+                .is_some_and(|f| frames_are_well_formed(f, partition.clone()))
+        }) {
+            return Ok(None);
+        }
         let mut accumulator = self.get_accumulator()?;
         accumulator.evaluate_window_segments(&values, partitions, &frames)
     }
@@ -546,6 +553,7 @@ pub trait AggregateWindowExpr: WindowExpr {
         }
 
         if filter_mask.is_none()
+            && frames_are_well_formed(&ranges, 0..length)
             && let Some(out) =
                 accumulator.evaluate_window_frames(&values, last_range, &ranges)?
         {
@@ -575,6 +583,15 @@ pub(crate) fn filter_array(array: &ArrayRef, mask: &BooleanArray) -> Result<Arra
     arrow_filter(array.as_ref(), mask)
         .map(|a| a as ArrayRef)
         .map_err(|e| arrow_datafusion_err!(e))
+}
+
+/// Whether every frame starts no later than it ends and lies inside `bounds`. A frame that starts
+/// after it ends (a negative `RANGE` offset produces one, which the planner should reject) is left
+/// to the row-by-row protocol, so that it behaves exactly as it did before frames were evaluated in bulk.
+fn frames_are_well_formed(frames: &[Range<usize>], bounds: Range<usize>) -> bool {
+    frames
+        .iter()
+        .all(|f| bounds.start <= f.start && f.start <= f.end && f.end <= bounds.end)
 }
 
 /// Filters a list of arrays with the provided boolean mask.
@@ -894,7 +911,9 @@ pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState, RandomSt
 mod tests {
     use std::sync::Arc;
 
-    use crate::window::window_expr::{WindowFn, WindowState, is_row_ahead};
+    use crate::window::window_expr::{
+        WindowFn, WindowState, frames_are_well_formed, is_row_ahead,
+    };
 
     use arrow::array::{ArrayRef, Float64Array};
     use arrow::compute::SortOptions;
@@ -952,6 +971,95 @@ mod tests {
             err.contains("called more than once"),
             "expected second-call error, got: {err}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn frames_are_well_formed_rejects_inverted_and_out_of_bounds_frames() {
+        assert!(frames_are_well_formed(&[0..0, 0..2, 1..3, 3..3], 0..3));
+        assert!(frames_are_well_formed(&[], 0..0));
+        // starts after it ends
+        assert!(!frames_are_well_formed(&[0..2, 2..1], 0..3));
+        // ends after the data, starts before the partition
+        assert!(!frames_are_well_formed(&[0..4], 0..3));
+        assert!(!frames_are_well_formed(&[2..4], 3..6));
+    }
+
+    /// The guard must only turn away frames that cannot occur in a valid query: the frames of every
+    /// frame the planner accepts (start no later than end), for all three units and both sort
+    /// directions, are well formed, so the bulk path is never disabled by it.
+    #[test]
+    fn frames_of_valid_window_frames_are_well_formed() -> Result<()> {
+        use arrow::array::Int64Array;
+        use datafusion_expr::window_state::WindowFrameContext;
+        use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+
+        let keys: ArrayRef = Arc::new(Int64Array::from(vec![1, 1, 2, 4, 4, 4, 7, 9]));
+        let n = keys.len();
+        for units in [
+            WindowFrameUnits::Rows,
+            WindowFrameUnits::Range,
+            WindowFrameUnits::Groups,
+        ] {
+            let offset = |k: u64| match units {
+                WindowFrameUnits::Range => ScalarValue::Int64(Some(k as i64)),
+                _ => ScalarValue::UInt64(Some(k)),
+            };
+            let unbounded = match units {
+                WindowFrameUnits::Range => ScalarValue::Int64(None),
+                _ => ScalarValue::UInt64(None),
+            };
+            // (position on the number line, bound): UNBOUNDED PRECEDING is -inf, UNBOUNDED FOLLOWING +inf
+            let mut line: Vec<(i128, WindowFrameBound)> = vec![
+                (i128::MIN, WindowFrameBound::Preceding(unbounded.clone())),
+                (0, WindowFrameBound::CurrentRow),
+                (i128::MAX, WindowFrameBound::Following(unbounded)),
+            ];
+            for k in [0u64, 1, 2, 3, 20] {
+                line.push((-(k as i128), WindowFrameBound::Preceding(offset(k))));
+                line.push((k as i128, WindowFrameBound::Following(offset(k))));
+            }
+            for (start_pos, start) in &line {
+                for (end_pos, end) in &line {
+                    // the planner rejects UNBOUNDED FOLLOWING as a start, UNBOUNDED PRECEDING as an end
+                    // and a start after the end
+                    if *start_pos == i128::MAX || *end_pos == i128::MIN || start_pos > end_pos
+                    {
+                        continue;
+                    }
+                    for descending in [false, true] {
+                        let options = SortOptions {
+                            descending,
+                            nulls_first: false,
+                        };
+                        let keys = if descending {
+                            arrow::compute::take(
+                                &keys,
+                                &arrow::array::UInt64Array::from_iter_values(
+                                    (0..n as u64).rev(),
+                                ),
+                                None,
+                            )?
+                        } else {
+                            Arc::clone(&keys)
+                        };
+                        let frame = WindowFrame::new_bounds(
+                            units,
+                            start.clone(),
+                            end.clone(),
+                        );
+                        let mut ctx =
+                            WindowFrameContext::new(Arc::new(frame), vec![options]);
+                        let mut ranges = Vec::new();
+                        ctx.calculate_ranges(&[keys], &(0..0), n, 0, false, &mut ranges)?;
+                        assert!(
+                            frames_are_well_formed(&ranges, 0..n),
+                            "{units:?} {start:?} .. {end:?} descending={descending}: {ranges:?}"
+                        );
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
