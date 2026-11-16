@@ -240,7 +240,7 @@ SELECT * FROM (
 2 30 d 1
 
 statement ok
-set datafusion.optimizer.enable_row_number_to_aggregate = false;
+reset datafusion.optimizer.enable_row_number_to_aggregate;
 
 statement ok
 DROP TABLE t;
