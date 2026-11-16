@@ -279,12 +279,9 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::HigherOrderFunction(_)
         | Expr::Lambda(_)
         | Expr::LambdaVariable(_) => Ok(false),
-        // TODO: remove the next line after `Expr::Wildcard` is removed
-        #[expect(deprecated)]
-        Expr::AggregateFunction(_)
-        | Expr::WindowFunction(_)
-        | Expr::Wildcard { .. }
-        | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
+        Expr::AggregateFunction(_) | Expr::WindowFunction(_) | Expr::GroupingSet(_) => {
+            internal_err!("Unsupported predicate type")
+        }
     })?)
 }
 
@@ -4923,7 +4920,7 @@ mod tests {
             .aggregate(vec![col("user")], vec![count(lit(1))])?
             .project(vec![
                 leaf_udf_expr(col("user")).is_not_null().alias("has_name"),
-                col("COUNT(Int32(1))"),
+                col("count(Int32(1))"),
             ])?
             .build()?;
 
