@@ -307,7 +307,10 @@ mod tests {
     use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
     use datafusion_common::instant::Instant;
     use datafusion_common::stats::Precision;
-    use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
+    use datafusion_common::{
+        ColumnStatistics, PhysicalColumnStatistics, PhysicalFileStatistics, ScalarValue,
+        Statistics,
+    };
     use datafusion_expr::ColumnarValue;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -882,6 +885,47 @@ mod tests {
 
         let entry = entries.get(&path_3).unwrap();
         assert_eq!(entry.value.meta.size, 2048); // Should be updated value
+    }
+
+    #[test]
+    fn test_statistics_cache_shares_physical_statistics_on_get() {
+        let meta = create_test_meta("test", 1024);
+        let cache = DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT);
+        let schema =
+            Schema::new(vec![Field::new("test_column", DataType::Utf8View, true)]);
+        let path = TableScopedPath {
+            path: meta.location.clone(),
+            table: None,
+        };
+        let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
+        let cached_value = CachedFileMetadata::new(
+            meta,
+            schema_fingerprint,
+            Arc::new(Statistics::new_unknown(&schema)),
+            None,
+        )
+        .with_physical_statistics(PhysicalFileStatistics {
+            num_rows: None,
+            column_statistics: vec![PhysicalColumnStatistics::default(); 64],
+        });
+        let physical_statistics = Arc::clone(
+            cached_value
+                .physical_statistics
+                .as_ref()
+                .expect("physical statistics should be present"),
+        );
+
+        cache.put(&path, cached_value);
+        let cached = cache.get(&path).expect("cache entry should be present");
+        let cached_physical_statistics = cached
+            .physical_statistics
+            .as_ref()
+            .expect("physical statistics should be present");
+
+        assert!(Arc::ptr_eq(
+            &physical_statistics,
+            cached_physical_statistics
+        ));
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Hash)]

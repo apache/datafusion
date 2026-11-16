@@ -15,8 +15,8 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, HashMap, HashSet, Result, ScalarValue, Statistics,
-    internal_datafusion_err,
+    ColumnStatistics, DataFusionError, HashMap, HashSet, PhysicalColumnStatistics,
+    PhysicalFileStatistics, Result, ScalarValue, Statistics, internal_datafusion_err,
 };
 use datafusion_execution::cache::cache_manager::{
     CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
@@ -31,7 +31,7 @@ use object_store::{ObjectMeta, ObjectStore};
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_to_arrow_schema;
-use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
+use parquet::basic::{ColumnOrder, Encoding, SortOrder, Type as PhysicalType};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
     RowGroupMetaData, SortingColumn,
@@ -45,6 +45,145 @@ use std::sync::Arc;
 /// merged result to be `Inexact` rather than `Absent`, as the estimate
 /// would be too unreliable otherwise.
 const PARTIAL_NDV_THRESHOLD: f64 = 0.75;
+
+/// Extract physical column statistics used by scan-aware optimizations.
+///
+/// Dictionary statistics are deliberately fail-closed. The dictionary flag is
+/// true only when every nonempty row group has a dictionary page and page-level
+/// encoding statistics prove that every data page uses a dictionary encoding.
+/// The minimum dictionary-page size is present only when every nonempty row
+/// group supplies the offsets and encoding metadata needed to compute it. Older
+/// writers commonly omit one or more of these fields.
+pub(crate) fn physical_file_statistics(
+    metadata: &ParquetMetaData,
+    logical_file_schema: &Schema,
+) -> PhysicalFileStatistics {
+    let file_metadata = metadata.file_metadata();
+    let schema_descr = file_metadata.schema_descr();
+    let native_file_schema =
+        parquet_to_arrow_schema(schema_descr, file_metadata.key_value_metadata()).ok();
+    let top_level_columns: HashMap<&str, usize> = schema_descr
+        .columns()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, column)| {
+            let parts = column.path().parts();
+            (parts.len() == 1).then_some((parts[0].as_str(), index))
+        })
+        .collect();
+
+    let column_statistics = logical_file_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.data_type() != &DataType::Utf8View {
+                return PhysicalColumnStatistics::default();
+            }
+            let Some(&column_index) = top_level_columns.get(field.name().as_str()) else {
+                return PhysicalColumnStatistics::default();
+            };
+
+            let native_dictionary_value_type = native_file_schema
+                .as_ref()
+                .and_then(|schema| schema.field_with_name(field.name()).ok())
+                .map(|field| match field.data_type() {
+                    DataType::Dictionary(_, value_type) => value_type.as_ref(),
+                    data_type => data_type,
+                })
+                .filter(|data_type| {
+                    matches!(
+                        data_type,
+                        DataType::Utf8
+                            | DataType::LargeUtf8
+                            | DataType::Binary
+                            | DataType::LargeBinary
+                    )
+                })
+                .cloned();
+
+            let mut saw_nonempty_row_group = false;
+            let mut min_dictionary_page_bytes = Some(usize::MAX);
+            let mut all_dictionary_encoded = true;
+            let mut min_value_bytes_per_row = Some(usize::MAX);
+            let mut min_value_bytes_per_encoded_byte = Some(usize::MAX);
+            for row_group in metadata.row_groups() {
+                let Ok(row_count) = usize::try_from(row_group.num_rows()) else {
+                    min_dictionary_page_bytes = None;
+                    all_dictionary_encoded = false;
+                    min_value_bytes_per_row = None;
+                    min_value_bytes_per_encoded_byte = None;
+                    continue;
+                };
+                if row_count == 0 {
+                    continue;
+                }
+                saw_nonempty_row_group = true;
+                let Some(column) = row_group.columns().get(column_index) else {
+                    return PhysicalColumnStatistics::default();
+                };
+                // A dictionary page offset proves the page exists even when an
+                // older writer did not include optional page-encoding stats.
+                let dictionary_page_bytes = if column.dictionary_page_offset().is_some() {
+                    column
+                        .dictionary_page_offset()
+                        .and_then(|offset| column.data_page_offset().checked_sub(offset))
+                        .and_then(|bytes| usize::try_from(bytes).ok())
+                        .filter(|bytes| *bytes != 0)
+                } else {
+                    None
+                };
+                min_dictionary_page_bytes = min_dictionary_page_bytes
+                    .and_then(|min| dictionary_page_bytes.map(|bytes| min.min(bytes)));
+                all_dictionary_encoded &= column.dictionary_page_offset().is_some()
+                    && column.page_encoding_stats_mask().is_some_and(|mask| {
+                        mask.is_only(Encoding::PLAIN_DICTIONARY)
+                            || mask.is_only(Encoding::RLE_DICTIONARY)
+                    });
+                let value_bytes = column
+                    .unencoded_byte_array_data_bytes()
+                    .and_then(|bytes| usize::try_from(bytes).ok());
+                min_value_bytes_per_row = min_value_bytes_per_row
+                    .and_then(|min| value_bytes.map(|bytes| min.min(bytes / row_count)));
+                let encoded_bytes = usize::try_from(column.uncompressed_size())
+                    .ok()
+                    .filter(|bytes| *bytes != 0);
+                min_value_bytes_per_encoded_byte = min_value_bytes_per_encoded_byte
+                    .and_then(|min| {
+                        value_bytes
+                            .zip(encoded_bytes)
+                            .map(|(value, encoded)| min.min(value / encoded))
+                    });
+            }
+
+            PhysicalColumnStatistics {
+                min_dictionary_page_bytes: saw_nonempty_row_group
+                    .then_some(min_dictionary_page_bytes)
+                    .flatten(),
+                all_dictionary_encoded: saw_nonempty_row_group && all_dictionary_encoded,
+                native_dictionary_value_type,
+                min_row_group_value_bytes_per_row: saw_nonempty_row_group
+                    .then_some(min_value_bytes_per_row)
+                    .flatten(),
+                min_row_group_value_bytes_per_encoded_byte: saw_nonempty_row_group
+                    .then_some(min_value_bytes_per_encoded_byte)
+                    .flatten(),
+            }
+        })
+        .collect();
+
+    let num_rows = metadata
+        .row_groups()
+        .iter()
+        .try_fold(0usize, |total, row_group| {
+            let rows = usize::try_from(row_group.num_rows()).ok()?;
+            total.checked_add(rows)
+        });
+
+    PhysicalFileStatistics {
+        num_rows,
+        column_statistics,
+    }
+}
 
 fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
     matches!(
@@ -1302,6 +1441,332 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    mod physical_statistics_tests {
+        use super::*;
+        use parquet::basic::{EncodingMask, LogicalType, Type as PhysicalType};
+        use parquet::file::metadata::{
+            ColumnChunkMetaData, FileMetaData, RowGroupMetaData,
+        };
+        use parquet::schema::types::Type as SchemaType;
+
+        fn schema_descriptor() -> Arc<SchemaDescriptor> {
+            let field =
+                SchemaType::primitive_type_builder("value", PhysicalType::BYTE_ARRAY)
+                    .with_logical_type(Some(LogicalType::String))
+                    .build()
+                    .unwrap();
+            let schema = SchemaType::group_type_builder("schema")
+                .with_fields(vec![Arc::new(field)])
+                .build()
+                .unwrap();
+            Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+        }
+
+        fn row_group(
+            schema: &Arc<SchemaDescriptor>,
+            encoding: Option<Encoding>,
+            unencoded_value_bytes: Option<i64>,
+        ) -> RowGroupMetaData {
+            row_group_with_dictionary_metadata(
+                schema,
+                encoding.is_some(),
+                encoding,
+                unencoded_value_bytes,
+            )
+        }
+
+        fn row_group_with_dictionary_metadata(
+            schema: &Arc<SchemaDescriptor>,
+            has_dictionary_page_offset: bool,
+            encoding: Option<Encoding>,
+            unencoded_value_bytes: Option<i64>,
+        ) -> RowGroupMetaData {
+            row_group_with_encodings(
+                schema,
+                has_dictionary_page_offset,
+                encoding.as_slice(),
+                unencoded_value_bytes,
+            )
+        }
+
+        fn row_group_with_encodings(
+            schema: &Arc<SchemaDescriptor>,
+            has_dictionary_page_offset: bool,
+            encodings: &[Encoding],
+            unencoded_value_bytes: Option<i64>,
+        ) -> RowGroupMetaData {
+            row_group_with_offsets(
+                schema,
+                10,
+                has_dictionary_page_offset.then_some(1),
+                129,
+                encodings,
+                unencoded_value_bytes,
+            )
+        }
+
+        fn row_group_with_offsets(
+            schema: &Arc<SchemaDescriptor>,
+            num_rows: i64,
+            dictionary_page_offset: Option<i64>,
+            data_page_offset: i64,
+            encodings: &[Encoding],
+            unencoded_value_bytes: Option<i64>,
+        ) -> RowGroupMetaData {
+            let mut column = ColumnChunkMetaData::builder(schema.column(0))
+                .set_num_values(10)
+                .set_total_uncompressed_size(20)
+                .set_data_page_offset(data_page_offset)
+                .set_unencoded_byte_array_data_bytes(unencoded_value_bytes);
+            if dictionary_page_offset.is_some() {
+                column = column.set_dictionary_page_offset(dictionary_page_offset);
+            }
+            if !encodings.is_empty() {
+                column = column.set_page_encoding_stats_mask(
+                    EncodingMask::new_from_encodings(encodings.iter()),
+                );
+            }
+            RowGroupMetaData::builder(Arc::clone(schema))
+                .set_num_rows(num_rows)
+                .set_total_byte_size(100)
+                .set_column_metadata(vec![column.build().unwrap()])
+                .build()
+                .unwrap()
+        }
+
+        fn make_metadata(row_groups: Vec<RowGroupMetaData>) -> ParquetMetaData {
+            let schema = schema_descriptor();
+            let file_metadata = FileMetaData::new(
+                1,
+                row_groups.iter().map(RowGroupMetaData::num_rows).sum(),
+                None,
+                None,
+                schema,
+                None,
+            );
+            ParquetMetaData::new(file_metadata, row_groups)
+        }
+
+        #[test]
+        fn requires_every_data_page_to_be_dictionary_encoded() {
+            let schema = schema_descriptor();
+            let logical_schema =
+                Schema::new(vec![Field::new("value", DataType::Utf8View, true)]);
+            let metadata = make_metadata(vec![
+                row_group(&schema, Some(Encoding::RLE_DICTIONARY), Some(160)),
+                row_group(&schema, Some(Encoding::PLAIN_DICTIONARY), Some(240)),
+            ]);
+
+            assert_eq!(
+                physical_file_statistics(&metadata, &logical_schema),
+                PhysicalFileStatistics {
+                    num_rows: Some(20),
+                    column_statistics: vec![PhysicalColumnStatistics {
+                        min_dictionary_page_bytes: Some(128),
+                        all_dictionary_encoded: true,
+                        native_dictionary_value_type: Some(DataType::Utf8),
+                        min_row_group_value_bytes_per_row: Some(16),
+                        min_row_group_value_bytes_per_encoded_byte: Some(8),
+                    }],
+                }
+            );
+
+            let metadata = make_metadata(vec![
+                row_group(&schema, Some(Encoding::RLE_DICTIONARY), Some(160)),
+                row_group(&schema, Some(Encoding::PLAIN), Some(240)),
+            ]);
+            assert!(
+                !physical_file_statistics(&metadata, &logical_schema).column_statistics
+                    [0]
+                .all_dictionary_encoded
+            );
+
+            let metadata = make_metadata(vec![row_group_with_encodings(
+                &schema,
+                true,
+                &[Encoding::RLE_DICTIONARY, Encoding::PLAIN],
+                Some(160),
+            )]);
+            assert!(
+                !physical_file_statistics(&metadata, &logical_schema).column_statistics
+                    [0]
+                .all_dictionary_encoded
+            );
+        }
+
+        #[test]
+        fn keeps_the_least_profitable_row_group() {
+            let schema = schema_descriptor();
+            let logical_schema =
+                Schema::new(vec![Field::new("value", DataType::Utf8View, true)]);
+            let metadata = make_metadata(vec![
+                row_group(&schema, Some(Encoding::RLE_DICTIONARY), Some(240)),
+                row_group(&schema, Some(Encoding::RLE_DICTIONARY), Some(30)),
+            ]);
+
+            let statistics = physical_file_statistics(&metadata, &logical_schema);
+            let column = &statistics.column_statistics[0];
+            assert_eq!(column.min_row_group_value_bytes_per_row, Some(3));
+            assert_eq!(column.min_row_group_value_bytes_per_encoded_byte, Some(1));
+        }
+
+        #[test]
+        fn keeps_the_smallest_dictionary_page_span() {
+            let schema = schema_descriptor();
+            let logical_schema =
+                Schema::new(vec![Field::new("value", DataType::Utf8View, true)]);
+            let metadata = make_metadata(vec![
+                row_group_with_offsets(
+                    &schema,
+                    10,
+                    Some(100),
+                    500,
+                    &[Encoding::RLE_DICTIONARY],
+                    Some(160),
+                ),
+                // Empty row groups do not constrain the minimum.
+                row_group_with_offsets(&schema, 0, None, 0, &[], None),
+                row_group_with_offsets(
+                    &schema,
+                    10,
+                    Some(1_000),
+                    1_128,
+                    &[Encoding::PLAIN_DICTIONARY],
+                    Some(160),
+                ),
+            ]);
+
+            assert_eq!(
+                physical_file_statistics(&metadata, &logical_schema).column_statistics[0]
+                    .min_dictionary_page_bytes,
+                Some(128)
+            );
+        }
+
+        #[test]
+        fn dictionary_page_span_fails_closed() {
+            let schema = schema_descriptor();
+            let logical_schema =
+                Schema::new(vec![Field::new("value", DataType::Utf8View, true)]);
+            let valid_row_group = || {
+                row_group_with_offsets(
+                    &schema,
+                    10,
+                    Some(1),
+                    129,
+                    &[Encoding::RLE_DICTIONARY],
+                    Some(160),
+                )
+            };
+            let assert_missing = |row_group| {
+                let metadata = make_metadata(vec![valid_row_group(), row_group]);
+                assert_eq!(
+                    physical_file_statistics(&metadata, &logical_schema)
+                        .column_statistics[0]
+                        .min_dictionary_page_bytes,
+                    None
+                );
+            };
+
+            assert_missing(row_group_with_offsets(
+                &schema,
+                10,
+                None,
+                129,
+                &[Encoding::RLE_DICTIONARY],
+                Some(160),
+            ));
+            let metadata = make_metadata(vec![row_group_with_offsets(
+                &schema,
+                10,
+                Some(1),
+                129,
+                &[],
+                Some(160),
+            )]);
+            assert_eq!(
+                physical_file_statistics(&metadata, &logical_schema).column_statistics[0]
+                    .min_dictionary_page_bytes,
+                Some(128)
+            );
+            assert_missing(row_group_with_offsets(
+                &schema,
+                10,
+                Some(129),
+                129,
+                &[Encoding::RLE_DICTIONARY],
+                Some(160),
+            ));
+            assert_missing(row_group_with_offsets(
+                &schema,
+                10,
+                Some(130),
+                129,
+                &[Encoding::RLE_DICTIONARY],
+                Some(160),
+            ));
+        }
+
+        #[test]
+        fn empty_row_groups_have_no_dictionary_page_span() {
+            let schema = schema_descriptor();
+            let logical_schema =
+                Schema::new(vec![Field::new("value", DataType::Utf8View, true)]);
+            let metadata = make_metadata(vec![row_group_with_offsets(
+                &schema,
+                0,
+                None,
+                0,
+                &[],
+                None,
+            )]);
+
+            let statistics = physical_file_statistics(&metadata, &logical_schema);
+            assert_eq!(statistics.num_rows, Some(0));
+            assert_eq!(
+                statistics.column_statistics[0].min_dictionary_page_bytes,
+                None
+            );
+        }
+
+        #[test]
+        fn missing_footer_fields_fail_closed() {
+            let schema = schema_descriptor();
+            let logical_schema =
+                Schema::new(vec![Field::new("value", DataType::Utf8View, true)]);
+            let metadata = make_metadata(vec![row_group(&schema, None, None)]);
+            let statistics = physical_file_statistics(&metadata, &logical_schema);
+
+            assert_eq!(
+                statistics.column_statistics,
+                vec![PhysicalColumnStatistics {
+                    min_dictionary_page_bytes: None,
+                    all_dictionary_encoded: false,
+                    native_dictionary_value_type: Some(DataType::Utf8),
+                    min_row_group_value_bytes_per_row: None,
+                    min_row_group_value_bytes_per_encoded_byte: None,
+                }]
+            );
+
+            for row_group in [
+                row_group_with_dictionary_metadata(&schema, true, None, Some(160)),
+                row_group_with_dictionary_metadata(
+                    &schema,
+                    false,
+                    Some(Encoding::RLE_DICTIONARY),
+                    Some(160),
+                ),
+            ] {
+                let metadata = make_metadata(vec![row_group]);
+                assert!(
+                    !physical_file_statistics(&metadata, &logical_schema)
+                        .column_statistics[0]
+                        .all_dictionary_encoded
+                );
+            }
+        }
     }
 
     #[test]

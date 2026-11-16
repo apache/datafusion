@@ -8,7 +8,6 @@
 mod tests {
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
     use datafusion::arrow::array::record_batch;
-    use datafusion::arrow::datatypes as arrow_schema;
     use datafusion::common::{Result, ScalarValue, TableReference};
     use datafusion::dataframe::DataFrame;
     use datafusion::prelude::SessionContext;

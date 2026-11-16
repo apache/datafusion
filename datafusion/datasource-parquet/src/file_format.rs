@@ -50,7 +50,9 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
-use crate::metadata::{DFParquetMetadata, lex_ordering_to_sorting_columns};
+use crate::metadata::{
+    DFParquetMetadata, lex_ordering_to_sorting_columns, physical_file_statistics,
+};
 use crate::reader::CachedParquetFileReaderFactory;
 use crate::source::ParquetSource;
 use async_trait::async_trait;
@@ -410,6 +412,7 @@ async fn fetch_stats_and_ordering(
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
     file_metadata_cache: Arc<FileMetadataCache>,
     table_schema: &SchemaRef,
+    collect_physical_statistics: bool,
 ) -> Result<datafusion_datasource::file_format::FileMeta> {
     let metadata = DFParquetMetadata::new(store, object)
         .with_metadata_size_hint(metadata_size_hint)
@@ -421,10 +424,63 @@ async fn fetch_stats_and_ordering(
         DFParquetMetadata::statistics_from_parquet_metadata(&metadata, table_schema)?;
     let ordering =
         crate::metadata::ordering_from_parquet_metadata(&metadata, table_schema)?;
-    Ok(
-        datafusion_datasource::file_format::FileMeta::new(statistics)
-            .with_ordering(ordering),
-    )
+    let file_meta = datafusion_datasource::file_format::FileMeta::new(statistics)
+        .with_ordering(ordering);
+    Ok(if collect_physical_statistics {
+        file_meta
+            .with_physical_statistics(physical_file_statistics(&metadata, table_schema))
+    } else {
+        file_meta
+    })
+}
+
+async fn infer_stats_and_ordering_impl(
+    format: &ParquetFormat,
+    state: &dyn Session,
+    store: &Arc<dyn ObjectStore>,
+    table_schema: SchemaRef,
+    object: &ObjectMeta,
+    collect_physical_statistics: bool,
+) -> Result<datafusion_datasource::file_format::FileMeta> {
+    let file_decryption_properties =
+        get_file_decryption_properties(state, &format.options, &object.location).await?;
+    let file_metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
+    let metadata_size_hint = format.metadata_size_hint();
+
+    // Decoding the footer and converting its statistics is CPU bound and
+    // grows with the number of columns. Callers such as `ListingTable` run
+    // this for many files concurrently from a single planning task, so run
+    // it in its own task to spread that work over the runtime's threads
+    // instead of decoding every file on the thread polling the planner.
+    // As in `spawn_buffered`, only spawn from a multi-thread tokio runtime.
+    let store = Arc::clone(store);
+    let object = object.clone();
+    let fetch = async move {
+        fetch_stats_and_ordering(
+            store.as_ref(),
+            &object,
+            metadata_size_hint,
+            file_decryption_properties,
+            file_metadata_cache,
+            &table_schema,
+            collect_physical_statistics,
+        )
+        .await
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle)
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread =>
+        {
+            SpawnedTask::spawn(fetch)
+                .join_unwind()
+                .await
+                .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?
+        }
+        // Otherwise do the work on this task, where the caller polls it
+        // together with the other files (for example in `ListingTable`'s
+        // `buffer_unordered`).
+        _ => fetch.await,
+    }
 }
 
 #[async_trait]
@@ -596,47 +652,19 @@ impl FileFormat for ParquetFormat {
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<datafusion_datasource::file_format::FileMeta> {
-        let file_decryption_properties =
-            get_file_decryption_properties(state, &self.options, &object.location)
-                .await?;
-        let file_metadata_cache =
-            state.runtime_env().cache_manager.get_file_metadata_cache();
-        let metadata_size_hint = self.metadata_size_hint();
-
-        // Decoding the footer and converting its statistics is CPU bound and
-        // grows with the number of columns. Callers such as `ListingTable` run
-        // this for many files concurrently from a single planning task, so run
-        // it in its own task to spread that work over the runtime's threads
-        // instead of decoding every file on the thread polling the planner.
-        // As in `spawn_buffered`, only spawn from a multi-thread tokio runtime.
-        let store = Arc::clone(store);
-        let object = object.clone();
-        let fetch = async move {
-            fetch_stats_and_ordering(
-                store.as_ref(),
-                &object,
-                metadata_size_hint,
-                file_decryption_properties,
-                file_metadata_cache,
-                &table_schema,
-            )
+        infer_stats_and_ordering_impl(self, state, store, table_schema, object, false)
             .await
-        };
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle)
-                if handle.runtime_flavor()
-                    == tokio::runtime::RuntimeFlavor::MultiThread =>
-            {
-                SpawnedTask::spawn(fetch)
-                    .join_unwind()
-                    .await
-                    .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?
-            }
-            // Otherwise do the work on this task, where the caller polls it
-            // together with the other files (for example in `ListingTable`'s
-            // `buffer_unordered`).
-            _ => fetch.await,
-        }
+    }
+
+    async fn infer_stats_and_ordering_with_physical_statistics(
+        &self,
+        state: &dyn Session,
+        store: &Arc<dyn ObjectStore>,
+        table_schema: SchemaRef,
+        object: &ObjectMeta,
+    ) -> Result<datafusion_datasource::file_format::FileMeta> {
+        infer_stats_and_ordering_impl(self, state, store, table_schema, object, true)
+            .await
     }
 
     async fn create_physical_plan(
