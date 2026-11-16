@@ -762,8 +762,8 @@ impl LogicalPlanBuilder {
             .map(Self::new)
     }
 
-    /// Apply a projection, aliasing non-Column/non-Alias expressions to
-    /// match the field names from the provided schema.
+    /// Apply a projection, aliasing non-Column expressions to match the field
+    /// names from the provided schema. Existing aliases are renamed.
     pub fn project_with_validation_and_schema(
         self,
         expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
@@ -2281,12 +2281,16 @@ fn project_with_validation(
         );
     }
 
-    // When inside a set expression, alias non-Column/non-Alias expressions
-    // to match the left side's field names, avoiding duplicate name errors.
+    // When inside a set expression, alias non-Column expressions to match the
+    // left side's field names, avoiding duplicate name errors. Existing aliases
+    // are renamed too, since they can still collide, e.g. `count(*)` is planned
+    // as `count(1) AS "count(*)"`.
     if let Some(schema) = &schema {
         for (expr, field) in projected_expr.iter_mut().zip(schema.fields()) {
-            if !matches!(expr, Expr::Column(_) | Expr::Alias(_)) {
-                *expr = std::mem::take(expr).alias(field.name());
+            match expr {
+                Expr::Column(_) => {}
+                Expr::Alias(alias) => alias.name.clone_from(field.name()),
+                _ => *expr = std::mem::take(expr).alias(field.name()),
             }
         }
     }
