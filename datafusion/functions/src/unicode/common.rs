@@ -44,7 +44,13 @@ pub(crate) fn pad_data_capacity(length_array: &Int64Array) -> usize {
     length_array
         .iter()
         .flatten()
-        .fold(0, |acc, len| acc.saturating_add(len as usize))
+        // Negative lengths produce "" and lengths above i32::MAX are an error,
+        // so neither adds bytes
+        .filter(|len| (0..=i32::MAX as i64).contains(len))
+        .fold(0usize, |acc, len| acc.saturating_add(len as usize))
+        // Many in-range lengths can still add up to more than one buffer
+        // should reserve up front
+        .min(i32::MAX as usize)
 }
 
 /// A trait for `left` and `right` byte slicing operations
@@ -227,5 +233,29 @@ fn general_left_right_view<F: LeftRightSlicer>(
     unsafe {
         let array = StringViewArray::new_unchecked(views, data_buffers, new_nulls);
         Ok(Arc::new(array) as ArrayRef)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::Int64Array;
+
+    use super::pad_data_capacity;
+
+    #[test]
+    fn test_pad_data_capacity() {
+        let capacity =
+            |lengths: Vec<Option<i64>>| pad_data_capacity(&Int64Array::from(lengths));
+        assert_eq!(capacity(vec![]), 0);
+        // Negative lengths produce "" and lengths above i32::MAX are an error
+        assert_eq!(capacity(vec![Some(3), None, Some(-1), Some(i64::MIN)]), 3);
+        assert_eq!(
+            capacity(vec![Some(3), Some(i32::MAX as i64 + 1), Some(i64::MAX)]),
+            3
+        );
+        assert_eq!(
+            capacity(vec![Some(i32::MAX as i64), Some(1)]),
+            i32::MAX as usize
+        );
     }
 }

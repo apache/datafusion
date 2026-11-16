@@ -597,3 +597,43 @@ DROP TABLE stored_trim_both;
 
 statement ok
 DROP TABLE whitespace_source;
+
+# Match file columns to the table schema by header name
+query I
+COPY (SELECT 1 AS a, 'x' AS b, 10 AS c)
+TO 'test_files/scratch/csv_files/header_layouts/full.csv'
+STORED AS csv
+OPTIONS ('format.has_header' 'true');
+----
+1
+
+query I
+COPY (SELECT 20 AS c, 'ignored' AS undeclared, 'y' AS b)
+TO 'test_files/scratch/csv_files/header_layouts/reordered.csv'
+STORED AS csv
+OPTIONS ('format.has_header' 'true');
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE header_layouts (
+  a INT,
+  b TEXT,
+  c INT
+) STORED AS CSV
+LOCATION 'test_files/scratch/csv_files/header_layouts/'
+OPTIONS ('format.has_header' 'true', 'format.match_columns_by_header' 'true');
+
+query ITI
+SELECT a, b, c FROM header_layouts ORDER BY c;
+----
+1 x 10
+NULL y 20
+
+query I
+SELECT c FROM header_layouts WHERE a IS NULL;
+----
+20
+
+statement ok
+DROP TABLE header_layouts;

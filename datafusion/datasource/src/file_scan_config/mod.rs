@@ -760,6 +760,9 @@ impl DataSource for FileScanConfig {
             .unwrap_or_else(|| context.session_config().batch_size());
 
         let source = self.file_source.with_batch_size(batch_size);
+        let source = source
+            .with_memory_pool(context.memory_pool())
+            .unwrap_or(source);
 
         let morselizer = source.create_morselizer(object_store, self, partition)?;
 
@@ -1141,6 +1144,8 @@ impl DataSource for FileScanConfig {
     ///   │     (natural ordering satisfies request)
     ///   │     → rebuild_with_source: sort files by stats, verify non-overlapping
     ///   │     → SortExec removed, fetch (LIMIT) pushed to DataSourceExec
+    ///   │     → if the ordering cannot be kept, continue as for Inexact
+    ///   │       with the original source
     ///   │
     ///   ├─► FileSource returns Inexact
     ///   │     (e.g. column_in_file_schema: opener will reorder RGs at runtime)
@@ -1173,54 +1178,19 @@ impl DataSource for FileScanConfig {
                 // rebuild_with_source keeps output_ordering only when all groups
                 // are non-overlapping. If output_ordering was cleared, files
                 // overlap despite within-file ordering → downgrade to Inexact.
-                if config.output_ordering.is_empty() {
-                    Ok(SortOrderPushdownResult::Inexact {
-                        inner: Arc::new(config),
-                    })
-                } else {
-                    Ok(SortOrderPushdownResult::Exact {
-                        inner: Arc::new(config),
-                    })
-                }
-            }
-            SortOrderPushdownResult::Inexact { inner } => {
-                let mut config = self.rebuild_with_source(inner, false, order)?;
-                // `rebuild_with_source` reorders files by stats; if the
-                // post-sort files are non-overlapping AND the request now
-                // validates against the new file groups, `output_ordering`
-                // is preserved and we can upgrade back to Exact. This
-                // restores the sort-elimination behaviour that lived in
-                // the `Unsupported` → `try_sort_file_groups_by_statistics`
-                // path before #21956 routed `column_in_file_schema` cases
-                // here.
-                if config.output_ordering.is_empty() {
-                    return Ok(SortOrderPushdownResult::Inexact {
+                if !config.output_ordering.is_empty() {
+                    return Ok(SortOrderPushdownResult::Exact {
                         inner: Arc::new(config),
                     });
                 }
-                // Upgrading to Exact: the post-sort file groups are
-                // non-overlapping and each file's declared ordering
-                // re-validates, so reading the files in their natural
-                // (declared-sorted) order already yields the requested
-                // ordering — exactly like the `Unsupported` → Exact path,
-                // which reads files in natural order too.
-                //
-                // Drop the runtime row-group reorder hints the Inexact
-                // source carried (`sort_order_for_reorder` /
-                // `reverse_row_groups`) by restoring the original,
-                // hint-free source. With the `SortExec` removed those
-                // hints are not just redundant but unsafe: for a DESC
-                // request the opener sorts row groups ASC-by-min and then
-                // reverses them, which reorders two row groups within a
-                // single file that share the same `min` incorrectly
-                // (e.g. a file `[10,8,8,8]` whose row groups are
-                // `[10,8]` and `[8,8]` would stream as `8,8,10,8`).
-                // The `SortExec` used to mask this; once it is gone the
-                // reordered stream is the final, wrong answer.
-                config.file_source = Arc::clone(&self.file_source);
-                Ok(SortOrderPushdownResult::Exact {
-                    inner: Arc::new(config),
-                })
+                // An exact source may read rows back to front, which only pays
+                // off when the scan replaces the sort. With the sort kept, fall
+                // back to the source as it was, so no buffering is left under
+                // it.
+                self.inexact_pushdown(Arc::clone(&self.file_source), order)
+            }
+            SortOrderPushdownResult::Inexact { inner } => {
+                self.inexact_pushdown(inner, order)
             }
             SortOrderPushdownResult::Unsupported => {
                 self.try_sort_file_groups_by_statistics(order)
@@ -3548,6 +3518,8 @@ mod tests {
     struct ExactSortPushdownSource {
         metrics: ExecutionPlanMetricsSet,
         table_schema: TableSchema,
+        /// Whether this is the source returned by `try_pushdown_sort`.
+        pushed: bool,
     }
 
     impl ExactSortPushdownSource {
@@ -3555,6 +3527,7 @@ mod tests {
             Self {
                 metrics: ExecutionPlanMetricsSet::new(),
                 table_schema,
+                pushed: false,
             }
         }
     }
@@ -3582,7 +3555,11 @@ mod tests {
         }
 
         fn file_type(&self) -> &str {
-            "mock_exact"
+            if self.pushed {
+                "mock_exact_pushed"
+            } else {
+                "mock_exact"
+            }
         }
 
         fn try_pushdown_sort(
@@ -3590,8 +3567,10 @@ mod tests {
             _order: &[PhysicalSortExpr],
             _eq_properties: &EquivalenceProperties,
         ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+            let mut pushed = self.clone();
+            pushed.pushed = true;
             Ok(SortOrderPushdownResult::Exact {
-                inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
+                inner: Arc::new(pushed) as Arc<dyn FileSource>,
             })
         }
 
@@ -3731,6 +3710,139 @@ mod tests {
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         assert!(!pushed_config.output_ordering.is_empty());
+        Ok(())
+    }
+
+    /// A source that is `Exact` for the reverse of the declared ordering
+    /// (it reads every file back to front): the files of each group are
+    /// reversed and the scan declares the reversed ordering.
+    #[test]
+    fn sort_pushdown_exact_reverse_reverses_files_and_ordering() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::from(&file_schema);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 9.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+            make_file_with_stats("file3", 20.0, 30.0),
+        ])];
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let reversed = sort_expr.reverse();
+        let result = config.try_pushdown_sort(std::slice::from_ref(&reversed))?;
+
+        let SortOrderPushdownResult::Exact { inner } = result else {
+            panic!("Expected Exact result, got {result:?}");
+        };
+        let pushed_config = inner
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let names: Vec<_> = pushed_config.file_groups[0]
+            .files()
+            .iter()
+            .map(|f| f.object_meta.location.as_ref())
+            .collect();
+        assert_eq!(names, ["file3", "file2", "file1"]);
+        assert_eq!(
+            pushed_config.output_ordering,
+            vec![LexOrdering::new(vec![reversed]).unwrap()]
+        );
+        Ok(())
+    }
+
+    /// Reading overlapping files back to front does not give an ordered
+    /// stream, so an `Exact` reverse claim is downgraded to `Inexact`.
+    #[test]
+    fn sort_pushdown_exact_reverse_overlapping_downgraded_to_inexact() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::from(&file_schema);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 15.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+        ])];
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr.reverse()])?;
+
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact result, got {result:?}");
+        };
+        let pushed_config = inner
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        assert!(pushed_config.output_ordering.is_empty());
+        // The sort stays, so the scan keeps the source it had rather than the
+        // one that would read every file back to front under it.
+        assert_eq!(pushed_config.file_source.file_type(), "mock_exact");
+        Ok(())
+    }
+
+    /// A source can be `Exact` for a request that only equivalence reasoning
+    /// recognises as the reverse of the declared ordering, here
+    /// `a DESC NULLS LAST` on a non-nullable `a` declared `a ASC NULLS LAST`.
+    /// The scan reverses its files and orderings for it just as for a literal
+    /// reverse.
+    #[test]
+    fn sort_pushdown_exact_reverse_by_equivalence() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::from(&file_schema);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+        let column = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let asc_nulls_last = PhysicalSortExpr::new(
+            Arc::clone(&column),
+            arrow::compute::SortOptions::new(false, false),
+        );
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 9.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+        ])];
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![asc_nulls_last.clone()]).unwrap(),
+                ])
+                .build();
+        let desc_nulls_last =
+            PhysicalSortExpr::new(column, arrow::compute::SortOptions::new(true, false));
+
+        let result = config.try_pushdown_sort(&[desc_nulls_last])?;
+
+        let SortOrderPushdownResult::Exact { inner } = result else {
+            panic!("Expected Exact result, got {result:?}");
+        };
+        let pushed_config = inner
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let names: Vec<_> = pushed_config.file_groups[0]
+            .files()
+            .iter()
+            .map(|f| f.object_meta.location.as_ref())
+            .collect();
+        assert_eq!(names, ["file2", "file1"]);
+        assert_eq!(
+            pushed_config.output_ordering,
+            vec![LexOrdering::new(vec![asc_nulls_last.reverse()]).unwrap()]
+        );
+        assert_eq!(pushed_config.file_source.file_type(), "mock_exact_pushed");
         Ok(())
     }
 

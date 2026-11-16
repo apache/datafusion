@@ -6,6 +6,6 @@
 # This file defines centralized tool versions used by CI and development scripts.
 # It is intended to be sourced by other scripts and should not be executed directly.
 
-PRETTIER_VERSION="2.7.1"
-LYCHEE_VERSION="0.23.0"
+PRETTIER_VERSION="3.10.1"
+LYCHEE_VERSION="0.24.2"
 CARGO_MACHETE_VERSION="0.9"

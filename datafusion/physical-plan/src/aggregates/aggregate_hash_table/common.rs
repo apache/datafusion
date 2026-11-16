@@ -7,10 +7,8 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, new_empty_array, new_null_array,
-};
-use arrow::compute::{filter_record_batch, prep_null_mask_filter};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, new_null_array};
+use arrow::compute::prep_null_mask_filter;
 use arrow::datatypes::SchemaRef;
 use arrow::downcast_dictionary_array;
 use arrow::record_batch::RecordBatch;
@@ -23,7 +21,7 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use log::debug;
 
 use crate::PhysicalExpr;
-use crate::aggregates::aggregate_argument::AggregateArgument;
+use crate::aggregates::aggregate_argument::{AggregateArgument, AggregateFilter};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
@@ -159,6 +157,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             .map(|(((agg_expr, arguments), filter), submetrics)| {
                 let accumulator =
                     create_group_accumulator(agg_expr, Arc::clone(submetrics))?;
+                let arguments = arguments
+                    .into_iter()
+                    .map(|expr| AggregateArgument::try_new(expr, &input_schema))
+                    .collect::<Result<_>>()?;
                 Ok(HashAggregateAccumulator::new(
                     Arc::clone(agg_expr),
                     arguments,
@@ -482,13 +484,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             let values = state
                 .accumulators
                 .iter()
-                .map(|acc| {
-                    Ok(CompactedAccumulatorArgs {
-                        arguments: acc.null_arguments(&self.input_schema, 0)?,
-                        selection: None,
-                    })
+                .map(|acc| CompactedAccumulatorArgs {
+                    arguments: acc.null_arguments(0),
+                    selection: None,
                 })
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Vec<_>>();
             group_by_metrics.time_aggregation(|| {
                 for (idx, (acc, values)) in
                     state.accumulators.iter_mut().zip(values.iter()).enumerate()
@@ -519,10 +519,10 @@ pub(super) struct HashAggregateAccumulator {
     /// Example: `CORR(x, y)` stores two arguments here, while `SUM(x)` stores one.
     arguments: Vec<AggregateArgument>,
 
-    /// Optional `FILTER` expression for this accumulator.
+    /// Optional `FILTER` clause for this accumulator.
     ///
     /// Example: `SUM(x) FILTER (WHERE x > 10)` stores the `x > 10` predicate.
-    filter: Option<Arc<dyn PhysicalExpr>>,
+    filter: Option<AggregateFilter>,
 
     /// Accumulator state for all groups for one aggregate expression.
     accumulator: Box<dyn GroupsAccumulator>,
@@ -736,14 +736,15 @@ fn compact_group_indices(
 impl HashAggregateAccumulator {
     pub(super) fn new(
         aggregate_expr: Arc<AggregateFunctionExpr>,
-        arguments: Vec<Arc<dyn PhysicalExpr>>,
+        arguments: Vec<AggregateArgument>,
         filter: Option<Arc<dyn PhysicalExpr>>,
         accumulator: Box<dyn GroupsAccumulator>,
         submetrics: Arc<dyn AggregateMetrics>,
     ) -> Self {
+        let filter = filter.map(|predicate| AggregateFilter::new(predicate, &arguments));
         Self {
             aggregate_expr,
-            arguments: arguments.into_iter().map(AggregateArgument::new).collect(),
+            arguments,
             filter,
             accumulator,
             submetrics,
@@ -759,9 +760,11 @@ impl HashAggregateAccumulator {
             Arc::clone(&self.aggregate_expr),
             self.arguments
                 .iter()
-                .map(|argument| Arc::clone(argument.expr()))
+                .map(AggregateArgument::empty_like)
                 .collect(),
-            self.filter.clone(),
+            self.filter
+                .as_ref()
+                .map(|filter| Arc::clone(filter.predicate())),
             accumulator,
             Arc::clone(&self.submetrics),
         ))
@@ -772,6 +775,8 @@ impl HashAggregateAccumulator {
     /// For example, `AVG(2 / x) FILTER (WHERE x > 0)` evaluates `x > 0`
     /// first, then evaluates `2 / x` against a compact batch containing only
     /// selected rows. Filtered rows won't trigger errors such as divide by zero.
+    /// Only the columns that the arguments read are copied into the compact
+    /// batch (see [`AggregateFilter::select`]).
     ///
     /// Before updating [`GroupsAccumulator`], the retained selection is used to
     /// compact the matching group IDs and is not passed through.
@@ -779,32 +784,28 @@ impl HashAggregateAccumulator {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<CompactedAccumulatorArgs> {
-        let selection = self.evaluate_filter(batch)?;
-        let selected_rows = selection.as_ref().map(|selection| selection.true_count());
-        let filtered_batch = match (selection.as_ref(), selected_rows) {
-            (Some(selection), Some(selected_rows))
-                if selected_rows > 0 && selected_rows < batch.num_rows() =>
-            {
-                Some(filter_record_batch(batch, selection)?)
+        let (selection, argument_batch) = match &mut self.filter {
+            None => (None, Some(Cow::Borrowed(batch))),
+            Some(filter) => {
+                let selection = filter.evaluate(batch)?;
+                let argument_batch = match selection.true_count() {
+                    0 => None,
+                    selected_rows if selected_rows == batch.num_rows() => {
+                        Some(Cow::Borrowed(batch))
+                    }
+                    _ => Some(Cow::Owned(filter.select(batch, &selection)?)),
+                };
+                (Some(selection), argument_batch)
             }
-            _ => None,
-        };
-        let argument_batch = match selected_rows {
-            None => Some(batch),
-            Some(0) => None,
-            Some(selected_rows) if selected_rows == batch.num_rows() => Some(batch),
-            Some(_) => filtered_batch.as_ref(),
         };
         let arguments = self
             .arguments
             .iter_mut()
             .map(|argument| {
-                if let Some(argument_batch) = argument_batch {
+                if let Some(argument_batch) = &argument_batch {
                     argument.evaluate(argument_batch)
                 } else {
-                    let data_type =
-                        argument.expr().data_type(batch.schema_ref().as_ref())?;
-                    Ok(new_empty_array(&data_type))
+                    Ok(argument.null_array(0))
                 }
             })
             .collect::<Result<_>>()?;
@@ -824,30 +825,38 @@ impl HashAggregateAccumulator {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<RowAlignedAccumulatorArgs> {
-        let filter = self.evaluate_filter(batch)?;
-        let selection = filter.as_ref();
+        let Some(filter) = &mut self.filter else {
+            let arguments = self
+                .arguments
+                .iter_mut()
+                .map(|argument| argument.evaluate(batch))
+                .collect::<Result<_>>()?;
+            return Ok(RowAlignedAccumulatorArgs {
+                arguments,
+                filter: None,
+            });
+        };
+
+        let selection = filter.evaluate(batch)?;
+        if !selection.has_true() {
+            // No argument will be evaluated, so avoid constructing an empty
+            // selected batch (or slicing every unused input column).
+            return Ok(RowAlignedAccumulatorArgs {
+                arguments: self.null_arguments(batch.num_rows()),
+                filter: Some(selection),
+            });
+        }
+        let selected = filter.select(batch, &selection)?;
         let arguments = self
             .arguments
             .iter_mut()
-            .map(|argument| match selection {
-                Some(selection) => argument.evaluate_selection(batch, selection),
-                None => argument.evaluate(batch),
-            })
+            .map(|argument| argument.evaluate_selection(batch, &selection, &selected))
             .collect::<Result<_>>()?;
 
-        Ok(RowAlignedAccumulatorArgs { arguments, filter })
-    }
-
-    fn evaluate_filter(&self, batch: &RecordBatch) -> Result<Option<BooleanArray>> {
-        self.filter
-            .as_ref()
-            .map(|filter| {
-                filter
-                    .evaluate(batch)
-                    .and_then(|value| value.into_array(batch.num_rows()))
-                    .map(|filter| filter.as_boolean().clone())
-            })
-            .transpose()
+        Ok(RowAlignedAccumulatorArgs {
+            arguments,
+            filter: Some(selection),
+        })
     }
 
     pub(super) fn size(&self) -> usize {
@@ -919,17 +928,10 @@ impl HashAggregateAccumulator {
             .convert_to_state(&values.arguments, values.filter.as_ref())
     }
 
-    pub(super) fn null_arguments(
-        &self,
-        input_schema: &SchemaRef,
-        num_rows: usize,
-    ) -> Result<Vec<ArrayRef>> {
+    pub(super) fn null_arguments(&self, num_rows: usize) -> Vec<ArrayRef> {
         self.arguments
             .iter()
-            .map(|argument| {
-                let data_type = argument.expr().data_type(input_schema)?;
-                Ok(new_null_array(&data_type, num_rows))
-            })
+            .map(|argument| argument.null_array(num_rows))
             .collect()
     }
 }
@@ -1160,7 +1162,7 @@ mod tests {
             create_group_accumulator(&aggregate_expr, Arc::clone(&submetrics))?;
         Ok(HashAggregateAccumulator::new(
             aggregate_expr,
-            vec![argument],
+            vec![AggregateArgument::try_new(argument, schema)?],
             Some(Arc::new(Column::new(filter_name, filter_index))),
             accumulator,
             submetrics,
