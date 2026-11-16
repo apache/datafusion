@@ -1659,13 +1659,10 @@ config_namespace! {
         pub enable_window_limits: bool, default = true
 
         /// When set to true, the optimizer will replace
-        /// Filter(rn<=K) → Window(ROW_NUMBER) → Sort patterns with a
-        /// PartitionedTopKExec that maintains per-partition heaps, avoiding
-        /// a full sort of the input.
-        /// When the window partition key has low cardinality, enabling this optimization
-        /// can improve performance. However, for high cardinality keys, it may
-        /// cause regressions in both memory usage and runtime.
-        pub enable_window_topn: bool, default = false
+        /// Filter(rn<=K) → Window(ROW_NUMBER, RANK or DENSE_RANK) → Sort
+        /// patterns with a PartitionedTopKExec that keeps only the top K rows
+        /// of each window partition, avoiding a full sort of the input.
+        pub enable_window_topn: bool, default = true
 
         /// When set to true, the optimizer will rewrite a "top-1 per group"
         /// pattern of the form `Filter(row_number() = 1)` over a `PARTITION BY` window into an
@@ -4134,6 +4131,17 @@ config_namespace! {
         /// of columns, it creates a union schema containing all columns found across the files, and will
         /// pad any files missing columns with null values for their rows.
         pub truncated_rows: Option<bool>, default = None
+        /// Whether to map file columns to the table schema by header name instead of by position.
+        ///
+        /// Only applies when `has_header` is true. When enabled, each file's header row is read
+        /// and columns are matched by name: table columns missing from a file are filled with
+        /// nulls, and file columns not declared in the table are ignored. Names are matched exactly
+        /// (case-sensitive) and duplicate header names resolve to the first occurrence. Header
+        /// names containing quoted newlines are not supported. The header is located the same
+        /// way the CSV parser does: a leading UTF-8 BOM, blank lines, and comment lines are skipped.
+        ///
+        /// Defaults to `false` when `None`.
+        pub match_columns_by_header: Option<bool>, default = None
     }
 }
 
@@ -4256,6 +4264,13 @@ impl CsvOptions {
     /// If the record’s schema is not nullable, then it will still return an error.
     pub fn with_truncated_rows(mut self, allow: bool) -> Self {
         self.truncated_rows = Some(allow);
+        self
+    }
+
+    /// Whether to map file columns to the table schema by header name instead of by position.
+    /// Only applies when the file has a header.
+    pub fn with_match_columns_by_header(mut self, match_by_header: bool) -> Self {
+        self.match_columns_by_header = Some(match_by_header);
         self
     }
 

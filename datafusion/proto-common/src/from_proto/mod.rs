@@ -1163,6 +1163,10 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
                 .ignore_trailing_whitespace
                 .first()
                 .map(|h| *h != 0),
+            match_columns_by_header: proto_opts
+                .match_columns_by_header
+                .first()
+                .map(|h| *h != 0),
         })
     }
 }
