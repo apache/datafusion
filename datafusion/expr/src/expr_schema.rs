@@ -193,18 +193,7 @@ impl ExprSchemable for Expr {
                     .as_ref()
                     .map(|expr| expr.get_type(schema))
                     .transpose()?;
-                // If the branches have no common type, keep the old provisional
-                // type. The analyzer reports the error.
-                let common_type =
-                    get_coerce_type_for_case_expression(&then_types, else_type.as_ref());
-                let result_type = common_type.unwrap_or_else(|| {
-                    then_types
-                        .into_iter()
-                        .find(|t| !t.is_null())
-                        .or(else_type)
-                        .unwrap_or(DataType::Null)
-                });
-                Ok(result_type)
+                Ok(case_result_type(then_types, else_type))
             }
             Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
                 Ok(field.data_type().clone())
@@ -658,15 +647,15 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 let metadata =
                     coerced_fields_metadata(fields.iter().map(|f| f.as_ref()))?;
-                // Same as `get_type`: the first non-NULL branch type. Reading it from
-                // `fields` avoids a second walk of the branches, which multiplies with
-                // the depth of nested CASE and function calls.
-                let data_type = fields
-                    .iter()
-                    .map(|f| f.data_type())
-                    .find(|t| !t.is_null())
-                    .cloned()
-                    .unwrap_or(DataType::Null);
+                // The type and nullability come from `fields`, as `get_type` and
+                // `nullable` compute them from the branches. Walking the branches again
+                // would multiply with the depth of nested CASE and function calls.
+                let (then_fields, else_field) =
+                    fields.split_at(case.when_then_expr.len());
+                let data_type = case_result_type(
+                    then_fields.iter().map(|f| f.data_type().clone()).collect(),
+                    else_field.first().map(|f| f.data_type().clone()),
+                );
                 Ok(Arc::new(metadata.add_to_field(Field::new(
                     &schema_name,
                     data_type,
@@ -798,6 +787,22 @@ fn verify_function_arguments<F: UDFCoercionExt>(
             )
         )
     })
+}
+
+/// The type of a CASE with the given THEN and ELSE types: their common type, without
+/// inserting casts.
+fn case_result_type(then_types: Vec<DataType>, else_type: Option<DataType>) -> DataType {
+    // If the branches have no common type, keep the old provisional
+    // type. The analyzer reports the error.
+    get_coerce_type_for_case_expression(&then_types, else_type.as_ref()).unwrap_or_else(
+        || {
+            then_types
+                .into_iter()
+                .find(|t| !t.is_null())
+                .or(else_type)
+                .unwrap_or(DataType::Null)
+        },
+    )
 }
 
 /// The nullability of `case`, given the nullability of each value branch:
