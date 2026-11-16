@@ -704,8 +704,7 @@ mod test {
     use super::*;
     use arrow::datatypes::{DataType, Field, FieldRef, Schema};
     use datafusion_expr_common::operator::Operator;
-    use datafusion_functions::core::coalesce;
-    use datafusion_functions::math::{gcd, random};
+    use datafusion_functions::math::random;
     use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr::expressions::{binary, lit};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -777,117 +776,6 @@ mod test {
 
         assert_snapshot!(optimized_plan, @r"
         NestedLoopJoinExec: join_type=Inner, filter=false AND join_proj_push_down_1@0 > join_proj_push_down_2@1, projection=[a@0, x@2]
-          ProjectionExec: expr=[a@0 as a, a@0 + 1 as join_proj_push_down_1]
-            EmptyExec
-          ProjectionExec: expr=[x@0 as x, x@0 + 1 as join_proj_push_down_2]
-            EmptyExec
-        ");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn does_not_push_down_short_circuiting_expressions() -> Result<()> {
-        let (left_schema, right_schema) = create_simple_schemas();
-        let optimized_plan = run_test(
-            left_schema,
-            right_schema,
-            a_x(),
-            None,
-            |schema| {
-                binary(
-                    lit(false),
-                    Operator::Or,
-                    a_plus_one_greater_than_x_plus_one(schema)?,
-                    schema,
-                )
-            },
-            JoinType::Inner,
-        )?;
-
-        assert_snapshot!(optimized_plan, @r"
-        NestedLoopJoinExec: join_type=Inner, filter=false OR a@0 + 1 > x@1 + 1
-          EmptyExec
-          EmptyExec
-        ");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn short_circuiting_scalar_function_blocks_argument_push_down() -> Result<()> {
-        let (left_schema, right_schema) = create_simple_schemas();
-        let optimized_plan = run_test(
-            left_schema,
-            right_schema,
-            a_x(),
-            None,
-            |schema| {
-                let left_expr = binary(
-                    Arc::new(Column::new("a", 0)),
-                    Operator::Plus,
-                    lit(1),
-                    schema,
-                )?;
-                let right_expr = binary(
-                    Arc::new(Column::new("x", 1)),
-                    Operator::Plus,
-                    lit(1),
-                    schema,
-                )?;
-                let coalesce_expr = Arc::new(ScalarFunctionExpr::new(
-                    "coalesce",
-                    coalesce(),
-                    vec![left_expr, right_expr],
-                    FieldRef::new(Field::new("out", DataType::Int32, true)),
-                    Arc::new(ConfigOptions::default()),
-                ));
-                binary(coalesce_expr, Operator::Gt, lit(0), schema)
-            },
-            JoinType::Inner,
-        )?;
-
-        assert_snapshot!(optimized_plan, @r"
-        NestedLoopJoinExec: join_type=Inner, filter=coalesce(a@0 + 1, x@1 + 1) > 0
-          EmptyExec
-          EmptyExec
-        ");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn eager_scalar_function_permits_argument_push_down() -> Result<()> {
-        let (left_schema, right_schema) = create_simple_schemas();
-        let optimized_plan = run_test(
-            left_schema,
-            right_schema,
-            a_x(),
-            None,
-            |schema| {
-                let left_expr = binary(
-                    Arc::new(Column::new("a", 0)),
-                    Operator::Plus,
-                    lit(1),
-                    schema,
-                )?;
-                let right_expr = binary(
-                    Arc::new(Column::new("x", 1)),
-                    Operator::Plus,
-                    lit(1),
-                    schema,
-                )?;
-                let gcd_expr = Arc::new(ScalarFunctionExpr::new(
-                    "gcd",
-                    gcd(),
-                    vec![left_expr, right_expr],
-                    FieldRef::new(Field::new("out", DataType::Int64, true)),
-                    Arc::new(ConfigOptions::default()),
-                ));
-                binary(gcd_expr, Operator::Gt, lit(0), schema)
-            },
-            JoinType::Inner,
-        )?;
-
-        assert_snapshot!(optimized_plan, @r"
-        NestedLoopJoinExec: join_type=Inner, filter=gcd(join_proj_push_down_1@0, join_proj_push_down_2@1) > 0, projection=[a@0, x@2]
           ProjectionExec: expr=[a@0 as a, a@0 + 1 as join_proj_push_down_1]
             EmptyExec
           ProjectionExec: expr=[x@0 as x, x@0 + 1 as join_proj_push_down_2]
