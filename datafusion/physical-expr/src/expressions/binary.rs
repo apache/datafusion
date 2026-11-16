@@ -1598,7 +1598,7 @@ fn not_false(array: &BooleanArray) -> BooleanArray {
 /// A null-free mask of the rows of `array` that are `false` or `NULL`.
 fn not_true(array: &BooleanArray) -> BooleanArray {
     let values = match array.nulls() {
-        Some(nulls) => &!array.values() | &!nulls.inner(),
+        Some(nulls) => !&(array.values() & nulls.inner()),
         None => !array.values(),
     };
     BooleanArray::new(values, None)
