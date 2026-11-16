@@ -24,7 +24,7 @@ use datafusion_sql::{
 fn main() {
     let sql = "SELECT \
             c.id, c.first_name, c.last_name, \
-            COUNT(*) as num_orders, \
+            count(*) as num_orders, \
             sum(o.price) AS total_price, \
             sum(o.price * s.sales_tax) AS state_tax \
         FROM customer c \
@@ -44,7 +44,10 @@ fn main() {
     let context_provider = MyContextProvider::new()
         .with_udaf(sum_udaf())
         .with_udaf(count_udaf())
-        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+        .with_expr_planner(Arc::new(
+            datafusion_functions_aggregate::planner::AggregateFunctionPlanner,
+        ));
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 

@@ -4,8 +4,8 @@
 --
 -- enable_window_topn turns on the WindowTopN rewrite, making the baseline the
 -- existing per-partition top-K operator rather than an unoptimized
--- window-plus-filter plan. The flag defaults to false, so without this the
--- subgroup would measure a different plan shape than its name claims.
+-- window-plus-filter plan. The flag is set explicitly so the subgroup keeps
+-- measuring the plan shape its name claims even if the default changes.
 --
 -- information_schema is enabled so the template can assert the flags actually
 -- took effect.

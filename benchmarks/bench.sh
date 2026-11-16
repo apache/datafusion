@@ -163,6 +163,7 @@ hj:                     Benchmark for simple hash joins, testing various join sc
 smj:                    Benchmark for simple sort merge joins, testing various join scenarios
 dict:                   Benchmark for dictionary-encoded group-by scenarios
 array_agg_distinct:     1000K-group, two-row-per-group array_agg(DISTINCT) benchmark
+grouped_count_distinct: Grouped count(DISTINCT) by key type, group count and distinct cardinality
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -279,6 +280,9 @@ main() {
                 projection_subquery)
                     # Data is generated inline by the suite's load SQL.
                     echo "projection_subquery: no external data to generate"
+                    ;;
+                grouped_count_distinct)
+                    echo "grouped_count_distinct: no external data to generate"
                     ;;
                 asof_join)
                     data_asof_join
@@ -681,6 +685,9 @@ main() {
                 array_agg_distinct)
                     run_array_agg_distinct
                     ;;
+                grouped_count_distinct)
+                    run_grouped_count_distinct
+                    ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
                     ;;
@@ -742,7 +749,7 @@ data_tpch() {
     # check if tpchgen-cli is installed
     if ! command -v tpchgen-cli &> /dev/null
     then
-        echo "tpchgen-cli could not be found, please install it via 'cargo install tpchgen-cli'"
+        echo "tpchgen-cli could not be found, please install it via 'cargo install tpchgen-cli --version ^4 --locked'"
         exit 1
     fi
 
@@ -763,7 +770,7 @@ data_tpch() {
           echo " parquet files exist ($FILE exists)."
       else
           echo " creating parquet files using tpchgen-cli ..."
-          tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format parquet --parquet-compression='ZSTD(1)' --parts=1 --output-dir "${TPCH_DIR}"
+          tpchgen-cli parquet -s "${SCALE_FACTOR}" --compression='ZSTD(1)' --parts=1 --output-dir "${TPCH_DIR}"
       fi
       return
     fi
@@ -775,7 +782,7 @@ data_tpch() {
           echo " csv files exist ($FILE exists)."
       else
           echo " creating csv files using tpchgen-cli binary ..."
-          tpchgen-cli --scale-factor "${SCALE_FACTOR}" --format csv --parts=1 --output-dir "${TPCH_DIR}/csv"
+          tpchgen-cli csv -s "${SCALE_FACTOR}" --parts=1 --output-dir "${TPCH_DIR}/csv"
       fi
       return
     fi
@@ -1491,7 +1498,7 @@ data_sort_pushdown() {
     TEMP_DIR="${DATA_DIR}/sort_pushdown_temp"
     mkdir -p "${TEMP_DIR}" "${SORT_PUSHDOWN_DIR}"
 
-    tpchgen-cli --scale-factor 1 --format parquet --parquet-compression='ZSTD(1)' --parts=3 --output-dir "${TEMP_DIR}"
+    tpchgen-cli parquet -s 1 --compression='ZSTD(1)' --parts=3 --output-dir "${TEMP_DIR}"
 
     # Rename: reverse alphabetical order vs key order
     mv "${TEMP_DIR}/lineitem/lineitem.3.parquet" "${SORT_PUSHDOWN_DIR}/a_part3.parquet"
@@ -1811,6 +1818,15 @@ run_dict() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running dict benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- dict --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs grouped DISTINCT counts over inline data with varying key types and cardinalities.
+run_grouped_count_distinct() {
+    debug_run env BENCH_NAME=grouped_count_distinct \
+      BENCH_RESULTS_FILE="$(sql_results_file grouped_count_distinct)" \
+      GROUPED_DISTINCT_ROWS="${GROUPED_DISTINCT_ROWS:-4000000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Runs the data-free high-cardinality array_agg(DISTINCT) SQL benchmark.
