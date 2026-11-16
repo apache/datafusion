@@ -588,6 +588,12 @@ impl Dialect for MySqlDialect {
         false
     }
 
+    /// MySQL `FLOAT` and `DOUBLE` cannot hold infinity or NaN, so a non-finite float literal
+    /// does not unparse.
+    fn non_finite_float_to_sql(&self, value: f64) -> Result<Option<ast::Expr>> {
+        not_impl_err!("MySQL has no literal for the float {value}")
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }

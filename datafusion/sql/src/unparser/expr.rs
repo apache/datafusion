@@ -2875,6 +2875,28 @@ mod tests {
     }
 
     #[test]
+    fn test_mysql_non_finite_float_scalar_to_expr_is_not_supported() {
+        let unparser = Unparser::new(&MySqlDialect {});
+        for (value, name) in [
+            (lit(f64::INFINITY), "inf"),
+            (lit(f64::NEG_INFINITY), "-inf"),
+            (lit(f64::NAN), "NaN"),
+            (lit(f32::INFINITY), "inf"),
+        ] {
+            let err = unparser.expr_to_sql(&value).unwrap_err().to_string();
+            assert!(
+                err.contains(&format!("MySQL has no literal for the float {name}")),
+                "{err}"
+            );
+        }
+        // A finite float still unparses as a number.
+        assert_eq!(
+            unparser.expr_to_sql(&lit(1.5_f64)).unwrap().to_string(),
+            "1.5"
+        );
+    }
+
+    #[test]
     fn test_float_scalar_to_expr() {
         let tests = [
             (Expr::Literal(ScalarValue::Float64(Some(3f64)), None), "3.0"),
