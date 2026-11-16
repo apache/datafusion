@@ -198,11 +198,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// Enable display of equivalence properties
     ///
     /// If true, plans will be displayed with the equivalence properties of each
-<<<<<<< HEAD
     /// node, e.g. `facts=[order: [a@0 ASC NULLS FIRST]]`
-=======
-    /// node, e.g. `facts=[order: [[a@0 ASC NULLS FIRST]], group: none, eq: none]`
->>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
     pub fn set_show_equivalences(mut self, show_equivalences: bool) -> Self {
         self.show_equivalences = show_equivalences;
         self
@@ -1659,11 +1655,7 @@ mod tests {
                 .set_show_equivalences(true)
                 .indent(false)
                 .to_string(),
-<<<<<<< HEAD
             "EmptyExec, facts=[none]\n"
-=======
-            "EmptyExec, facts=[order: none, group: none, eq: none]\n"
->>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
         );
         assert!(
             DisplayableExecutionPlan::new(&plan)

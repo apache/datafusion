@@ -482,11 +482,7 @@ mod tests {
 
         assert_eq!(
             out_properties.to_string(),
-<<<<<<< HEAD
             "order: [a@0 ASC NULLS FIRST, c@2 ASC NULLS FIRST, b@1 ASC NULLS FIRST, d@3 ASC NULLS FIRST] | [a@0 ASC NULLS FIRST, b@1 ASC NULLS FIRST, c@2 ASC NULLS FIRST, d@3 ASC NULLS FIRST]"
-=======
-            "order: [[a@0 ASC NULLS FIRST, c@2 ASC NULLS FIRST, b@1 ASC NULLS FIRST, d@3 ASC NULLS FIRST], [a@0 ASC NULLS FIRST, b@1 ASC NULLS FIRST, c@2 ASC NULLS FIRST, d@3 ASC NULLS FIRST]], group: none, eq: none"
->>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
         );
 
         Ok(())

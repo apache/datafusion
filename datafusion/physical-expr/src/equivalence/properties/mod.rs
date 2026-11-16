@@ -369,11 +369,7 @@ use itertools::{Either, Itertools};
 ///
 /// assert_eq!(
 ///     eq_properties.to_string(),
-<<<<<<< HEAD
 ///     "order: [a@0 ASC NULLS FIRST, c@2 DESC NULLS FIRST]; constant: b@1 (one value per partition)"
-=======
-///     "order: [[a@0 ASC NULLS FIRST, c@2 DESC NULLS FIRST]], group: none, eq: [{members: [b@1], constant: (heterogeneous)}]"
->>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
 /// );
 /// ```
 #[derive(Clone, Debug)]
@@ -1962,7 +1958,6 @@ impl EquivalenceProperties {
 ///
 /// Format:
 /// ```text
-<<<<<<< HEAD
 /// order: [a@0 ASC NULLS FIRST] | [b@1 DESC NULLS LAST]; equal: {a@0, c@2}; constant: d@3 (one value per partition)
 /// ```
 ///
@@ -1979,30 +1974,6 @@ impl Display for EquivalenceProperties {
             .collect::<Vec<_>>()
             .join("; ");
         f.write_str(&text)
-=======
-/// order: [[b@1 ASC NULLS LAST]], group: none, eq: [{members: [a@0], constant: (heterogeneous)}]
-/// ```
-///
-/// Empty sections are printed as `none`.
-impl Display for EquivalenceProperties {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let order = if self.oeq_class.is_empty() {
-            "none".to_string()
-        } else {
-            self.oeq_class.to_string()
-        };
-        let group = if self.geq_class.is_empty() {
-            "none".to_string()
-        } else {
-            self.geq_class.to_string()
-        };
-        let eq = if self.eq_group.is_empty() {
-            "none".to_string()
-        } else {
-            self.eq_group.to_string()
-        };
-        write!(f, "order: {order}, group: {group}, eq: {eq}")
->>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
     }
 }
 
@@ -2165,7 +2136,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
     fn test_facts_spell_out_null_placement_and_skip_literals() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
@@ -2180,20 +2150,6 @@ mod tests {
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
         assert!(eq_properties.facts().is_empty());
         assert_eq!(eq_properties.to_string(), "none");
-=======
-    fn test_display_spells_out_null_placement_and_none() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Int32, true),
-        ]));
-        let col_a = col("a", &schema)?;
-        let col_b = col("b", &schema)?;
-        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-        assert_eq!(
-            eq_properties.to_string(),
-            "order: none, group: none, eq: none"
-        );
->>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
 
         eq_properties.add_ordering([
             PhysicalSortExpr::new(
@@ -2211,7 +2167,6 @@ mod tests {
                 },
             ),
         ]);
-<<<<<<< HEAD
         eq_properties.add_equal_conditions(Arc::clone(&col_a), Arc::clone(&col_c))?;
         eq_properties.add_constants([
             ConstExpr::from(Arc::clone(&col_d)),
@@ -2220,11 +2175,6 @@ mod tests {
         assert_eq!(
             eq_properties.to_string(),
             "order: [a@0 ASC NULLS FIRST, b@1 DESC NULLS LAST]; equal: {a@0, c@2}; constant: d@3 (one value per partition)"
-=======
-        assert_eq!(
-            eq_properties.to_string(),
-            "order: [[a@0 ASC NULLS FIRST, b@1 DESC NULLS LAST]], group: none, eq: none"
->>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
         );
         Ok(())
     }

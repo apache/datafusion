@@ -285,11 +285,7 @@ impl IntoIterator for OrderingEquivalenceClass {
 /// Renders an ordering with `NULLS FIRST`/`NULLS LAST` spelled out. The
 /// `PhysicalSortExpr` display leaves `NULLS FIRST` implicit for `ASC`, which is
 /// ambiguous when reading equivalence properties.
-<<<<<<< HEAD
 pub(crate) struct ExplicitNullsOrdering<'a>(pub(crate) &'a LexOrdering);
-=======
-struct ExplicitNullsOrdering<'a>(&'a LexOrdering);
->>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
 
 impl Display for ExplicitNullsOrdering<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
