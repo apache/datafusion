@@ -423,6 +423,39 @@ physical_plan
 08)----------RepartitionExec: partitioning=Hash([mark_join.s[k]@0], 2), input_partitions=2
 09)------------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/mark_join/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/mark_join/2.parquet]]}, projection=[get_field(s@0, k) as mark_join.s[k]], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
+# The same plan with a join key computed from the field. The join can only
+# project its partitioning if the dropped column inside the key also projects
+# through the equivalent field access.
+query T rowsort
+SELECT s['k'] || 'z' FROM mark_join
+WHERE s['k'] = 'a' OR s['k'] || 'z' IN (SELECT s['k'] || 'z' FROM mark_join)
+GROUP BY 1;
+----
+az
+bz
+
+# A join key that uses the dropped column twice.
+query T rowsort
+SELECT s['k'] || s['k'] FROM mark_join
+WHERE s['k'] = 'a' OR s['k'] || s['k'] IN (SELECT s['k'] || s['k'] FROM mark_join)
+GROUP BY 1;
+----
+aa
+bb
+
+# A union of two such joins, which InterleaveExec combines by partitioning.
+query T rowsort
+SELECT k FROM (
+  SELECT s['k'] AS k FROM mark_join
+  WHERE s['k'] = 'a' OR s['k'] IN (SELECT s['k'] FROM mark_join)
+  UNION ALL
+  SELECT s['k'] FROM mark_join
+  WHERE s['k'] = 'b' OR s['k'] IN (SELECT s['k'] FROM mark_join)
+) GROUP BY k;
+----
+a
+b
+
 statement ok
 DROP TABLE mark_join;
 
