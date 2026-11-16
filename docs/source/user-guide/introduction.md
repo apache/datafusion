@@ -150,6 +150,7 @@ projects and projects that do not meet the active-list criteria:
 - [HoraeDB](https://github.com/apache/horaedb) Distributed Time-Series Database (archived)
 - [IceGate](https://github.com/icegatetech/icegate) Observability data lake engine for metrics, traces, logs, and events, built on Apache Iceberg with OpenTelemetry ingestion
 - [KalamDB](https://github.com/jamals86/KalamDB) SQL-first realtime state database for AI agents, chat products, and multi-tenant SaaS.
+- [nuthatch](https://github.com/nuthatch-org/nuthatch) Self-hosted Ethereum Virtual Machine (EVM) blockchain indexer in one Rust binary, serving SQL over sealed Parquet
 - [ROAPI](https://github.com/roapi/roapi) Create full-fledged APIs for slowly moving datasets without writing a single line of code
 - [Tensorbase](https://github.com/tensorbase/tensorbase)
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
