@@ -13,7 +13,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 use std::{cmp, fmt};
 
-use crate::{DisplayFormatType, ExecutionPlan};
+use crate::{DisplayFormatType, ExecutionPlan, ExecutionPlanProperties};
 
 // TODO: It's never used.
 /// Represents a 2D coordinate in the rendered tree.
@@ -71,12 +71,12 @@ pub struct RenderTree {
 
 impl RenderTree {
     /// Creates a new render tree from an execution plan.
-    pub fn create_tree(plan: &dyn ExecutionPlan) -> Self {
+    pub fn create_tree(plan: &dyn ExecutionPlan, show_equivalences: bool) -> Self {
         let (width, height) = get_tree_width_height(plan);
 
         let mut result = Self::new(width, height);
 
-        create_tree_recursive(&mut result, plan, 0, 0);
+        create_tree_recursive(&mut result, plan, 0, 0, show_equivalences);
 
         result
     }
@@ -181,6 +181,7 @@ fn create_tree_recursive(
     plan: &dyn ExecutionPlan,
     x: usize,
     y: usize,
+    show_equivalences: bool,
 ) -> usize {
     let display_info = fmt_display(plan).to_string();
     let mut extra_info = HashMap::new();
@@ -193,6 +194,23 @@ fn create_tree_recursive(
         } else {
             extra_info.insert(line.to_string(), "".to_string());
         }
+    }
+
+    if show_equivalences {
+<<<<<<< HEAD
+        let facts = plan.equivalence_properties().facts();
+        if facts.is_empty() {
+            extra_info.insert("facts".to_string(), "none".to_string());
+        }
+        for (key, value) in facts {
+            extra_info.insert(key.to_string(), value);
+        }
+=======
+        extra_info.insert(
+            "facts".to_string(),
+            plan.equivalence_properties().to_string(),
+        );
+>>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
     }
 
     let mut node = RenderTreeNode::new(plan.name().to_string(), extra_info);
@@ -209,7 +227,13 @@ fn create_tree_recursive(
         let child_x = x + width;
         let child_y = y + 1;
         node.add_child_position(child_x, child_y);
-        width += create_tree_recursive(result, child.as_ref(), child_x, child_y);
+        width += create_tree_recursive(
+            result,
+            child.as_ref(),
+            child_x,
+            child_y,
+            show_equivalences,
+        );
     }
 
     result.set_node(x, y, Arc::new(node));

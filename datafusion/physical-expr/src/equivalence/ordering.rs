@@ -282,15 +282,46 @@ impl IntoIterator for OrderingEquivalenceClass {
     }
 }
 
+/// Renders an ordering with `NULLS FIRST`/`NULLS LAST` spelled out. The
+/// `PhysicalSortExpr` display leaves `NULLS FIRST` implicit for `ASC`, which is
+/// ambiguous when reading equivalence properties.
+<<<<<<< HEAD
+pub(crate) struct ExplicitNullsOrdering<'a>(pub(crate) &'a LexOrdering);
+=======
+struct ExplicitNullsOrdering<'a>(&'a LexOrdering);
+>>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
+
+impl Display for ExplicitNullsOrdering<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (idx, sort_expr) in self.0.iter().enumerate() {
+            if idx > 0 {
+                write!(f, ", ")?;
+            }
+            let direction = if sort_expr.options.descending {
+                "DESC"
+            } else {
+                "ASC"
+            };
+            let nulls = if sort_expr.options.nulls_first {
+                "FIRST"
+            } else {
+                "LAST"
+            };
+            write!(f, "{} {direction} NULLS {nulls}", sort_expr.expr)?;
+        }
+        Ok(())
+    }
+}
+
 impl Display for OrderingEquivalenceClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[")?;
         let mut iter = self.orderings.iter();
         if let Some(ordering) = iter.next() {
-            write!(f, "[{ordering}]")?;
+            write!(f, "[{}]", ExplicitNullsOrdering(ordering))?;
         }
         for ordering in iter {
-            write!(f, ", [{ordering}]")?;
+            write!(f, ", [{}]", ExplicitNullsOrdering(ordering))?;
         }
         write!(f, "]")
     }

@@ -19,6 +19,7 @@ use self::dependency::{
     generate_dependency_orderings, referred_dependencies,
 };
 use self::walk::SortKeyWalk;
+use crate::equivalence::ordering::ExplicitNullsOrdering;
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, GroupingEquivalenceClass,
     OrderingEquivalenceClass, ProjectionMapping,
@@ -368,7 +369,11 @@ use itertools::{Either, Itertools};
 ///
 /// assert_eq!(
 ///     eq_properties.to_string(),
-///     "order: [[a@0 ASC, c@2 DESC]], eq: [{members: [b@1], constant: (heterogeneous)}]"
+<<<<<<< HEAD
+///     "order: [a@0 ASC NULLS FIRST, c@2 DESC NULLS FIRST]; constant: b@1 (one value per partition)"
+=======
+///     "order: [[a@0 ASC NULLS FIRST, c@2 DESC NULLS FIRST]], group: none, eq: [{members: [b@1], constant: (heterogeneous)}]"
+>>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
 /// );
 /// ```
 #[derive(Clone, Debug)]
@@ -1895,34 +1900,109 @@ impl From<EquivalenceProperties> for OrderingEquivalenceClass {
     }
 }
 
-/// More readable display version of the `EquivalenceProperties`.
+impl EquivalenceProperties {
+    /// The facts this object states about its output, as `(key, value)` pairs.
+    ///
+    /// Orderings always spell out NULL placement. Literal-only constants and
+    /// equivalence classes are skipped, and empty sections are omitted.
+    pub fn facts(&self) -> Vec<(&'static str, String)> {
+        let is_literal = |expr: &Arc<dyn PhysicalExpr>| expr.is::<Literal>();
+        let mut facts = vec![];
+
+        let orders = self
+            .oeq_class
+            .iter()
+            .map(|ordering| format!("[{}]", ExplicitNullsOrdering(ordering)))
+            .collect::<Vec<_>>();
+        if !orders.is_empty() {
+            facts.push(("order", orders.join(" | ")));
+        }
+        if !self.geq_class.is_empty() {
+            facts.push(("group", self.geq_class.to_string()));
+        }
+
+        let equal = self
+            .eq_group
+            .iter()
+            .filter_map(|class| {
+                let members = class
+                    .iter()
+                    .filter(|expr| !is_literal(expr))
+                    .map(|expr| expr.to_string())
+                    .collect::<Vec<_>>();
+                (members.len() >= 2).then(|| format!("{{{}}}", members.join(", ")))
+            })
+            .collect::<Vec<_>>();
+        if !equal.is_empty() {
+            facts.push(("equal", equal.join(", ")));
+        }
+
+        let constants = self
+            .constants()
+            .into_iter()
+            .filter(|constant| !is_literal(&constant.expr))
+            .map(|constant| match constant.across_partitions {
+                AcrossPartitions::Uniform(Some(value)) => {
+                    format!("{} = {value}", constant.expr)
+                }
+                AcrossPartitions::Uniform(None) => constant.expr.to_string(),
+                AcrossPartitions::Heterogeneous => {
+                    format!("{} (one value per partition)", constant.expr)
+                }
+            })
+            .collect::<Vec<_>>();
+        if !constants.is_empty() {
+            facts.push(("constant", constants.join(", ")));
+        }
+        facts
+    }
+}
+
+/// Readable display of the [`EquivalenceProperties::facts`], separated by `; `.
 ///
 /// Format:
 /// ```text
-/// order: [[b@1 ASC NULLS LAST]], group: [[a@0, b@1]], eq: [{members: [a@0], constant: (heterogeneous)}]
+<<<<<<< HEAD
+/// order: [a@0 ASC NULLS FIRST] | [b@1 DESC NULLS LAST]; equal: {a@0, c@2}; constant: d@3 (one value per partition)
 /// ```
+///
+/// Prints `none` when there are no facts.
 impl Display for EquivalenceProperties {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let empty_eq_group = self.eq_group.is_empty();
-        let empty_oeq_class = self.oeq_class.is_empty();
-        let empty_geq_class = self.geq_class.is_empty();
-        if empty_oeq_class && empty_geq_class && empty_eq_group {
-            return write!(f, "No properties");
+        let facts = self.facts();
+        if facts.is_empty() {
+            return write!(f, "none");
         }
-
-        let mut separator = "";
-        if !empty_oeq_class {
-            write!(f, "order: {}", self.oeq_class)?;
-            separator = ", ";
-        }
-        if !empty_geq_class {
-            write!(f, "{separator}group: {}", self.geq_class)?;
-            separator = ", ";
-        }
-        if !empty_eq_group {
-            write!(f, "{separator}eq: {}", self.eq_group)?;
-        }
-        Ok(())
+        let text = facts
+            .iter()
+            .map(|(key, value)| format!("{key}: {value}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        f.write_str(&text)
+=======
+/// order: [[b@1 ASC NULLS LAST]], group: none, eq: [{members: [a@0], constant: (heterogeneous)}]
+/// ```
+///
+/// Empty sections are printed as `none`.
+impl Display for EquivalenceProperties {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let order = if self.oeq_class.is_empty() {
+            "none".to_string()
+        } else {
+            self.oeq_class.to_string()
+        };
+        let group = if self.geq_class.is_empty() {
+            "none".to_string()
+        } else {
+            self.geq_class.to_string()
+        };
+        let eq = if self.eq_group.is_empty() {
+            "none".to_string()
+        } else {
+            self.eq_group.to_string()
+        };
+        write!(f, "order: {order}, group: {group}, eq: {eq}")
+>>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
     }
 }
 
@@ -2048,7 +2128,7 @@ mod tests {
     use super::*;
 
     use crate::equivalence::tests::create_test_params;
-    use crate::expressions::col;
+    use crate::expressions::{col, lit};
 
     use arrow::datatypes::{DataType, Field, Schema};
 
@@ -2082,6 +2162,71 @@ mod tests {
             Field::new("c1", DataType::Int32, true),
             Field::new("d1", DataType::Int32, true),
         ]))
+    }
+
+    #[test]
+<<<<<<< HEAD
+    fn test_facts_spell_out_null_placement_and_skip_literals() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+        let col_d = col("d", &schema)?;
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        assert!(eq_properties.facts().is_empty());
+        assert_eq!(eq_properties.to_string(), "none");
+=======
+    fn test_display_spells_out_null_placement_and_none() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        assert_eq!(
+            eq_properties.to_string(),
+            "order: none, group: none, eq: none"
+        );
+>>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
+
+        eq_properties.add_ordering([
+            PhysicalSortExpr::new(
+                Arc::clone(&col_a),
+                SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            ),
+            PhysicalSortExpr::new(
+                Arc::clone(&col_b),
+                SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            ),
+        ]);
+<<<<<<< HEAD
+        eq_properties.add_equal_conditions(Arc::clone(&col_a), Arc::clone(&col_c))?;
+        eq_properties.add_constants([
+            ConstExpr::from(Arc::clone(&col_d)),
+            ConstExpr::from(lit(5i32)),
+        ])?;
+        assert_eq!(
+            eq_properties.to_string(),
+            "order: [a@0 ASC NULLS FIRST, b@1 DESC NULLS LAST]; equal: {a@0, c@2}; constant: d@3 (one value per partition)"
+=======
+        assert_eq!(
+            eq_properties.to_string(),
+            "order: [[a@0 ASC NULLS FIRST, b@1 DESC NULLS LAST]], group: none, eq: none"
+>>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
+        );
+        Ok(())
     }
 
     #[test]

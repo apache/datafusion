@@ -1984,6 +1984,11 @@ config_namespace! {
         /// When set to true, the explain statement will print schema information
         pub show_schema: bool, default = false
 
+        /// When set to true, the explain statement will print the equivalence
+        /// properties (orderings, equivalent expressions, and constants) of each
+        /// physical plan node
+        pub show_equivalences: bool, default = false
+
         /// Display format of explain. Default is "indent".
         /// When set to "tree", it will print the plan in a tree-rendered format.
         pub format: ExplainFormat, default = ExplainFormat::Indent

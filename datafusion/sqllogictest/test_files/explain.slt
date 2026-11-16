@@ -264,6 +264,28 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 statement ok
 set datafusion.explain.show_schema = false;
 
+### tests for EXPLAIN with display equivalences enabled
+statement ok
+set datafusion.explain.show_equivalences = true;
+
+query TT
+EXPLAIN SELECT a, b, c FROM simple_explain_test ORDER BY a;
+----
+logical_plan
+01)Sort: simple_explain_test.a ASC NULLS LAST
+02)--TableScan: simple_explain_test projection=[a, b, c]
+physical_plan
+<<<<<<< HEAD
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false], facts=[order: [a@0 ASC NULLS LAST]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true, facts=[none]
+=======
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false], facts=[order: [[a@0 ASC NULLS LAST]], group: none, eq: none]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true, facts=[order: none, group: none, eq: none]
+>>>>>>> b6d141373b8be59f263f25628eaaef8c67a94bce
+
+statement ok
+set datafusion.explain.show_equivalences = false;
+
 
 ### tests for EXPLAIN with display statistics enabled
 statement ok

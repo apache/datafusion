@@ -2051,6 +2051,40 @@ physical_plan
 statement ok
 DROP TABLE t
 
+# Equivalence facts
+statement ok
+CREATE TABLE facts_t (int_col INT, string_col TEXT);
+
+statement ok
+set datafusion.explain.show_equivalences = true;
+
+query TT
+explain SELECT int_col, string_col FROM facts_t ORDER BY int_col;
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│          SortExec         │
+03)│    --------------------   │
+04)│  int_col@0 ASC NULLS LAST │
+05)│                           │
+06)│           order:          │
+07)│ [int_col@0 ASC NULLS LAST]│
+08)└─────────────┬─────────────┘
+09)┌─────────────┴─────────────┐
+10)│       DataSourceExec      │
+11)│    --------------------   │
+12)│          bytes: 0         │
+13)│        facts: none        │
+14)│       format: memory      │
+15)│          rows: 0          │
+16)└───────────────────────────┘
+
+statement ok
+set datafusion.explain.show_equivalences = false;
+
+statement ok
+DROP TABLE facts_t;
+
 # Config reset
 statement ok
 RESET datafusion.explain.format;
