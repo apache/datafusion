@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Math function: `log()`.
 
@@ -25,7 +12,9 @@ use arrow::datatypes::{
 };
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
-use datafusion_common::types::NativeType;
+use datafusion_common::types::{
+    NativeType, logical_float16, logical_float32, logical_float64,
+};
 use datafusion_common::{Result, ScalarValue, exec_err, plan_datafusion_err, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
@@ -73,6 +62,20 @@ impl LogFunc {
             vec![TypeSignatureClass::Numeric],
             NativeType::Float64,
         );
+
+        // For log(base, value) with float arguments, both are widened to the
+        // widest float so a wider base is not narrowed to the value's type
+        // (issue #22581)
+        let float16 = Coercion::new_exact(TypeSignatureClass::Native(logical_float16()));
+        let float32 = Coercion::new_implicit_native(
+            logical_float32(),
+            vec![TypeSignatureClass::Native(logical_float16())],
+        );
+        let float64 = Coercion::new_implicit_native(
+            logical_float64(),
+            vec![TypeSignatureClass::Numeric],
+        );
+
         Self {
             signature: Signature::one_of(
                 // Ensure decimals have precedence over floats since we have
@@ -85,10 +88,15 @@ impl LogFunc {
                     TypeSignature::Coercible(vec![as_float.clone()]),
                     // log(base, value)
                     TypeSignature::Coercible(vec![
-                        as_float.clone(),
+                        as_float,
                         Coercion::new_exact(TypeSignatureClass::Decimal),
                     ]),
-                    TypeSignature::Coercible(vec![as_float.clone(), as_float.clone()]),
+                    // Only (Float16, Float16)
+                    TypeSignature::Coercible(vec![float16.clone(), float16]),
+                    // Any mix of Float16 and Float32, promoted to Float32
+                    TypeSignature::Coercible(vec![float32.clone(), float32]),
+                    // All other numeric inputs, promoted to Float64
+                    TypeSignature::Coercible(vec![float64.clone(), float64]),
                 ],
                 Volatility::Immutable,
             ),
@@ -339,8 +347,13 @@ impl ScalarUDFImpl for LogFunc {
             .collect::<Result<Vec<_>>>()?;
         let return_type = self.return_type(&arg_types)?;
 
-        // Null propagation
-        if arg_types.iter().any(|dt| dt.is_null()) {
+        // Null propagation. Coercion may have already turned a NULL argument
+        // into a typed NULL literal, e.g. `log(NULL, float64_col)`
+        if arg_types.iter().any(|dt| dt.is_null())
+            || args
+                .iter()
+                .any(|arg| matches!(arg, Expr::Literal(value, _) if value.is_null()))
+        {
             return Ok(ExprSimplifyResult::Simplified(lit(
                 ScalarValue::Null.cast_to(&return_type)?
             )));
@@ -383,6 +396,8 @@ mod tests {
     use arrow::datatypes::{DECIMAL256_MAX_PRECISION, Field};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::ScalarUDF;
+    use datafusion_expr::type_coercion::functions::fields_with_udf;
 
     #[test]
     fn test_log_decimal_native() {
@@ -741,6 +756,32 @@ mod tests {
                 panic!("Expected ExprSimplifyResult::Original")
             };
             assert_eq!(actual, args);
+        }
+    }
+
+    #[test]
+    fn test_log_simplify_typed_null() {
+        // Coercion can turn a NULL argument into a typed NULL literal
+        let context = SimplifyContext::default();
+        for (args, expected) in [
+            (
+                vec![lit(ScalarValue::Float64(None)), lit(2.0)],
+                ScalarValue::Float64(None),
+            ),
+            (
+                vec![lit(2.0), lit(ScalarValue::Float64(None))],
+                ScalarValue::Float64(None),
+            ),
+            (
+                vec![lit(ScalarValue::Float32(None)), lit(2.0f32)],
+                ScalarValue::Float32(None),
+            ),
+        ] {
+            let result = LogFunc::new().simplify(args, &context).unwrap();
+            let ExprSimplifyResult::Simplified(expr) = result else {
+                panic!("Expected ExprSimplifyResult::Simplified")
+            };
+            assert_eq!(expr, lit(expected));
         }
     }
 
@@ -1202,5 +1243,52 @@ mod tests {
                 panic!("Expected an array value")
             }
         }
+    }
+
+    #[test]
+    fn test_log_coerces_floats_to_widest() {
+        use DataType::*;
+        let udf = ScalarUDF::from(LogFunc::new());
+        let coerce = |types: &[DataType]| -> Vec<DataType> {
+            let fields = types
+                .iter()
+                .map(|t| Arc::new(Field::new("a", t.clone(), true)))
+                .collect::<Vec<_>>();
+            fields_with_udf(&fields, &udf)
+                .unwrap()
+                .iter()
+                .map(|f| f.data_type().clone())
+                .collect()
+        };
+
+        // A wider base must not be narrowed to the value's type (#22581)
+        assert_eq!(coerce(&[Float64, Float32]), [Float64, Float64]);
+        assert_eq!(coerce(&[Float32, Float64]), [Float64, Float64]);
+        assert_eq!(coerce(&[Float16, Float32]), [Float32, Float32]);
+        assert_eq!(coerce(&[Float32, Float16]), [Float32, Float32]);
+        assert_eq!(coerce(&[Float16, Float64]), [Float64, Float64]);
+        assert_eq!(coerce(&[Int64, Float32]), [Float64, Float64]);
+        assert_eq!(coerce(&[Float32, Int64]), [Float64, Float64]);
+        assert_eq!(coerce(&[Decimal128(10, 2), Float32]), [Float64, Float64]);
+        assert_eq!(
+            coerce(&[Float64, Dictionary(Box::new(Int32), Box::new(Float32))]),
+            [Float64, Float64]
+        );
+        // Homogeneous inputs keep their type
+        assert_eq!(coerce(&[Float16, Float16]), [Float16, Float16]);
+        assert_eq!(coerce(&[Float32, Float32]), [Float32, Float32]);
+        assert_eq!(coerce(&[Float64, Float64]), [Float64, Float64]);
+        assert_eq!(coerce(&[Float32]), [Float32]);
+        // Decimal values keep the native decimal implementation
+        assert_eq!(
+            coerce(&[Float32, Decimal128(10, 2)]),
+            [Float32, Decimal128(10, 2)]
+        );
+        assert_eq!(coerce(&[Decimal128(10, 2)]), [Decimal128(10, 2)]);
+        // A NULL base is typed by the value; a NULL value matches the decimal
+        // value signature and stays untyped
+        assert_eq!(coerce(&[Null, Float32]), [Float32, Float32]);
+        assert_eq!(coerce(&[Float32, Null]), [Float32, Null]);
+        assert_eq!(coerce(&[Null, Null]), [Null, Null]);
     }
 }

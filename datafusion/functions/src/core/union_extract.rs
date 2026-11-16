@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::Array;
 use arrow::datatypes::{DataType, Field, FieldRef, UnionFields};
@@ -26,6 +13,9 @@ use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
+
+#[deprecated(since = "56.0.0", note = "This type is now called `UnionExtractFunc`")]
+pub type UnionExtractFun = UnionExtractFunc;
 
 #[user_doc(
     doc_section(label = "Union Functions"),
@@ -50,17 +40,17 @@ use datafusion_macros::user_doc;
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct UnionExtractFun {
+pub struct UnionExtractFunc {
     signature: Signature,
 }
 
-impl Default for UnionExtractFun {
+impl Default for UnionExtractFunc {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl UnionExtractFun {
+impl UnionExtractFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
@@ -68,7 +58,7 @@ impl UnionExtractFun {
     }
 }
 
-impl ScalarUDFImpl for UnionExtractFun {
+impl ScalarUDFImpl for UnionExtractFunc {
     fn name(&self) -> &str {
         "union_extract"
     }
@@ -178,12 +168,12 @@ mod tests {
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
-    use super::UnionExtractFun;
+    use super::UnionExtractFunc;
 
     // when it becomes possible to construct union scalars in SQL, this should go to sqllogictests
     #[test]
     fn test_scalar_value() -> Result<()> {
-        let fun = UnionExtractFun::new();
+        let fun = UnionExtractFunc::new();
 
         let fields = UnionFields::try_new(
             vec![1, 3],

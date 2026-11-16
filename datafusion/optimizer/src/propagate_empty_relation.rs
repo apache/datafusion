@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`PropagateEmptyRelation`] eliminates nodes fed by `EmptyRelation`
 
@@ -23,9 +10,10 @@ use datafusion_common::JoinType;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, DFSchemaRef, Result, ScalarValue, plan_err};
 use datafusion_expr::logical_plan::LogicalPlan;
-use datafusion_expr::{EmptyRelation, Expr, GroupingSet, Projection, Union, cast, lit};
+use datafusion_expr::{EmptyRelation, Expr, Projection, Union, cast, lit};
 
 use crate::optimizer::ApplyOrder;
+use crate::utils::aggregate_emits_on_empty_input;
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimization rule that bottom-up to eliminate plan by propagating empty_relation.
@@ -170,13 +158,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                 }
             }
             LogicalPlan::Aggregate(ref agg) => {
-                // An aggregate over an empty input can be eliminated only when
-                // there is no empty grouping set.  An empty grouping set `()`
-                // (from `GROUPING SETS(())`, `ROLLUP(...)`, or `CUBE(...)`)
-                // always produces exactly one row even on empty input, so it
-                // must not be replaced by an empty relation.
-                if !agg.group_expr.is_empty()
-                    && !has_empty_grouping_set(&agg.group_expr)
+                if !aggregate_emits_on_empty_input(&agg.group_expr)
                     && let Some(empty_plan) = empty_child(&plan)?
                 {
                     return Ok(Transformed::yes(empty_plan));
@@ -325,30 +307,6 @@ fn build_null_padded_projection(
         surviving_plan,
         Arc::clone(join_schema),
     )?))
-}
-
-/// Returns `true` if any grouping set in the list of GROUP BY expressions is
-/// the empty set `()`.
-///
-/// An empty grouping set acts as a "grand total" group: the aggregate must
-/// always produce **exactly one row** for it, even when the input is empty.
-/// This means an aggregate with an empty grouping set cannot be replaced by
-/// an empty relation.
-///
-/// The three forms that can contain an empty grouping set:
-/// - `GROUPING SETS (…, (), …)` — explicitly listed.
-/// - `ROLLUP(exprs)` — always expands to include `()`.
-/// - `CUBE(exprs)`  — always expands to include `()`.
-fn has_empty_grouping_set(group_expr: &[Expr]) -> bool {
-    match group_expr.first() {
-        Some(Expr::GroupingSet(GroupingSet::GroupingSets(groups))) => {
-            groups.iter().any(|g| g.is_empty())
-        }
-        // Both ROLLUP and CUBE always include the empty grouping set ().
-        Some(Expr::GroupingSet(GroupingSet::Rollup(_)))
-        | Some(Expr::GroupingSet(GroupingSet::Cube(_))) => true,
-        _ => false,
-    }
 }
 
 #[cfg(test)]

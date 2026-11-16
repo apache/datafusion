@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::{Between, Expr, Like, predicate_bounds};
 use crate::ValueOrLambda;
@@ -26,6 +13,7 @@ use crate::expr::{FieldMetadata, LambdaVariable};
 use crate::higher_order_function::HigherOrderReturnFieldArgs;
 use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
+use crate::type_coercion::other::get_coerce_type_for_case_expression;
 use crate::udf::ReturnFieldArgs;
 use crate::{
     LogicalPlan, Operator, Projection, Subquery, WindowFunctionDefinition, utils,
@@ -46,6 +34,10 @@ use std::sync::Arc;
 /// Trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {
     /// Given a schema, return the type of the expr
+    ///
+    /// `CASE` expressions infer a common type from all `THEN` and `ELSE`
+    /// branches without inserting casts. Incompatible branches retain a
+    /// provisional type until analysis.
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType>;
 
     /// Given a schema, return the nullability of the expr
@@ -190,15 +182,28 @@ impl ExprSchemable for Expr {
             Expr::ScalarVariable(field, _) => Ok(field.data_type().clone()),
             Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
-                for (_, then_expr) in &case.when_then_expr {
-                    let then_type = then_expr.get_type(schema)?;
-                    if !then_type.is_null() {
-                        return Ok(then_type);
-                    }
-                }
-                case.else_expr
+                let then_types = case
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, expr)| expr.get_type(schema))
+                    .collect::<Result<Vec<_>>>()?;
+                let else_type = case
+                    .else_expr
                     .as_ref()
-                    .map_or(Ok(DataType::Null), |e| e.get_type(schema))
+                    .map(|expr| expr.get_type(schema))
+                    .transpose()?;
+                // If the branches have no common type, keep the old provisional
+                // type. The analyzer reports the error.
+                let common_type =
+                    get_coerce_type_for_case_expression(&then_types, else_type.as_ref());
+                let result_type = common_type.unwrap_or_else(|| {
+                    then_types
+                        .into_iter()
+                        .find(|t| !t.is_null())
+                        .or(else_type)
+                        .unwrap_or(DataType::Null)
+                });
+                Ok(result_type)
             }
             Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
                 Ok(field.data_type().clone())
@@ -550,15 +555,13 @@ impl ExprSchemable for Expr {
                 metadata,
                 ..
             }) => {
-                let mut combined_metadata = expr.metadata(schema)?;
+                let field = expr.to_field(schema)?.1;
+                let mut combined_metadata = FieldMetadata::from(field.metadata());
                 if let Some(metadata) = metadata {
                     combined_metadata.extend(metadata.clone());
                 }
 
-                Ok(expr
-                    .to_field(schema)
-                    .map(|(_, f)| f)?
-                    .with_field_metadata(&combined_metadata))
+                Ok(field.with_field_metadata(&combined_metadata))
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(Arc::clone),
@@ -1300,6 +1303,62 @@ mod tests {
     }
 
     #[test]
+    fn test_nested_alias_resolves_child_field_once() -> Result<()> {
+        #[derive(Debug)]
+        struct CountingSchema {
+            field: FieldRef,
+            lookups: std::cell::Cell<usize>,
+        }
+
+        impl ExprSchema for CountingSchema {
+            fn nullable(&self, _col: &Column) -> Result<bool> {
+                Ok(self.field.is_nullable())
+            }
+
+            fn field_from_column(&self, _col: &Column) -> Result<&FieldRef> {
+                self.lookups.set(self.lookups.get() + 1);
+                Ok(&self.field)
+            }
+        }
+
+        let schema = CountingSchema {
+            field: Arc::new(Field::new("value", DataType::Int32, false).with_metadata(
+                HashMap::from([
+                    ("override".to_string(), "base".to_string()),
+                    ("keep".to_string(), "base".to_string()),
+                ]),
+            )),
+            lookups: std::cell::Cell::new(0),
+        };
+        let mut expr = col("value");
+        for index in 0..12 {
+            let metadata = Some(FieldMetadata::from(HashMap::from([(
+                "override".to_string(),
+                index.to_string(),
+            )])));
+            expr = if index == 11 {
+                expr.alias_qualified_with_metadata(
+                    Some("outer"),
+                    format!("alias_{index}"),
+                    metadata,
+                )
+            } else {
+                expr.alias_with_metadata(format!("alias_{index}"), metadata)
+            };
+        }
+
+        let (relation, field) = expr.to_field(&schema)?;
+        assert_eq!(schema.lookups.get(), 1);
+        assert_eq!(relation, Some(TableReference::bare("outer")));
+        assert_eq!(field.name(), "alias_11");
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(!field.is_nullable());
+        assert_eq!(field.metadata().get("override"), Some(&"11".to_string()));
+        assert_eq!(field.metadata().get("keep"), Some(&"base".to_string()));
+        Ok(())
+    }
+
+    #[test]
     fn test_expr_placeholder() {
         let schema = MockExprSchema::new();
 
@@ -1642,5 +1701,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn case_infers_all_result_types_without_casting() -> Result<()> {
+        use crate::expr::Case;
+        let schema = DFSchema::empty();
+        let nested = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(lit(false)), Box::new(lit(1_i64)))],
+            Some(Box::new(lit(2.5))),
+        ));
+        for (then_values, else_value, expected) in [
+            (vec![lit(1_i64)], Some(lit(2.5)), DataType::Float64),
+            (vec![lit(1_i64), lit(2.5)], None, DataType::Float64),
+            (vec![lit(2.5), lit(1_i64)], None, DataType::Float64),
+            (vec![lit(2.5)], Some(lit(1_i64)), DataType::Float64),
+            (vec![lit(3_i64)], Some(nested), DataType::Float64),
+            (vec![lit(ScalarValue::Null)], None, DataType::Null),
+            // Incompatible raw types retain a provisional type for the analyzer.
+            (vec![lit(true)], Some(lit("a")), DataType::Boolean),
+        ] {
+            let when_then = then_values
+                .into_iter()
+                .map(|value| (Box::new(lit(true)), Box::new(value)))
+                .collect();
+            let expr = Expr::Case(Case::new(None, when_then, else_value.map(Box::new)));
+            assert_eq!(expr.get_type(&schema)?, expected);
+        }
+        Ok(())
     }
 }

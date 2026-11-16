@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Optimizer rule that replaces executors that lose ordering with their
 //! order-preserving variants when it is helpful; either in terms of
@@ -21,6 +8,8 @@
 
 use std::sync::Arc;
 
+use super::sort_pushdown::can_push_fetch_through;
+use crate::row_bound::{RowBound, limit_node};
 use crate::utils::{
     is_coalesce_partitions, is_repartition, is_sort, is_sort_preserving_merge,
 };
@@ -110,6 +99,7 @@ pub fn plan_with_order_preserving_variants(
         sort_input.data = false;
         return Ok(sort_input);
     }
+    let child_fetch = fetch.filter(|_| can_push_fetch_through(&sort_input.plan));
     sort_input.children = sort_input
         .children
         .into_iter()
@@ -120,7 +110,7 @@ pub fn plan_with_order_preserving_variants(
                     node,
                     is_spr_better,
                     is_spm_better,
-                    fetch,
+                    child_fetch,
                 )
             } else {
                 Ok(node)
@@ -284,6 +274,13 @@ pub fn replace_with_order_preserving_variants(
     }
     for child in alternate_plan.children.iter_mut() {
         child.data = false;
+    }
+    if let Some(fetch) = requirements.plan.fetch() {
+        let plan = limit_node(
+            Arc::clone(&alternate_plan.plan),
+            RowBound::fetch(Some(fetch)),
+        );
+        alternate_plan = PlanContext::new(plan, false, vec![alternate_plan]);
     }
     Ok(Transformed::yes(alternate_plan))
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`Analyzer`] and [`AnalyzerRule`]
 
@@ -61,13 +48,26 @@ pub trait AnalyzerRule: Debug {
     fn name(&self) -> &str;
 }
 
-/// Rule-based Analyzer.
+/// Rule-based Analyzer for [`LogicalPlan`]s.
 ///
 /// Applies [`FunctionRewrite`]s and [`AnalyzerRule`]s to transform a
 /// [`LogicalPlan`] in preparation for execution.
 ///
 /// For example, the `Analyzer` applies type coercion to ensure the types of
 /// operands match the types required by functions.
+///
+/// # Built-in Analyzer Rules
+///
+/// The Analyzer first applies any [`FunctionRewrite`]s added with
+/// [`Self::add_function_rewrite`].
+///
+/// The rules are applied in the following order. Note: the list may change
+/// between releases.
+///
+/// | rule (name in EXPLAIN plan) | struct name                 | summary                                                                   |
+/// | --------------------------- | --------------------------- | ------------------------------------------------------------------------- |
+/// | `resolve_grouping_function` | [`ResolveGroupingFunction`] | Rewrites `GROUPING(...)` into expressions over the internal grouping id.  |
+/// | `type_coercion`             | [`TypeCoercion`]            | Adds implicit casts so operators and functions receive valid input types. |
 #[derive(Clone, Debug)]
 pub struct Analyzer {
     /// Expr --> Function writes to apply prior to analysis passes
@@ -83,7 +83,7 @@ impl Default for Analyzer {
 }
 
 impl Analyzer {
-    /// Create a new analyzer using the recommended list of rules
+    /// Create a new analyzer using the [built-in rules](Self#built-in-analyzer-rules)
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
             Arc::new(ResolveGroupingFunction::new()),
@@ -164,5 +164,29 @@ impl Analyzer {
         log_plan("Final analyzed plan", &new_plan);
         debug!("Analyzer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Analyzer;
+    use datafusion_common::test_util::documented_rule_names;
+
+    /// Verifies the rule table in the [`Analyzer`] docs matches the rules
+    /// (and their order) returned by [`Analyzer::new`]
+    #[test]
+    fn analyzer_rules_match_documented_order() {
+        let rules: Vec<_> = Analyzer::new()
+            .rules
+            .iter()
+            .map(|rule| rule.name().to_string())
+            .collect();
+
+        let documented = documented_rule_names(
+            include_str!("mod.rs"),
+            "/// # Built-in Analyzer Rules",
+        );
+
+        assert_eq!(documented, rules);
     }
 }

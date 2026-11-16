@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! See `main.rs` for how to run it.
 //!
@@ -40,7 +27,6 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::proto::{
     ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx, ExtensionPlanFromProto,
-    ProtoDecoderRegistry, register_execution_plan,
 };
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
@@ -56,16 +42,13 @@ pub fn extension_plan_registry() -> Result<()> {
         input: Arc::new(ChildExec {}),
     });
 
-    // Each crate exposes a function that fills a registry it is handed; the
-    // application that owns the session composes them. The two crates need to
-    // know nothing about each other, and the call order does not matter.
-    let mut registry = ProtoDecoderRegistry::new();
-    crate_a::register(&mut registry)?;
-    crate_b::register(&mut registry)?;
-
-    let ctx = SessionContext::new_with_config(
-        SessionConfig::new().with_extension(Arc::new(registry)),
-    );
+    // Each crate exposes a function that adds its decoders to the session's
+    // registry. The two crates need to know nothing about each other, and the
+    // call order does not matter.
+    let mut config = SessionConfig::new();
+    crate_a::register(&mut config)?;
+    crate_b::register(&mut config)?;
+    let ctx = SessionContext::new_with_config(config);
 
     // `DefaultPhysicalExtensionCodec` decodes nothing at all, so whatever
     // survives the round trip came from the registry.
@@ -98,8 +81,8 @@ pub fn extension_plan_registry() -> Result<()> {
 mod crate_a {
     use super::*;
 
-    pub fn register(registry: &mut ProtoDecoderRegistry) -> Result<()> {
-        register_execution_plan::<ParentExec>(registry)
+    pub fn register(config: &mut SessionConfig) -> Result<()> {
+        config.update_extension(ParentExec::register_proto)
     }
 }
 
@@ -107,8 +90,8 @@ mod crate_a {
 mod crate_b {
     use super::*;
 
-    pub fn register(registry: &mut ProtoDecoderRegistry) -> Result<()> {
-        register_execution_plan::<ChildExec>(registry)
+    pub fn register(config: &mut SessionConfig) -> Result<()> {
+        config.update_extension(ChildExec::register_proto)
     }
 }
 

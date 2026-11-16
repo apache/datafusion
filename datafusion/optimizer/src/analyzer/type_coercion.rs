@@ -1,25 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Optimizer rule for type validation and coercion
 
 use arrow::compute::can_cast_types;
 use datafusion_expr::binary::BinaryTypeCoercer;
-use itertools::{Itertools as _, izip};
+use itertools::Itertools as _;
 use std::sync::{Arc, LazyLock};
 
 use crate::analyzer::AnalyzerRule;
@@ -28,6 +15,7 @@ use crate::utils::{NamePreserver, merge_into_schema};
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::metadata::merge_metadata_for_union;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -46,12 +34,13 @@ use datafusion_expr::expr_schema::{cast_subquery, cast_subquery_columns};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
-    type_union_coercion,
 };
 use datafusion_expr::type_coercion::functions::{
     UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf_and_lambdas,
 };
-use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
+use datafusion_expr::type_coercion::other::{
+    coerce_union_type, get_coerce_type_for_case_expression,
+};
 use datafusion_expr::type_coercion::{
     is_datetime, is_interval, is_signed_numeric, is_timestamp,
 };
@@ -327,7 +316,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     }
 
     fn coerce_dml(&self, mut dml: DmlStatement) -> Result<LogicalPlan> {
-        let WriteOp::MergeInto(merge_op) = &dml.op else {
+        let WriteOp::MergeInto(merge_op) = &mut dml.op else {
             return Ok(LogicalPlan::Dml(dml));
         };
 
@@ -335,8 +324,8 @@ impl<'a> TypeCoercionRewriter<'a> {
             dml.table_name.clone(),
             &dml.target.schema(),
         )?;
-        let mut merge_op = (**merge_op).clone();
-        merge_op.on = self.coerce_predicate(merge_op.on, "MERGE ON condition")?;
+        merge_op.on = self
+            .coerce_predicate(std::mem::take(&mut merge_op.on), "MERGE ON condition")?;
         for clause in &mut merge_op.clauses {
             clause.predicate = clause
                 .predicate
@@ -348,7 +337,8 @@ impl<'a> TypeCoercionRewriter<'a> {
                 datafusion_expr::dml::MergeIntoAction::Update(assignments) => {
                     for (column, value) in assignments {
                         let field = target_schema.field_with_unqualified_name(column)?;
-                        *value = value.clone().cast_to(field.data_type(), self.schema)?;
+                        *value = std::mem::take(value)
+                            .cast_to(field.data_type(), self.schema)?;
                     }
                 }
                 datafusion_expr::dml::MergeIntoAction::Insert { columns, values } => {
@@ -356,22 +346,21 @@ impl<'a> TypeCoercionRewriter<'a> {
                         for (value, field) in
                             values.iter_mut().zip(target_schema.fields())
                         {
-                            *value =
-                                value.clone().cast_to(field.data_type(), self.schema)?;
+                            *value = std::mem::take(value)
+                                .cast_to(field.data_type(), self.schema)?;
                         }
                     } else {
                         for (column, value) in columns.iter().zip(values) {
                             let field =
                                 target_schema.field_with_unqualified_name(column)?;
-                            *value =
-                                value.clone().cast_to(field.data_type(), self.schema)?;
+                            *value = std::mem::take(value)
+                                .cast_to(field.data_type(), self.schema)?;
                         }
                     }
                 }
                 datafusion_expr::dml::MergeIntoAction::Delete => {}
             }
         }
-        dml.op = WriteOp::MergeInto(Box::new(merge_op));
         Ok(LogicalPlan::Dml(dml))
     }
 
@@ -1661,7 +1650,7 @@ fn coerce_case_expression(
 ///
 /// **Type coercion precedence**: The coerced type is determined by iteratively applying
 /// `type_union_coercion()` between the accumulated type and each new input's type. The
-/// result depends on type coercion rules, not input order.
+/// result follows the input order, which can matter for dictionary and nested types.
 ///
 /// **Nullability merging**: Nullability is accumulated using logical OR (`||`).
 /// Once any input field is nullable, the result field becomes nullable permanently.
@@ -1683,86 +1672,59 @@ fn coerce_case_expression(
 /// ```
 ///
 /// **Precedence Summary**:
-/// - **Datatypes**: Determined by `type_union_coercion()` rules, not input order
+/// - **Datatypes**: Folded in input order using `type_union_coercion()`
 /// - **Nullability**: Later inputs can add nullability but cannot remove it (logical OR)
 /// - **Metadata**: Later inputs take precedence for same keys (HashMap::extend semantics)
 pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
-    coerce_union_schema_with_schema(&inputs[1..], inputs[0].schema())
+    let Some(first) = inputs.first() else {
+        return plan_err!("UNION requires at least one input");
+    };
+    coerce_union_schema_with_schema(inputs, first.schema())
 }
 fn coerce_union_schema_with_schema(
     inputs: &[Arc<LogicalPlan>],
     base_schema: &DFSchemaRef,
 ) -> Result<DFSchema> {
-    let mut union_datatypes = base_schema
-        .fields()
-        .iter()
-        .map(|f| f.data_type().clone())
-        .collect::<Vec<_>>();
-    let mut union_nullabilities = base_schema
-        .fields()
-        .iter()
-        .map(|f| f.is_nullable())
-        .collect::<Vec<_>>();
-    let mut union_field_meta = base_schema
-        .fields()
-        .iter()
-        .map(|f| f.metadata().clone())
-        .collect::<Vec<_>>();
-
-    let mut metadata = base_schema.metadata().clone();
-
     for (i, plan) in inputs.iter().enumerate() {
-        let plan_schema = plan.schema();
-        metadata.extend(plan_schema.metadata().clone());
-
-        if plan_schema.fields().len() != base_schema.fields().len() {
+        if plan.schema().fields().len() != base_schema.fields().len() {
             return plan_err!(
                 "Union schemas have different number of fields: \
                 query 1 has {} fields whereas query {} has {} fields",
                 base_schema.fields().len(),
                 i + 1,
-                plan_schema.fields().len()
+                plan.schema().fields().len()
             );
         }
-
-        // coerce data type and nullability for each field
-        for (union_datatype, union_nullable, union_field_map, plan_field) in izip!(
-            union_datatypes.iter_mut(),
-            union_nullabilities.iter_mut(),
-            union_field_meta.iter_mut(),
-            plan_schema.fields().iter()
-        ) {
-            let coerced_type =
-                type_union_coercion(union_datatype, plan_field.data_type()).ok_or_else(
-                    || {
-                        plan_datafusion_err!(
-                            "Incompatible inputs for Union: Previous inputs were \
-                            of type {}, but got incompatible type {} on column '{}'",
-                            union_datatype,
-                            plan_field.data_type(),
-                            plan_field.name()
-                        )
-                    },
-                )?;
-
-            *union_datatype = coerced_type;
-            *union_nullable = *union_nullable || plan_field.is_nullable();
-            union_field_map.extend(plan_field.metadata().clone());
-        }
     }
-    let union_qualified_fields = izip!(
-        base_schema.fields(),
-        union_datatypes.into_iter(),
-        union_nullabilities,
-        union_field_meta.into_iter()
-    )
-    .map(|(field, datatype, nullable, metadata)| {
-        let mut field = Field::new(field.name().clone(), datatype, nullable);
-        field.set_metadata(metadata);
-        (None, field.into())
-    })
-    .collect::<Vec<_>>();
 
+    let all_schemas = std::iter::once(base_schema)
+        .chain(inputs.iter().map(|p| p.schema()))
+        .collect::<Vec<_>>();
+
+    let union_qualified_fields = base_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(i, field)| {
+            // The stored schema may already contain an inferred common type. Feeding
+            // it back into coercion can change the result, notably for dictionaries.
+            let datatype = coerce_union_type(
+                inputs.iter().map(|plan| plan.schema().field(i).as_ref()),
+            )?;
+            let nullable = field.is_nullable()
+                || inputs
+                    .iter()
+                    .any(|plan| plan.schema().field(i).is_nullable());
+            let mut field = Field::new(field.name().clone(), datatype, nullable);
+            field.set_metadata(merge_metadata_for_union(
+                all_schemas.iter().map(|schema| schema.field(i).metadata()),
+            ));
+            Ok((None, field.into()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let metadata =
+        merge_metadata_for_union(all_schemas.iter().map(|schema| schema.metadata()));
     DFSchema::new_with_metadata(union_qualified_fields, metadata)
 }
 
@@ -1981,6 +1943,18 @@ mod test {
             plan,
             "Negation only supports numeric, interval and timestamp types",
         )
+    }
+
+    #[test]
+    fn union_schema_validates_input_shapes() -> Result<()> {
+        use super::coerce_union_schema;
+        assert!(coerce_union_schema(&[]).is_err());
+        let input = empty_with_type(DataType::Int32);
+        let schema = coerce_union_schema(&[Arc::clone(&input)])?;
+        assert_eq!(schema.field(0).data_type(), &DataType::Int32);
+        let incompatible_width = empty();
+        assert!(coerce_union_schema(&[input, incompatible_width]).is_err());
+        Ok(())
     }
 
     #[test]
