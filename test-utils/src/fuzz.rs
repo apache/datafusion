@@ -59,14 +59,39 @@ pub trait FuzzTest {
 }
 
 /// Execution limits for [`run`]. At least one stopping condition is required.
+///
+/// It's recommended to use a time limit and keep each test case short.
+///
+/// Examples:
+///
+/// - For a time-limited run:
+///   max_cases = None
+///   time_limit = Some(60 sec)
+///   cases_per_dataset = 100
+///
+///   Generate a dataset, run up to 100 cases on it, and repeat until the
+///   60-second budget is reached.
+///   This config also applies if the test doesn't need dataset setup; it simply
+///   repeats rounds with dataset preparation as a no-op.
+///
+/// - For a fixed-count run with dataset setup:
+///   max_cases = Some(1000)
+///   time_limit = None
+///   cases_per_dataset = 100
+///
+///   Generate 10 datasets and run 100 cases on each, for 1,000 cases in total.
 #[derive(Debug, Clone)]
 pub struct RunConfig {
     /// Initial seed, or `None` to choose a fresh seed once per run.
+    ///
+    /// It's recommended to set this to `None` to vary the seed between runs.
+    /// Error messages include all the seeds needed to reproduce failures.
+    /// See the [`FuzzTest`] documentation for details.
     pub run_seed: Option<u64>,
     /// Maximum successful cases; must be positive when supplied.
     pub max_cases: Option<usize>,
-    /// Soft budget including preparation. The first complete case always runs,
-    /// even with a zero budget. Active preparation and cases are never cancelled.
+    /// Soft budget including preparation. The first test case start after the time
+    /// limit reached will be cancled.
     pub time_limit: Option<Duration>,
     /// Maximum cases sharing one fixture; must be positive.
     pub cases_per_dataset: usize,
