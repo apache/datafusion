@@ -486,6 +486,11 @@ fn leaf_column_name(index: usize) -> String {
     format!("{LEAF_COLUMN_PREFIX}_{index}")
 }
 
+/// Returns the input of `node` if the split may place the leaf projection
+/// below it. The split gives `node` an input with different columns, so `node`
+/// must not reference its input's columns and must output them unchanged, or
+/// the outer projection's column indices would point at the wrong columns. The
+/// arms are an allowlist: meeting that is necessary, not sufficient.
 fn split_host_child(node: &Arc<dyn ExecutionPlan>) -> Option<&Arc<dyn ExecutionPlan>> {
     if let Some(repartition) = node.downcast_ref::<RepartitionExec>() {
         // Hash and Range partitioning reference columns by index, which would
@@ -526,6 +531,9 @@ fn split_host_chain(node: &Arc<dyn ExecutionPlan>) -> Option<SplitHostChain<'_>>
 
 /// Splits a `ProjectionExec` that mixes leaf expressions with ones that must
 /// stay in place, moving the leaves into a projection the source absorbs.
+/// Without the split the leaves stay above the source: no projection swaps past
+/// a `GlobalLimitExec`, and none with a computed expression swaps past a
+/// `RepartitionExec`.
 fn try_split_leaf_projection(
     plan: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {

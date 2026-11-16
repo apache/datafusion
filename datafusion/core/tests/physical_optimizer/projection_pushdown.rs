@@ -2141,9 +2141,8 @@ async fn split_declines_global_limit_without_leaf() -> Result<()> {
     Ok(())
 }
 
-/// `LocalLimitExec` is kept out of the host set. The corpus never strands a
-/// leaf above one, but that is what the corpus shows, not a proof that nothing
-/// can, so this pins the exclusion.
+/// `LocalLimitExec` is left out of `split_host_child`: no query in the test
+/// suite strands a leaf expression above one. This pins that choice.
 #[tokio::test]
 async fn split_declines_local_limit() -> Result<()> {
     let (schema, scan) = limit_split_scan()?;
@@ -2260,8 +2259,7 @@ async fn split_keeps_the_coalesce_fetch() -> Result<()> {
     Ok(())
 }
 
-/// Six numbers have to come back in the right places, not two. The corpus
-/// reaches a chain this deep but never with a leaf to move.
+/// Each of the three limits keeps its own `skip` and `fetch` after the rebuild.
 #[tokio::test]
 async fn split_descends_through_three_hosts() -> Result<()> {
     let (schema, scan) = limit_split_scan()?;
