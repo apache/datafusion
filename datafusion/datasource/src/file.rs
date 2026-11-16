@@ -185,66 +185,6 @@ pub fn try_rewrite_dictionary_filter_predicate(
     Ok(None)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::datatypes::Field;
-
-    fn dictionary_field(name: &str) -> Field {
-        Field::new(
-            name,
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-            false,
-        )
-    }
-
-    #[test]
-    fn rewrite_not_eq_literal_for_dictionary_column() -> Result<()> {
-        let schema = Schema::new(vec![dictionary_field("referer")]);
-        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("referer", 0)),
-            Operator::NotEq,
-            Arc::new(Literal::new(ScalarValue::Utf8View(Some(String::new())))),
-        ));
-
-        let rewritten =
-            try_rewrite_dictionary_filter_predicate(&predicate, &schema, &[0])?
-                .expect("dictionary inequality should be rewritten");
-        let rewritten = rewritten
-            .downcast_ref::<BinaryExpr>()
-            .expect("rewritten predicate should remain a binary expression");
-
-        assert_eq!(rewritten.op(), &Operator::NotEq);
-        assert_eq!(
-            rewritten
-                .right()
-                .downcast_ref::<Literal>()
-                .expect("right operand should remain a literal")
-                .value(),
-            &ScalarValue::Utf8(Some(String::new()))
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn do_not_rewrite_not_eq_between_columns() -> Result<()> {
-        let schema = Schema::new(vec![
-            dictionary_field("referer"),
-            Field::new("url", DataType::Utf8View, false),
-        ]);
-        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("referer", 0)),
-            Operator::NotEq,
-            Arc::new(Column::new("url", 1)),
-        ));
-
-        assert!(
-            try_rewrite_dictionary_filter_predicate(&predicate, &schema, &[0])?.is_none()
-        );
-        Ok(())
-    }
-}
-
 /// File format specific behaviors for [`DataSource`]
 ///
 /// # Schema information
@@ -652,5 +592,65 @@ impl dyn FileSource {
     /// Attempts to downcast this source to a concrete type `T`.
     pub fn downcast_ref<T: FileSource>(&self) -> Option<&T> {
         (self as &dyn Any).downcast_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::Field;
+
+    fn dictionary_field(name: &str) -> Field {
+        Field::new(
+            name,
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )
+    }
+
+    #[test]
+    fn rewrite_not_eq_literal_for_dictionary_column() -> Result<()> {
+        let schema = Schema::new(vec![dictionary_field("referer")]);
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("referer", 0)),
+            Operator::NotEq,
+            Arc::new(Literal::new(ScalarValue::Utf8View(Some(String::new())))),
+        ));
+
+        let rewritten =
+            try_rewrite_dictionary_filter_predicate(&predicate, &schema, &[0])?
+                .expect("dictionary inequality should be rewritten");
+        let rewritten = rewritten
+            .downcast_ref::<BinaryExpr>()
+            .expect("rewritten predicate should remain a binary expression");
+
+        assert_eq!(rewritten.op(), &Operator::NotEq);
+        assert_eq!(
+            rewritten
+                .right()
+                .downcast_ref::<Literal>()
+                .expect("right operand should remain a literal")
+                .value(),
+            &ScalarValue::Utf8(Some(String::new()))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn do_not_rewrite_not_eq_between_columns() -> Result<()> {
+        let schema = Schema::new(vec![
+            dictionary_field("referer"),
+            Field::new("url", DataType::Utf8View, false),
+        ]);
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("referer", 0)),
+            Operator::NotEq,
+            Arc::new(Column::new("url", 1)),
+        ));
+
+        assert!(
+            try_rewrite_dictionary_filter_predicate(&predicate, &schema, &[0])?.is_none()
+        );
+        Ok(())
     }
 }

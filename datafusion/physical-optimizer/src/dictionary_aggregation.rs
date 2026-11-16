@@ -1308,7 +1308,7 @@ impl DictionaryPreservation {
                 let old = &aggregate.aggr_expr()[index];
                 let Ok(Some(new)) = Self::replan_aggregate_expr(
                     old,
-                    hypothetical_schema.clone(),
+                    Arc::clone(&hypothetical_schema),
                     &[input_index].into(),
                 ) else {
                     return false;
@@ -1439,11 +1439,7 @@ impl DictionaryPreservation {
         let Some(case) = expr.downcast_ref::<CaseExpr>() else {
             return false;
         };
-        if case.expr().is_some()
-            || case
-                .else_expr()
-                .is_some_and(|expr| references_candidate(expr))
-        {
+        if case.expr().is_some() || case.else_expr().is_some_and(references_candidate) {
             return false;
         }
         case.when_then_expr().iter().all(|(when, then)| {
@@ -1536,11 +1532,8 @@ impl DictionaryPreservation {
             let Some(child) = expr.children().into_iter().next() else {
                 return Ok(None);
             };
-            let Some(child) = Self::replan_dictionary_expr(
-                &child,
-                input_schema,
-                changed_input_indices,
-            )?
+            let Some(child) =
+                Self::replan_dictionary_expr(child, input_schema, changed_input_indices)?
             else {
                 return Ok(None);
             };
@@ -2769,18 +2762,19 @@ impl DictionaryPreservation {
                     .checked_mul(saved_bytes_per_row)
                     .is_some_and(|bytes| bytes >= min_saved_bytes);
         }
-        if matches!(
+        let is_joined_aggregate = matches!(
             dictionary_use,
             DictionaryUse::JoinedAggregate
                 | DictionaryUse::JoinedAggregateWithCompanion
                 | DictionaryUse::SemiJoinedAggregate
                 | DictionaryUse::TransformedJoinedAggregate
-        ) && !storage_profitable
-            && !(dictionary_use == DictionaryUse::SemiJoinedAggregate
+        );
+        let joined_storage_profitable = storage_profitable
+            || (dictionary_use == DictionaryUse::SemiJoinedAggregate
                 && weak_storage_profitable)
-            && !(dictionary_use == DictionaryUse::JoinedAggregateWithCompanion
-                && all_wide_values)
-        {
+            || (dictionary_use == DictionaryUse::JoinedAggregateWithCompanion
+                && all_wide_values);
+        if is_joined_aggregate && !joined_storage_profitable {
             let Some(source_rows) = footer_rows() else {
                 return false;
             };
@@ -2902,10 +2896,10 @@ impl DictionaryPreservation {
             let Some(cast) = projection_expr.expr.downcast_ref::<CastExpr>() else {
                 return Ok(Transformed::no(plan));
             };
-            if !cast
+            if cast
                 .expr()
                 .downcast_ref::<Column>()
-                .is_some_and(|column| column.index() == index)
+                .is_none_or(|column| column.index() != index)
                 || cast.cast_type() != output_field.data_type()
                 || input_field.name() != output_field.name()
                 || input_field.is_nullable() != output_field.is_nullable()
@@ -3072,7 +3066,6 @@ mod tests {
                             parquet_uncompressed_bytes
                                 .filter(|bytes| *bytes != 0)
                                 .map(|encoded_bytes| *bytes / encoded_bytes),
-                        ..Default::default()
                     },
                 )
                 .collect(),
@@ -3181,7 +3174,6 @@ mod tests {
                             min_row_group_value_bytes_per_encoded_byte: Some(
                                 value_bytes_per_parquet_byte,
                             ),
-                            ..Default::default()
                         }
                     } else {
                         PhysicalColumnStatistics::default()
@@ -3366,6 +3358,7 @@ mod tests {
         )
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn filtered_distinct_rollup_plan_with_final_mode(
         footer_rows: usize,
         all_dictionary_encoded: bool,
@@ -3814,7 +3807,6 @@ mod tests {
                             native_dictionary_value_type: Some(DataType::Utf8),
                             min_row_group_value_bytes_per_row: Some(24),
                             min_row_group_value_bytes_per_encoded_byte: Some(6),
-                            ..Default::default()
                         }
                     } else {
                         PhysicalColumnStatistics::default()
@@ -3920,6 +3912,7 @@ mod tests {
         single_group_aggregate(downstream, 0)
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn amplified_join_input(
         build_constraint: Option<Constraint>,
         build_key_nullable: bool,
@@ -3945,7 +3938,6 @@ mod tests {
                     native_dictionary_value_type: Some(DataType::Utf8),
                     min_row_group_value_bytes_per_row: Some(value_bytes_per_row),
                     min_row_group_value_bytes_per_encoded_byte: Some(2),
-                    ..Default::default()
                 },
             ],
         };
@@ -4040,15 +4032,16 @@ mod tests {
                         native_dictionary_value_type: Some(DataType::Utf8),
                         min_row_group_value_bytes_per_row: Some(12),
                         min_row_group_value_bytes_per_encoded_byte: Some(2),
-                        ..Default::default()
                     },
                 ],
             }),
             Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]),
         );
-        let bridge_constraints = propagate_future_key
-            .then(|| Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![1])]))
-            .unwrap_or_default();
+        let bridge_constraints = if propagate_future_key {
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![1])])
+        } else {
+            Constraints::default()
+        };
         let bridge = statistics_scan(
             Arc::new(Schema::new(vec![
                 Field::new("b_d_key", DataType::Int64, false),
@@ -4171,7 +4164,6 @@ mod tests {
                     native_dictionary_value_type: Some(DataType::Utf8),
                     min_row_group_value_bytes_per_row: Some(12),
                     min_row_group_value_bytes_per_encoded_byte: Some(2),
-                    ..Default::default()
                 },
                 PhysicalColumnStatistics::default(),
             ],
@@ -5396,7 +5388,6 @@ mod tests {
                     min_row_group_value_bytes_per_encoded_byte: Some(
                         MIN_FILTER_VALUE_BYTES_PER_PARQUET_BYTE,
                     ),
-                    ..Default::default()
                 }],
             };
             let file = PartitionedFile::new("data.parquet", 1024)
@@ -5816,7 +5807,6 @@ mod tests {
             min_row_group_value_bytes_per_encoded_byte: Some(
                 MIN_FILTER_VALUE_BYTES_PER_PARQUET_BYTE,
             ),
-            ..Default::default()
         };
         let file = PartitionedFile::new("lineitem.parquet", 1024).with_extension(
             PhysicalFileStatistics {

@@ -1812,7 +1812,7 @@ mod tests {
                 _partitioned_file: PartitionedFile,
                 _metadata_size_hint: Option<usize>,
                 _metrics: &ExecutionPlanMetricsSet,
-            ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
+            ) -> Result<Box<dyn AsyncFileReader + Send>> {
                 unimplemented!()
             }
         }
