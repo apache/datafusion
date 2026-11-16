@@ -31,7 +31,6 @@ use datafusion::logical_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, create_udf,
 };
-use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::{
@@ -145,20 +144,6 @@ impl TestContext {
             state_builder = state_builder.with_statistics_registry(registry);
         }
 
-        // Only this file runs with a non default physical optimizer
-        if file_name == "sort_pushdown_custom_rule.slt" {
-            let mut rules = PhysicalOptimizer::new().rules;
-            let ensure_requirements = rules
-                .iter()
-                .position(|rule| rule.name() == "EnsureRequirements")
-                .expect("default optimizer includes EnsureRequirements");
-            rules.insert(
-                ensure_requirements,
-                Arc::new(custom_sort_pushdown::CustomLimitRule),
-            );
-            state_builder = state_builder.with_physical_optimizer_rules(rules);
-        }
-
         let state = state_builder.build();
 
         let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
@@ -172,12 +157,6 @@ impl TestContext {
                 .expect("register custom projection table");
                 exact_sort_pushdown::register_exact_sort_source(test_ctx.session_ctx())
                     .expect("register exact sort source");
-            }
-            "sort_pushdown_custom_rule.slt" => {
-                custom_sort_pushdown::register_custom_ordered_input(
-                    test_ctx.session_ctx(),
-                )
-                .expect("register custom ordered input");
             }
             "parquet_missing_bounds.slt" => {
                 register_parquet_missing_bounds(&mut test_ctx).await;
