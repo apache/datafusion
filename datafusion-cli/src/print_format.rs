@@ -17,7 +17,7 @@ use datafusion::common::format::ExplainFormat;
 use datafusion::config::FormatOptions;
 use datafusion::error::Result;
 use tabled::builder::Builder;
-use tabled::grid::{config::Position, records::RecordsMut};
+use tabled::grid::{config::Position, records::RecordsMut, util::string::get_char_width};
 use tabled::settings::{
     Span, Style, Width, object::Cell, peaker::Priority, style::HorizontalLine,
     width::Wrap,
@@ -323,7 +323,11 @@ fn print_wrapped<W: std::io::Write>(
     }
     let text = match continuation_indent {
         Some(indent) => wrap_indented(text, width, indent),
-        None => Wrap::wrap(text, width, true),
+        None => {
+            // Keep an indivisible character intact even if it exceeds the target width.
+            let width = text.chars().map(get_char_width).fold(width, usize::max);
+            Wrap::wrap(text, width, true)
+        }
     };
     writeln!(writer, "{text}")?;
     Ok(())
@@ -456,7 +460,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use arrow::array::{Int32Array, Time64NanosecondArray};
+    use arrow::array::{Int32Array, StringArray, Time64NanosecondArray};
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use insta::{allow_duplicates, assert_snapshot};
 
@@ -735,6 +739,42 @@ mod tests {
             .with_header(WithHeader::Yes)
             .run();
         assert_eq!(output, "")
+    }
+
+    #[test]
+    fn narrow_tables_preserve_wide_characters() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        for (width, value, expected) in [
+            (1, "中", "s\n中\n"),
+            (1, "ab", "s\na\nb\n"),
+            (1, "a中b", "s\na\n中\nb\n"),
+            (1, "🙂", "s\n🙂\n"),
+            (2, "中", "s\n中\n"),
+        ] {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(StringArray::from(vec![value]))],
+            )?;
+            let mut output = Vec::new();
+            PrintFormat::Table.print_batches_with_options(
+                &mut output,
+                Arc::clone(&schema),
+                &[batch],
+                TableOptions {
+                    maxrows: MaxRows::Unlimited,
+                    width: Some(width),
+                    explain_format: None,
+                },
+                true,
+                &FormatOptions::default(),
+            )?;
+            assert_eq!(
+                String::from_utf8(output).unwrap(),
+                expected,
+                "width {width}, value {value:?}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

@@ -57,6 +57,7 @@ Options:
 `--maxwidth auto` (default) fits tables and explain plans to the terminal width.
 Use `--maxwidth 100` for a fixed width, or `--maxwidth 0` / `--maxwidth inf` for
 no limit. Change it in the CLI with `\pset maxwidth <value>`.
+Individual characters wider than the limit are kept intact.
 
 With `auto`, redirected output is unlimited. CSV, TSV, and JSON output is unchanged.
 
