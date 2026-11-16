@@ -781,7 +781,7 @@ drop table t0;
 # pushdown rebuilds a Parquet scan that accepts a dynamic filter, which
 # recomputes the aggregates above it.
 statement ok
-COPY (SELECT (v % 100)::int AS k, v AS x FROM generate_series(1, 1000) AS s(v))
+COPY (SELECT (v % 100)::int AS k, v AS x FROM generate_series(1, 1000) AS s(v) ORDER BY x)
 TO 'test_files/scratch/aggregates_topk/topk.parquet' STORED AS PARQUET;
 
 statement ok

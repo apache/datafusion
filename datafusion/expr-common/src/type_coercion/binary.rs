@@ -2270,6 +2270,12 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         (Date32, Time64(_)) | (Time64(_), Date32) => Some(Timestamp(Nanosecond, None)),
         (Date64, Time32(_)) | (Time32(_), Date64) => Some(Timestamp(Nanosecond, None)),
         (Date64, Time64(_)) | (Time64(_), Date64) => Some(Timestamp(Nanosecond, None)),
+        (Time32(lhs_unit) | Time64(lhs_unit), Time32(rhs_unit) | Time64(rhs_unit)) => {
+            match timeunit_coercion(lhs_unit, rhs_unit) {
+                unit @ (Second | Millisecond) => Some(Time32(unit)),
+                unit @ (Microsecond | Nanosecond) => Some(Time64(unit)),
+            }
+        }
         (Timestamp(_, None), Date64) | (Date64, Timestamp(_, None)) => {
             Some(Timestamp(Nanosecond, None))
         }
