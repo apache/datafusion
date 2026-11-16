@@ -1071,10 +1071,10 @@ SELECT CASE WHEN column1 < 0 THEN column2[7] WHEN column1 > 100 THEN column2[8] 
 0
 
 query I
-SELECT CASE WHEN column1 < 0 THEN column2['a'] WHEN column1 > 100 THEN column2['b'] ELSE 0 END FROM mt
+SELECT CASE WHEN column1 = 1 THEN column2['a'] WHEN column1 = 2 THEN column2['c'] ELSE 0 END FROM mt
 ----
-0
-0
+10
+30
 
 statement ok
 drop table mt;

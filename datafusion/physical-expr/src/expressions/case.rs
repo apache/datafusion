@@ -1819,7 +1819,7 @@ mod tests {
     use super::*;
 
     use crate::expressions;
-    use crate::expressions::{binary, cast, col, is_not_null};
+    use crate::expressions::{binary, cast, col, is_not_null, lambda};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::Field;
@@ -2552,6 +2552,14 @@ mod tests {
     #[test]
     fn case_without_expr_precomputes_struct_fields() -> Result<()> {
         let batch = case_test_batch_with_struct()?;
+        let metadata =
+            std::collections::HashMap::from([("key".to_string(), "value".to_string())]);
+        let schema = batch
+            .schema()
+            .as_ref()
+            .clone()
+            .with_metadata(metadata.clone());
+        let batch = batch.with_schema(Arc::new(schema))?;
         let schema = batch.schema();
         let s = col("s", &schema)?;
         let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
@@ -2579,6 +2587,10 @@ mod tests {
                 assert!(projected.supports_projection);
                 assert_eq!(projected.projection, vec![0]);
                 assert_eq!(projected.precomputed, vec![s_a, s_b]);
+                let projected_batch = projected
+                    .project_batch(&batch)?
+                    .expect("batch should be projected");
+                assert_eq!(projected_batch.schema().metadata(), &metadata);
             }
             method => panic!("expected NoExpression, got {method:?}"),
         }
@@ -2630,7 +2642,7 @@ mod tests {
         let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
         let s_b = get_field_expr(Arc::clone(&s), "b", &schema)?;
 
-        // CASE WHEN s['a'] > 1 THEN s['b'] / s['a'] ELSE x END
+        // CASE WHEN s['a'] > 1 THEN s['b'] / (s['a'] - 1) ELSE x END
         let expr = CaseExpr::try_new(
             None,
             vec![(
@@ -2638,7 +2650,7 @@ mod tests {
                 binary(
                     Arc::clone(&s_b),
                     Operator::Divide,
-                    Arc::clone(&s_a),
+                    binary(Arc::clone(&s_a), Operator::Minus, lit(1i32), &schema)?,
                     &schema,
                 )?,
             )],
@@ -2657,7 +2669,7 @@ mod tests {
 
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_int32_array(&result)?;
-        let expected = Int32Array::from(vec![Some(100), Some(10), Some(300), Some(10)]);
+        let expected = Int32Array::from(vec![Some(100), Some(20), Some(300), Some(13)]);
         assert_eq!(&expected, result);
         Ok(())
     }
@@ -2774,6 +2786,44 @@ mod tests {
         let b = as_int32_array(result.as_struct().column(1))?;
         assert_eq!(b.value(0), 10);
         assert_eq!(result.logical_nulls().unwrap().null_count(), 3);
+        Ok(())
+    }
+
+    /// Lambda variables take slots in the projected column numbering but are not
+    /// columns of the projected batch, so nothing is precomputed when lambdas are present.
+    #[test]
+    fn case_with_lambda_does_not_precompute_struct_fields() -> Result<()> {
+        let arr_field =
+            Field::new_list("arr", Field::new_list_field(DataType::Int32, true), true);
+        let batch = case_test_batch_with_struct()?;
+        let s_field = batch.schema().field(1).clone();
+        let schema = Schema::new(vec![arr_field, s_field]);
+        let arr = col("arr", &schema)?;
+        let s_a = get_field_expr(col("s", &schema)?, "a", &schema)?;
+        let v = Arc::new(LambdaVariable::new(
+            2,
+            Arc::new(Field::new("v", DataType::Int32, true)),
+        ));
+
+        // Stands for
+        // CASE WHEN s['a'] > 1 THEN array_transform(arr, v -> v) WHEN s['a'] = 0 THEN arr END;
+        // the bare lambda references `v` the same way the higher-order function's would
+        let body = CaseBody {
+            expr: None,
+            when_then_expr: vec![
+                (
+                    binary(Arc::clone(&s_a), Operator::Gt, lit(1i32), &schema)?,
+                    lambda(["v"], v)?,
+                ),
+                (binary(s_a, Operator::Eq, lit(0i32), &schema)?, arr),
+            ],
+            else_expr: None,
+        };
+
+        let projected = body.project(&schema)?;
+        assert!(projected.supports_projection);
+        assert_eq!(projected.projection, vec![0, 1, 2]);
+        assert!(projected.precomputed.is_empty());
         Ok(())
     }
 
