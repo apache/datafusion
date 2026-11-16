@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::vec;
 
 use super::Unparser;
-use super::dialect::{DistinctFromStyle, IntervalStyle};
+use super::dialect::{ArrayTypeStyle, DistinctFromStyle, IntervalStyle};
 use arrow::array::{
     ArrayRef, Date32Array, Date64Array, PrimitiveArray,
     types::{
@@ -1811,6 +1811,30 @@ impl Unparser<'_> {
         }))
     }
 
+    fn array_to_ast_dtype(
+        &self,
+        data_type: &DataType,
+        inner: &FieldRef,
+        size: Option<i32>,
+    ) -> Result<ast::DataType> {
+        let elem = Box::new(self.arrow_dtype_to_ast_dtype(inner)?);
+        let elem_def = match (self.dialect.array_type_style(), size) {
+            (ArrayTypeStyle::SquareBracket, size) => {
+                ast::ArrayElemTypeDef::SquareBracket(elem, size.map(|s| s as u64))
+            }
+            (ArrayTypeStyle::AngleBracket, None) => {
+                ast::ArrayElemTypeDef::AngleBracket(elem)
+            }
+            (ArrayTypeStyle::AngleBracket, Some(_))
+            | (ArrayTypeStyle::Unsupported, _) => {
+                return not_impl_err!(
+                    "Unsupported DataType for this dialect: conversion: {data_type}"
+                );
+            }
+        };
+        Ok(ast::DataType::Array(elem_def))
+    }
+
     fn arrow_dtype_to_ast_dtype(&self, field: &FieldRef) -> Result<ast::DataType> {
         let data_type = field.data_type();
         match data_type {
@@ -1864,14 +1888,11 @@ impl Unparser<'_> {
             DataType::Utf8 => Ok(self.dialect.utf8_cast_dtype()),
             DataType::LargeUtf8 => Ok(self.dialect.large_utf8_cast_dtype()),
             DataType::Utf8View => Ok(self.dialect.utf8_cast_dtype()),
-            DataType::List(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type}")
+            DataType::List(inner) | DataType::LargeList(inner) => {
+                self.array_to_ast_dtype(data_type, inner, None)
             }
-            DataType::FixedSizeList(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type}")
-            }
-            DataType::LargeList(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type}")
+            DataType::FixedSizeList(inner, size) => {
+                self.array_to_ast_dtype(data_type, inner, Some(*size))
             }
             DataType::ListView(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
@@ -1946,12 +1967,13 @@ mod tests {
     use sqlparser::ast::ExactNumberInfo;
 
     use crate::unparser::dialect::{
-        BigQueryDialect, CharacterLengthStyle, CustomDialect, CustomDialectBuilder,
-        DateFieldExtractStyle, DefaultDialect, Dialect, DuckDBDialect, PostgreSqlDialect,
-        ScalarFnToSqlHandler,
+        ArrayTypeStyle, BigQueryDialect, CharacterLengthStyle, CustomDialect,
+        CustomDialectBuilder, DateFieldExtractStyle, DefaultDialect, Dialect,
+        DuckDBDialect, PostgreSqlDialect, ScalarFnToSqlHandler,
     };
 
     use super::*;
+    use datafusion_common::assert_contains;
 
     /// Mocked UDF
     #[derive(Debug, PartialEq, Eq, Hash)]
@@ -3712,6 +3734,57 @@ mod tests {
 
         assert_eq!(ast_dtype, ast::DataType::Varchar(None));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_to_ast_dtype() -> Result<()> {
+        let utf8 = Arc::new(Field::new_list_field(DataType::Utf8, true));
+        let list = DataType::List(Arc::clone(&utf8));
+        let large_list = DataType::LargeList(Arc::clone(&utf8));
+        let fixed_list = DataType::FixedSizeList(Arc::clone(&utf8), 3);
+        let nested = DataType::List(Arc::new(Field::new_list_field(list.clone(), true)));
+
+        let square: &dyn Dialect = &DefaultDialect {};
+        let angle: &dyn Dialect = &BigQueryDialect {};
+        let none: &dyn Dialect = &MySqlDialect {};
+        let duckdb = DuckDBDialect::new();
+        let custom_default = CustomDialect::default();
+        let custom_angle = CustomDialectBuilder::new()
+            .with_array_type_style(ArrayTypeStyle::AngleBracket)
+            .build();
+
+        let cases: Vec<(&dyn Dialect, &DataType, Option<&str>)> = vec![
+            (square, &list, Some("VARCHAR[]")),
+            (square, &large_list, Some("VARCHAR[]")),
+            (square, &fixed_list, Some("VARCHAR[3]")),
+            (square, &nested, Some("VARCHAR[][]")),
+            (&PostgreSqlDialect {}, &list, Some("VARCHAR[]")),
+            (&duckdb, &list, Some("VARCHAR[]")),
+            (angle, &list, Some("ARRAY<STRING>")),
+            (angle, &nested, Some("ARRAY<ARRAY<STRING>>")),
+            (angle, &fixed_list, None),
+            (&custom_angle, &list, Some("ARRAY<VARCHAR>")),
+            (none, &list, None),
+            (&SqliteDialect {}, &list, None),
+            (&SnowflakeDialect {}, &list, None),
+            (&custom_default, &list, None),
+        ];
+
+        for (dialect, data_type, expected) in cases {
+            let unparser = Unparser::new(dialect);
+            let field = Arc::new(Field::new("a", data_type.clone(), true));
+            let result = unparser.arrow_dtype_to_ast_dtype(&field);
+            match expected {
+                Some(expected) => assert_eq!(result?.to_string(), expected),
+                None => {
+                    assert_contains!(
+                        result.unwrap_err().to_string(),
+                        "Unsupported DataType for this dialect"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 

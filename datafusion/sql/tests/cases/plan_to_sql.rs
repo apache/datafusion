@@ -2240,6 +2240,28 @@ fn test_cast_to_tinyint() -> Result<(), DataFusionError> {
 }
 
 #[test]
+fn test_cast_to_array() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(NULL as text[])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT CAST(NULL AS VARCHAR[])",
+    );
+    Ok(())
+}
+
+#[test]
+fn test_cast_to_fixed_size_array_default_dialect() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(NULL as int[2])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT CAST(NULL AS INTEGER[2])",
+    );
+    Ok(())
+}
+
+#[test]
 fn test_cast_to_tinyint_default_dialect() -> Result<(), DataFusionError> {
     roundtrip_statement_with_dialect_helper!(
         sql: "select cast(3 as tinyint)",
