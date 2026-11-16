@@ -569,6 +569,12 @@ that aligns with the SQL specification.</p>
 </pre></div>
 </div>
 </section>
+<section id="deprecated-expr-wildcard-has-been-removed">
+<h3>Deprecated <code class="docutils literal notranslate"><span class="pre">Expr::Wildcard</span></code> has been removed<a class="headerlink" href="#deprecated-expr-wildcard-has-been-removed" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">Expr::Wildcard</span></code> has been deprecated since version 46.0.0, and has been removed.
+For counting rows, use <code class="docutils literal notranslate"><span class="pre">count_all()</span></code> or <code class="docutils literal notranslate"><span class="pre">count_all_window()</span></code>.</p>
+<p>It has also been removed from the Protobuf and Substrait based serialization.</p>
+</section>
 </section>
 </section>
 
@@ -625,6 +631,7 @@ that aligns with the SQL specification.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-spark-moved-to-its-own-repository"><code class="docutils literal notranslate"><span class="pre">datafusion-spark</span></code> moved to its own repository</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetfilereaderfactory-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">ParquetFileReaderFactory</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#copy-to-ordering"><code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">TO</span></code> ordering</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#deprecated-expr-wildcard-has-been-removed">Deprecated <code class="docutils literal notranslate"><span class="pre">Expr::Wildcard</span></code> has been removed</a></li>
 </ul>
 </li>
 </ul>
