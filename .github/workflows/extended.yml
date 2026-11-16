@@ -81,13 +81,14 @@ jobs:
           extended_test_binary="$(cargo xtask ci step test extended-build |
             jq -r 'select(.reason == "compiler-artifact" and .target.name == "extended_tests" and .executable != null) | .executable')"
           test -x "$extended_test_binary"
+          xtask_binary="${CARGO_TARGET_DIR:-target}/debug/datafusion-xtask"
+          test -x "$xtask_binary"
           printf 'EXTENDED_TEST_BINARY=%s\n' "$extended_test_binary" >> "$GITHUB_ENV"
+          printf 'XTASK_BINARY=%s\n' "$xtask_binary" >> "$GITHUB_ENV"
       - parallel:
           - name: Run extended tests
-            run: '"$EXTENDED_TEST_BINARY"'
-            working-directory: datafusion/core
-            env:
-              RUST_BACKTRACE: "1"
+            # Invoke the built xtask directly so Cargo cannot wait on a fuzz build.
+            run: '"$XTASK_BINARY" ci step test extended --binary "$EXTENDED_TEST_BINARY"'
           - name: Run fuzz tests
             run: cargo xtask ci step test fuzz
           # Migrate it to the above unified fuzz runner over time

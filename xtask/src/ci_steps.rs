@@ -14,21 +14,25 @@ type StepRunner = fn(&StepContext, &[String]) -> StepResult<StepCommand>;
 
 enum StepCommand {
     External(CommandSpec),
-    WorkspaceCoverage(PathBuf),
+    WorkspaceCoverage(PathBuf, EnvReader),
 }
 
 impl StepCommand {
     fn execute(self) -> Result<()> {
         match self {
             Self::External(command) => command.execute(),
-            Self::WorkspaceCoverage(root) => crate::coverage::run(&root),
+            Self::WorkspaceCoverage(root, env_reader) => {
+                crate::coverage::run(&root, env_reader)
+            }
         }
     }
 
     fn explanation(&self) -> Result<String> {
         match self {
             Self::External(command) => Ok(command.explanation()),
-            Self::WorkspaceCoverage(root) => crate::coverage::explanation(root),
+            Self::WorkspaceCoverage(root, env_reader) => {
+                crate::coverage::explanation(root, *env_reader)
+            }
         }
     }
 }
@@ -62,9 +66,9 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|extended-build|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]",
+        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|extended-build|fuzz|fuzz-legacy|hash-collisions|sqlite> [--binary <path>] [--explain]",
         help_examples: &["test cli", "test workspace"],
-        help_description: "Run a CI test suite",
+        help_description: "Run a CI test suite (extended also accepts --binary <path>)",
         runner: StepContext::run_test,
     },
 ];
@@ -251,18 +255,41 @@ impl StepContext {
 
     /// Implementation for `cargo xtask ci step test [args]`
     fn run_test(&self, args: &[String]) -> StepResult<StepCommand> {
-        let [variant] = args else {
-            return Err(StepError::Usage);
-        };
-
         let mut cmd_builder = CommandSpec::builder(self.env_reader);
         cmd_builder
             .current_dir(&self.root)
             .failure_message("CI test step failed");
 
+        if let [variant, option, binary] = args
+            && variant == "extended"
+            && option == "--binary"
+            && !binary.is_empty()
+        {
+            let binary = self.root.join(binary);
+            let manifest_dir = self.root.join("datafusion/core");
+            cmd_builder
+                .doc("Run the prebuilt extended suite without acquiring Cargo's build lock.")
+                .program(&binary)
+                .current_dir(&manifest_dir)
+                .env("CARGO_MANIFEST_DIR", &manifest_dir)
+                .env("CARGO_MANIFEST_PATH", manifest_dir.join("Cargo.toml"))
+                .env("RUST_BACKTRACE", "1")
+                .requires_path(&binary, "build it with `cargo xtask ci step test extended-build`");
+            return cmd_builder
+                .build()
+                .map(StepCommand::External)
+                .map_err(StepError::InvalidCommand);
+        }
+        let [variant] = args else {
+            return Err(StepError::Usage);
+        };
+
         match variant.as_str() {
             "workspace" => {
-                return Ok(StepCommand::WorkspaceCoverage(self.root.clone()));
+                return Ok(StepCommand::WorkspaceCoverage(
+                    self.root.clone(),
+                    self.env_reader,
+                ));
             }
             "slt-coverage" => {
                 cmd_builder
@@ -394,6 +421,7 @@ impl StepContext {
             "benchmark-sqllogic" => {
                 let tpch_data = self.root.join(TPCH_DATA_DIR);
                 cmd_builder
+                    .doc("Run only the TPC-H SLT suite; other SQL logic tests run in workspace coverage.")
                     .program("cargo")
                     .args([
                         "test",
@@ -602,7 +630,7 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
 
-    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|extended-build|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]";
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|extended-build|fuzz|fuzz-legacy|hash-collisions|sqlite> [--binary <path>] [--explain]";
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
@@ -705,6 +733,29 @@ mod tests {
     }
 
     #[test]
+    fn prebuilt_extended_keeps_manifest_context() {
+        let (_, command) = context()
+            .ci_step(&args(&[
+                "test",
+                "extended",
+                "--binary",
+                "target/ci/deps/extended",
+            ]))
+            .unwrap();
+        let StepCommand::External(command) = command else {
+            panic!("expected a prebuilt test command");
+        };
+        insta::assert_snapshot!(command.full_command(), @r"
+cd /workspace/datafusion/core && \
+CARGO_MANIFEST_DIR=/workspace/datafusion/core \
+CARGO_MANIFEST_PATH=/workspace/datafusion/core/Cargo.toml \
+RUST_BACKTRACE=1 \
+/workspace/target/ci/deps/extended
+");
+        assert!(command.execute().unwrap_err().contains("extended-build"));
+    }
+
+    #[test]
     fn unknown_test_variant_is_rejected() {
         let error = context()
             .ci_step(&args(&["test", "extended_tests", "--explain"]))
@@ -780,58 +831,10 @@ cargo check \
                 command: &["test", "workspace"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
-# Package and integration-target placeholders are resolved by Cargo at execution time.
-# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
-cd /workspace && \
-RUST_BACKTRACE=1 \
-cargo llvm-cov clean \
---workspace
+# Resolve coverage targets at runtime; run SLT once and write both reports.
 
-# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
 cd /workspace && \
-RUST_BACKTRACE=1 \
-cargo llvm-cov \
---profile ci \
---workspace \
---exclude datafusion-examples \
---exclude ffi_example_table_provider \
---exclude datafusion-cli \
---features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
---no-report \
---test sqllogictests
-
-# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
-cd /workspace && \
-RUST_BACKTRACE=1 \
-cargo llvm-cov report \
---profile ci \
---codecov \
---package '<selected-package>' \
---output-path target/codecov-slt.json
-
-# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
-cd /workspace && \
-RUST_BACKTRACE=1 \
-cargo llvm-cov \
---profile ci \
---workspace \
---exclude datafusion-examples \
---exclude ffi_example_table_provider \
---exclude datafusion-cli \
---features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
---no-report \
---lib \
---bins \
---test '<enabled-integration-target-except-SLT>'
-
-# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
-cd /workspace && \
-RUST_BACKTRACE=1 \
-cargo llvm-cov report \
---profile ci \
---codecov \
---package '<selected-package>' \
---output-path target/codecov.json
+cargo xtask ci step test workspace
 ");
                 },
             },
@@ -953,6 +956,8 @@ cargo test plan_q \
                 command: &["test", "benchmark-sqllogic"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
+# Run only the TPC-H SLT suite; other SQL logic tests run in workspace coverage.
+
 # Requires path `/workspace/datafusion/sqllogictest/test_files/tpch/data` (generate the TPC-H fixture data before running this step)
 cd /workspace && \
 INCLUDE_TPCH=true \

@@ -34,7 +34,7 @@
 //!
 //! A CI step is one command used by DataFusion's CI that can also be run
 //! locally. `--explain` prints the shell commands without executing them. Workspace
-//! coverage uses placeholders for packages and targets resolved by Cargo at runtime.
+//! coverage prints its runnable xtask entry point, with targets resolved at runtime.
 //!
 //! Use `cargo xtask ci step help` to list the available steps and
 //! `cargo xtask ci step <step-name> help` for step-specific arguments.
