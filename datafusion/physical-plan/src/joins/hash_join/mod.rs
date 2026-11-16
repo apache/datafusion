@@ -10,13 +10,15 @@
 //!
 //! 1. [`RegularHashJoinStream::into_stream`]: the state machine entry point,
 //!    driving the build, probe, and final output stages.
-//! 2. [`BatchedJoinProcessor`]: probes the raw index, evaluates the residual filter,
-//!    and coalesces output. Each lookup returns up to `batch_size` candidate pairs.
-//! 3. [`Map`]: the raw build-side index (hash table or integer-key array map).
+//! 2. [`BatchedJoinProcessor`]: looks up bounded probe batches, expands duplicate
+//!    groups in chunks of at most `batch_size` pairs, applies residual filters and
+//!    join semantics, and coalesces output.
+//! 3. [`JoinIndexMap`]: the build-side index. It resolves equal keys to individual
+//!    build rows or handles to contiguous groups of duplicate rows.
 //!
 //! [`RegularHashJoinStream::into_stream`]: regular_join::RegularHashJoinStream::into_stream
 //! [`BatchedJoinProcessor`]: batched_join_processor::BatchedJoinProcessor
-//! [`Map`]: crate::joins::Map
+//! [`JoinIndexMap`]: crate::joins::join_index::JoinIndexMap
 
 pub use exec::{HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild};
 /// # Public Only for Internal Use:
@@ -34,6 +36,7 @@ mod exec;
 mod inlist_builder;
 mod not_in;
 mod partitioned_hash_eval;
+pub(crate) mod probe_cursor;
 mod regular_join;
 mod shared_bounds;
 mod stream;

@@ -978,8 +978,9 @@ config_namespace! {
         pub enable_migration_aggregate: bool, default = true
 
         /// Whether inner, left outer, right outer, and full outer hash joins use
-        /// the refactored probe implementation. When set to `false`, these joins
-        /// use the previous probe implementation.
+        /// the exact-key index with flat duplicate-row groups and the refactored
+        /// probe implementation. When set to `false`, these joins use the previous
+        /// index and probe implementations. Semi, anti, and mark joins are unaffected.
         ///
         /// The fallback exists only as a workaround for bugs in the new
         /// implementation and will be removed, together with this option, once

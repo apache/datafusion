@@ -28,17 +28,16 @@ use datafusion_execution::memory_pool::MemoryPool;
 /// nested build columns remain unsupported. UTF-8 and fixed-size binary keys
 /// use hash-table membership filters instead of copying range or IN-list values.
 pub struct PreparedHashJoinBuild {
-    build: Arc<JoinBuildData>,
+    build: JoinBuildData,
     keys: Vec<usize>,
     null_equality: NullEquality,
-    regular: bool,
 }
 
 impl fmt::Debug for PreparedHashJoinBuild {
     /// Describe immutable metadata without dumping table contents.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PreparedHashJoinBuild")
-            .field("schema", &self.build.batch.schema())
+            .field("schema", &self.build.batch().schema())
             .field("keys", &self.keys)
             .field("rows", &self.num_rows())
             .field("reserved_bytes", &self.reserved_bytes())
@@ -49,40 +48,46 @@ impl fmt::Debug for PreparedHashJoinBuild {
 impl PreparedHashJoinBuild {
     /// Return the retained build reservation, excluding all per-probe state.
     pub fn reserved_bytes(&self) -> usize {
-        self.build.reservation.size() + self.build.map.reserved_bytes()
+        self.build.reservation().size() + self.build.map_reserved_bytes()
     }
 
     /// Return the complete build row count, including duplicate and null keys.
     pub fn num_rows(&self) -> usize {
-        self.build.batch.num_rows()
+        self.build.batch().num_rows()
     }
 
     pub(super) fn is_regular(&self) -> bool {
-        self.regular
+        matches!(&self.build, JoinBuildData::Regular(_))
     }
 
     /// Create independent mutable state for one consuming legacy join.
-    pub(super) fn probe_data(&self, probe_threads: usize) -> JoinLeftData {
-        JoinLeftData {
-            build: Arc::clone(&self.build),
+    pub(super) fn probe_data(&self, probe_threads: usize) -> Result<JoinLeftData> {
+        let JoinBuildData::Legacy(build) = &self.build else {
+            return internal_err!("Regular prepared build requires the regular executor");
+        };
+        Ok(JoinLeftData {
+            build: Arc::clone(build),
             // Prepared builds exclude null-aware joins.
             not_in: None,
             visited_indices_bitmap: Mutex::new(BooleanBufferBuilder::new(0)),
             probe_completion: ProbeCompletion::new(probe_threads),
-        }
+        })
     }
 
     /// Create independent [`RegularJoinLeftData`] for one consuming regular join.
     /// Prepared builds currently support INNER only, so no unmatched-row state is needed.
-    pub(super) fn regular_probe_data(&self) -> RegularJoinLeftData {
-        RegularJoinLeftData::new(Arc::clone(&self.build), None, 0)
+    pub(super) fn regular_probe_data(&self) -> Result<RegularJoinLeftData> {
+        let JoinBuildData::Regular(build) = &self.build else {
+            return internal_err!("Legacy prepared build requires the legacy executor");
+        };
+        Ok(RegularJoinLeftData::new(Arc::clone(build), None, 0))
     }
 
     /// Validate the build descriptor and current execution restrictions without
     /// consuming input or modifying either plan. Cache identity is caller-owned.
     pub(super) fn validate(&self, join: &HashJoinExec) -> Result<()> {
         let keys = prepared_key_indices(join)?;
-        if join.left.schema() != self.build.batch.schema()
+        if join.left.schema() != self.build.batch().schema()
             || keys != self.keys
             || join.null_equality != self.null_equality
         {
@@ -200,13 +205,13 @@ impl HashJoinExec {
             None,
             count,
             BuildMode::Prepared,
+            regular,
         )
         .await?;
         Ok(Arc::new(PreparedHashJoinBuild {
             build: data.build,
             keys,
             null_equality: self.null_equality,
-            regular,
         }))
     }
 }
