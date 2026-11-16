@@ -19,6 +19,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::join_selection::below_collect_thresholds;
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
@@ -1409,9 +1410,10 @@ fn enforce_distribution_relationships(
     plan_name: &str,
     input_distributions: &InputDistributionRequirements,
     children: &mut [DistributionChildState],
-    target_partitions: usize,
+    config: &ConfigOptions,
     stats_ctx: &StatisticsContext,
 ) -> Result<()> {
+    let target_partitions = config.execution.target_partitions;
     let mut repartitioned_for_relationship = vec![false; children.len()];
 
     loop {
@@ -1495,6 +1497,26 @@ fn enforce_distribution_relationships(
                     }
                 }
             };
+
+        // Do not adapt a child above the `CollectLeft` thresholds to a reference
+        // below them; fall back to hash partitioning instead. Otherwise keep the
+        // reference, so that it is not shuffled as well.
+        let best_satisfied_child = best_satisfied_child.filter(|(ref_idx, _)| {
+            let is_small = |idx: usize| {
+                let stats = stats_ctx
+                    .compute_arc(&children[idx].context.plan, &StatisticsArgs::new())
+                    .ok()?;
+                below_collect_thresholds(
+                    &stats,
+                    config.optimizer.hash_join_single_partition_threshold,
+                    config.optimizer.hash_join_single_partition_threshold_rows,
+                )
+            };
+            is_small(*ref_idx) != Some(true)
+                || !unsatisfied_children
+                    .iter()
+                    .any(|&child_idx| is_small(child_idx) == Some(false))
+        });
 
         // Validate that best_satisfied_child can be adapted across all unsatisfied children in the group
         let best_satisfied_child =
@@ -1923,7 +1945,7 @@ pub fn ensure_distribution_with_stats(
         plan.name(),
         &input_distributions,
         &mut children,
-        target_partitions,
+        config,
         stats_ctx,
     )?;
 
