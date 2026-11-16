@@ -1228,8 +1228,7 @@ impl BinaryExpr {
                     pre_selection_scatter(mask, Some(boolean_array), fill_value)?;
                 // Selected rows may have a NULL LHS (`NULL OR x`), so combine
                 // with the LHS; unselected rows are `fill_value` on both sides.
-                if lhs.data_type() == DataType::Boolean
-                    && let ColumnarValue::Array(lhs) = &lhs
+                if let ColumnarValue::Array(lhs) = &lhs
                     && lhs.null_count() > 0
                 {
                     let scattered = scattered.into_array(batch.num_rows())?;
@@ -1306,7 +1305,7 @@ enum ShortCircuitStrategy {
     None,
     ReturnLeft,
     ReturnRight,
-    /// Evaluate the RHS where the LHS is `false`; fill other rows with `true`.
+    /// Evaluate the RHS where the LHS is not `true`; fill other rows with `true`.
     PreSelection {
         mask: BooleanArray,
         fill_value: bool,
