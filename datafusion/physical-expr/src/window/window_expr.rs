@@ -552,7 +552,9 @@ pub trait AggregateWindowExpr: WindowExpr {
             return Ok(new_empty_array(out_type));
         }
 
+        // The kernels slide from `last_range` to the new frames, so both must be well formed
         if filter_mask.is_none()
+            && frames_are_well_formed(std::slice::from_ref(&*last_range), 0..length)
             && frames_are_well_formed(&ranges, 0..length)
             && let Some(out) =
                 accumulator.evaluate_window_frames(&values, last_range, &ranges)?
@@ -588,6 +590,8 @@ pub(crate) fn filter_array(array: &ArrayRef, mask: &BooleanArray) -> Result<Arra
 /// Whether every frame starts no later than it ends and lies inside `bounds`. A frame that starts
 /// after it ends (a negative `RANGE` offset produces one, which the planner should reject) is left
 /// to the row-by-row protocol, so that it behaves exactly as it did before frames were evaluated in bulk.
+/// The previous frame of a partition (`last_range`), from which the kernels slide, must be well formed too:
+/// after an inverted frame the next, well-formed frames are still computed from it.
 fn frames_are_well_formed(frames: &[Range<usize>], bounds: Range<usize>) -> bool {
     frames
         .iter()
