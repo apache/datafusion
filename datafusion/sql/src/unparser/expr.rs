@@ -1313,6 +1313,9 @@ impl Unparser<'_> {
     /// stays inside the string, so the cast folds to one negative literal and not
     /// to a negation of a cast.
     fn non_finite_float_to_sql(&self, f: f64, data_type: DataType) -> Result<ast::Expr> {
+        if let Some(expr) = self.dialect.non_finite_float_to_sql(f)? {
+            return Ok(expr);
+        }
         let value = if f.is_nan() {
             "NaN"
         } else if f.is_sign_positive() {
@@ -2849,6 +2852,26 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+    }
+
+    #[test]
+    fn test_sqlite_non_finite_float_scalar_to_expr() -> Result<()> {
+        let unparser = Unparser::new(&SqliteDialect {});
+        for (value, expected) in [(f64::INFINITY, "9e999"), (f64::NEG_INFINITY, "-9e999")]
+        {
+            let ast = unparser.expr_to_sql(&lit(value))?;
+            assert_eq!(ast.to_string(), expected);
+        }
+        let ast = unparser.expr_to_sql(&lit(f32::INFINITY))?;
+        assert_eq!(ast.to_string(), "9e999");
+
+        let err = unparser.expr_to_sql(&lit(f64::NAN)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("SQLite has no literal for a NaN float"),
+            "{err}"
+        );
+        Ok(())
     }
 
     #[test]

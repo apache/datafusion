@@ -12,7 +12,7 @@ use super::{
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use chrono::DateTime;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, internal_err, not_impl_err};
 use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::tokenizer::Span;
@@ -57,6 +57,15 @@ pub trait Dialect: Send + Sync {
 
     fn interval_style(&self) -> IntervalStyle {
         IntervalStyle::PostgresVerbose
+    }
+
+    /// Render a non-finite float literal (`inf`, `-inf` or `NaN`).
+    ///
+    /// Return `Ok(None)` to use the default, a cast of the string `'Infinity'`, `'-Infinity'`
+    /// or `'NaN'` to the float type. Override this for a dialect whose cast does not parse
+    /// those strings, so that the unparsed SQL keeps the value or fails to unparse.
+    fn non_finite_float_to_sql(&self, _value: f64) -> Result<Option<ast::Expr>> {
+        Ok(None)
     }
 
     /// Does the dialect use DOUBLE PRECISION to represent Float64 rather than DOUBLE?
@@ -680,6 +689,24 @@ pub struct SqliteDialect {}
 impl Dialect for SqliteDialect {
     fn supports_qualify(&self) -> bool {
         false
+    }
+
+    /// SQLite casts a string that is not a number to `0.0`, so `CAST('Infinity' AS REAL)` is
+    /// `0.0`. A literal that overflows a double is infinity in SQLite. SQLite has no literal
+    /// for NaN, so a NaN literal does not unparse.
+    fn non_finite_float_to_sql(&self, value: f64) -> Result<Option<ast::Expr>> {
+        if value.is_nan() {
+            return not_impl_err!("SQLite has no literal for a NaN float");
+        }
+        let overflow = if value.is_sign_positive() {
+            "9e999"
+        } else {
+            "-9e999"
+        };
+        Ok(Some(ast::Expr::value(ast::Value::Number(
+            overflow.to_string(),
+            false,
+        ))))
     }
 
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
