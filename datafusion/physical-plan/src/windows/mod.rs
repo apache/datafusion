@@ -374,6 +374,8 @@ pub(crate) fn window_equivalence_properties(
     input: &Arc<dyn ExecutionPlan>,
     window_exprs: &[Arc<dyn WindowExpr>],
 ) -> Result<EquivalenceProperties> {
+    // We need to update the schema, so we can't directly use input's equivalence
+    // properties.
     let mut window_eq_properties = EquivalenceProperties::new(Arc::clone(schema))
         .extend(input.equivalence_properties().clone())?;
     let input_schema_len = input.schema().fields().len();
