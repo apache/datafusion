@@ -14,7 +14,7 @@ use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
 use std::sync::Arc;
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, IdentNormalizer, PlannerContext, SqlToRel};
 use datafusion_expr::UNNAMED_TABLE;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -114,10 +114,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         );
 
         if ids[0].value.starts_with('@') && ids[0].quote_style.is_none() {
-            let var_names: Vec<_> = ids
-                .into_iter()
-                .map(|id| self.ident_normalizer.normalize(id))
-                .collect();
+            // Variable-provider keys retain legacy folding, independent of object policy.
+            let normalizer =
+                IdentNormalizer::new(self.options.enable_ident_normalization);
+            let var_names: Vec<_> =
+                ids.into_iter().map(|id| normalizer.normalize(id)).collect();
             let field = self
                 .context_provider
                 .get_variable_field(&var_names)
