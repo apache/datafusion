@@ -1748,8 +1748,14 @@ select coalesce(1, y/x), coalesce(2, y/x) from t;
 query error
 SELECT y > 0 and 1 / y < 1, x > 0 and y > 0 and 1 / y < 1 / x from t;
 
-query error
+query BB
 SELECT y = 0 or 1 / y < 1, x = 0 or y = 0 or 1 / y < 1 / x from t;
+----
+false false
+true false
+true false
+true true
+true true
 
 statement ok
 DROP TABLE t;
