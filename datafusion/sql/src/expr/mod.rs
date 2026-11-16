@@ -361,18 +361,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn rewrite_partial_qualifier(&self, expr: Expr, schema: &DFSchema) -> Expr {
         match expr {
             Expr::Column(col) => match &col.relation {
-                Some(q) => {
-                    match schema.iter().find(|(qualifier, field)| match qualifier {
-                        Some(field_q) => {
-                            field.name() == &col.name
-                                && field_q.to_string().ends_with(&format!(".{q}"))
-                        }
-                        _ => false,
-                    }) {
-                        Some((qualifier, df_field)) => Expr::from((qualifier, df_field)),
-                        None => Expr::Column(col),
+                Some(q) => match schema.qualified_field_with_name(Some(q), &col.name) {
+                    Ok((Some(qualifier), _)) => {
+                        let mut col = col;
+                        col.relation = Some(qualifier.clone());
+                        Expr::Column(col)
                     }
-                }
+                    _ => Expr::Column(col),
+                },
                 None => Expr::Column(col),
             },
             _ => expr,

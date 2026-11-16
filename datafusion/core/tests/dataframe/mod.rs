@@ -3911,6 +3911,32 @@ async fn select_ambiguous_column() -> Result<()> {
 }
 
 #[tokio::test]
+async fn select_ambiguous_qualified_column() -> Result<()> {
+    let join = |left: &'static str, right: &'static str| async move {
+        create_test_table("t1").await?.alias(left)?.join(
+            create_test_table("t2").await?.alias(right)?,
+            JoinType::Inner,
+            &["a"],
+            &["a"],
+            None,
+        )
+    };
+
+    let err = join("s1.t", "s2.t")
+        .await?
+        .select(vec![col("t.b")])
+        .unwrap_err();
+    assert_snapshot!(err.strip_backtrace(), @"Schema error: Ambiguous reference to t.b, it matches s1.t.b and s2.t.b");
+
+    // A relation named exactly `t` is not ambiguous, whatever the join order
+    for (left, right) in [("t", "s1.t"), ("s1.t", "t")] {
+        let df = join(left, right).await?.select(vec![col("t.b")])?;
+        assert_eq!(df.schema().qualified_field(0).0, Some(&"t".into()));
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn filter_with_alias_overwrite() -> Result<()> {
     let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
