@@ -684,6 +684,14 @@ impl ListingTable {
             return false;
         }
 
+        self.projection_requires_dictionary_statistics(projection, excluded_columns)
+    }
+
+    fn projection_requires_dictionary_statistics(
+        &self,
+        projection: Option<&[usize]>,
+        excluded_columns: &HashSet<&str>,
+    ) -> bool {
         let Some(projection) = projection else {
             return false;
         };
@@ -1560,11 +1568,10 @@ mod tests {
     use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
-    fn create_test_listing_table() -> ListingTable {
+    fn create_test_listing_table(schema: SchemaRef) -> ListingTable {
         let table_path = ListingTableUrl::parse("file:///test").unwrap();
         let file_format = Arc::new(ParquetFormat::default());
         let listing_options = ListingOptions::new(file_format);
-        let schema = Arc::new(Schema::empty());
 
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(listing_options)
@@ -1603,6 +1610,24 @@ mod tests {
             &referer().not_eq(url()),
             "Referer"
         ));
+    }
+
+    #[test]
+    fn unprojected_scan_skips_dictionary_statistics() {
+        let table = create_test_listing_table(Arc::new(Schema::new(vec![Field::new(
+            "category",
+            DataType::Utf8View,
+            false,
+        )])));
+        let excluded_columns = HashSet::new();
+
+        assert!(
+            !table.projection_requires_dictionary_statistics(None, &excluded_columns)
+        );
+        assert!(
+            table
+                .projection_requires_dictionary_statistics(Some(&[0]), &excluded_columns)
+        );
     }
 
     /// Helper to create a PhysicalSortExpr
@@ -1900,8 +1925,8 @@ mod tests {
         let factory2: Arc<dyn PhysicalExprAdapterFactory> =
             Arc::new(DefaultPhysicalExprAdapterFactory);
 
-        let table =
-            create_test_listing_table().with_expr_adapter_factory(Arc::clone(&factory1));
+        let table = create_test_listing_table(Arc::new(Schema::empty()))
+            .with_expr_adapter_factory(Arc::clone(&factory1));
 
         assert!(Arc::ptr_eq(
             table.expr_adapter_factory().unwrap(),
