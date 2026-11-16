@@ -3472,4 +3472,27 @@ mod tests {
             "unexpected narrowing bucket for {source_unit:?} → {target_unit:?} {lit}"
         );
     }
+
+    #[test]
+    fn test_is_lossless_decimal_cast() {
+        use DataType::*;
+        for (from, into, expected) in [
+            (Int32, Decimal128(10, 0), true),
+            (Int32, Decimal128(9, 0), false),
+            (UInt64, Decimal128(20, 0), true),
+            (Decimal128(15, 2), Decimal128(20, 4), true),
+            (Decimal128(15, 2), Decimal128(15, 3), false),
+            (Decimal128(15, 2), Decimal128(15, 1), false),
+            // `into` must be a decimal:
+            (Decimal128(19, 0), Int64, false),
+            (Int64, UInt64, false),
+            (Decimal128(15, 2), Float64, false),
+        ] {
+            assert_eq!(
+                is_lossless_decimal_cast(&from, &into),
+                expected,
+                "{from} -> {into}"
+            );
+        }
+    }
 }
