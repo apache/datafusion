@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Utilities for implementing GroupsAccumulator
 //! Adapter that makes [`GroupsAccumulator`] out of [`Accumulator`]
@@ -509,9 +496,14 @@ impl GroupsAccumulatorAdapter {
     /// that has emitted every group holds no memory
     fn free_scratch_if_empty(&mut self) {
         if self.states.is_empty() {
-            let scratch = std::mem::take(&mut self.scratch);
-            self.free_allocation(scratch.allocated_size());
+            self.free_scratch();
         }
+    }
+
+    /// Release the scratch buffers. The next batch allocates them again.
+    fn free_scratch(&mut self) {
+        let scratch = std::mem::take(&mut self.scratch);
+        self.free_allocation(scratch.allocated_size());
     }
 
     /// Release the allocation held by a state that is being emitted.
@@ -609,6 +601,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let vec_size_pre = self.states.allocated_size();
         let states = emit_to.take_needed(&mut self.states);
+        let num_states = states.len();
 
         // each accumulator produces a potential vector of values
         // which we need to form into columns
@@ -617,7 +610,8 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         for mut state in states {
             self.free_state_allocation(&state);
             let accumulator_state = state.accumulator.state()?;
-            results.resize_with(accumulator_state.len(), Vec::new);
+            results
+                .resize_with(accumulator_state.len(), || Vec::with_capacity(num_states));
             for (idx, state_val) in accumulator_state.into_iter().enumerate() {
                 results[idx].push(state_val);
             }
@@ -664,6 +658,19 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         self.allocation_bytes
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.free_scratch();
+        // Each group keeps the capacity of its row indices after a batch, so
+        // a group that had many rows in the last batch still holds them
+        let mut freed = 0;
+        for state in &mut self.states {
+            if state.indices.is_empty() {
+                freed += std::mem::take(&mut state.indices).allocated_size();
+            }
+        }
+        self.free_allocation(freed);
+    }
+
     fn convert_to_state(
         &self,
         values: &[ArrayRef],
@@ -686,10 +693,12 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         // Each row has its respective group
         let mut results = vec![];
         let mut metric_recorder = None;
+        let mut prepared =
+            Vec::with_capacity(GROUPED_METRIC_PREPARATION_CHUNK_SIZE.min(num_rows));
         for chunk_start in (0..num_rows).step_by(GROUPED_METRIC_PREPARATION_CHUNK_SIZE) {
             let chunk_end =
                 (chunk_start + GROUPED_METRIC_PREPARATION_CHUNK_SIZE).min(num_rows);
-            let mut prepared = Vec::with_capacity(chunk_end - chunk_start);
+            prepared.clear();
 
             for row_idx in chunk_start..chunk_end {
                 // Create the empty accumulator and prepare adapter-owned input
@@ -718,7 +727,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             };
             update_result?;
 
-            for (mut accumulator, _) in prepared {
+            for (mut accumulator, _) in prepared.drain(..) {
                 let states = accumulator.state()?;
 
                 // Resize results to have enough columns according to the converted states

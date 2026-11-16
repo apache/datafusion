@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt::{self, Display};
 use std::ops::{Deref, DerefMut};
@@ -394,11 +381,14 @@ mod tests {
     use crate::{ConstExpr, EquivalenceProperties, ScalarFunctionExpr};
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
+    use arrow::record_batch::RecordBatch;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Constraint, Constraints, Result};
+    use datafusion_expr::ColumnarValue;
     use datafusion_expr::Operator;
-    use datafusion_expr::sort_properties::SortProperties;
+    use datafusion_expr::interval_arithmetic::Interval;
+    use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_functions::string::concat;
     use datafusion_physical_expr_common::sort_expr::{
         LexRequirement, PhysicalSortRequirement,
@@ -602,6 +592,54 @@ mod tests {
         let (_, idxs) = eq_properties.find_longest_permutation(&required_columns)?;
         assert_eq!(idxs, vec![0]);
 
+        Ok(())
+    }
+
+    /// `sqrt(a)` has no ordering that can be derived from `a`, which may be
+    /// negative, so its ordering function fails. A plan sorted on `sqrt(a)`
+    /// still satisfies a requirement on `sqrt(a)` with the same sort options,
+    /// and nothing else makes `sqrt(a)` ordered.
+    #[test]
+    fn test_known_ordering_when_expr_properties_fail() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        let a = col("a", &schema)?;
+        let sqrt_a: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            datafusion_functions::math::sqrt(),
+            vec![Arc::clone(&a)],
+            &schema,
+            Arc::new(ConfigOptions::default()),
+        )?);
+
+        // `sqrt(a)` is nullable, so both the direction and the NULLS position
+        // must match:
+        let all_options = [(false, false), (false, true), (true, false), (true, true)]
+            .map(|(descending, nulls_first)| SortOptions {
+                descending,
+                nulls_first,
+            });
+        for known in all_options {
+            let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+            eq_properties
+                .add_ordering([PhysicalSortExpr::new(Arc::clone(&sqrt_a), known)]);
+            for required in all_options {
+                let required_ordering =
+                    [PhysicalSortExpr::new(Arc::clone(&sqrt_a), required)];
+                assert_eq!(
+                    eq_properties.ordering_satisfy(required_ordering)?,
+                    known == required,
+                    "known {known:?}, required {required:?}"
+                );
+            }
+        }
+
+        // Without a known ordering on `sqrt(a)`, it is not ordered, even when
+        // `a` is:
+        let required_ordering = [PhysicalSortExpr::new_default(Arc::clone(&sqrt_a))];
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        assert!(!eq_properties.ordering_satisfy(required_ordering.clone())?);
+        eq_properties.add_ordering([PhysicalSortExpr::new_default(a)]);
+        assert!(!eq_properties.ordering_satisfy(required_ordering)?);
         Ok(())
     }
 
@@ -1561,6 +1599,257 @@ mod tests {
             "Output should be ordered by get_field(s, 'a') since input is ordered by col_a"
         );
 
+        Ok(())
+    }
+
+    /// An expression with its own identity that evaluates to its child and
+    /// records the range it is given for its child. Of its
+    /// properties it reports only an ordering: its child's, or ascending when
+    /// `ordered` is set.
+    #[derive(Debug)]
+    struct RangeProbe {
+        child: Arc<dyn PhysicalExpr>,
+        id: usize,
+        ordered: bool,
+        seen: Seen,
+    }
+
+    impl PartialEq for RangeProbe {
+        fn eq(&self, other: &Self) -> bool {
+            self.id == other.id && self.child.eq(&other.child)
+        }
+    }
+    impl Eq for RangeProbe {}
+    impl std::hash::Hash for RangeProbe {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.id.hash(state);
+            self.child.hash(state);
+        }
+    }
+    impl Display for RangeProbe {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "probe{}({})", self.id, self.child)
+        }
+    }
+
+    impl PhysicalExpr for RangeProbe {
+        fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+            self.child.data_type(input_schema)
+        }
+        fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+            self.child.nullable(input_schema)
+        }
+        fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+            self.child.evaluate(batch)
+        }
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.child]
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(Arc::new(RangeProbe {
+                child: Arc::clone(&children[0]),
+                id: self.id,
+                ordered: self.ordered,
+                seen: Arc::clone(&self.seen),
+            }))
+        }
+        fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
+            self.seen.lock().unwrap().push(children[0].range.clone());
+            let order = if self.ordered {
+                SortProperties::Ordered(SortOptions::default())
+            } else {
+                children[0].sort_properties
+            };
+            Ok(ExprProperties::new_unknown().with_order(order))
+        }
+        fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{self}")
+        }
+    }
+
+    type Seen = Arc<std::sync::Mutex<Vec<Interval>>>;
+
+    /// Projects each `(child, id, ordered)` through a probe named `p{id}`.
+    /// Returns the mapping and, per probe, the range types it will be given.
+    fn probe_mapping(
+        sources: Vec<(Arc<dyn PhysicalExpr>, usize, bool)>,
+        schema: &SchemaRef,
+    ) -> Result<(ProjectionMapping, Vec<Seen>)> {
+        let mut exprs = vec![];
+        let mut seen = vec![];
+        for (child, id, ordered) in sources {
+            let probe_seen = Seen::default();
+            exprs.push((
+                Arc::new(RangeProbe {
+                    child,
+                    id,
+                    ordered,
+                    seen: Arc::clone(&probe_seen),
+                }) as Arc<dyn PhysicalExpr>,
+                format!("p{id}"),
+            ));
+            seen.push(probe_seen);
+        }
+        Ok((ProjectionMapping::try_new(exprs, schema)?, seen))
+    }
+
+    fn assert_only_saw(seen: &Seen, expected: &DataType) {
+        let seen = seen.lock().unwrap();
+        assert!(!seen.is_empty());
+        assert!(seen.iter().all(|r| &r.data_type() == expected), "{seen:?}");
+    }
+
+    fn sorted_orderings(properties: &EquivalenceProperties) -> Vec<String> {
+        let mut orderings = properties
+            .oeq_class()
+            .iter()
+            .map(|o| {
+                o.iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .collect::<Vec<_>>();
+        orderings.sort();
+        orderings
+    }
+
+    #[test]
+    fn project_gives_each_source_the_range_of_its_own_column() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let (a, b) = (col("a", &schema)?, col("b", &schema)?);
+        let mut input = EquivalenceProperties::new(Arc::clone(&schema));
+        input.add_orderings([vec![PhysicalSortExpr::new(
+            Arc::clone(&a),
+            SortOptions::default(),
+        )]]);
+
+        // Several sources over each column, so all but the first of each are
+        // served from the cache: `a` through the sort key, `b` as a plain
+        // column. `p4` declares itself ordered over the unordered `b`.
+        let (mapping, seen) = probe_mapping(
+            vec![
+                (Arc::clone(&a), 0, false),
+                (a, 1, false),
+                (Arc::clone(&b), 2, false),
+                (Arc::clone(&b), 3, false),
+                (b, 4, true),
+            ],
+            &schema,
+        )?;
+        let projected = input.project(&mapping, output_schema(&mapping, &schema)?);
+
+        for (seen, expected) in seen.iter().zip([
+            DataType::Int64,
+            DataType::Int64,
+            DataType::Utf8,
+            DataType::Utf8,
+            DataType::Utf8,
+        ]) {
+            assert_only_saw(seen, &expected);
+        }
+        assert_eq!(
+            sorted_orderings(&projected),
+            vec!["p0@0 ASC", "p1@1 ASC", "p4@4 ASC"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn project_builds_the_range_of_an_ordered_column_once() -> Result<()> {
+        let fields = Fields::from(vec![
+            Field::new("x", DataType::Int64, true),
+            Field::new("y", DataType::Utf8, true),
+        ]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(fields),
+            true,
+        )]));
+        let s = col("s", &schema)?;
+        let mut input = EquivalenceProperties::new(Arc::clone(&schema));
+        input.add_orderings([vec![PhysicalSortExpr::new(
+            Arc::clone(&s),
+            SortOptions::default(),
+        )]]);
+
+        // Every probe refers to the sort key, so both substituting the
+        // ordering and deriving the projected one examine each of them.
+        let (mapping, seen) = probe_mapping(
+            (0..3).map(|id| (Arc::clone(&s), id, false)).collect(),
+            &schema,
+        )?;
+        let projected = input.project(&mapping, output_schema(&mapping, &schema)?);
+
+        assert_eq!(
+            sorted_orderings(&projected),
+            vec!["p0@0 ASC", "p1@1 ASC", "p2@2 ASC"]
+        );
+        // A rebuilt range of a struct holds a new null array.
+        let mut arrays = vec![];
+        for seen in &seen {
+            for range in seen.lock().unwrap().iter() {
+                let datafusion_common::ScalarValue::Struct(array) = range.lower() else {
+                    panic!("{range:?}");
+                };
+                arrays.push(Arc::clone(array));
+            }
+        }
+        // Each probe is examined by both steps.
+        assert!(arrays.len() >= 6, "{}", arrays.len());
+        assert!(arrays.iter().all(|a| Arc::ptr_eq(a, &arrays[0])));
+        Ok(())
+    }
+
+    #[test]
+    fn project_does_not_reuse_a_column_range_across_calls() -> Result<()> {
+        for data_type in [DataType::Utf8, DataType::Int64] {
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("a", data_type.clone(), true)]));
+            let (mapping, seen) =
+                probe_mapping(vec![(col("a", &schema)?, 0, false)], &schema)?;
+            EquivalenceProperties::new(Arc::clone(&schema))
+                .project(&mapping, output_schema(&mapping, &schema)?);
+            assert_only_saw(&seen[0], &data_type);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn project_drops_a_derivation_whose_sort_key_type_fails() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        // `a + b` has no type, so its range cannot be built.
+        let untyped = Arc::new(BinaryExpr::new(
+            col("a", &schema)?,
+            Operator::Plus,
+            col("b", &schema)?,
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(untyped.data_type(&schema).is_err());
+        let mut input = EquivalenceProperties::new(Arc::clone(&schema));
+        input.add_orderings([vec![PhysicalSortExpr::new(
+            Arc::clone(&untyped),
+            SortOptions::default(),
+        )]]);
+
+        // The probe is ordered only through a derivation from `a + b`, which
+        // fails before the probe is asked for its properties. The output type
+        // cannot be computed either, so it is given as `Null`.
+        let (mapping, seen) = probe_mapping(vec![(untyped, 0, false)], &schema)?;
+        let out_schema =
+            Arc::new(Schema::new(vec![Field::new("p0", DataType::Null, true)]));
+        let projected = input.project(&mapping, out_schema);
+
+        assert!(sorted_orderings(&projected).is_empty());
+        assert!(seen[0].lock().unwrap().is_empty());
         Ok(())
     }
 }

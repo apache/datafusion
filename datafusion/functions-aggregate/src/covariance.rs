@@ -1,26 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`CovarianceSample`]: covariance sample aggregations.
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_float64_array, as_uint64_array};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::DistinctHandling;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
@@ -118,7 +105,10 @@ impl AggregateUDFImpl for CovarianceSample {
         .collect())
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!("COVAR_SAMP(DISTINCT) aggregations are not available");
+        }
         Ok(Box::new(CovarianceAccumulator::try_new(StatsType::Sample)?))
     }
 
@@ -131,9 +121,9 @@ impl AggregateUDFImpl for CovarianceSample {
     }
 
     fn distinct_handling(&self) -> DistinctHandling {
-        // Duplicate-sensitive, but the accumulator does not read
-        // `is_distinct` and today silently returns the non-distinct answer.
-        // The tag records the intent; enforcement is a follow-up change.
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`. It only
+        // works when the planner removes it first (`SingleDistinctToGroupBy`
+        // for a single distinct field, e.g. `covar_samp(DISTINCT x, x)`).
         DistinctHandling::Unsupported
     }
 }
@@ -205,7 +195,10 @@ impl AggregateUDFImpl for CovariancePopulation {
         .collect())
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            return not_impl_err!("COVAR_POP(DISTINCT) aggregations are not available");
+        }
         Ok(Box::new(CovarianceAccumulator::try_new(
             StatsType::Population,
         )?))
@@ -216,9 +209,9 @@ impl AggregateUDFImpl for CovariancePopulation {
     }
 
     fn distinct_handling(&self) -> DistinctHandling {
-        // Duplicate-sensitive, but the accumulator does not read
-        // `is_distinct` and today silently returns the non-distinct answer.
-        // The tag records the intent; enforcement is a follow-up change.
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`. It only
+        // works when the planner removes it first (`SingleDistinctToGroupBy`
+        // for a single distinct field, e.g. `covar_pop(DISTINCT x, x)`).
         DistinctHandling::Unsupported
     }
 }

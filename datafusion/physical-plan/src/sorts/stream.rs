@@ -1,21 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
+use crate::spill::gc_columns;
+use crate::spill::spilled_row_sizes::SpilledRowSizes;
 use crate::{EmptyRecordBatchStream, SendableRecordBatchStream};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{Array, UInt32Array};
@@ -94,25 +83,70 @@ impl FusedStreams {
     }
 }
 
-/// An `Arc<Rows>` that can be reused
+/// An `Arc<Rows>` that can be reused.
+///
+/// Owns the reservation covering every retained buffer for as long as it is
+/// retained, so the cache is visible to the pool rather than held off-book.
+/// A retained buffer keeps its capacity, so the cost is the high-water mark of
+/// each stream, not the size of the batch currently in flight.
 #[derive(Debug)]
 struct ReusableRows {
     inner: Vec<Option<Arc<Rows>>>,
+    /// Each stream's charge stays reserved while its buffer is taken for reuse.
+    /// The sum of these sizes equals `reservation.size()`.
+    reserved_sizes: Vec<usize>,
+    reservation: MemoryReservation,
 }
 
 impl ReusableRows {
     // return a Rows for writing,
     // does not clone if the existing rows can be reused
-    fn take_next(&mut self, stream_idx: usize) -> Result<Rows> {
-        Arc::try_unwrap(self.inner[stream_idx].take().unwrap()).map_err(|_| {
-            internal_datafusion_err!(
-                "Rows from RowCursorStream is still in use by consumer"
-            )
-        })
+    fn take_next(&mut self, stream_idx: usize, converter: &RowConverter) -> Result<Rows> {
+        match self.inner[stream_idx].take() {
+            Some(rows) => Arc::try_unwrap(rows).map_err(|_| {
+                internal_datafusion_err!(
+                    "Rows from RowCursorStream is still in use by consumer"
+                )
+            }),
+            // Nothing retained yet, or already released, so start over.
+            None => Ok(converter.empty_rows(0, 0)),
+        }
     }
-    // save the Rows
-    fn save(&mut self, stream_idx: usize, rows: &Arc<Rows>) {
+
+    /// Account for a freshly built buffer, and retain it for reuse.
+    ///
+    /// The reservation is mandatory rather than best-effort. The buffer is live in the
+    /// cursor whether or not this slot keeps a handle to it, so declining to reserve
+    /// would hide it from the pool instead of avoiding it, and it frees nothing at this
+    /// point either, since the cursor holds the same `Arc`. Retention on top of the
+    /// reservation is free for the same reason. A pool that cannot cover the buffer
+    /// fails the query here, as it did before the buffer was cached at all.
+    fn save(&mut self, stream_idx: usize, rows: &Arc<Rows>) -> Result<()> {
+        let size = rows.size();
+        let retained = self.reservation.size() - self.reserved_sizes[stream_idx] + size;
+        debug_assert!(retained >= self.reservation.size());
+        if let Err(e) = self.reservation.try_resize(retained) {
+            self.release(stream_idx);
+            return Err(e);
+        }
         self.inner[stream_idx] = Some(Arc::clone(rows));
+        self.reserved_sizes[stream_idx] = size;
+        Ok(())
+    }
+
+    // drop whatever a finished stream was holding
+    fn release(&mut self, stream_idx: usize) {
+        debug_assert!(self.reservation.size() >= self.retained_size());
+        self.inner[stream_idx] = None;
+        let reserved = mem::take(&mut self.reserved_sizes[stream_idx]);
+        self.reservation.resize(self.reservation.size() - reserved);
+        // Verify the incremental accounting against a full recomputation, avoiding
+        // the cost of scanning all buffers in release builds.
+        debug_assert_eq!(self.reservation.size(), self.retained_size());
+    }
+
+    fn retained_size(&self) -> usize {
+        self.inner.iter().flatten().map(|rows| rows.size()).sum()
     }
 }
 
@@ -152,18 +186,19 @@ impl RowCursorStream {
             .collect::<Result<Vec<_>>>()?;
 
         let streams: Vec<_> = streams.into_iter().map(|s| s.fuse()).collect();
+        let stream_count = streams.len();
         let converter = RowConverter::new(sort_fields)?;
-        let mut rows = Vec::with_capacity(streams.len());
-        for _ in &streams {
-            // Initialize each stream with an empty Rows
-            rows.push(Some(Arc::new(converter.empty_rows(0, 0))));
-        }
+        let rows_reservation = reservation.new_empty();
         Ok(Self {
             converter,
             reservation,
             column_expressions: expressions.iter().map(|x| Arc::clone(&x.expr)).collect(),
             streams: FusedStreams(streams),
-            rows: ReusableRows { inner: rows },
+            rows: ReusableRows {
+                inner: vec![None; stream_count],
+                reserved_sizes: vec![0; stream_count],
+                reservation: rows_reservation,
+            },
         })
     }
 
@@ -175,7 +210,7 @@ impl RowCursorStream {
         let cols = evaluate_expressions_to_arrays(&self.column_expressions, batch)?;
 
         // At this point, ownership should of this Rows should be unique
-        let mut rows = self.rows.take_next(stream_idx)?;
+        let mut rows = self.rows.take_next(stream_idx, &self.converter)?;
 
         rows.clear();
 
@@ -184,12 +219,13 @@ impl RowCursorStream {
 
         let rows = Arc::new(rows);
 
-        self.rows.save(stream_idx, &rows);
+        self.rows.save(stream_idx, &rows)?;
 
-        // track the memory in the newly created Rows.
-        let rows_reservation = self.reservation.new_empty();
-        rows_reservation.try_grow(rows.size())?;
-        Ok(RowValues::new(rows, rows_reservation))
+        // `self.rows` now holds the reservation for this buffer unconditionally, and
+        // holds it for at least as long as the cursor does. `take_next` cannot reclaim
+        // the slot while the consumer still owns the `Arc`, so the cursor is handed an
+        // empty reservation rather than accounting for the same bytes a second time.
+        Ok(RowValues::new(rows, self.reservation.new_empty()))
     }
 }
 
@@ -205,7 +241,12 @@ impl PartitionedStream for RowCursorStream {
         cx: &mut Context<'_>,
         stream_idx: usize,
     ) -> Poll<Option<Self::Output>> {
-        Poll::Ready(ready!(self.streams.poll_next(cx, stream_idx)).map(|r| {
+        let polled = ready!(self.streams.poll_next(cx, stream_idx));
+        if polled.is_none() {
+            // The stream is finished, so its retained buffer will never be reused.
+            self.rows.release(stream_idx);
+        }
+        Poll::Ready(polled.map(|r| {
             r.and_then(|batch| {
                 let cursor = self.convert_batch(&batch, stream_idx)?;
                 Ok((cursor, batch))
@@ -289,12 +330,13 @@ impl<T: CursorArray> PartitionedStream for FieldCursorStream<T> {
 /// peak memory to hold both the unsorted and sorted copies simultaneously).
 ///
 /// On the first call to `next()`, a sorted index array (`UInt32Array`) is
-/// computed via `lexsort_to_indices`. Subsequent calls yield chunks of
-/// `batch_size` rows by `take`-ing from the original batch using slices of
-/// this index array. Each `take` copies data for the chunk (not zero-copy),
-/// but only one chunk is live at a time since the caller consumes it before
-/// requesting the next. Once all rows have been yielded, the original batch
-/// and index array are dropped to free memory.
+/// computed via `lexsort_to_indices`. Subsequent calls yield chunks of up to
+/// `batch_size` rows, fewer if [`Self::with_max_batch_bytes`] is set, by
+/// `take`-ing from the original batch using slices of this index array. Each
+/// `take` copies data for the chunk (not zero-copy), but only one chunk is
+/// live at a time since the caller consumes it before requesting the next.
+/// Once all rows have been yielded, the original batch and index array are
+/// dropped to free memory.
 ///
 /// The caller must reserve `sizeof(batch) + sizeof(one chunk)` for this iterator,
 /// and free the reservation once the iterator is depleted.
@@ -302,7 +344,11 @@ pub(crate) struct IncrementalSortIterator {
     batch: RecordBatch,
     expressions: LexOrdering,
     batch_size: usize,
+    /// See [`Self::with_max_batch_bytes`].
+    max_batch_bytes: Option<usize>,
     indices: Option<UInt32Array>,
+    /// Row sizes of `batch`, measured with `indices` when `max_batch_bytes` is set
+    row_sizes: Option<SpilledRowSizes>,
     cursor: usize,
 }
 
@@ -316,9 +362,46 @@ impl IncrementalSortIterator {
             batch,
             expressions,
             batch_size,
+            max_batch_bytes: None,
             cursor: 0,
             indices: None,
+            row_sizes: None,
         }
+    }
+
+    /// Also limits each chunk to `max_batch_bytes`, by the size its rows take
+    /// once spilled (see [`SpilledRowSizes`]). A row larger than that is
+    /// returned on its own. Chunks hold only the dictionary values of their
+    /// own rows in the columns where that size counts them (see
+    /// [`SpilledRowSizes::compacted_columns`]).
+    pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: usize) -> Self {
+        self.max_batch_bytes = Some(max_batch_bytes);
+        self
+    }
+
+    /// Returns how many of the rows at `indices` fit in `max_batch_bytes`.
+    fn rows_within(&self, indices: &[u32]) -> usize {
+        let (Some(max_batch_bytes), Some(row_sizes)) =
+            (self.max_batch_bytes, &self.row_sizes)
+        else {
+            return indices.len();
+        };
+        if let Some(row_bytes) = row_sizes.fixed() {
+            return (max_batch_bytes / row_bytes.max(1))
+                .max(1)
+                .min(indices.len());
+        }
+        if row_sizes.max_row().saturating_mul(indices.len()) <= max_batch_bytes {
+            return indices.len();
+        }
+        let mut bytes = 0;
+        for (rows, &row) in indices.iter().enumerate() {
+            bytes += row_sizes.row(row as usize);
+            if rows > 0 && bytes > max_batch_bytes {
+                return rows;
+            }
+        }
+        indices.len()
     }
 }
 
@@ -347,18 +430,35 @@ impl Iterator for IncrementalSortIterator {
                     Err(e) => return Some(Err(e.into())),
                 };
                 self.indices = Some(indices);
+                if self.max_batch_bytes.is_some() {
+                    self.row_sizes = Some(SpilledRowSizes::new(&self.batch));
+                }
 
                 // Call again, this time it will hit the Some(indices) branch and return the first batch
                 self.next()
             }
             Some(indices) => {
                 let batch_size = self.batch_size.min(self.batch.num_rows() - self.cursor);
+                let batch_size = self.rows_within(
+                    &indices.values()[self.cursor..self.cursor + batch_size],
+                );
 
                 // Perform the take to produce the next batch
                 let new_batch_indices = indices.slice(self.cursor, batch_size);
                 let new_batch = match take_record_batch(&self.batch, &new_batch_indices) {
                     Ok(batch) => batch,
                     Err(e) => return Some(Err(e.into())),
+                };
+                // `take` keeps every dictionary value, while the row sizes
+                // count only the values of the rows of `compacted_columns`
+                let new_batch = match &self.row_sizes {
+                    Some(row_sizes) if !row_sizes.compacted_columns().is_empty() => {
+                        match gc_columns(&new_batch, row_sizes.compacted_columns()) {
+                            Ok(batch) => batch,
+                            Err(e) => return Some(Err(e)),
+                        }
+                    }
+                    _ => new_batch,
                 };
 
                 self.cursor += batch_size;
@@ -368,6 +468,7 @@ impl Iterator for IncrementalSortIterator {
                     let schema = self.batch.schema();
                     let _ = mem::replace(&mut self.batch, RecordBatch::new_empty(schema));
                     self.indices = None;
+                    self.row_sizes = None;
                 }
 
                 // Return the new batch
@@ -382,7 +483,13 @@ impl Iterator for IncrementalSortIterator {
         let num_rows = self.batch.num_rows().saturating_sub(self.cursor);
         let batch_size = self.batch_size;
         let num_batches = num_rows.div_ceil(batch_size);
-        (num_batches, Some(num_batches))
+        // Limiting bytes can leave as few as one row per batch
+        let max_batches = if self.max_batch_bytes.is_some() {
+            num_rows
+        } else {
+            num_batches
+        };
+        (num_batches, Some(max_batches))
     }
 }
 
@@ -391,11 +498,15 @@ impl FusedIterator for IncrementalSortIterator {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{AsArray, Int32Array};
+    use crate::memory::MemoryStream;
+    use arrow::array::{ArrayRef, AsArray, DictionaryArray, Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Int32Type};
     use arrow_schema::SchemaRef;
     use datafusion_common::DataFusionError;
     use datafusion_execution::RecordBatchStream;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryConsumer, MemoryLimit, MemoryPool,
+    };
     use datafusion_physical_expr::expressions::col;
     use futures::Stream;
     use std::pin::Pin;
@@ -548,6 +659,99 @@ mod tests {
         }
     }
 
+    #[test]
+    fn incremental_sort_iterator_limits_batch_bytes() -> Result<()> {
+        // Keys 100 down to 0. Keys 0..5 have 1000 byte values, the others 10
+        // bytes, so a row takes 1008 or 18 bytes with the Int32 key and the
+        // 4 byte offset.
+        let keys: Vec<i32> = (0..=100).rev().collect();
+        let values: Vec<String> = keys
+            .iter()
+            .map(|&key| "x".repeat(if key < 5 { 1000 } else { 10 }))
+            .collect();
+        let batch = RecordBatch::try_from_iter(vec![
+            ("key", Arc::new(Int32Array::from(keys)) as ArrayRef),
+            ("value", Arc::new(StringArray::from(values)) as ArrayRef),
+        ])?;
+        let expressions = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "key",
+            &batch.schema(),
+        )?)])
+        .unwrap();
+
+        let chunk_lens = |iter: IncrementalSortIterator| -> Result<Vec<usize>> {
+            let mut next_key = 0;
+            iter.map(|chunk| {
+                let chunk = chunk?;
+                let keys = chunk.column(0).as_primitive::<Int32Type>();
+                for key in keys.values() {
+                    assert_eq!(*key, next_key, "rows must stay sorted");
+                    next_key += 1;
+                }
+                Ok(chunk.num_rows())
+            })
+            .collect()
+        };
+
+        let iter = IncrementalSortIterator::new(batch.clone(), expressions.clone(), 50);
+        assert_eq!(chunk_lens(iter)?, vec![50, 50, 1]);
+
+        // Two large rows fit in 2500 bytes. The last large row leaves room for
+        // many small rows, up to 50 rows per batch.
+        let iter = IncrementalSortIterator::new(batch.clone(), expressions.clone(), 50)
+            .with_max_batch_bytes(2500);
+        assert_eq!(chunk_lens(iter)?, vec![2, 2, 50, 47]);
+
+        // Without the values, every row takes the 4 bytes of its key
+        let keys = batch.project(&[0])?;
+        let iter =
+            IncrementalSortIterator::new(keys, expressions, 50).with_max_batch_bytes(100);
+        assert_eq!(chunk_lens(iter)?, vec![25, 25, 25, 25, 1]);
+        Ok(())
+    }
+
+    #[test]
+    fn incremental_sort_iterator_compacts_unique_dictionaries() -> Result<()> {
+        // Keys 99 down to 0, each with its own 100 byte value in `unique`, and
+        // one of four values, each of 25 keys, in `shared`
+        let keys: Vec<i32> = (0..100).rev().collect();
+        let values: Vec<String> = keys.iter().map(|key| format!("{key:0>100}")).collect();
+        let unique: DictionaryArray<Int32Type> =
+            values.iter().map(String::as_str).collect();
+        let shared: DictionaryArray<Int32Type> = keys
+            .iter()
+            .map(|key| ["a", "b", "c", "d"][*key as usize / 25])
+            .collect();
+        let shared_values = shared.values().to_data();
+        let batch = RecordBatch::try_from_iter(vec![
+            ("key", Arc::new(Int32Array::from(keys)) as ArrayRef),
+            ("unique", Arc::new(unique) as ArrayRef),
+            ("shared", Arc::new(shared) as ArrayRef),
+        ])?;
+        let expressions = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "key",
+            &batch.schema(),
+        )?)])
+        .unwrap();
+
+        // A row takes 4 bytes of key and 4 of `shared` key, plus a 4 byte key,
+        // a 4 byte offset and 100 bytes of value in `unique`, so 10 rows fit
+        // in 1200 bytes
+        let chunks = IncrementalSortIterator::new(batch, expressions, 50)
+            .with_max_batch_bytes(1200)
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(chunks.len(), 10);
+        for chunk in &chunks {
+            // Each chunk holds the unique values of its own rows, and shares
+            // the values of the other dictionary
+            let unique = chunk.column(1).as_any_dictionary();
+            assert_eq!(unique.values().len(), chunk.num_rows());
+            let shared = chunk.column(2).as_any_dictionary();
+            assert!(shared.values().to_data().ptr_eq(&shared_values));
+        }
+        Ok(())
+    }
+
     fn assert_iterator_size_hint(iter: &IncrementalSortIterator, expected_len: usize) {
         assert_eq!(iter.size_hint(), (expected_len, Some(expected_len)));
     }
@@ -585,6 +789,310 @@ mod tests {
 
         assert!(iterator.next().is_none());
 
+        Ok(())
+    }
+
+    /// Drives a `RowCursorStream` over several partitions and reports the pool
+    /// reservation, so the tests below can watch it move.
+    struct RowCursorHarness {
+        stream: RowCursorStream,
+        pool: Arc<dyn MemoryPool>,
+        schema: SchemaRef,
+        /// `(rows, str_width)` of each batch, per partition.
+        shapes: Vec<Vec<(usize, usize)>>,
+    }
+
+    /// The converted `Rows` size depends only on `rows` and `str_width`.
+    fn make_batch(
+        schema: &SchemaRef,
+        seq: usize,
+        rows: usize,
+        str_width: usize,
+    ) -> RecordBatch {
+        let base = (seq * rows) as i32;
+        let a = Int32Array::from_iter_values((0..rows as i32).map(|i| base + i));
+        let b = StringArray::from_iter_values((0..rows).map(|_| "x".repeat(str_width)));
+        RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a), Arc::new(b)]).unwrap()
+    }
+
+    impl RowCursorHarness {
+        /// `batches_per_partition` batches of `rows` rows each, per partition.
+        /// The sort key spans two columns so this takes the `Rows` path rather
+        /// than the specialized single-column `FieldCursorStream`.
+        fn new(
+            partitions: usize,
+            batches_per_partition: usize,
+            rows: usize,
+            str_width: usize,
+        ) -> Result<Self> {
+            Self::with_shapes(vec![
+                vec![(rows, str_width); batches_per_partition];
+                partitions
+            ])
+        }
+
+        /// One partition per entry, one `(rows, str_width)` batch per element.
+        fn with_shapes(shapes: Vec<Vec<(usize, usize)>>) -> Result<Self> {
+            let schema: SchemaRef = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Utf8, false),
+            ]));
+
+            let streams: Vec<SendableRecordBatchStream> = shapes
+                .iter()
+                .map(|partition| {
+                    let batches: Vec<RecordBatch> = partition
+                        .iter()
+                        .enumerate()
+                        .map(|(seq, &(rows, str_width))| {
+                            make_batch(&schema, seq, rows, str_width)
+                        })
+                        .collect();
+                    Box::pin(
+                        MemoryStream::try_new(batches, Arc::clone(&schema), None)
+                            .unwrap(),
+                    ) as SendableRecordBatchStream
+                })
+                .collect();
+
+            let expressions = LexOrdering::new(vec![
+                PhysicalSortExpr::new_default(col("a", &schema)?),
+                PhysicalSortExpr::new_default(col("b", &schema)?),
+            ])
+            .unwrap();
+
+            // Generous limit: this measures what is reserved, not what is refused.
+            let pool: Arc<dyn MemoryPool> =
+                Arc::new(GreedyMemoryPool::new(256 * 1024 * 1024));
+            let reservation = MemoryConsumer::new("test").register(&pool);
+            let stream =
+                RowCursorStream::try_new(&schema, &expressions, streams, reservation)?;
+
+            Ok(Self {
+                stream,
+                pool,
+                schema,
+                shapes,
+            })
+        }
+
+        fn reserved(&self) -> usize {
+            self.pool.reserved()
+        }
+
+        fn converter(&self) -> Result<RowConverter> {
+            Ok(RowConverter::new(vec![
+                SortField::new(DataType::Int32),
+                SortField::new(DataType::Utf8),
+            ])?)
+        }
+
+        /// `(converter size, retained Rows size)` when all batches share a shape.
+        fn expected_sizes(&self) -> Result<(usize, usize)> {
+            let converter = self.converter()?;
+            Ok((converter.size(), self.expected_retained_sizes(0)?[0]))
+        }
+
+        /// `Rows::size()` after each of `stream_idx`'s batches, reusing one
+        /// buffer like the stream does.
+        fn expected_retained_sizes(&self, stream_idx: usize) -> Result<Vec<usize>> {
+            let converter = self.converter()?;
+            let mut rows = converter.empty_rows(0, 0);
+            self.shapes[stream_idx]
+                .iter()
+                .enumerate()
+                .map(|(seq, &(num_rows, str_width))| {
+                    let batch = make_batch(&self.schema, seq, num_rows, str_width);
+                    rows.clear();
+                    converter.append(&mut rows, batch.columns())?;
+                    Ok(rows.size())
+                })
+                .collect()
+        }
+
+        /// Polls `stream_idx`, handing back the cursor so the caller controls when
+        /// it is dropped. `None` once the partition is finished.
+        fn poll_cursor(&mut self, stream_idx: usize) -> Result<Option<RowValues>> {
+            let waker = futures::task::noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            match self.stream.poll_next(&mut cx, stream_idx) {
+                Poll::Ready(Some(Ok((values, _batch)))) => Ok(Some(values)),
+                Poll::Ready(Some(Err(e))) => Err(e),
+                Poll::Ready(None) => Ok(None),
+                Poll::Pending => unreachable!("MemoryStream is never pending"),
+            }
+        }
+
+        /// Polls `stream_idx` and immediately drops the returned cursor, which is
+        /// what the merge does once a cursor is exhausted. Returns `false` once
+        /// the partition is finished.
+        fn poll_and_drop_cursor(&mut self, stream_idx: usize) -> Result<bool> {
+            let waker = futures::task::noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            match self.stream.poll_next(&mut cx, stream_idx) {
+                Poll::Ready(Some(Ok((values, _batch)))) => {
+                    drop(values);
+                    Ok(true)
+                }
+                Poll::Ready(Some(Err(e))) => Err(e),
+                Poll::Ready(None) => Ok(false),
+                Poll::Pending => unreachable!("MemoryStream is never pending"),
+            }
+        }
+    }
+
+    // `RowCursorStream` keeps one `Rows` buffer per partition alive between
+    // polls so the allocation can be reused. That buffer is real memory, and it
+    // outlives the cursor handed to the consumer: the merge drops a cursor as
+    // soon as it is exhausted, but the buffer behind it stays cached.
+    //
+    // So dropping the cursor must not change what the pool reports. If it does,
+    // the bytes still held by the cache have gone off the books and the pool is
+    // under-counting a live allocation.
+    #[test]
+    fn dropping_a_cursor_does_not_unaccount_its_retained_buffer() -> Result<()> {
+        let mut harness = RowCursorHarness::new(1, 4, 512, 64)?;
+        let (converter_size, rows_size) = harness.expected_sizes()?;
+        assert_eq!(harness.reserved(), 0);
+
+        let cursor = harness.poll_cursor(0)?.expect("first batch");
+        assert_eq!(harness.reserved(), converter_size + rows_size);
+
+        // The cached `Rows` buffer outlives the cursor, so dropping the cursor
+        // must not release its bytes.
+        drop(cursor);
+        assert_eq!(harness.reserved(), converter_size + rows_size);
+
+        Ok(())
+    }
+
+    // The retained bytes are per partition, so what the pool reports has to
+    // scale with partition count rather than staying flat at the size of
+    // whichever batch happens to be in flight.
+    #[test]
+    fn retained_row_buffer_reservation_scales_with_partitions() -> Result<()> {
+        for partitions in [2, 16] {
+            let mut harness = RowCursorHarness::new(partitions, 4, 512, 64)?;
+            let (converter_size, rows_size) = harness.expected_sizes()?;
+            for stream_idx in 0..partitions {
+                assert!(harness.poll_and_drop_cursor(stream_idx)?);
+            }
+            // One shared converter, plus one cached buffer per partition.
+            assert_eq!(
+                harness.reserved(),
+                converter_size + partitions * rows_size,
+                "{partitions} partitions"
+            );
+        }
+
+        Ok(())
+    }
+
+    // The flip side: a partition that will never be polled again must hand its
+    // buffer back. Otherwise the reservation only ever grows and a long merge
+    // holds every partition's high-water mark until the whole stream drops.
+    #[test]
+    fn exhausted_partitions_release_their_retained_buffers() -> Result<()> {
+        let partitions = 8;
+        let batches_per_partition = 3;
+        let mut harness =
+            RowCursorHarness::new(partitions, batches_per_partition, 512, 64)?;
+        let (converter_size, rows_size) = harness.expected_sizes()?;
+        assert_eq!(harness.reserved(), 0);
+
+        for stream_idx in 0..partitions {
+            for _ in 0..batches_per_partition {
+                assert!(harness.poll_and_drop_cursor(stream_idx)?);
+            }
+        }
+        // Reusing a buffer for later batches of the same shape does not grow it.
+        assert_eq!(harness.reserved(), converter_size + partitions * rows_size);
+
+        // Poll each partition once more so it reports exhaustion, releasing
+        // one buffer at a time.
+        for stream_idx in 0..partitions {
+            assert!(!harness.poll_and_drop_cursor(stream_idx)?);
+            let still_retained = partitions - stream_idx - 1;
+            assert_eq!(
+                harness.reserved(),
+                converter_size + still_retained * rows_size
+            );
+        }
+
+        // Only the converter is left.
+        assert_eq!(harness.reserved(), converter_size);
+
+        Ok(())
+    }
+
+    // A reused buffer keeps its capacity, so the reservation should track each
+    // partition's high-water mark and release it on exhaustion only.
+    #[test]
+    fn retained_buffer_reservation_tracks_high_water_mark() -> Result<()> {
+        let small = (64, 8);
+        let large = (2048, 128);
+        let mut harness =
+            RowCursorHarness::with_shapes(vec![vec![small, large, small], vec![small]])?;
+        let converter_size = harness.converter()?.size();
+        let growing = harness.expected_retained_sizes(0)?;
+        let cached = harness.expected_retained_sizes(1)?[0];
+
+        // The large batch grows the buffer; the next small one doesn't shrink it.
+        assert!(growing[1] > growing[0]);
+        assert_eq!(growing[2], growing[1]);
+
+        // Partition 1 keeps its buffer cached throughout.
+        assert!(harness.poll_and_drop_cursor(1)?);
+        assert_eq!(harness.reserved(), converter_size + cached);
+
+        for (seq, retained) in growing.iter().enumerate() {
+            assert!(harness.poll_and_drop_cursor(0)?);
+            assert_eq!(
+                harness.reserved(),
+                converter_size + cached + retained,
+                "after batch {seq}"
+            );
+        }
+
+        // Releasing partition 0 leaves partition 1 accounted for.
+        assert!(!harness.poll_and_drop_cursor(0)?);
+        assert_eq!(harness.reserved(), converter_size + cached);
+
+        assert!(!harness.poll_and_drop_cursor(1)?);
+        assert_eq!(harness.reserved(), converter_size);
+
+        Ok(())
+    }
+
+    // The buffer has already been taken out of the cache when its reservation fails
+    // to grow. Cleanup must still release its previous charge.
+    #[test]
+    fn failed_buffer_growth_releases_only_its_stream_reservation() -> Result<()> {
+        let small = (64, 8);
+        let large = (2048, 128);
+        let mut harness =
+            RowCursorHarness::with_shapes(vec![vec![small, large], vec![small]])?;
+
+        // Cache stream 1's buffer and record the reservation that must survive.
+        assert!(harness.poll_and_drop_cursor(1)?);
+        let expected_remaining = harness.reserved();
+        assert!(harness.poll_and_drop_cursor(0)?);
+
+        // Leave no space for stream 0's larger batch.
+        let MemoryLimit::Finite(limit) = harness.pool.memory_limit() else {
+            unreachable!("the harness uses a bounded memory pool");
+        };
+        let competitor = MemoryConsumer::new("competitor").register(&harness.pool);
+        competitor.try_grow(limit - harness.reserved())?;
+
+        assert!(matches!(
+            harness.poll_cursor(0),
+            Err(DataFusionError::ResourcesExhausted(_))
+        ));
+        drop(competitor);
+
+        // Only stream 1's buffer and the shared converter remain reserved.
+        assert_eq!(harness.reserved(), expected_remaining);
         Ok(())
     }
 }

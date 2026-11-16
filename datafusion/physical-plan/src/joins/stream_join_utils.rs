@@ -1,28 +1,16 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This file contains common subroutines for symmetric hash join
 //! related functionality, used both in join calculations and optimization rules.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
 
-use crate::joins::MapOffset;
+use crate::joins::join_hash_map::ProbeOffset;
 use crate::joins::join_hash_map::{
     contain_hashes, get_matched_indices, get_matched_indices_with_limit_offset,
     update_from_iter,
@@ -73,8 +61,11 @@ impl JoinHashMapType for PruningJoinHashMap {
         iter: Box<dyn Iterator<Item = (usize, &'a u64)> + 'a>,
         deleted_offset: Option<usize>,
     ) -> (Vec<u32>, Vec<u64>) {
-        // Flatten the deque
-        let next: Vec<u64> = self.next.iter().copied().collect();
+        // Flatten the deque, unless it is already contiguous
+        let next = match self.next.as_slices() {
+            (head, []) => Cow::Borrowed(head),
+            _ => Cow::Owned(self.next.iter().copied().collect()),
+        };
         get_matched_indices::<u64>(&self.map, &next, iter, deleted_offset)
     }
 
@@ -83,10 +74,10 @@ impl JoinHashMapType for PruningJoinHashMap {
         hash_values: &[u64],
         valid_keys: Option<&NullBuffer>,
         limit: usize,
-        offset: MapOffset,
+        offset: ProbeOffset,
         input_indices: &mut Vec<u32>,
         match_indices: &mut Vec<u64>,
-    ) -> Option<MapOffset> {
+    ) -> Option<ProbeOffset> {
         // Flatten the deque
         let next: Vec<u64> = self.next.iter().copied().collect();
         get_matched_indices_with_limit_offset::<u64>(

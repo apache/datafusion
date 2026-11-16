@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! User facing options for the file formats readers
 
@@ -99,6 +86,12 @@ pub struct CsvReadOptions<'a> {
     /// When set to true then it will allow records with less than the expected number of columns and fill the missing columns with nulls.
     /// If the record’s schema is not nullable, then it will still return an error.
     pub truncated_rows: bool,
+    /// Whether to map file columns to the table schema by header name instead of by position.
+    ///
+    /// Only applies when `has_header` is true. Table columns missing from a file are
+    /// filled with nulls and file columns not declared in the table are ignored.
+    /// Defaults to `false`.
+    pub match_columns_by_header: bool,
 }
 
 impl Default for CsvReadOptions<'_> {
@@ -126,6 +119,7 @@ impl<'a> CsvReadOptions<'a> {
             comment: None,
             null_regex: None,
             truncated_rows: false,
+            match_columns_by_header: false,
         }
     }
 
@@ -239,6 +233,13 @@ impl<'a> CsvReadOptions<'a> {
     /// If the record’s schema is not nullable, then it will still return an error.
     pub fn truncated_rows(mut self, truncated_rows: bool) -> Self {
         self.truncated_rows = truncated_rows;
+        self
+    }
+
+    /// Configure whether file columns are matched to the table schema by header name
+    /// instead of by position. Only applies when `has_header` is true.
+    pub fn match_columns_by_header(mut self, match_columns_by_header: bool) -> Self {
+        self.match_columns_by_header = match_columns_by_header;
         self
     }
 }
@@ -656,7 +657,8 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_schema_infer_max_rec(self.schema_infer_max_records)
             .with_file_compression_type(self.file_compression_type.to_owned())
             .with_null_regex(self.null_regex.clone())
-            .with_truncated_rows(self.truncated_rows);
+            .with_truncated_rows(self.truncated_rows)
+            .with_match_columns_by_header(self.match_columns_by_header);
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)
@@ -821,7 +823,8 @@ impl ReadOptions<'_> for ArrowReadOptions<'_> {
         _config: &SessionConfig,
         _table_options: TableOptions,
     ) -> ListingOptions {
-        let file_format = ArrowFormat;
+        // There are no read options for Arrow, so we can ignore the `TableOptions`
+        let file_format = ArrowFormat::default();
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)

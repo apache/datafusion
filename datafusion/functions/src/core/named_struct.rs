@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::getfield::GetFieldFunc;
 use arrow::array::StructArray;
@@ -25,6 +12,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 #[user_doc(
@@ -191,9 +179,14 @@ impl ScalarUDFImpl for NamedStructFunc {
         }
 
         let mut fields = Vec::with_capacity(literal_args.len() / 2);
+        let mut names = HashSet::new();
         for (i, chunk) in literal_args.chunks(2).enumerate() {
             match chunk {
                 [Some(ScalarValue::Utf8(Some(name))), _] => {
+                    // Field access resolves only the first occurrence of a name.
+                    if !names.insert(name) {
+                        return None;
+                    }
                     fields.push((
                         vec![ScalarValue::Utf8(Some(name.clone()))],
                         i * 2 + 1, // index of the value argument

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod data_utils;
 
@@ -203,17 +190,10 @@ fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
     ctx
 }
 
-fn register_clickbench_hits_table(rt: &Runtime) -> SessionContext {
+fn register_clickbench_hits_table(rt: &Runtime, path: &str) -> SessionContext {
     let ctx = SessionContext::new();
 
     // use an external table for clickbench benchmarks
-    let path =
-        if PathBuf::from(format!("{BENCHMARKS_PATH_1}{CLICKBENCH_DATA_PATH}")).exists() {
-            format!("{BENCHMARKS_PATH_1}{CLICKBENCH_DATA_PATH}")
-        } else {
-            format!("{BENCHMARKS_PATH_2}{CLICKBENCH_DATA_PATH}")
-        };
-
     let sql =
         format!("CREATE EXTERNAL TABLE hits_raw STORED AS PARQUET LOCATION '{path}'");
 
@@ -354,16 +334,47 @@ fn union_orderby_query(n: usize) -> String {
     query
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
-    // verify that we can load the clickbench data prior to running the benchmark
-    if !PathBuf::from(format!("{BENCHMARKS_PATH_1}{CLICKBENCH_DATA_PATH}")).exists()
-        && !PathBuf::from(format!("{BENCHMARKS_PATH_2}{CLICKBENCH_DATA_PATH}")).exists()
-    {
-        panic!(
-            "benchmarks/data/hits_partitioned/ could not be loaded. Please run \
-         'benchmarks/bench.sh data clickbench_partitioned' prior to running this benchmark"
-        )
+/// `levels` nested projections over `t1`, each computing `width` expressions
+/// from the layer below, with the outermost query selecting `outer_columns`.
+fn wide_projection_stack_query(
+    levels: usize,
+    width: usize,
+    outer_columns: usize,
+) -> String {
+    let mut query = "t1".to_string();
+    let mut input_prefix = "a";
+    for level in 0..levels {
+        let prefix = if level % 2 == 0 { "p" } else { "q" };
+        let exprs: Vec<String> = (0..width)
+            .map(|i| format!("{input_prefix}{i} + {input_prefix}{i} AS {prefix}{i}"))
+            .collect();
+        query = format!("(SELECT {} FROM {query}) AS s{level}", exprs.join(", "));
+        input_prefix = prefix;
     }
+    let columns: Vec<String> = (0..outer_columns)
+        .map(|i| format!("{input_prefix}{i}"))
+        .collect();
+    format!("SELECT {} FROM {query}", columns.join(", "))
+}
+
+fn criterion_benchmark(c: &mut Criterion) {
+    // CI uses the small checked-in fixture; performance runs use the full dataset.
+    let clickbench_data_path =
+        std::env::var("CLICKBENCH_DATA_PATH").unwrap_or_else(|_| {
+            let path = format!("{BENCHMARKS_PATH_1}{CLICKBENCH_DATA_PATH}");
+            if PathBuf::from(&path).exists() {
+                path
+            } else {
+                format!("{BENCHMARKS_PATH_2}{CLICKBENCH_DATA_PATH}")
+            }
+        });
+    // verify that we can load the clickbench data prior to running the benchmark
+    assert!(
+        PathBuf::from(&clickbench_data_path).exists(),
+        "{clickbench_data_path} could not be loaded. Please run \
+         'benchmarks/bench.sh data clickbench_partitioned' prior to running this benchmark \
+         or set CLICKBENCH_DATA_PATH to an existing dataset"
+    );
 
     let ctx = create_context();
     let rt = Runtime::new().unwrap();
@@ -693,7 +704,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             )))
             .collect::<Vec<_>>();
 
-    let clickbench_ctx = register_clickbench_hits_table(&rt);
+    let clickbench_ctx = register_clickbench_hits_table(&rt, &clickbench_data_path);
 
     // for (i, sql) in clickbench_queries.iter().enumerate() {
     //     c.bench_function(&format!("logical_plan_clickbench_q{}", i + 1), |b| {
@@ -1002,6 +1013,71 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    // --- CTE materialization (unmarked, MATERIALIZED, NOT MATERIALIZED) ---
+    // A materialized CTE body is optimized on its own before the rest of the
+    // plan, so these measure that extra planning against inlined CTEs.
+    //
+    // The planner inlines unmarked and `NOT MATERIALIZED` CTEs alike, so their
+    // cases match. They are separate because the unmarked default can change:
+    // PostgreSQL materializes an unmarked CTE that the query reads more than
+    // once. `NOT MATERIALIZED` always inlines, so it stays the inlined baseline.
+    {
+        // sqlparser only parses `[NOT] MATERIALIZED` for the PostgreSQL dialect.
+        let cte_ctx = create_context();
+        rt.block_on(cte_ctx.sql("SET datafusion.sql_parser.dialect = 'PostgreSQL'"))
+            .unwrap();
+
+        let body = "SELECT a0, a1, SUM(a2) AS s FROM t1 WHERE a3 > 0 GROUP BY a0, a1";
+        let two_refs = "SELECT x.a0, x.s, y.s FROM c x JOIN c y ON x.a0 = y.a1";
+        for (name, marker) in [
+            ("unmarked", ""),
+            ("materialized", "MATERIALIZED "),
+            ("not_materialized", "NOT MATERIALIZED "),
+        ] {
+            let query = format!("WITH c AS {marker}({body}) SELECT * FROM c");
+            c.bench_function(&format!("physical_cte_{name}_one_ref"), |b| {
+                b.iter(|| physical_plan(&cte_ctx, &rt, &query))
+            });
+
+            let query = format!("WITH c AS {marker}({body}) {two_refs}");
+            c.bench_function(&format!("physical_cte_{name}_two_refs"), |b| {
+                b.iter(|| physical_plan(&cte_ctx, &rt, &query))
+            });
+
+            // Each CTE reads the previous one twice.
+            let mut query = format!("WITH c0 AS {marker}({body})");
+            for i in 1..6 {
+                let prev = i - 1;
+                write!(
+                    query,
+                    ", c{i} AS {marker}(SELECT x.a0, x.a1, x.s + y.s AS s \
+                     FROM c{prev} x JOIN c{prev} y ON x.a0 = y.a1)"
+                )
+                .unwrap();
+            }
+            query.push_str(" SELECT * FROM c5");
+            c.bench_function(&format!("physical_cte_{name}_chain_6"), |b| {
+                b.iter(|| physical_plan(&cte_ctx, &rt, &query))
+            });
+        }
+
+        // One CTE of each kind, each read twice.
+        let query = format!(
+            "WITH m AS MATERIALIZED ({body}), \
+               n AS NOT MATERIALIZED ({body}), \
+               u AS ({body}) \
+             SELECT m.a0, m.s, n.s, u.s FROM m \
+             JOIN m m2 ON m.a0 = m2.a1 \
+             JOIN n ON m.a0 = n.a0 \
+             JOIN n n2 ON n.a0 = n2.a1 \
+             JOIN u ON m.a0 = u.a0 \
+             JOIN u u2 ON u.a0 = u2.a1"
+        );
+        c.bench_function("physical_cte_mixed", |b| {
+            b.iter(|| physical_plan(&cte_ctx, &rt, &query))
+        });
+    }
+
     // --- TPC-H logical plans (uncommented from existing code) ---
     // These test real-world query patterns with moderate plan complexity.
 
@@ -1096,6 +1172,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         c.bench_function("optimizer_wide_aggregate_100", |b| {
             b.iter(|| optimize_plan(&ctx, &plan))
         });
+    }
+
+    // Stacked wide projections of computed expressions (many expressions per
+    // node over a wide input, as produced by layered views). Each expression
+    // reads its input column twice so the layers are not merged.
+    for (name, outer_columns) in [
+        ("optimizer_wide_projection_stack_all", 200),
+        ("optimizer_wide_projection_stack_half", 100),
+    ] {
+        let query = wide_projection_stack_query(4, 200, outer_columns);
+        let plan = analyzed_plan(&ctx, &rt, &query);
+        c.bench_function(name, |b| b.iter(|| optimize_plan(&ctx, &plan)));
     }
 
     // Subquery (tests decorrelation rules)
