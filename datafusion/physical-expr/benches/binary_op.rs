@@ -553,10 +553,7 @@ fn benchmark_date64_subtract(c: &mut Criterion) {
     }
 }
 
-/// Benchmarks a left-deep disjunction `c0 = 0 OR c0 = 1 OR ...`, such as the
-/// pruning predicate of an IN list. Pruning evaluates such predicates once per
-/// container (e.g., row group), often with null statistics (e.g., when pruning
-/// with Bloom filters), which disables the short-circuit evaluation.
+/// Benchmarks a left-deep disjunction `c0 = 0 OR c0 = 1 OR ...`.
 fn benchmark_disjunction_chain(c: &mut Criterion) {
     let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Int64, true)]));
     let inputs: [(&str, ArrayRef); 2] = [

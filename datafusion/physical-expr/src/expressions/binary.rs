@@ -669,7 +669,7 @@ impl PhysicalExpr for BinaryExpr {
         // Derive the result type from the types of the evaluated children, which
         // also rejects invalid operand types. `self.data_type` would recompute the
         // types of the entire subtree, which is quadratic in the depth of AND/OR
-        // chains (e.g., the pruning predicates of IN lists).
+        // chains.
         let result_type =
             BinaryTypeCoercer::new(&left_data_type, &self.op, &right_data_type)
                 .get_result_type()?;
