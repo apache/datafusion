@@ -442,6 +442,12 @@ pub struct ForeignExecutionPlan {
     plan: FFI_ExecutionPlan,
     properties: Arc<PlanProperties>,
     children: Vec<Arc<dyn ExecutionPlan>>,
+    /// Input requirements are fixed for a plan instance, so they are fetched
+    /// once on construction rather than across FFI on every optimizer call.
+    input_distribution_requirements: InputDistributionRequirements,
+    required_input_ordering: Vec<Option<OrderingRequirements>>,
+    maintains_input_order: Vec<bool>,
+    benefits_from_input_partitioning: Vec<bool>,
 }
 
 unsafe impl Send for ForeignExecutionPlan {}
@@ -497,11 +503,40 @@ impl TryFrom<FFI_ExecutionPlan> for ForeignExecutionPlan {
                 .map(<Arc<dyn ExecutionPlan>>::try_from)
                 .collect::<Result<Vec<_>>>()?;
 
+            let input_distribution_requirements =
+                (&(plan.input_distribution_requirements)(&plan)).into();
+            // `LexRequirement` and `OrderingRequirements` are non-empty by
+            // construction, so a well-formed provider never sends one that fails
+            // to convert. Reject the plan rather than silently dropping a
+            // (possibly hard) ordering requirement.
+            let required_input_ordering = (plan.required_input_ordering)(&plan)
+                .iter()
+                .map(|ordering| match ordering {
+                    FFI_Option::Some(ordering) => {
+                        OrderingRequirements::try_from(ordering).map(Some)
+                    }
+                    FFI_Option::None => Ok(None),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let maintains_input_order = (plan.maintains_input_order)(&plan)
+                .iter()
+                .copied()
+                .collect();
+            let benefits_from_input_partitioning =
+                (plan.benefits_from_input_partitioning)(&plan)
+                    .iter()
+                    .copied()
+                    .collect();
+
             Ok(ForeignExecutionPlan {
                 name,
                 plan,
                 properties: Arc::new(properties),
                 children,
+                input_distribution_requirements,
+                required_input_ordering,
+                maintains_input_order,
+                benefits_from_input_partitioning,
             })
         }
     }
@@ -525,39 +560,19 @@ impl ExecutionPlan for ForeignExecutionPlan {
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
-        let ffi = unsafe { (self.plan.input_distribution_requirements)(&self.plan) };
-        (&ffi).into()
+        self.input_distribution_requirements.clone()
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
-        unsafe { (self.plan.required_input_ordering)(&self.plan) }
-            .iter()
-            .map(|ordering| match ordering {
-                FFI_Option::Some(ordering) => OrderingRequirements::try_from(ordering)
-                    .inspect_err(|e| {
-                        log::error!(
-                            "Invalid required input ordering from foreign plan {}: {e}",
-                            self.name
-                        )
-                    })
-                    .ok(),
-                FFI_Option::None => None,
-            })
-            .collect()
+        self.required_input_ordering.clone()
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        unsafe { (self.plan.maintains_input_order)(&self.plan) }
-            .iter()
-            .copied()
-            .collect()
+        self.maintains_input_order.clone()
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        unsafe { (self.plan.benefits_from_input_partitioning)(&self.plan) }
-            .iter()
-            .copied()
-            .collect()
+        self.benefits_from_input_partitioning.clone()
     }
 
     fn replace_children(
@@ -811,10 +826,6 @@ pub mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
-        }
-
-        fn required_input_distribution(&self) -> Vec<Distribution> {
-            self.input_distribution_requirements().into_per_child()
         }
 
         fn input_distribution_requirements(&self) -> InputDistributionRequirements {

@@ -283,3 +283,62 @@ mod tests {
         Ok(())
     }
 }
+
+mod foreign_requirements {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use datafusion::catalog::{Session, TableProvider};
+    use datafusion::logical_expr::{Expr, TableType};
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::Result;
+    use datafusion_ffi::tests::utils::get_requirements_exec;
+    use datafusion_physical_plan::{ExecutionPlan, displayable};
+
+    /// A host-side table whose scan returns a plan built by another library.
+    #[derive(Debug)]
+    struct ForeignScanTable(Arc<dyn ExecutionPlan>);
+
+    #[async_trait]
+    impl TableProvider for ForeignScanTable {
+        fn schema(&self) -> arrow_schema::SchemaRef {
+            self.0.schema()
+        }
+        fn table_type(&self) -> TableType {
+            TableType::Base
+        }
+        async fn scan(
+            &self,
+            _: &dyn Session,
+            _: Option<&[usize]>,
+            _: &[Expr],
+            _: Option<usize>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::clone(&self.0))
+        }
+    }
+
+    /// A correct foreign subtree (its top node's requirement is met by its own
+    /// child) must plan on the host without errors or extra repartitions/sorts.
+    #[tokio::test]
+    async fn foreign_requirements_met_by_foreign_child() -> Result<()> {
+        for hard_ordering in [false, true] {
+            let ffi = get_requirements_exec(hard_ordering)?;
+            let foreign: Arc<dyn ExecutionPlan> = (&ffi).try_into()?;
+            let ctx = SessionContext::new();
+            ctx.register_table("t", Arc::new(ForeignScanTable(foreign)))?;
+            let plan = ctx
+                .sql("SELECT * FROM t")
+                .await?
+                .create_physical_plan()
+                .await?;
+            let display = displayable(plan.as_ref()).indent(false).to_string();
+            assert!(
+                !display.contains("\n  RepartitionExec: partitioning=Hash")
+                    && !display.contains("\n  SortExec"),
+                "redundant repartition or sort added:\n{display}"
+            );
+        }
+        Ok(())
+    }
+}

@@ -181,7 +181,10 @@ impl From<&FFI_Distribution> for Distribution {
 pub struct FFI_InputDistributionRequirements {
     /// One distribution per child.
     distributions: SVec<FFI_Distribution>,
-    /// Whether all children must be co-partitioned.
+    /// Whether all children must be co-partitioned. This relies on
+    /// [`InputDistributionRequirements`] only being constructible with all or
+    /// none of its children co-partitioned; if subsets become possible, this
+    /// must carry the co-partitioned child indexes instead.
     co_partitioned: bool,
 }
 

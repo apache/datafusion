@@ -2267,6 +2267,7 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "arrow-schema",
+ "async-trait",
  "datafusion",
  "datafusion-catalog",
  "datafusion-common",
