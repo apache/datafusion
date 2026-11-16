@@ -1293,7 +1293,7 @@ character_length(str)
 #### Aliases
 
 - length
-- char_length
+- char\_length
 
 **Related functions**:
 
@@ -2030,7 +2030,7 @@ substr_index(str, delim, count)
 
 #### Aliases
 
-- substring_index
+- substring\_index
 
 ### `substring`
 
@@ -2607,7 +2607,6 @@ date_trunc(precision, expression)
 - **precision**: Time precision to truncate to. The following precisions are supported:
 
   For Timestamp types:
-
   - year / YEAR
   - quarter / QUARTER
   - month / MONTH
@@ -2620,7 +2619,6 @@ date_trunc(precision, expression)
   - microsecond / MICROSECOND
 
   For Time types (hour, minute, second, millisecond, microsecond only):
-
   - hour / HOUR
   - minute / MINUTE
   - second / SECOND
@@ -2795,7 +2793,7 @@ now()
 
 #### Aliases
 
-- current_timestamp
+- current\_timestamp
 
 ### `timezone`
 
@@ -2863,7 +2861,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 #### Aliases
 
-- date_format
+- date\_format
 
 ### `to_date`
 
@@ -3439,7 +3437,7 @@ array_add(array1, array2)
 
 #### Aliases
 
-- list_add
+- list\_add
 
 ### `array_any_match`
 
@@ -3467,8 +3465,8 @@ any_match(array, predicate)
 
 #### Aliases
 
-- any_match
-- list_any_match
+- any\_match
+- list\_any\_match
 
 ### `array_any_value`
 
@@ -3495,7 +3493,7 @@ array_any_value(array)
 
 #### Aliases
 
-- list_any_value
+- list\_any\_value
 
 ### `array_append`
 
@@ -3523,9 +3521,9 @@ array_append(array, element)
 
 #### Aliases
 
-- list_append
-- array_push_back
-- list_push_back
+- list\_append
+- array\_push\_back
+- list\_push\_back
 
 ### `array_avg`
 
@@ -3552,7 +3550,7 @@ array_avg(array)
 
 #### Aliases
 
-- list_avg
+- list\_avg
 
 ### `array_cat`
 
@@ -3583,7 +3581,7 @@ array_compact(array)
 
 #### Aliases
 
-- list_compact
+- list\_compact
 
 ### `array_concat`
 
@@ -3611,9 +3609,9 @@ array_concat(array[, ..., array_n])
 
 #### Aliases
 
-- array_cat
-- list_concat
-- list_cat
+- array\_cat
+- list\_concat
+- list\_cat
 
 ### `array_contains`
 
@@ -3644,7 +3642,7 @@ array_dims(array)
 
 #### Aliases
 
-- list_dims
+- list\_dims
 
 ### `array_distance`
 
@@ -3672,7 +3670,7 @@ array_distance(array1, array2)
 
 #### Aliases
 
-- list_distance
+- list\_distance
 
 ### `array_distinct`
 
@@ -3699,7 +3697,7 @@ array_distinct(array)
 
 #### Aliases
 
-- list_distinct
+- list\_distinct
 
 ### `array_element`
 
@@ -3727,9 +3725,9 @@ array_element(array, index)
 
 #### Aliases
 
-- array_extract
-- list_element
-- list_extract
+- array\_extract
+- list\_element
+- list\_extract
 
 ### `array_empty`
 
@@ -3767,7 +3765,7 @@ array_except(array1, array2)
 
 #### Aliases
 
-- list_except
+- list\_except
 
 ### `array_extract`
 
@@ -3799,7 +3797,7 @@ array_filter(array, x -> x > 2)
 
 #### Aliases
 
-- list_filter
+- list\_filter
 
 ### `array_first`
 
@@ -3827,7 +3825,7 @@ array_first(array, predicate)
 
 #### Aliases
 
-- list_first
+- list\_first
 
 ### `array_has`
 
@@ -3855,9 +3853,9 @@ array_has(array, element)
 
 #### Aliases
 
-- list_has
-- array_contains
-- list_contains
+- list\_has
+- array\_contains
+- list\_contains
 
 ### `array_has_all`
 
@@ -3885,7 +3883,7 @@ array_has_all(array, sub_array)
 
 #### Aliases
 
-- list_has_all
+- list\_has\_all
 
 ### `array_has_any`
 
@@ -3913,8 +3911,8 @@ array_has_any(array1, array2)
 
 #### Aliases
 
-- list_has_any
-- arrays_overlap
+- list\_has\_any
+- arrays\_overlap
 
 ### `array_indexof`
 
@@ -3952,7 +3950,7 @@ array_intersect(array1, array2)
 
 #### Aliases
 
-- list_intersect
+- list\_intersect
 
 ### `array_join`
 
@@ -3984,7 +3982,7 @@ array_length(array[, dimension])
 
 #### Aliases
 
-- list_length
+- list\_length
 
 ### `array_max`
 
@@ -4011,7 +4009,7 @@ array_max(array)
 
 #### Aliases
 
-- list_max
+- list\_max
 
 ### `array_min`
 
@@ -4061,7 +4059,7 @@ array_ndims(array)
 
 #### Aliases
 
-- list_ndims
+- list\_ndims
 
 ### `array_normalize`
 
@@ -4088,7 +4086,7 @@ array_normalize(array)
 
 #### Aliases
 
-- list_normalize
+- list\_normalize
 
 ### `array_pop_back`
 
@@ -4115,7 +4113,7 @@ array_pop_back(array)
 
 #### Aliases
 
-- list_pop_back
+- list\_pop\_back
 
 ### `array_pop_front`
 
@@ -4142,7 +4140,7 @@ array_pop_front(array)
 
 #### Aliases
 
-- list_pop_front
+- list\_pop\_front
 
 ### `array_position`
 
@@ -4177,9 +4175,9 @@ array_position(array, element[, index])
 
 #### Aliases
 
-- list_position
-- array_indexof
-- list_indexof
+- list\_position
+- array\_indexof
+- list\_indexof
 
 ### `array_positions`
 
@@ -4207,7 +4205,7 @@ array_positions(array, element)
 
 #### Aliases
 
-- list_positions
+- list\_positions
 
 ### `array_prepend`
 
@@ -4235,9 +4233,9 @@ array_prepend(element, array)
 
 #### Aliases
 
-- list_prepend
-- array_push_front
-- list_push_front
+- list\_prepend
+- array\_push\_front
+- list\_push\_front
 
 ### `array_product`
 
@@ -4264,7 +4262,7 @@ array_product(array)
 
 #### Aliases
 
-- list_product
+- list\_product
 
 ### `array_push_back`
 
@@ -4307,7 +4305,7 @@ array_remove(array, element)
 
 #### Aliases
 
-- list_remove
+- list\_remove
 
 ### `array_remove_all`
 
@@ -4342,7 +4340,7 @@ array_remove_all(array, element)
 
 #### Aliases
 
-- list_remove_all
+- list\_remove\_all
 
 ### `array_remove_n`
 
@@ -4378,7 +4376,7 @@ array_remove_n(array, element, max)
 
 #### Aliases
 
-- list_remove_n
+- list\_remove\_n
 
 ### `array_repeat`
 
@@ -4412,7 +4410,7 @@ array_repeat(element, count)
 
 #### Aliases
 
-- list_repeat
+- list\_repeat
 
 ### `array_replace`
 
@@ -4441,7 +4439,7 @@ array_replace(array, from, to)
 
 #### Aliases
 
-- list_replace
+- list\_replace
 
 ### `array_replace_all`
 
@@ -4470,7 +4468,7 @@ array_replace_all(array, from, to)
 
 #### Aliases
 
-- list_replace_all
+- list\_replace\_all
 
 ### `array_replace_n`
 
@@ -4500,7 +4498,7 @@ array_replace_n(array, from, to, max)
 
 #### Aliases
 
-- list_replace_n
+- list\_replace\_n
 
 ### `array_resize`
 
@@ -4529,7 +4527,7 @@ array_resize(array, size[, value])
 
 #### Aliases
 
-- list_resize
+- list\_resize
 
 ### `array_reverse`
 
@@ -4556,7 +4554,7 @@ array_reverse(array)
 
 #### Aliases
 
-- list_reverse
+- list\_reverse
 
 ### `array_scale`
 
@@ -4584,7 +4582,7 @@ array_scale(array, scalar)
 
 #### Aliases
 
-- list_scale
+- list\_scale
 
 ### `array_slice`
 
@@ -4614,7 +4612,7 @@ array_slice(array, begin, end[, stride])
 
 #### Aliases
 
-- list_slice
+- list\_slice
 
 ### `array_sort`
 
@@ -4649,7 +4647,7 @@ array_sort(array[, order[, nulls_order]])
 
 #### Aliases
 
-- list_sort
+- list\_sort
 
 ### `array_subtract`
 
@@ -4677,7 +4675,7 @@ array_subtract(array1, array2)
 
 #### Aliases
 
-- list_subtract
+- list\_subtract
 
 ### `array_sum`
 
@@ -4704,7 +4702,7 @@ array_sum(array)
 
 #### Aliases
 
-- list_sum
+- list\_sum
 
 ### `array_to_string`
 
@@ -4733,9 +4731,9 @@ array_to_string(array, delimiter[, null_string])
 
 #### Aliases
 
-- list_to_string
-- array_join
-- list_join
+- list\_to\_string
+- array\_join
+- list\_join
 
 ### `array_transform`
 
@@ -4763,7 +4761,7 @@ array_transform(array, lambda)
 
 #### Aliases
 
-- list_transform
+- list\_transform
 
 ### `array_union`
 
@@ -4797,7 +4795,7 @@ array_union(array1, array2)
 
 #### Aliases
 
-- list_union
+- list\_union
 
 ### `arrays_overlap`
 
@@ -4835,7 +4833,7 @@ arrays_zip(array1[, ..., array_n])
 
 #### Aliases
 
-- list_zip
+- list\_zip
 
 ### `cardinality`
 
@@ -4913,8 +4911,8 @@ empty(array)
 
 #### Aliases
 
-- array_empty
-- list_empty
+- array\_empty
+- list\_empty
 
 ### `flatten`
 
@@ -4996,7 +4994,7 @@ inner_product(array1, array2)
 
 #### Aliases
 
-- dot_product
+- dot\_product
 
 ### `list_add`
 
@@ -5239,7 +5237,7 @@ make_array([expression1, ..., expression_n])
 
 #### Aliases
 
-- make_list
+- make\_list
 
 ### `make_list`
 
@@ -5311,7 +5309,7 @@ string_to_array(str, delimiter[, null_str])
 
 #### Aliases
 
-- string_to_list
+- string\_to\_list
 
 ### `string_to_list`
 
@@ -5539,7 +5537,7 @@ SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'a');
 
 #### Aliases
 
-- element_at
+- element\_at
 
 ### `map_keys`
 
