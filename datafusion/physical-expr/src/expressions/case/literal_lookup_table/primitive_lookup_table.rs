@@ -19,6 +19,10 @@ use std::hash::Hash;
 /// as fewer wider values fit in a vector register.
 const MAX_LINEAR_LOOKUP_BYTES: usize = 128;
 
+/// [MAX_LINEAR_LOOKUP_BYTES] for values wider than 64 bits, which have no native
+/// vector comparisons, making each comparison several times more costly.
+const MAX_WIDE_LINEAR_LOOKUP_BYTES: usize = 64;
+
 /// The maximum number of literals that are looked up by comparing each value with all
 /// of them, for values narrow enough for many of them to fit [MAX_LINEAR_LOOKUP_BYTES].
 const MAX_LINEAR_LOOKUP_LITERALS: usize = 32;
@@ -26,7 +30,12 @@ const MAX_LINEAR_LOOKUP_LITERALS: usize = 32;
 /// The maximum number of literals of type `K` that are looked up by comparing each
 /// value with all of them, rather than with a hash map.
 fn max_linear_lookup_literals<K>() -> usize {
-    (MAX_LINEAR_LOOKUP_BYTES / size_of::<K>()).min(MAX_LINEAR_LOOKUP_LITERALS)
+    let max_bytes = if size_of::<K>() > size_of::<u64>() {
+        MAX_WIDE_LINEAR_LOOKUP_BYTES
+    } else {
+        MAX_LINEAR_LOOKUP_BYTES
+    };
+    (max_bytes / size_of::<K>()).min(MAX_LINEAR_LOOKUP_LITERALS)
 }
 
 /// The number of values that are compared with all the literals at a time in a linear lookup.
@@ -164,7 +173,7 @@ where
             let literal_index = literal_index as u32;
             for (value, index) in values.iter().zip(indices.iter_mut()) {
                 // Storing unconditionally vectorizes; storing only on a match branches per value
-                *index = if value.into_hashable_key() == *literal {
+                *index = if T::Native::keys_eq(value.into_hashable_key(), *literal) {
                     literal_index
                 } else {
                     *index
@@ -173,13 +182,30 @@ where
         }
     }
     if let Some(nulls) = array.nulls().filter(|nulls| nulls.null_count() > 0) {
-        for (index, valid) in indices.iter_mut().zip(nulls.iter()) {
-            if !valid {
-                *index = else_index;
+        let valid_chunks = nulls.inner().bit_chunks();
+        let mut index_chunks = indices.chunks_mut(64);
+        for (valid_bits, indices) in valid_chunks.iter().zip(&mut index_chunks) {
+            if valid_bits != u64::MAX {
+                set_else_index_for_nulls(valid_bits, indices, else_index);
             }
+        }
+        if let Some(indices) = index_chunks.next() {
+            set_else_index_for_nulls(valid_chunks.remainder_bits(), indices, else_index);
         }
     }
     indices
+}
+
+/// Sets `else_index` for each of up to 64 `indices` whose bit in `valid_bits` is unset.
+#[inline]
+fn set_else_index_for_nulls(valid_bits: u64, indices: &mut [u32], else_index: u32) {
+    for (i, index) in indices.iter_mut().enumerate() {
+        *index = if valid_bits & (1 << i) != 0 {
+            *index
+        } else {
+            else_index
+        };
+    }
 }
 
 impl<T> WhenLiteralIndexMap for PrimitiveIndexMap<T>
@@ -232,6 +258,12 @@ pub(super) trait ToHashableKey: ArrowNativeTypeOp {
     /// Converts self to a hashable key
     /// the result of this value can be used as the key in hash maps/sets
     fn into_hashable_key(self) -> Self::HashableKey;
+
+    /// Compares two keys, in a way that vectorizes when comparing many values with a key
+    #[inline]
+    fn keys_eq(a: Self::HashableKey, b: Self::HashableKey) -> bool {
+        a == b
+    }
 }
 
 macro_rules! impl_to_hashable_key {
@@ -262,7 +294,24 @@ macro_rules! impl_to_hashable_key {
     };
 }
 
-impl_to_hashable_key!(@already_hashable | i8, i16, i32, i64, i128, i256, u8, u16, u32, u64, IntervalDayTime, IntervalMonthDayNano);
+impl ToHashableKey for i128 {
+    type HashableKey = i128;
+
+    #[inline]
+    fn into_hashable_key(self) -> Self::HashableKey {
+        self
+    }
+
+    /// `a == b` is not vectorized, as `i128` is not a vector lane type, but this
+    /// vectorizes as operations on the 64-bit halves.
+    #[inline]
+    fn keys_eq(a: i128, b: i128) -> bool {
+        let x = (a ^ b) as u128;
+        (x as u64 | (x >> 64) as u64) == 0
+    }
+}
+
+impl_to_hashable_key!(@already_hashable | i8, i16, i32, i64, i256, u8, u16, u32, u64, IntervalDayTime, IntervalMonthDayNano);
 impl_to_hashable_key!(@float | f16 => u16);
 impl_to_hashable_key!(@float | f32 => u32);
 impl_to_hashable_key!(@float | f64 => u64);
@@ -279,9 +328,9 @@ mod tests {
         assert_eq!(max_linear_lookup_literals::<u16>(), 32);
         assert_eq!(max_linear_lookup_literals::<i32>(), 32);
         assert_eq!(max_linear_lookup_literals::<i64>(), 16);
-        assert_eq!(max_linear_lookup_literals::<i128>(), 8);
-        assert_eq!(max_linear_lookup_literals::<IntervalMonthDayNano>(), 8);
-        assert_eq!(max_linear_lookup_literals::<i256>(), 4);
+        assert_eq!(max_linear_lookup_literals::<i128>(), 4);
+        assert_eq!(max_linear_lookup_literals::<IntervalMonthDayNano>(), 4);
+        assert_eq!(max_linear_lookup_literals::<i256>(), 2);
     }
 
     // This test ensure that all arrow primitive types implement ToHashableKey
