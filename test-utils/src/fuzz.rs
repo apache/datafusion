@@ -91,7 +91,7 @@ pub struct RunConfig {
     /// Maximum successful cases; must be positive when supplied.
     pub max_cases: Option<usize>,
     /// Soft budget including preparation. The first test case start after the time
-    /// limit reached will be cancled.
+    /// limit reached will be cancelled.
     pub time_limit: Option<Duration>,
     /// Maximum cases sharing one fixture; must be positive.
     pub cases_per_dataset: usize,
