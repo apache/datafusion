@@ -17,8 +17,8 @@ runs:
       run: |
         mkdir -p $HOME/d/protoc
         cd $HOME/d/protoc
-        export PROTO_ZIP="protoc-29.1-osx-aarch_64.zip"
-        curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v29.1/$PROTO_ZIP
+        export PROTO_ZIP="protoc-36.2-osx-aarch_64.zip"
+        curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v36.2/$PROTO_ZIP
         unzip $PROTO_ZIP
         echo "$HOME/d/protoc/bin" >> $GITHUB_PATH
         export PATH=$PATH:$HOME/d/protoc/bin

@@ -282,8 +282,9 @@ fn coerce_exprs_for_schema(
             let new_type = dst_schema.field(idx).data_type();
             if new_type != &expr.get_type(src_schema)? {
                 match expr {
-                    Expr::Alias(Alias { expr, name, .. }) => {
-                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                    Expr::Alias(mut alias) => {
+                        alias.expr = Box::new(alias.expr.cast_to(new_type, src_schema)?);
+                        Ok(Expr::Alias(alias))
                     }
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
@@ -293,8 +294,12 @@ fn coerce_exprs_for_schema(
                             // tablename being added to it when not explicitly set by the query
                             // (see: https://github.com/apache/datafusion/issues/18818)
                             Expr::Column(ref column) => {
+                                // Keep the qualifier too: joined columns may share a name.
+                                let relation = column.relation.clone();
                                 let name = column.name().to_owned();
-                                Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                                Ok(expr
+                                    .cast_to(new_type, src_schema)?
+                                    .alias_qualified(relation, name))
                             }
                             _ => Ok(expr.cast_to(new_type, src_schema)?),
                         }
@@ -513,6 +518,51 @@ mod test {
         let expected = "Schema error: No field named b.\n\
             Valid fields are \"tableA\".a.";
         assert_eq!(error, expected);
+    }
+
+    #[test]
+    fn coerce_plan_preserves_qualified_column_names() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let right =
+            crate::logical_plan::table_scan(Some("right"), &schema, None)?.build()?;
+        let join = crate::logical_plan::table_scan(Some("left"), &schema, None)?
+            .cross_join(right)?
+            .build()?;
+        let target = DFSchema::try_from(Schema::new(vec![
+            Field::new("x", DataType::Int64, false),
+            Field::new("y", DataType::Int64, false),
+        ]))?;
+
+        // Exercise both adding a projection and coercing an existing projection,
+        // including qualified aliases produced by earlier rewrites.
+        let columns = vec![col("left.a"), col("right.a")];
+        let projected = LogicalPlanBuilder::from(join.clone())
+            .project(columns.clone())?
+            .build()?;
+        let aliased = LogicalPlanBuilder::from(join.clone())
+            .project([
+                col("left.a").alias_qualified(Some("left"), "a"),
+                col("right.a").alias_qualified(Some("right"), "a"),
+            ])?
+            .build()?;
+        for plan in [join, projected, aliased] {
+            let coerced = coerce_plan_expr_for_schema(plan, &target)?;
+            assert_eq!(
+                coerced.schema().columns(),
+                vec![
+                    Column::from_qualified_name("left.a"),
+                    Column::from_qualified_name("right.a"),
+                ]
+            );
+            assert!(coerced.schema().fields().iter().all(|field| {
+                field.name() == "a" && field.data_type() == &DataType::Int64
+            }));
+            // Both columns remain independently addressable after casting.
+            LogicalPlanBuilder::from(coerced)
+                .project(columns.clone())?
+                .build()?;
+        }
+        Ok(())
     }
 
     #[test]

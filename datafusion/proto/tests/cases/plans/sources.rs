@@ -35,7 +35,7 @@ use datafusion::physical_plan::{
     ExecutionPlan, Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, Statistics,
     displayable,
 };
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::stats::Precision;
@@ -166,6 +166,51 @@ async fn roundtrip_parquet_exec_with_sort_pushdown() -> Result<()> {
         before.contains("sort_order_for_reorder=[id@0 DESC NULLS LAST]")
             && before.contains("reverse_row_groups=true"),
         "expected sort pushdown in plan:\n{before}"
+    );
+
+    let roundtripped = roundtrip_test_and_return(
+        plan,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let after = displayable(roundtripped.as_ref()).indent(true).to_string();
+    pretty_assertions::assert_eq!(before, after);
+    Ok(())
+}
+
+/// An exact reverse scan carries `reverse_rows` alongside
+/// `reverse_row_groups`; losing it in the round trip would make the decoded
+/// scan emit rows in on-disk order under a plan with no `SortExec` left.
+#[tokio::test]
+async fn roundtrip_parquet_exec_with_exact_reverse_scan() -> Result<()> {
+    let mut config = SessionConfig::new();
+    config
+        .options_mut()
+        .execution
+        .parquet
+        .enable_exact_reverse_scan = true;
+    let ctx = SessionContext::new_with_config(config);
+    let testdata = datafusion::test_util::parquet_test_data();
+    ctx.register_parquet(
+        "alltypes_plain",
+        &format!("{testdata}/alltypes_plain.parquet"),
+        ParquetReadOptions {
+            file_sort_order: vec![vec![datafusion::prelude::col("id").sort(true, false)]],
+            ..Default::default()
+        },
+    )
+    .await?;
+    let plan = ctx
+        .sql("SELECT id FROM alltypes_plain ORDER BY id DESC NULLS FIRST LIMIT 5")
+        .await?
+        .create_physical_plan()
+        .await?;
+    let before = displayable(plan.as_ref()).indent(true).to_string();
+    assert!(
+        before.contains("reverse_row_groups=true, reverse_rows=true")
+            && !before.contains("SortExec"),
+        "expected an exact reverse scan in plan:\n{before}"
     );
 
     let roundtripped = roundtrip_test_and_return(
@@ -387,7 +432,9 @@ fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
     let file_source = Arc::new(
-        JsonSource::new(TableSchema::from(&file_schema)).with_newline_delimited(false),
+        JsonSource::new(TableSchema::from(&file_schema))
+            .with_newline_delimited(false)
+            .with_coerce_primitive(true),
     );
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
@@ -416,14 +463,16 @@ fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
         .downcast_ref::<JsonSource>()
         .ok_or_else(|| internal_datafusion_err!("Expected JsonSource"))?;
     assert!(!json_source.is_newline_delimited());
+    assert!(json_source.coerce_primitive());
     assert_eq!(file_scan.file_compression_type, FileCompressionType::GZIP);
 
     // Payloads written before these fields existed must keep their historical
-    // defaults: newline-delimited JSON without compression.
+    // defaults: newline-delimited JSON without compression or primitive coercion.
     let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
     match node.physical_plan_type.as_mut() {
         Some(protobuf::physical_plan_node::PhysicalPlanType::JsonScan(scan)) => {
             scan.newline_delimited = None;
+            scan.coerce_primitive = None;
             scan.base_conf
                 .as_mut()
                 .expect("JSON scan has a base config")
@@ -441,6 +490,7 @@ fn roundtrip_json_scan_preserves_format_options() -> Result<()> {
         .downcast_ref::<JsonSource>()
         .ok_or_else(|| internal_datafusion_err!("Expected JsonSource"))?;
     assert!(json_source.is_newline_delimited());
+    assert!(!json_source.coerce_primitive());
     assert_eq!(
         file_scan.file_compression_type,
         FileCompressionType::UNCOMPRESSED
@@ -606,6 +656,44 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+#[test]
+fn roundtrip_csv_scan_preserves_match_columns_by_header() -> Result<()> {
+    use datafusion::common::config::CsvOptions;
+
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, true)]));
+    let file_source = Arc::new(
+        CsvSource::new(TableSchema::from(&file_schema)).with_csv_options(
+            CsvOptions::default()
+                .with_has_header(true)
+                .with_match_columns_by_header(true),
+        ),
+    );
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.csv".to_string(),
+                1024,
+            )])])
+            .build();
+
+    let ctx = SessionContext::new();
+    let roundtripped = roundtrip_test_and_return(
+        DataSourceExec::from_data_source(scan_config),
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let csv_source = roundtripped
+        .downcast_ref::<DataSourceExec>()
+        .and_then(|exec| exec.data_source().downcast_ref::<FileScanConfig>())
+        .and_then(|scan| scan.file_source().downcast_ref::<CsvSource>())
+        .ok_or_else(|| internal_datafusion_err!("Expected CsvSource"))?;
+
+    assert!(csv_source.match_columns_by_header());
     Ok(())
 }
 
