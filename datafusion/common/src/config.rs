@@ -1447,12 +1447,19 @@ config_namespace! {
         /// dictionary pages are inferred and scanned as
         /// `Dictionary<Int32, Utf8>` / `Dictionary<Int32, Binary>` instead of
         /// their plain value type.
-        ///
         /// This applies only when DataFusion infers the table schema. Tables with
         /// a user-supplied schema are not promoted because the Parquet footer is
         /// not read at DDL time, so dictionary pages cannot be detected per column.
+        /// Setting `dictionary_read_max_distinct_values` also enables dictionary
+        /// reads using its stricter eligibility rules.
         /// See <https://github.com/apache/datafusion/issues/24112>
         pub enable_rle_to_dictionary: bool, default = false
+
+        /// (reading) If set, promote top-level string and binary columns only when
+        /// all data pages are dictionary encoded and the per-file NDV sum is within
+        /// this cap. It enables dictionary reads; missing statistics fail closed.
+        /// Later files may still be cast by schema adaptation.
+        pub dictionary_read_max_distinct_values: Option<usize>, default = None
 
         /// (reading) Which byte range of a split file reads each row group.
         /// `start_offset` picks the range containing the row group's start.

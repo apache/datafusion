@@ -427,6 +427,41 @@ pub(crate) fn uniform_dict_schemas(schemas: Vec<Schema>) -> Vec<Schema> {
         .collect()
 }
 
+/// Make the listed string/binary fields dictionaries and demote all other
+/// string/binary dictionaries to their value type.
+pub(crate) fn set_dictionary_columns(
+    schema: &Schema,
+    dictionary_columns: &HashSet<String>,
+) -> Option<Schema> {
+    let fields = coerce_fields(schema.fields(), |_, field| {
+        let listed = dictionary_columns.contains(field.name());
+        let new_type = match (listed, field.data_type()) {
+            (true, value_type)
+                if matches!(
+                    value_type,
+                    DataType::Utf8
+                        | DataType::LargeUtf8
+                        | DataType::Binary
+                        | DataType::LargeBinary
+                ) =>
+            {
+                Some(DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(value_type.clone()),
+                ))
+            }
+            (false, DataType::Dictionary(_, value_type))
+                if value_type.is_string() || value_type.is_binary() =>
+            {
+                Some(value_type.as_ref().clone())
+            }
+            _ => None,
+        };
+        new_type.map(|ty| field_with_new_type(field, ty))
+    })?;
+    Some(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
 /// Coerces the file schema's Timestamps to the provided TimeUnit if the
 /// Parquet schema contains INT96.
 ///
@@ -1999,6 +2034,9 @@ mod tests {
 
         assert_eq!(result.field(0).data_type(), &DataType::Utf8);
         assert_eq!(result.field(1).data_type(), &DataType::Utf8);
+
+        let demoted = set_dictionary_columns(&table_schema, &HashSet::new()).unwrap();
+        assert_eq!(demoted.field(0).data_type(), &DataType::Utf8);
     }
 
     fn dk(key: DataType) -> DataType {

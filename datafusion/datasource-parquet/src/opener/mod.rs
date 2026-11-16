@@ -13,6 +13,7 @@ use self::early_stop::EarlyStoppingStream;
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
+use crate::metadata::dictionary_promotion_candidates;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
@@ -23,7 +24,9 @@ use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
     BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
     ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn, RowGroupAccess,
-    schema_coercion::apply_file_schema_type_coercions_with_rle,
+    schema_coercion::{
+        apply_file_schema_type_coercions_with_rle, set_dictionary_columns,
+    },
 };
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
@@ -292,6 +295,8 @@ pub(super) struct ParquetMorselizer {
     pub max_in_list_size: usize,
     /// Whether to ask arrow-rs to read promoted dictionary columns directly.
     pub enable_rle_to_dictionary: bool,
+    /// Optional per-file NDV upper bound for direct dictionary reads.
+    pub dictionary_read_max_distinct_values: Option<usize>,
     /// How row groups are assigned to the byte ranges of a split file. Sourced
     /// from `datafusion.execution.parquet.row_group_range_assignment`.
     pub row_group_range_assignment: RowGroupRangeAssignment,
@@ -496,6 +501,7 @@ struct PreparedParquetOpen {
     max_predicate_cache_size: Option<usize>,
     max_in_list_size: usize,
     enable_rle_to_dictionary: bool,
+    dictionary_read_max_distinct_values: Option<usize>,
     row_group_range_assignment: RowGroupRangeAssignment,
     reverse_row_groups: bool,
     reverse_rows: bool,
@@ -1020,6 +1026,7 @@ impl ParquetMorselizer {
             max_predicate_cache_size: self.max_predicate_cache_size,
             max_in_list_size: self.max_in_list_size,
             enable_rle_to_dictionary: self.enable_rle_to_dictionary,
+            dictionary_read_max_distinct_values: self.dictionary_read_max_distinct_values,
             row_group_range_assignment: self.row_group_range_assignment,
             reverse_row_groups: self.reverse_row_groups,
             reverse_rows: self.reverse_rows,
@@ -1134,14 +1141,43 @@ impl MetadataLoadedParquetOpen {
         //   produced separately by the reader and are not part of this schema.
         let mut physical_file_schema = Arc::clone(reader_metadata.schema());
 
+        let dictionary_columns =
+            prepared
+                .dictionary_read_max_distinct_values
+                .map(|max_distinct_values| {
+                    dictionary_promotion_candidates(
+                        reader_metadata.metadata(),
+                        reader_metadata.parquet_schema(),
+                        Some(max_distinct_values),
+                    )
+                    .into_iter()
+                    .filter(|name| {
+                        prepared
+                            .logical_file_schema
+                            .field_with_name(name)
+                            .is_ok_and(|field| {
+                                matches!(field.data_type(), DataType::Dictionary(_, _))
+                            })
+                    })
+                    .collect()
+                });
+
         // The schema loaded from the file may not be the same as the
         // desired schema (for example if we want to instruct the parquet
         // reader to read strings using Utf8View instead). Update if necessary
         let mut metadata_dirty = false;
+        if let Some(dictionary_columns) = dictionary_columns.as_ref()
+            && let Some(schema) =
+                set_dictionary_columns(physical_file_schema.as_ref(), dictionary_columns)
+        {
+            physical_file_schema = Arc::new(schema);
+            options = options.with_schema(Arc::clone(&physical_file_schema));
+            metadata_dirty = true;
+        }
         if let Some(merged) = apply_file_schema_type_coercions_with_rle(
             &prepared.logical_file_schema,
             &physical_file_schema,
-            prepared.enable_rle_to_dictionary,
+            prepared.enable_rle_to_dictionary && dictionary_columns.is_none(),
         ) {
             physical_file_schema = Arc::new(merged);
             options = options.with_schema(Arc::clone(&physical_file_schema));
@@ -2214,7 +2250,7 @@ mod test {
         ParquetFileReaderFactory, ParquetFileSchemaProvider, ParquetRowSelection,
         RowGroupAccess,
     };
-    use arrow::array::{Array, AsArray, RecordBatch, record_batch};
+    use arrow::array::{Array, AsArray, BinaryArray, RecordBatch, record_batch};
     use arrow::buffer::BooleanBuffer;
     use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
@@ -2290,6 +2326,7 @@ mod test {
         max_predicate_cache_size: Option<usize>,
         max_in_list_size: usize,
         enable_rle_to_dictionary: bool,
+        dictionary_read_max_distinct_values: Option<usize>,
         row_group_range_assignment: RowGroupRangeAssignment,
         reverse_row_groups: bool,
         reverse_rows: bool,
@@ -2512,6 +2549,7 @@ mod test {
                 max_predicate_cache_size: None,
                 max_in_list_size: MAX_IN_LIST_SIZE,
                 enable_rle_to_dictionary: false,
+                dictionary_read_max_distinct_values: None,
                 row_group_range_assignment: RowGroupRangeAssignment::default(),
                 reverse_row_groups: false,
                 reverse_rows: false,
@@ -2590,8 +2628,11 @@ mod test {
             self
         }
 
-        fn with_enable_rle_to_dictionary(mut self, enable: bool) -> Self {
-            self.enable_rle_to_dictionary = enable;
+        fn with_dictionary_read_max_distinct_values(
+            mut self,
+            max_distinct_values: usize,
+        ) -> Self {
+            self.dictionary_read_max_distinct_values = Some(max_distinct_values);
             self
         }
 
@@ -2738,6 +2779,8 @@ mod test {
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 max_in_list_size: self.max_in_list_size,
                 enable_rle_to_dictionary: self.enable_rle_to_dictionary,
+                dictionary_read_max_distinct_values: self
+                    .dictionary_read_max_distinct_values,
                 row_group_range_assignment: self.row_group_range_assignment,
                 reverse_row_groups: self.reverse_row_groups,
                 reverse_rows: self.reverse_rows,
@@ -6436,11 +6479,11 @@ mod test {
             DataType::Binary,
             true,
         )]));
-        let values =
-            Arc::new(arrow::array::BinaryArray::from_vec(vec![b"a", b"b", b"a"]));
+        let values = Arc::new(BinaryArray::from_vec(vec![b"a", b"b", b"a"]));
         let batch = RecordBatch::try_new(Arc::clone(&bin_schema), vec![values]).unwrap();
         let props = WriterProperties::builder()
             .set_dictionary_enabled(true)
+            .set_write_row_group_number_distinct_values(true)
             .build();
         let bin_size = write_parquet_batches(
             Arc::clone(&store),
@@ -6454,19 +6497,50 @@ mod test {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
             true,
         )]));
-        let morselizer = ParquetMorselizerBuilder::new()
-            .with_store(Arc::clone(&store))
-            .with_schema(Arc::clone(&dict_bin_schema))
-            .with_enable_rle_to_dictionary(true)
-            .build();
-        let batches = collect_batches(
-            &morselizer,
-            PartitionedFile::new("binary.parquet".to_string(), bin_size as u64),
-        )
-        .await;
-        assert_eq!(
-            batches[0].schema().field(0).data_type(),
-            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary))
-        );
+        let file = PartitionedFile::new("binary.parquet".to_string(), bin_size as u64);
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary));
+        for (cap, legacy, physical_type) in [
+            (1, false, &DataType::Binary),
+            (1, true, &DataType::Binary),
+            (2, false, &dictionary_type),
+        ] {
+            let mut builder = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&dict_bin_schema));
+            builder.enable_rle_to_dictionary = legacy;
+            let morselizer = builder
+                .with_dictionary_read_max_distinct_values(cap)
+                .build();
+            let prepared = morselizer
+                .prepare_open_file(file.clone())
+                .unwrap()
+                .load()
+                .await
+                .unwrap()
+                .prepare_filters()
+                .unwrap();
+            assert_eq!(
+                prepared
+                    .loaded
+                    .prepared
+                    .physical_file_schema
+                    .field(0)
+                    .data_type(),
+                physical_type
+            );
+            let batches = collect_batches(&morselizer, file.clone()).await;
+            assert_eq!(batches[0].schema().field(0).data_type(), &dictionary_type);
+            let dictionary = batches[0].column(0).as_dictionary::<Int32Type>();
+            let values = dictionary.values().as_binary::<i32>();
+            assert_eq!(
+                dictionary
+                    .keys()
+                    .iter()
+                    .map(|key| values.value(key.unwrap() as usize))
+                    .collect::<Vec<_>>(),
+                vec![b"a".as_slice(), b"b".as_slice(), b"a".as_slice()]
+            );
+        }
     }
 }
