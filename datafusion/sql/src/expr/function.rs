@@ -663,11 +663,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .transpose()?
                     .map(Box::new);
 
-                let star_name = star.map(|star| {
+                let star_name = star.as_ref().map(|star| {
                     Expr::from(WindowFunction {
                         fun: fun.clone(),
                         params: expr::WindowFunctionParams {
-                            args: vec![star],
+                            args: vec![star.clone()],
                             partition_by: partition_by.clone(),
                             order_by: order_by.clone(),
                             window_frame: window_frame.clone(),
@@ -700,6 +700,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         PlannerResult::Planned(expr) => return Ok(with_star_name(expr)),
                         PlannerResult::Original(expr) => window_expr = expr,
                     }
+                }
+
+                if let Some(star) = star {
+                    return plan_err!(
+                        "Wildcard argument is not supported in {name}({star})"
+                    );
                 }
 
                 let RawWindowExpr {
@@ -850,10 +856,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     args
                 };
 
-                let star_name = star.map(|star| {
+                let star_name = star.as_ref().map(|star| {
                     Expr::AggregateFunction(expr::AggregateFunction::new_udf(
                         Arc::clone(&fm),
-                        vec![star],
+                        vec![star.clone()],
                         distinct,
                         filter.clone(),
                         order_by.clone(),
@@ -880,6 +886,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         PlannerResult::Planned(expr) => return Ok(with_star_name(expr)),
                         PlannerResult::Original(expr) => aggregate_expr = expr,
                     }
+                }
+
+                if let Some(star) = star {
+                    return plan_err!(
+                        "Wildcard argument is not supported in {name}({star})"
+                    );
                 }
 
                 let RawAggregateExpr {

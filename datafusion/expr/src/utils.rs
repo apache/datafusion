@@ -2318,7 +2318,7 @@ mod tests {
             .unwrap_err();
         assert_snapshot!(
             err.strip_backtrace(),
-            @"Error during planning: Aggregate function calls cannot be nested: 'COUNT(b)' is nested inside 'sum(a + COUNT(b))'"
+            @"Error during planning: Aggregate function calls cannot be nested: 'count(b)' is nested inside 'sum(a + count(b))'"
         );
 
         // nested in the FILTER of an aggregate
