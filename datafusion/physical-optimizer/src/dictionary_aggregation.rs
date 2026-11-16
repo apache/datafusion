@@ -2845,6 +2845,19 @@ impl DictionaryPreservation {
         )))
     }
 
+    /// Whether this node has the shape handled by the restoration pass.
+    fn has_restoration_filter_shape(plan: &Arc<dyn ExecutionPlan>) -> bool {
+        plan.downcast_ref::<FilterExec>().is_some_and(|filter| {
+            filter.fetch().is_none()
+                && filter.projection().is_none()
+                && filter.input().downcast_ref::<ProjectionExec>().is_some_and(
+                    |projection| {
+                        projection.input().downcast_ref::<AggregateExec>().is_some()
+                    },
+                )
+        })
+    }
+
     /// Move a schema-restoring projection above a filter that does not read
     /// any retyped field. This avoids decoding every aggregate group before a
     /// selective `HAVING` predicate while preserving the rule's output schema.
@@ -2953,28 +2966,34 @@ impl PhysicalOptimizerRule for DictionaryPreservation {
             DictionaryPhase::Aggregation => Self::downstream_join_aggregates(&plan),
             DictionaryPhase::Filter => vec![],
         };
-        let plan = plan
-            .transform_down(|plan| {
-                let rewritten = match self.phase {
-                    DictionaryPhase::Aggregation => Self::try_rewrite_aggregate(
-                        &plan,
-                        context,
-                        downstream_join_aggregates
-                            .iter()
-                            .any(|aggregate| Arc::ptr_eq(&aggregate.aggregate, &plan)),
-                    )?,
-                    DictionaryPhase::Filter => Self::try_rewrite_filter(&plan, context)?,
-                };
-                Ok(match rewritten {
-                    Some(rewritten) => Transformed::yes(rewritten),
-                    None => Transformed::no(plan),
-                })
-            })?
-            .data;
+        let mut saw_restoration_filter_shape = false;
+        let transformed = plan.transform_down(|plan| {
+            saw_restoration_filter_shape |=
+                matches!(self.phase, DictionaryPhase::Aggregation)
+                    && Self::has_restoration_filter_shape(&plan);
+            let rewritten = match self.phase {
+                DictionaryPhase::Aggregation => Self::try_rewrite_aggregate(
+                    &plan,
+                    context,
+                    downstream_join_aggregates
+                        .iter()
+                        .any(|aggregate| Arc::ptr_eq(&aggregate.aggregate, &plan)),
+                )?,
+                DictionaryPhase::Filter => Self::try_rewrite_filter(&plan, context)?,
+            };
+            Ok(match rewritten {
+                Some(rewritten) => Transformed::yes(rewritten),
+                None => Transformed::no(plan),
+            })
+        })?;
+        let run_restoration_pass =
+            transformed.transformed || saw_restoration_filter_shape;
+        let plan = transformed.data;
         match self.phase {
-            DictionaryPhase::Aggregation => plan
+            DictionaryPhase::Aggregation if run_restoration_pass => plan
                 .transform_up(Self::push_restoration_above_filter)
                 .data(),
+            DictionaryPhase::Aggregation => Ok(plan),
             DictionaryPhase::Filter => Ok(plan),
         }
     }
@@ -5165,6 +5184,41 @@ mod tests {
             .downcast_ref::<FilterExec>()
             .expect("HAVING should be below the restoration projection");
         assert!(filter.input().downcast_ref::<AggregateExec>().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn descendant_rewrite_triggers_restoration_pass() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int64, false),
+            Field::new("group_key", DataType::Utf8View, false),
+        ]));
+        let aggregate = partial_final_group_count_aggregate(profitable_scan(schema), 1)?;
+        let output_schema = aggregate.schema();
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("count_rows", 1)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(100_000)))),
+        ));
+        let plan = Arc::new(FilterExec::try_new(predicate, aggregate)?)
+            as Arc<dyn ExecutionPlan>;
+
+        let optimized = optimize(plan)?;
+        assert_eq!(optimized.schema(), output_schema);
+        let projection = optimized
+            .downcast_ref::<ProjectionExec>()
+            .expect("restoration projection should move above HAVING");
+        let filter = projection
+            .input()
+            .downcast_ref::<FilterExec>()
+            .expect("HAVING should be below the restoration projection");
+        assert!(filter.input().downcast_ref::<AggregateExec>().is_some());
+
+        let scan = find_scan(&optimized).expect("rewritten plan should contain scan");
+        assert!(matches!(
+            scan.file_schema().field(1).data_type(),
+            DataType::Dictionary(_, _)
+        ));
         Ok(())
     }
 
