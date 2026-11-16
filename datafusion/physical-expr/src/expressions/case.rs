@@ -114,16 +114,45 @@ impl Eq for LiteralLookupTable {}
 /// exponential in the nesting depth: [`CaseBody::project`] rebuilds the nested expressions,
 /// each of which would project its own body again.
 #[derive(Debug, Default)]
-struct LazyProjectedBody(OnceLock<ProjectedCaseBody>);
+struct LazyProjectedBody {
+    projected: OnceLock<ProjectedCaseBody>,
+    /// Whether the single `WHEN` is evaluated against the full input batch before the
+    /// derived body is used, so that the derived body only needs its `THEN` and `ELSE`.
+    when_evaluated: bool,
+}
 
 impl LazyProjectedBody {
+    /// For bodies with a single `WHEN` that is evaluated against the full input batch.
+    fn when_evaluated() -> Self {
+        Self {
+            projected: OnceLock::new(),
+            when_evaluated: true,
+        }
+    }
+
     fn project(&self, body: &CaseBody, schema: &Schema) -> Result<&ProjectedCaseBody> {
-        if let Some(projected) = self.0.get() {
+        if let Some(projected) = self.projected.get() {
             return Ok(projected);
         }
         // Concurrent first evaluations may each derive the body; one of them is kept.
-        let projected = body.project(schema)?;
-        Ok(self.0.get_or_init(|| projected))
+        let projected = if self.when_evaluated {
+            // The derived `WHEN` is never evaluated, so a placeholder keeps it from
+            // affecting the projection and the precomputed expressions.
+            let placeholder: Arc<dyn PhysicalExpr> =
+                Arc::new(Literal::new(ScalarValue::Boolean(Some(true))));
+            CaseBody {
+                expr: None,
+                when_then_expr: vec![(
+                    placeholder,
+                    Arc::clone(&body.when_then_expr[0].1),
+                )],
+                else_expr: body.else_expr.clone(),
+            }
+            .project(schema)?
+        } else {
+            body.project(schema)?
+        };
+        Ok(self.projected.get_or_init(|| projected))
     }
 }
 
@@ -926,7 +955,7 @@ impl CaseExpr {
         {
             EvalMethod::ScalarOrScalar
         } else if body.when_then_expr.len() == 1 {
-            EvalMethod::ExpressionOrExpression(LazyProjectedBody::default())
+            EvalMethod::ExpressionOrExpression(LazyProjectedBody::when_evaluated())
         } else {
             EvalMethod::NoExpression(LazyProjectedBody::default())
         }
@@ -2209,16 +2238,11 @@ mod tests {
     fn case_expr_or_expr_with_custom_column() -> Result<()> {
         let batch = case_test_batch_with_extra_columns()?;
         let schema = batch.schema();
-        let when = binary(
-            Arc::new(CustomColumn::new("a", 0)),
-            Operator::Eq,
-            lit("foo"),
-            &schema,
-        )?;
+        let when = binary(col("a", &schema)?, Operator::Eq, lit("foo"), &schema)?;
 
         let expr = CaseExpr::try_new(
             None,
-            vec![(when, col("b", &schema)?)],
+            vec![(when, Arc::new(CustomColumn::new("b", 1)))],
             Some(col("c", &schema)?),
         )?;
 
@@ -2248,19 +2272,19 @@ mod tests {
             &schema,
             Arc::new(ConfigOptions::default()),
         )?);
-        let when = binary(random, Operator::Gt, lit(0.5f64), &schema)?;
+        let when = binary(col("a", &schema)?, Operator::Gt, lit(0i32), &schema)?;
 
         let expr = CaseExpr::try_new(
             None,
-            vec![(when, col("b", &schema)?)],
-            Some(col("c", &schema)?),
+            vec![(when, random)],
+            Some(cast(col("c", &schema)?, &schema, Float64)?),
         )?;
 
         match &expr.eval_method {
             EvalMethod::ExpressionOrExpression(projected) => {
                 let projected = projected.project(&expr.body, &schema)?;
                 assert!(projected.supports_projection);
-                assert_eq!(projected.projection, vec![1, 2]);
+                assert_eq!(projected.projection, vec![2]);
             }
             method => panic!("expected ExpressionOrExpression, got {method:?}"),
         }
@@ -2626,7 +2650,7 @@ mod tests {
                 let projected = projected.project(&expr.body, &schema)?;
                 assert!(projected.supports_projection);
                 assert_eq!(projected.projection, vec![0]);
-                assert_eq!(projected.precomputed, vec![s_a, s_b]);
+                assert_eq!(projected.precomputed, vec![s_b, s_a]);
             }
             method => panic!("expected ExpressionOrExpression, got {method:?}"),
         }
@@ -2634,6 +2658,41 @@ mod tests {
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_int32_array(&result)?;
         let expected = Int32Array::from(vec![Some(100), Some(10), Some(300), Some(10)]);
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_expr_or_expr_does_not_precompute_when_only_fields() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s_a = get_field_expr(col("s", &schema)?, "a", &schema)?;
+        let x = col("x", &schema)?;
+
+        // CASE WHEN s['a'] > 1 THEN x ELSE -x END
+        let expr = CaseExpr::try_new(
+            None,
+            vec![(
+                binary(s_a, Operator::Gt, lit(1i32), &schema)?,
+                Arc::clone(&x),
+            )],
+            Some(binary(lit(0i32), Operator::Minus, x, &schema)?),
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::ExpressionOrExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
+                assert!(projected.supports_projection);
+                assert_eq!(projected.projection, vec![0]);
+                assert!(projected.precomputed.is_empty());
+            }
+            method => panic!("expected ExpressionOrExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int32_array(&result)?;
+        let expected =
+            Int32Array::from(vec![Some(-100), Some(200), Some(-300), Some(400)]);
         assert_eq!(&expected, result);
         Ok(())
     }
