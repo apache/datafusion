@@ -572,12 +572,14 @@ impl ExternalSorter {
             self.in_progress_spill_file.take().ok_or_else(|| {
                 internal_datafusion_err!("Should be called after `spill_append`")
             })?;
+        let shared_dictionary_bytes = in_progress_file.shared_dictionary_bytes();
         let spill_file = in_progress_file.finish_async().await?;
 
         if let Some(spill_file) = spill_file {
             self.finished_spill_files.push(SortedSpillFile {
                 file: spill_file,
                 max_record_batch_memory,
+                shared_dictionary_bytes,
             });
         }
 

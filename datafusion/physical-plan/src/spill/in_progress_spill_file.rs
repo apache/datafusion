@@ -9,6 +9,8 @@ use datafusion_common::{Result, internal_datafusion_err};
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+use arrow::datatypes::DataType;
+use arrow_data::ArrayData;
 use datafusion_common::exec_datafusion_err;
 use datafusion_execution::spill_file::SpillFile;
 
@@ -32,6 +34,57 @@ pub(crate) struct WrittenBatchStats {
     pub(crate) rows: usize,
 }
 
+/// The dictionary values of the pieces written to one file.
+enum FileDictionaries {
+    /// No piece is written yet.
+    Unknown,
+    /// Every piece references these values, which hold `bytes` bytes.
+    Same {
+        values: Vec<ArrayData>,
+        bytes: usize,
+    },
+    /// Two pieces reference different values.
+    Differ,
+}
+
+impl FileDictionaries {
+    fn observe(&mut self, piece: &RecordBatch) -> Result<()> {
+        let mut values = vec![];
+        for column in piece.columns() {
+            dictionary_values(&column.to_data(), &mut values);
+        }
+        match self {
+            Self::Unknown => {
+                let bytes = values
+                    .iter()
+                    .map(|v| v.get_slice_memory_size())
+                    .sum::<std::result::Result<usize, _>>()?;
+                *self = Self::Same { values, bytes };
+            }
+            Self::Same { values: first, .. } => {
+                let same = first.len() == values.len()
+                    && first.iter().zip(&values).all(|(a, b)| a.ptr_eq(b));
+                if !same {
+                    *self = Self::Differ;
+                }
+            }
+            Self::Differ => {}
+        }
+        Ok(())
+    }
+}
+
+/// Pushes the values of every dictionary in `data`, at any nesting level.
+fn dictionary_values(data: &ArrayData, values: &mut Vec<ArrayData>) {
+    if let DataType::Dictionary(_, _) = data.data_type() {
+        values.push(data.child_data()[0].clone());
+    } else {
+        data.child_data()
+            .iter()
+            .for_each(|child| dictionary_values(child, values));
+    }
+}
+
 /// Represents an in-progress spill file used for writing `RecordBatch`es to disk, created by `SpillManager`.
 /// Caller is able to use this struct to incrementally append in-memory batches to
 /// the file, and then finalize the file by calling the `finish` method.
@@ -41,6 +94,8 @@ pub struct InProgressSpillFile {
     writer: Option<InProgressWriter>,
     /// Lazily initialized in-progress file, it will be moved out when the `finish` method is invoked
     in_progress_file: Option<Arc<dyn SpillFile>>,
+    /// See [`Self::shared_dictionary_bytes`]
+    dictionaries: FileDictionaries,
 }
 
 impl InProgressSpillFile {
@@ -52,6 +107,30 @@ impl InProgressSpillFile {
             spill_manager,
             in_progress_file: Some(in_progress_file),
             writer: None,
+            dictionaries: FileDictionaries::Unknown,
+        }
+    }
+
+    /// The bytes of the dictionary values that every batch written so far shares, or 0
+    /// when the batches do not all share the same values.
+    ///
+    /// The IPC writer writes a dictionary only when it changes, and the reader then
+    /// gives every batch the same decoded values. So a reader of the file holds these
+    /// bytes once, however many of its batches are in memory. The size recorded for each
+    /// batch includes them, so a merge subtracts them from every batch it buffers and
+    /// reserves them once for the file (see [`SortedSpillFile`]).
+    ///
+    /// This is 0 for a manager without a bound.
+    ///
+    /// [`SortedSpillFile`]: crate::sorts::streaming_merge::SortedSpillFile
+    pub(crate) fn shared_dictionary_bytes(&self) -> usize {
+        match &self.dictionaries {
+            FileDictionaries::Same { bytes, .. }
+                if self.spill_manager.max_batch_bytes().is_some() =>
+            {
+                *bytes
+            }
+            _ => 0,
         }
     }
 
@@ -125,6 +204,7 @@ impl InProgressSpillFile {
                 let size = self.spill_manager.read_back_size(size, delta_bytes);
                 stats.memory_size = stats.memory_size.max(size);
                 stats.rows = stats.rows.max(piece.num_rows());
+                self.dictionaries.observe(&piece)?;
             }
         } else if self.writer.is_some() {
             return Err(exec_datafusion_err!(
@@ -191,6 +271,7 @@ impl InProgressSpillFile {
                     let size = self.spill_manager.read_back_size(size, delta_bytes);
                     stats.memory_size = stats.memory_size.max(size);
                     stats.rows = stats.rows.max(piece.num_rows());
+                    self.dictionaries.observe(&piece)?;
                 }
             }
             Some(InProgressWriter::Sync(_)) => {
