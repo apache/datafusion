@@ -4,7 +4,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 
-use datafusion_common::tree_node::{Transformed, TransformedResult};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference,
     assert_contains,
@@ -289,6 +289,67 @@ fn roundtrip_statement() -> Result<()> {
             remove_column_self_aliases(plan)?,
             remove_column_self_aliases(plan_roundtrip)?,
         );
+    }
+
+    Ok(())
+}
+
+/// Folds `CAST(<string literal> AS <type>)` to a literal, as constant folding does
+/// before a plan reaches the unparser.
+fn fold_literal_casts(plan: LogicalPlan) -> Result<LogicalPlan> {
+    plan.transform_up_with_subqueries(|plan| {
+        plan.map_expressions(|expr| {
+            expr.transform_up(|expr| match &expr {
+                Expr::Cast(cast) => match cast.expr.as_ref() {
+                    Expr::Literal(value, None) => Ok(Transformed::yes(Expr::Literal(
+                        value.cast_to(cast.field.data_type())?,
+                        None,
+                    ))),
+                    _ => Ok(Transformed::no(expr)),
+                },
+                _ => Ok(Transformed::no(expr)),
+            })
+        })
+    })
+    .data()
+}
+
+#[test]
+fn roundtrip_non_finite_float_literals() -> Result<()> {
+    let tests = [
+        (
+            "SELECT * FROM t WHERE x < 'inf'::double",
+            r#"SELECT t.x FROM t WHERE (t.x < CAST('Infinity' AS DOUBLE))"#,
+        ),
+        (
+            "SELECT * FROM t WHERE x > '-inf'::double",
+            r#"SELECT t.x FROM t WHERE (t.x > CAST('-Infinity' AS DOUBLE))"#,
+        ),
+        (
+            "SELECT * FROM t WHERE x <> 'NaN'::double",
+            r#"SELECT t.x FROM t WHERE (t.x <> CAST('NaN' AS DOUBLE))"#,
+        ),
+        (
+            "SELECT * FROM t WHERE x NOT IN ('NaN'::double, 'Infinity'::double, '-Infinity'::double)",
+            r#"SELECT t.x FROM t WHERE t.x NOT IN (CAST('NaN' AS DOUBLE), CAST('Infinity' AS DOUBLE), CAST('-Infinity' AS DOUBLE))"#,
+        ),
+    ];
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    for (query, expected) in tests {
+        let statement = Parser::new(&GenericDialect {})
+            .try_with_sql(query)?
+            .parse_statement()?;
+        let plan = fold_literal_casts(sql_to_rel.sql_statement_to_plan(statement)?)?;
+
+        let roundtrip_statement = plan_to_sql(&plan)?;
+        assert_eq!(roundtrip_statement.to_string(), expected);
+
+        let plan_roundtrip =
+            fold_literal_casts(sql_to_rel.sql_statement_to_plan(roundtrip_statement)?)?;
+        assert_eq!(plan, plan_roundtrip);
     }
 
     Ok(())
