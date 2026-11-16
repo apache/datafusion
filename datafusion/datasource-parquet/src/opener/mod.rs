@@ -21,8 +21,9 @@ use crate::push_decoder::{
 };
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
-    BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
-    ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn, RowGroupAccess,
+    BloomFilterStatistics, CachedParquetFileReaderFactory, Int96Coercer,
+    ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory, ParquetRowSelection,
+    ParquetVirtualColumn, RowGroupAccess,
     schema_coercion::apply_file_schema_type_coercions_with_rle,
 };
 use arrow::array::RecordBatch;
@@ -76,7 +77,9 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::file::metadata::{
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
+};
 
 /// Morselizer-level state for virtual columns, precomputed once per scan
 /// partition so each file skips the validator walks, `null_replacements`
@@ -1111,6 +1114,24 @@ impl PreparedParquetOpen {
             options,
         })
     }
+
+    /// Stores `metadata`, read after the initial metadata load, in the cache
+    /// of a [`CachedParquetFileReaderFactory`] so later opens of the file
+    /// reuse it.
+    fn cache_metadata(&self, metadata: &Arc<ParquetMetaData>) {
+        // Like the initial metadata load, never share decrypted metadata
+        #[cfg(feature = "parquet_encryption")]
+        if self.file_decryption_properties.is_some() {
+            return;
+        }
+        if let Some(factory) = self
+            .parquet_file_reader_factory
+            .downcast_ref::<CachedParquetFileReaderFactory>()
+        {
+            factory
+                .cache_metadata(&self.partitioned_file.object_meta, Arc::clone(metadata));
+        }
+    }
 }
 
 impl MetadataLoadedParquetOpen {
@@ -1494,7 +1515,7 @@ impl RowGroupsPrunedParquetOpen {
 
     /// Load the page index if pruning requires it and metadata did not include it.
     async fn load_page_index(mut self) -> Result<Self> {
-        self.prepared.loaded.reader_metadata = load_page_index(
+        let reader_metadata = load_page_index(
             self.prepared.loaded.reader_metadata.clone(),
             &mut self.prepared.loaded.prepared.async_file_reader,
             self.prepared
@@ -1511,6 +1532,14 @@ impl RowGroupsPrunedParquetOpen {
                 ),
         )
         .await?;
+        let loaded = &mut self.prepared.loaded;
+        if !Arc::ptr_eq(
+            reader_metadata.metadata(),
+            loaded.reader_metadata.metadata(),
+        ) {
+            loaded.prepared.cache_metadata(reader_metadata.metadata());
+        }
+        loaded.reader_metadata = reader_metadata;
 
         Ok(self)
     }
