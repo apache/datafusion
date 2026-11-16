@@ -504,64 +504,35 @@ fn math_decimal_coercion(
         }
         // Unlike with comparison we don't coerce to a decimal in the case of floating point
         // numbers, instead falling back to floating point arithmetic instead
-        (
-            Decimal32(_, _),
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
-        ) => Some((
-            lhs_type.clone(),
-            coerce_numeric_type_to_decimal32(rhs_type)?,
-        )),
-        (
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
-            Decimal32(_, _),
-        ) => Some((
-            coerce_numeric_type_to_decimal32(lhs_type)?,
-            rhs_type.clone(),
-        )),
-        (
-            Decimal64(_, _),
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
-        ) => Some((
-            lhs_type.clone(),
-            coerce_numeric_type_to_decimal64(rhs_type)?,
-        )),
-        (
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
-            Decimal64(_, _),
-        ) => Some((
-            coerce_numeric_type_to_decimal64(lhs_type)?,
-            rhs_type.clone(),
-        )),
-        (
-            Decimal128(_, _),
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
-        ) => Some((
-            lhs_type.clone(),
-            coerce_numeric_type_to_decimal128(rhs_type)?,
-        )),
-        (
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
-            Decimal128(_, _),
-        ) => Some((
-            coerce_numeric_type_to_decimal128(lhs_type)?,
-            rhs_type.clone(),
-        )),
-        (
-            Decimal256(_, _),
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
-        ) => Some((
-            lhs_type.clone(),
-            coerce_numeric_type_to_decimal256(rhs_type)?,
-        )),
-        (
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
-            Decimal256(_, _),
-        ) => Some((
-            coerce_numeric_type_to_decimal256(lhs_type)?,
-            rhs_type.clone(),
-        )),
+        (decimal, integer) if decimal.is_decimal() && integer.is_integer() => {
+            decimal_and_integer_math_types(decimal, integer)
+        }
+        (integer, decimal) if integer.is_integer() && decimal.is_decimal() => {
+            let (decimal, integer) = decimal_and_integer_math_types(decimal, integer)?;
+            Some((integer, decimal))
+        }
         _ => None,
     }
+}
+
+/// The operand types for arithmetic between a decimal and an integer: the
+/// narrowest variant that holds both, each side keeping its own precision and
+/// scale. Arrow derives the result's precision from both operands' (`decimal_op`
+/// in `arrow_arith::numeric`), so one common type for both would cost it.
+fn decimal_and_integer_math_types(
+    decimal_type: &DataType,
+    integer_type: &DataType,
+) -> Option<(DataType, DataType)> {
+    let (precision, scale) = decimal_precision_and_scale(decimal_type)?;
+    let (integer_precision, integer_scale) = integer_decimal_precision(integer_type)?;
+    // The decimal's own variant holds its precision, so the integer's decides,
+    // unless the decimal's precision is out of range for its variant.
+    let variant =
+        narrowest_decimal_variant(decimal_type, precision.max(integer_precision))?;
+    Some((
+        variant(precision, scale),
+        variant(integer_precision, integer_scale),
+    ))
 }
 
 /// Returns the output type of applying bitwise operations such as
@@ -1214,21 +1185,8 @@ fn get_wider_decimal_type_cross_variant(
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
-    let (p1, s1) = match lhs_type {
-        Decimal32(p, s) => (*p, *s),
-        Decimal64(p, s) => (*p, *s),
-        Decimal128(p, s) => (*p, *s),
-        Decimal256(p, s) => (*p, *s),
-        _ => return None,
-    };
-
-    let (p2, s2) = match rhs_type {
-        Decimal32(p, s) => (*p, *s),
-        Decimal64(p, s) => (*p, *s),
-        Decimal128(p, s) => (*p, *s),
-        Decimal256(p, s) => (*p, *s),
-        _ => return None,
-    };
+    let (p1, s1) = decimal_precision_and_scale(lhs_type)?;
+    let (p2, s2) = decimal_precision_and_scale(rhs_type)?;
 
     // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
     let s = s1.max(s2);
@@ -1269,25 +1227,39 @@ fn get_common_decimal_type(
     other_type: &DataType,
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    match decimal_type {
-        Decimal32(_, _) => {
-            let other_decimal_type = coerce_numeric_type_to_decimal32(other_type)?;
-            get_wider_decimal_type(decimal_type, &other_decimal_type)
+
+    // How many digits an integer needs is known exactly, so a common type with
+    // no room for them is one no such value casts into.
+    if let Some((integer_precision, integer_scale)) =
+        integer_decimal_precision(other_type)
+    {
+        let (precision, scale) = decimal_precision_and_scale(decimal_type)?;
+        let common_precision = required_decimal_precision(
+            precision,
+            scale,
+            integer_precision,
+            integer_scale,
+        );
+        let common_scale = scale.max(integer_scale);
+        if let Some(variant) = narrowest_decimal_variant(decimal_type, common_precision) {
+            return Some(variant(common_precision, common_scale));
         }
-        Decimal64(_, _) => {
-            let other_decimal_type = coerce_numeric_type_to_decimal64(other_type)?;
-            get_wider_decimal_type(decimal_type, &other_decimal_type)
-        }
-        Decimal128(_, _) => {
-            let other_decimal_type = coerce_numeric_type_to_decimal128(other_type)?;
-            get_wider_decimal_type(decimal_type, &other_decimal_type)
-        }
-        Decimal256(_, _) => {
-            let other_decimal_type = coerce_numeric_type_to_decimal256(other_type)?;
-            get_wider_decimal_type(decimal_type, &other_decimal_type)
-        }
-        _ => None,
+        // Only a Decimal256 with a large scale, of either sign, needs more digits
+        // than any variant holds; capping keeps the comparison in decimals.
+        return get_wider_decimal_type(
+            decimal_type,
+            &Decimal256(integer_precision, integer_scale),
+        );
     }
+
+    let other_decimal_type = match decimal_type {
+        Decimal32(_, _) => coerce_float_type_to_decimal32(other_type)?,
+        Decimal64(_, _) => coerce_float_type_to_decimal64(other_type)?,
+        Decimal128(_, _) => coerce_float_type_to_decimal128(other_type)?,
+        Decimal256(_, _) => coerce_float_type_to_decimal256(other_type)?,
+        _ => return None,
+    };
+    get_wider_decimal_type(decimal_type, &other_decimal_type)
 }
 
 /// Returns a decimal [`DataType`] variant that can store any value from either
@@ -1346,31 +1318,81 @@ fn required_decimal_precision(p1: u8, s1: i8, p2: u8, s2: i8) -> u8 {
     (range + s).clamp(0, u8::MAX as i32) as u8
 }
 
-/// Convert the numeric data type to the decimal data type.
-/// We support signed and unsigned integer types and floating-point type.
-fn coerce_numeric_type_to_decimal32(numeric_type: &DataType) -> Option<DataType> {
+/// The precision and scale of any decimal [`DataType`].
+fn decimal_precision_and_scale(decimal_type: &DataType) -> Option<(u8, i8)> {
+    use arrow::datatypes::DataType::*;
+    match decimal_type {
+        Decimal32(p, s) | Decimal64(p, s) | Decimal128(p, s) | Decimal256(p, s) => {
+            Some((*p, *s))
+        }
+        _ => None,
+    }
+}
+
+/// The precision and scale an integer needs as a decimal, independent of which
+/// decimal variant holds it. The precisions are the ones spark uses:
+/// https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
+fn integer_decimal_precision(integer_type: &DataType) -> Option<(u8, i8)> {
+    use arrow::datatypes::DataType::*;
+    match integer_type {
+        Int8 | UInt8 => Some((3, 0)),
+        Int16 | UInt16 => Some((5, 0)),
+        Int32 | UInt32 => Some((10, 0)),
+        Int64 | UInt64 => Some((20, 0)),
+        _ => None,
+    }
+}
+
+/// The narrowest decimal variant that holds `precision` and is no narrower than
+/// `at_least`'s, as a constructor for that variant.
+fn narrowest_decimal_variant(
+    at_least: &DataType,
+    precision: u8,
+) -> Option<fn(u8, i8) -> DataType> {
+    use arrow::datatypes::DataType::*;
+
+    // A variant's maximum scale equals its maximum precision, and a precision
+    // leaves room for its own scale, so the precision alone decides.
+    let holds = |max_precision: u8| precision <= max_precision;
+
+    match at_least {
+        Decimal32(_, _) if holds(DECIMAL32_MAX_PRECISION) => Some(Decimal32),
+        Decimal32(_, _) | Decimal64(_, _) if holds(DECIMAL64_MAX_PRECISION) => {
+            Some(Decimal64)
+        }
+        Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _)
+            if holds(DECIMAL128_MAX_PRECISION) =>
+        {
+            Some(Decimal128)
+        }
+        Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _)
+            if holds(DECIMAL256_MAX_PRECISION) =>
+        {
+            Some(Decimal256)
+        }
+        _ => None,
+    }
+}
+
+/// Convert the floating-point data type to the decimal data type.
+///
+/// An integer goes through [`integer_decimal_precision`] instead: its digits are
+/// known exactly, while the scale a float coerces to is an approximation.
+fn coerce_float_type_to_decimal32(numeric_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     // This conversion rule is from spark
     // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
     match numeric_type {
-        Int8 | UInt8 => Some(Decimal32(3, 0)),
-        Int16 | UInt16 => Some(Decimal32(5, 0)),
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
         Float16 => Some(Decimal32(6, 3)),
         _ => None,
     }
 }
 
-/// Convert the numeric data type to the decimal data type.
-/// We support signed and unsigned integer types and floating-point type.
-fn coerce_numeric_type_to_decimal64(numeric_type: &DataType) -> Option<DataType> {
+/// Like [`coerce_float_type_to_decimal32`], for `Decimal64`.
+fn coerce_float_type_to_decimal64(numeric_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    // This conversion rule is from spark
-    // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
     match numeric_type {
-        Int8 | UInt8 => Some(Decimal64(3, 0)),
-        Int16 | UInt16 => Some(Decimal64(5, 0)),
-        Int32 | UInt32 => Some(Decimal64(10, 0)),
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
         Float16 => Some(Decimal64(6, 3)),
         Float32 => Some(Decimal64(14, 7)),
@@ -1378,17 +1400,10 @@ fn coerce_numeric_type_to_decimal64(numeric_type: &DataType) -> Option<DataType>
     }
 }
 
-/// Convert the numeric data type to the decimal data type.
-/// We support signed and unsigned integer types and floating-point type.
-fn coerce_numeric_type_to_decimal128(numeric_type: &DataType) -> Option<DataType> {
+/// Like [`coerce_float_type_to_decimal32`], for `Decimal128`.
+fn coerce_float_type_to_decimal128(numeric_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    // This conversion rule is from spark
-    // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
     match numeric_type {
-        Int8 | UInt8 => Some(Decimal128(3, 0)),
-        Int16 | UInt16 => Some(Decimal128(5, 0)),
-        Int32 | UInt32 => Some(Decimal128(10, 0)),
-        Int64 | UInt64 => Some(Decimal128(20, 0)),
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
         Float16 => Some(Decimal128(6, 3)),
         Float32 => Some(Decimal128(14, 7)),
@@ -1397,17 +1412,10 @@ fn coerce_numeric_type_to_decimal128(numeric_type: &DataType) -> Option<DataType
     }
 }
 
-/// Convert the numeric data type to the decimal data type.
-/// We support signed and unsigned integer types and floating-point type.
-fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType> {
+/// Like [`coerce_float_type_to_decimal32`], for `Decimal256`.
+fn coerce_float_type_to_decimal256(numeric_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    // This conversion rule is from spark
-    // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
     match numeric_type {
-        Int8 | UInt8 => Some(Decimal256(3, 0)),
-        Int16 | UInt16 => Some(Decimal256(5, 0)),
-        Int32 | UInt32 => Some(Decimal256(10, 0)),
-        Int64 | UInt64 => Some(Decimal256(20, 0)),
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
         Float16 => Some(Decimal256(6, 3)),
         Float32 => Some(Decimal256(14, 7)),
