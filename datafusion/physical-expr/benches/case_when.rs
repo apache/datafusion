@@ -514,7 +514,8 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
 }
 
 /// `CASE c WHEN 0 THEN 0 WHEN 7 THEN 1 ... ELSE -1 END` over values of a primitive type,
-/// 90% of which match one of the literals, for a range of numbers of literals.
+/// 90% of the non-null values matching one of the literals, for a range of numbers of
+/// literals, with no nulls and with 50% nulls.
 fn benchmark_lookup_table_by_number_of_entries(c: &mut Criterion, batch_size: usize) {
     let mut group = c.benchmark_group("lookup_table_case_when_entries");
 
@@ -531,12 +532,17 @@ fn benchmark_lookup_table_by_number_of_entries(c: &mut Criterion, batch_size: us
     ];
 
     for (type_name, data_type, to_scalar) in types {
-        for num_entries in [2, 4, 8, 12, 16, 24, 32, 64] {
+        for (num_entries, null_percent) in [2, 4, 8, 12, 16, 24, 32, 64]
+            .into_iter()
+            .flat_map(|n| [(n, 0), (n, 50)])
+        {
             let literal = |i: i32| i * 7;
             let rng = &mut seedable_rng();
             let array: Int32Array = (0..batch_size)
                 .map(|_| {
-                    if rng.random_bool(0.9) {
+                    if rng.random_ratio(null_percent, 100) {
+                        None
+                    } else if rng.random_bool(0.9) {
                         Some(literal(rng.random_range(0..num_entries)))
                     } else {
                         // Not a multiple of 7, so matching no literal
@@ -552,7 +558,9 @@ fn benchmark_lookup_table_by_number_of_entries(c: &mut Criterion, batch_size: us
             .unwrap();
 
             group.bench_function(
-                format!("{batch_size} rows: {type_name} -> i32, {num_entries} entries"),
+                format!(
+                    "{batch_size} rows: {type_name} -> i32, {num_entries} entries, {null_percent}% nulls"
+                ),
                 |b| {
                     let when_thens = (0..num_entries)
                         .map(|i| (lit(to_scalar(literal(i))), lit(i)))
