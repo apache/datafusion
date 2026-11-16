@@ -95,7 +95,7 @@ Some practical guidelines for reviewing comments:
    code, e.g. "// changed to use a HashMap" or "// this handles the case
    mentioned above"). Such comments become irrelevant as soon as the PR merges.
 3. When comments refer to other structs, functions, or modules, they should use
-   [rustdoc intra-doc links] (e.g. `` [`LogicalPlan`] ``) rather than plain
+   [rustdoc intra-doc links] (e.g. ``[`LogicalPlan`]``) rather than plain
    text names, so that `cargo doc` link checking ensures the references stay
    valid as the code evolves. For an item in a crate that depends on the
    current one, link to its docs.rs URL instead.
