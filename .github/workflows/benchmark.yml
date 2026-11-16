@@ -1,0 +1,349 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Catches performance regressions: runs TPC-H SF10 for a candidate commit
+# (`head`) and for the commit it sits on (`base`), on one machine, and fails
+# when `head` is slower than the limits allow. The sides are measured
+# interleaved, a pass each per round, because measuring one after the other
+# lets machine drift read as a code change.
+
+name: Benchmarks
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+# Every push to `main`, so an unlabelled regression is still pinned to one
+# merge. Opt-in on a PR, at half an hour of runner time: add the `performance`
+# label, or start it from the Actions tab.
+on:
+  push:
+    branches:
+      # A fork whose default branch is named differently has to add it here.
+      - main
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/pull_request_template.md"
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: 'Measurement rounds (a full pass of each side per round; keep it even)'
+        type: string
+        default: '6'
+      iterations:
+        description: 'Iterations per query within a round'
+        type: string
+        default: '1'
+      query_regression:
+        description: 'Fail if a single query is more than this much slower'
+        type: string
+        default: '1.20'
+      min_delta_ms:
+        description: 'Never fail a query that got less than this many ms slower'
+        type: string
+        default: '25'
+      total_regression:
+        description: 'Fail if the total time is more than this much slower'
+        type: string
+        default: '1.05'
+      scale_factor:
+        description: 'TPC-H scale factor'
+        type: choice
+        options:
+          - '10'
+          - '1'
+        default: '10'
+      profile:
+        description: 'Cargo profile to build both sides with'
+        type: choice
+        options:
+          - release-nonlto
+          - release
+        default: release-nonlto
+
+permissions:
+  contents: read
+
+env:
+  # `release-nonlto` is `release` without fat LTO, which roughly halves the
+  # build. Dispatch with `release` for cross-crate inlining effects, or for
+  # numbers comparable with locally posted `bench.sh` results.
+  CARGO_PROFILE: ${{ inputs.profile || 'release-nonlto' }}
+  SCALE_FACTOR: ${{ inputs.scale_factor || '10' }}
+  # Even, so each side leads the same number of rounds.
+  ROUNDS: ${{ inputs.rounds || '6' }}
+  ITERATIONS: ${{ inputs.iterations || '1' }}
+  QUERY_REGRESSION: ${{ inputs.query_regression || '1.20' }}
+  TOTAL_REGRESSION: ${{ inputs.total_regression || '1.05' }}
+  # A 1.20x swing on a 20ms query is 4ms, below what a shared runner resolves.
+  MIN_DELTA_MS: ${{ inputs.min_delta_ms || '25' }}
+  # `benchmark_runner` finds `sql_benchmarks` through the CARGO_MANIFEST_DIR
+  # baked in at compile time, so its tree has to sit at the same absolute path
+  # in the job that builds it and the job that runs it -- hence a fixed root.
+  BENCH_ROOT: /tmp/df-bench
+  # Same cargo network settings as .github/actions/setup-rust-runtime, without
+  # its RUSTFLAGS: benchmark binaries are built with the defaults.
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_RETRY: "10"
+
+jobs:
+  # Resolved once, so the three jobs below cannot disagree about what "base" is.
+  resolve:
+    name: resolve base commit
+    # Every event except `pull_request` runs unconditionally; a PR needs the label.
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'performance')
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=c8a+m8a,cpu=2,image=ubuntu24-full-x64,extras=s3-cache,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    outputs:
+      base_sha: ${{ steps.base.outputs.sha }}
+    steps:
+      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Depth 2 reaches the first parent, which is the base in both cases.
+          fetch-depth: 2
+      - name: Resolve base commit
+        id: base
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            # A merge that just landed: its first parent is the branch as it
+            # was before, whether the merge was squashed or not.
+            base_sha=$(git rev-parse "HEAD^1")
+            echo "push to $GITHUB_REF_NAME, comparing its tip against the parent"
+          elif [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -ge 3 ]; then
+            # HEAD is the PR merged into the base branch, so its first parent
+            # is the commit this PR would land on.
+            base_sha=$(git rev-parse "HEAD^1")
+          else
+            # Manual run on a branch: compare it as-is against the base tip.
+            git fetch --no-tags --depth 1 origin "$BASE_REF"
+            base_sha=$(git rev-parse FETCH_HEAD)
+            echo "HEAD is not a merge commit, comparing it as-is against $BASE_REF"
+          fi
+          echo "sha=${base_sha}" >> "$GITHUB_OUTPUT"
+          echo "base:      ${base_sha} $(git log -1 --format=%s "${base_sha}")"
+          echo "candidate: $(git rev-parse HEAD) $(git log -1 --format=%s HEAD)"
+
+  # One runner per side, so the two builds really do run at the same time.
+  build:
+    name: build ${{ matrix.side }} runner
+    needs: resolve
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=c8a+m8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    timeout-minutes: 90
+    strategy:
+      # No point in building one side if the other one is broken.
+      fail-fast: true
+      matrix:
+        side: [base, head]
+    steps:
+      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 2
+      - name: Free Disk Space (Ubuntu)
+        # A release build needs this on `ubuntu-latest`'s 14GB, but not on the
+        # RunsOn runner's `disk=large`, where it is two wasted minutes.
+        if: vars.USE_RUNS_ON != 'true'
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
+      - name: Install Rust
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          # installs the channel pinned by rust-toolchain.toml
+          rustup toolchain install
+      - name: Check out the ${{ matrix.side }} tree
+        env:
+          SIDE: ${{ matrix.side }}
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+        run: |
+          if [ "$SIDE" = "base" ]; then
+            git worktree add --detach "$BENCH_ROOT/$SIDE" "$BASE_SHA"
+          else
+            git worktree add --detach "$BENCH_ROOT/$SIDE" HEAD
+          fi
+      - name: Cache the dependency build
+        # A cold build is fourteen minutes, mostly dependencies neither side
+        # changed. One shared key covers both sides; only pushes write it.
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        with:
+          workspaces: ${{ env.BENCH_ROOT }}/${{ matrix.side }}
+          shared-key: benchmark-${{ env.CARGO_PROFILE }}
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Build benchmark_runner
+        env:
+          SIDE: ${{ matrix.side }}
+        run: |
+          cd "$BENCH_ROOT/$SIDE"
+          cargo build --profile "$CARGO_PROFILE" -p datafusion-benchmarks --bin benchmark_runner
+          cp "target/$CARGO_PROFILE/benchmark_runner" "$RUNNER_TEMP/benchmark_runner"
+      - name: Upload benchmark_runner
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: benchmark_runner-${{ matrix.side }}
+          path: ${{ runner.temp }}/benchmark_runner
+          retention-days: 1
+
+  # Both sides are measured here, interleaved, on this one machine.
+  benchmark:
+    name: TPC-H (head vs base)
+    needs: [resolve, build]
+    runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=c8a+m8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    timeout-minutes: 90
+    steps:
+      - uses: runs-on/action@46910bf61b41721b0579f237e186afb35477007a  # v2.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 2
+      - name: Configure paths
+        run: |
+          echo "DATA_DIR=$RUNNER_TEMP/bench-data" >> "$GITHUB_ENV"
+          echo "RESULTS_DIR=$RUNNER_TEMP/results" >> "$GITHUB_ENV"
+      - name: Check out both trees
+        env:
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+        run: |
+          # The same paths the build jobs used, so each binary finds the
+          # `sql_benchmarks` directory of the tree it was built from.
+          git worktree add --detach "$BENCH_ROOT/base" "$BASE_SHA"
+          git worktree add --detach "$BENCH_ROOT/head" HEAD
+      - name: Download base benchmark_runner
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: benchmark_runner-base
+          path: ${{ runner.temp }}/bin/base
+      - name: Download head benchmark_runner
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: benchmark_runner-head
+          path: ${{ runner.temp }}/bin/head
+      - name: Check both runners see their queries
+        run: |
+          # Artifacts do not carry the executable bit, and a binary whose tree
+          # is missing would discover no benchmark at all -- fail here.
+          for side in base head; do
+            binary="$RUNNER_TEMP/bin/$side/benchmark_runner"
+            chmod +x "$binary"
+            if ! "$binary" --list | grep -qE '^[[:space:]]+tpch[[:space:]]'; then
+              echo "::error::the $side runner does not see the tpch suite at $BENCH_ROOT/$side/benchmarks"
+              "$binary" --list
+              exit 1
+            fi
+          done
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+      - name: Generate TPC-H data
+        # Same generator settings as `bench.sh data tpch`, inlined because that
+        # path also pulls the expected answers through `docker run -it`, which
+        # has no TTY here. From the PyPI wheel, so no Rust toolchain is needed;
+        # `parquet` is a subcommand because 3.0.0 deprecated `--format`.
+        run: |
+          mkdir -p "$DATA_DIR/tpch_sf$SCALE_FACTOR" "$RESULTS_DIR/base" "$RESULTS_DIR/head"
+          uv tool run --from 'tpchgen-cli==3.0.0' tpchgen-cli parquet \
+            --scale-factor "$SCALE_FACTOR" \
+            --compression 'ZSTD(1)' \
+            --parts=1 \
+            --output-dir "$DATA_DIR/tpch_sf$SCALE_FACTOR"
+          du -sh "$DATA_DIR/tpch_sf$SCALE_FACTOR"
+          df -h "$DATA_DIR"
+      - name: Describe the machine
+        # GitHub withholds `vars` from fork pull requests, so `USE_RUNS_ON`
+        # reads as empty and they fall back to a 4-vCPU `ubuntu-latest`. Pushes
+        # to `main` and manual dispatches do get the 16-vCPU runner.
+        run: |
+          echo "cpus: $(nproc)"
+          lscpu | grep -E '^(Model name|Socket|Core|Thread|CPU\(s\)):' || true
+          free -h
+          if [ "$(nproc)" -lt 8 ]; then
+            echo "::warning::running on $(nproc) CPUs, not the runner asked for; expect a high noise floor. Fork pull requests cannot reach the larger one -- the run on \`main\` after the merge is authoritative."
+          fi
+      # Each side runs from its own tree and reads the one generated dataset.
+      - name: Benchmark both sides, interleaved
+        run: |
+          set -euo pipefail
+          run_side() {
+            local side="$1" output="$2"
+            cd "$BENCH_ROOT/$side/benchmarks"
+            "$RUNNER_TEMP/bin/$side/benchmark_runner" tpch \
+              --scale-factor "$SCALE_FACTOR" \
+              --format parquet \
+              --iterations "$ITERATIONS" \
+              --path "$DATA_DIR" \
+              --output "$output"
+          }
+          # Pull the data into the page cache, which is all a warmup can carry
+          # between rounds -- each round is a fresh process.
+          echo "::group::warm the page cache"
+          find "$DATA_DIR" -type f -exec cat {} + > /dev/null
+          echo "::endgroup::"
+          for round in $(seq 1 "$ROUNDS"); do
+            # Alternate the leader, so each side pays the first-position cost
+            # the same number of times.
+            if [ $((round % 2)) -eq 1 ]; then order="base head"; else order="head base"; fi
+            for side in $order; do
+              echo "::group::round $round: $side"
+              # Zero-padded, because compare.py pairs the two sides' rounds in
+              # sorted filename order.
+              run_side "$side" "$(printf '%s/%s/round%02d.json' "$RESULTS_DIR" "$side" "$round")"
+              echo "::endgroup::"
+            done
+          done
+      - name: Compare
+        run: |
+          set -uo pipefail
+          status=0
+          uv run --no-project --with rich python3 benchmarks/compare.py \
+            "$RESULTS_DIR/base" \
+            "$RESULTS_DIR/head" \
+            --fail-threshold "$QUERY_REGRESSION" \
+            --fail-total-threshold "$TOTAL_REGRESSION" \
+            --fail-min-delta-ms "$MIN_DELTA_MS" \
+            > "$RESULTS_DIR/comparison.txt" 2>&1 || status=$?
+          cat "$RESULTS_DIR/comparison.txt"
+          {
+            echo "### TPC-H SF$SCALE_FACTOR: \`head\` (${{ github.event_name == 'push' && 'the merge that just landed' || 'this PR, merged into the base branch' }}) vs \`base\` (${{ needs.resolve.outputs.base_sha }})"
+            echo
+            echo "\`$ROUNDS\` rounds of \`$ITERATIONS\` iteration(s), the two sides interleaved and their order alternated per round."
+            echo "A query fails the gate when the median of its per-round ratios is above \`${QUERY_REGRESSION}x\`, the regression costs at least \`${MIN_DELTA_MS}ms\`, and it is larger than the spread the base side showed against itself."
+            echo "The total time fails above \`${TOTAL_REGRESSION}x\` under the same noise floor."
+            echo "Both sides built with the \`$CARGO_PROFILE\` profile on \`$(nproc)\` CPUs."
+            echo
+            echo '```'
+            cat "$RESULTS_DIR/comparison.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::TPC-H SF$SCALE_FACTOR got slower than the configured limits allow, see the job summary"
+          fi
+          exit "$status"
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: tpch-comparison
+          path: ${{ runner.temp }}/results
+          retention-days: 7
