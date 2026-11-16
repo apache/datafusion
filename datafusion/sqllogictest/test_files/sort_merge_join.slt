@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ##########
 ## Sort Merge Join Tests
@@ -1028,6 +1015,119 @@ DROP TABLE c;
 
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+# Join filter that reads no columns: it must still be evaluated for every
+# candidate pair (hash join already does), so FULL JOIN null-pads both sides.
+statement ok
+CREATE TABLE smj_nocol_a AS SELECT * FROM (VALUES (1, 10), (2, 20), (3, 30)) t(k, v);
+
+statement ok
+CREATE TABLE smj_nocol_b AS SELECT * FROM (VALUES (1, 100), (2, 200), (4, 400)) t(k, w);
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+query IIII
+SELECT * FROM smj_nocol_a a FULL JOIN smj_nocol_b b ON a.k = b.k AND random() > 2 ORDER BY a.k, b.k;
+----
+1 10 NULL NULL
+2 20 NULL NULL
+3 30 NULL NULL
+NULL NULL 1 100
+NULL NULL 2 200
+NULL NULL 4 400
+
+query IIII
+SELECT * FROM smj_nocol_a a FULL JOIN smj_nocol_b b ON a.k = b.k AND random() < 2 ORDER BY a.k, b.k;
+----
+1 10 1 100
+2 20 2 200
+3 30 NULL NULL
+NULL NULL 4 400
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE smj_nocol_a;
+
+statement ok
+DROP TABLE smj_nocol_b;
+
+# Regression test for #26003: semi/anti/mark joins must compare key groups
+# that cross an input batch boundary for key types `compare_join_arrays`
+# did not handle.
+statement ok
+CREATE TABLE smj_tz_events AS
+  SELECT arrow_cast(to_timestamp(value), 'Timestamp(Microsecond, Some("UTC"))') AS ts
+  FROM generate_series(1, 100000);
+
+statement ok
+CREATE TABLE smj_tz_alerts AS
+  SELECT arrow_cast(to_timestamp(value * 7), 'Timestamp(Microsecond, Some("UTC"))') AS ts
+  FROM generate_series(1, 20000);
+
+query I
+SELECT count(*) FROM smj_tz_events e WHERE EXISTS (SELECT 1 FROM smj_tz_alerts a WHERE a.ts = e.ts);
+----
+14285
+
+query I
+SELECT count(*) FROM smj_tz_events e WHERE e.ts IN (SELECT ts FROM smj_tz_alerts);
+----
+14285
+
+query I
+SELECT count(*) FROM smj_tz_events e WHERE NOT EXISTS (SELECT 1 FROM smj_tz_alerts a WHERE a.ts = e.ts);
+----
+85715
+
+statement ok
+DROP TABLE smj_tz_events;
+
+statement ok
+DROP TABLE smj_tz_alerts;
+
+statement ok
+set datafusion.execution.batch_size = 2;
+
+statement ok
+CREATE TABLE smj_key_l AS SELECT
+  arrow_cast(k, 'Dictionary(Int32, Utf8)') AS d,
+  arrow_cast(k, 'Decimal256(40, 2)') AS dec,
+  arrow_cast(arrow_cast(k, 'Int64'), 'Time64(Nanosecond)') AS t
+FROM (VALUES ('1'), ('2'), ('2'), ('2'), ('3'), ('4')) v(k);
+
+statement ok
+CREATE TABLE smj_key_r AS SELECT
+  arrow_cast(k, 'Dictionary(Int32, Utf8)') AS d,
+  arrow_cast(k, 'Decimal256(40, 2)') AS dec,
+  arrow_cast(arrow_cast(k, 'Int64'), 'Time64(Nanosecond)') AS t
+FROM (VALUES ('2'), ('2'), ('2'), ('4'), ('5')) v(k);
+
+query I
+SELECT count(*) FROM smj_key_l l WHERE EXISTS (SELECT 1 FROM smj_key_r r WHERE r.d = l.d);
+----
+4
+
+query I
+SELECT count(*) FROM smj_key_l l WHERE NOT EXISTS (SELECT 1 FROM smj_key_r r WHERE r.dec = l.dec);
+----
+2
+
+query I
+SELECT count(*) FROM smj_key_l l WHERE l.t IN (SELECT t FROM smj_key_r);
+----
+4
+
+statement ok
+DROP TABLE smj_key_l;
+
+statement ok
+DROP TABLE smj_key_r;
+
+statement ok
+RESET datafusion.execution.batch_size;
 
 # Config reset
 statement ok

@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Configuration reference: https://docs.codecov.com/docs/codecovyml-reference
+
+# Upload code coverage report, GitHub bot will comment with the code coverage report.
+#
+# It has two reports:
+# - All-tests (default): code coverage from running all tests.
+# - sqllogictests: code coverage from running sqllogictests.
+coverage:
+  status:
+    # Coverage across the whole project.
+    project:
+      default:
+        flags: [all-tests]
+      sqllogictests:
+        flags: [sqllogictests]
+        informational: true
+    # Coverage of changed lines.
+    patch:
+      default:
+        flags: [all-tests]
+      sqllogictests:
+        flags: [sqllogictests]
+        informational: true
+
+# Show both reports in one expanded PR comment.
+comment:
+  layout: "flags, diff, files"
+  behavior: default
+  hide_comment_details: false
+  hide_project_coverage: false
+
+# Keep reports separate and use only coverage uploaded for this commit.
+flags:
+  all-tests:
+    carryforward: false
+  sqllogictests:
+    carryforward: false

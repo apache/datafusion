@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 #[cfg(test)]
@@ -400,11 +387,6 @@ impl TypePlanner for CustomTypePlanner {
         sql_type: &sqlparser::ast::DataType,
     ) -> Result<Option<FieldRef>> {
         match sql_type {
-            sqlparser::ast::DataType::Uuid => Ok(Some(Arc::new(
-                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-                    Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
-                ),
-            ))),
             sqlparser::ast::DataType::Datetime(precision) => {
                 let precision = match precision {
                     Some(0) => TimeUnit::Second,
@@ -413,8 +395,10 @@ impl TypePlanner for CustomTypePlanner {
                     None | Some(9) => TimeUnit::Nanosecond,
                     _ => unreachable!(),
                 };
+                // Differs from the default mapping (no time zone)
                 Ok(Some(
-                    DataType::Timestamp(precision, None).into_nullable_field_ref(),
+                    DataType::Timestamp(precision, Some("UTC".into()))
+                        .into_nullable_field_ref(),
                 ))
             }
             _ => Ok(None),

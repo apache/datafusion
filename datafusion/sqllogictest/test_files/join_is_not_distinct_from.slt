@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Test IS NOT DISTINCT FROM join functionality
 # This tests the optimizer's ability to convert IS NOT DISTINCT FROM joins
@@ -335,3 +322,48 @@ drop table t3;
 
 statement ok
 drop table t4;
+
+# An ordinary '=' predicate pushed down into an 'IS NOT DISTINCT FROM' join
+# must NOT evaluate NULL = NULL as true (issue #27215).
+statement ok
+CREATE TABLE t1(a INT, b INT) AS VALUES (NULL, 1), (5, 2), (6, NULL);
+
+statement ok
+CREATE TABLE t2(a INT, b INT) AS VALUES (NULL, 1), (5, 2), (6, NULL);
+
+query TT
+EXPLAIN SELECT *
+FROM (SELECT t1.a a1, t1.b b1, t2.b b2
+      FROM t1 JOIN t2 ON t1.a IS NOT DISTINCT FROM t2.a) s
+WHERE s.b1 = s.b2
+ORDER BY a1;
+----
+logical_plan
+01)Sort: s.a1 ASC NULLS LAST
+02)--SubqueryAlias: s
+03)----Projection: t1.a AS a1, t1.b AS b1, t2.b AS b2
+04)------Inner Join: t1.a = t2.a Filter: t2.b = t1.b
+05)--------TableScan: t1 projection=[a, b]
+06)--------TableScan: t2 projection=[a, b]
+physical_plan
+01)SortExec: expr=[a1@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[a@0 as a1, b@1 as b1, b@2 as b2]
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)], filter=b@1 = b@0, projection=[a@0, b@1, b@3], NullsEqual: true
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query III rowsort
+SELECT *
+FROM (SELECT t1.a a1, t1.b b1, t2.b b2
+      FROM t1 JOIN t2 ON t1.a IS NOT DISTINCT FROM t2.a) s
+WHERE s.b1 = s.b2
+ORDER BY a1;
+----
+5 2 2
+NULL 1 1
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;

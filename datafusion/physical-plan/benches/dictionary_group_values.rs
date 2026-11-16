@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Benchmarks for `GroupValues` over a single `Dictionary<Int32, Utf8>`
 //! column. Each iteration measures `intern` (once or N times) followed by
@@ -29,7 +16,7 @@ use criterion::{
 };
 use datafusion_expr::EmitTo;
 use datafusion_physical_plan::aggregates::group_values::new_group_values;
-use datafusion_physical_plan::aggregates::order::{GroupOrdering, GroupOrderingFull};
+use datafusion_physical_plan::aggregates::order::{GroupClustering, GroupClusteringFull};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -106,7 +93,7 @@ fn bench_intern_emit(c: &mut Criterion) {
                     b.iter_batched_ref(
                         || {
                             (
-                                new_group_values(schema.clone(), &GroupOrdering::None)
+                                new_group_values(schema.clone(), &GroupClustering::None)
                                     .unwrap(),
                                 Vec::<usize>::with_capacity(size),
                             )
@@ -151,7 +138,7 @@ fn bench_repeated_intern_emit(c: &mut Criterion) {
                     b.iter_batched_ref(
                         || {
                             (
-                                new_group_values(schema.clone(), &GroupOrdering::None)
+                                new_group_values(schema.clone(), &GroupClustering::None)
                                     .unwrap(),
                                 Vec::<usize>::with_capacity(size),
                             )
@@ -172,7 +159,7 @@ fn bench_repeated_intern_emit(c: &mut Criterion) {
     group.finish();
 }
 
-// GroupOrdering::Full -> GroupValuesColumn::<true>: scalar append_val/equal_to path.
+// GroupClustering::Full -> GroupValuesColumn::<true>: scalar append_val/equal_to path.
 fn bench_scalar_append_equal(c: &mut Criterion) {
     let mut group = c.benchmark_group("dict_scalar_append_equal");
     let schema = dict_schema();
@@ -192,7 +179,7 @@ fn bench_scalar_append_equal(c: &mut Criterion) {
                         (
                             new_group_values(
                                 schema.clone(),
-                                &GroupOrdering::Full(GroupOrderingFull::new()),
+                                &GroupClustering::Full(GroupClusteringFull::new()),
                             )
                             .unwrap(),
                             Vec::<usize>::with_capacity(size),
@@ -227,7 +214,7 @@ fn bench_take_n(c: &mut Criterion) {
             b.iter_batched_ref(
                 || {
                     (
-                        new_group_values(schema.clone(), &GroupOrdering::None).unwrap(),
+                        new_group_values(schema.clone(), &GroupClustering::None).unwrap(),
                         Vec::<usize>::with_capacity(size),
                     )
                 },
@@ -298,7 +285,7 @@ fn bench_shared_values_arc(c: &mut Criterion) {
                 b.iter_batched_ref(
                     || {
                         (
-                            new_group_values(schema.clone(), &GroupOrdering::None)
+                            new_group_values(schema.clone(), &GroupClustering::None)
                                 .unwrap(),
                             Vec::<usize>::with_capacity(size),
                         )

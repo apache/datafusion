@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`MemTable`] for querying `Vec<RecordBatch>` by DataFusion.
 
@@ -300,7 +287,7 @@ impl MemTable {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut partitions = vec![];
+        let mut partitions = Vec::with_capacity(self.batches.len());
         for arc_inner_vec in self.batches.iter() {
             let inner_vec = arc_inner_vec.read().await;
             partitions.push(inner_vec.clone())
@@ -321,7 +308,7 @@ impl MemTable {
             let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
 
             let eqp = state.execution_props();
-            let mut file_sort_order = vec![];
+            let mut file_sort_order = Vec::with_capacity(sort_order.len());
             for sort_exprs in sort_order.iter() {
                 let physical_exprs = create_physical_sort_exprs(
                     sort_exprs,

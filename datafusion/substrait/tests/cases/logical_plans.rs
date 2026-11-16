@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests for reading substrait plans produced by other systems
 
@@ -558,7 +545,7 @@ mod tests {
         assert_snapshot!(
         plan,
         @"
-        Projection: array_transform2(make_array(make_array(data3.p1)), (p0, p2) -> array_concat(array_transform2(p0, (p3, p4) -> p3 * p2 * p4), array_transform2(p0, (p5, p6) -> p5 * p2 * p6))) AS array_transform2(make_array(make_array(data3.p1)),(v, i) -> array_concat(array_transform2(v,(v, j) -> v * i * j),array_transform2(v,(v, j) -> v * i * j)))
+        Projection: array_transform2(make_array(make_array(data3.p1)), (p0, p2) -> array_concat(array_transform2(p0, (p3, p4) -> p3 * p2 * p4), array_transform2(p0, (p3, p4) -> p3 * p2 * p4))) AS array_transform2(make_array(make_array(data3.p1)),(v, i) -> array_concat(array_transform2(v,(v, j) -> v * i * j),array_transform2(v,(v, j) -> v * i * j)))
           TableScan: data3
         "
         );
@@ -654,7 +641,7 @@ mod tests {
         assert_snapshot!(
         df.into_optimized_plan()?,
         @r#"
-        Projection: array_any_match(array_transform(t.tags, (p0) -> p0), (p1) -> p1 = Dictionary(UInt32, Utf8("c"))) AS matched
+        Projection: array_any_match(array_transform(t.tags, (p0) -> p0), (p0) -> p0 = Dictionary(UInt32, Utf8("c"))) AS matched
           TableScan: t projection=[tags]
         "#
         );

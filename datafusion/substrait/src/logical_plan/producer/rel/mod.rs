@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod aggregate_rel;
 mod exchange_rel;
@@ -37,7 +24,7 @@ pub use sort_rel::*;
 
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::common::not_impl_err;
-use datafusion::logical_expr::LogicalPlan;
+use datafusion::logical_expr::{LogicalPlan, MaterializedCtePlan};
 use substrait::proto::Rel;
 
 pub fn to_substrait_rel(
@@ -70,12 +57,16 @@ pub fn to_substrait_rel(
         LogicalPlan::Dml(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::Ddl(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::Copy(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
-        LogicalPlan::DescribeTable(plan) => {
-            not_impl_err!("Unsupported plan type: {plan:?}")?
-        }
+        LogicalPlan::Show(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::Unnest(plan) => not_impl_err!("Unsupported plan type: {plan:?}")?,
         LogicalPlan::RecursiveQuery(plan) => {
             not_impl_err!("Unsupported plan type: {plan:?}")?
+        }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(plan)) => {
+            not_impl_err!("Substrait MATERIALIZED CTE is not supported: {plan:?}")?
+        }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(plan)) => {
+            not_impl_err!("Substrait MATERIALIZED CTE is not supported: {plan:?}")?
         }
     }
 }

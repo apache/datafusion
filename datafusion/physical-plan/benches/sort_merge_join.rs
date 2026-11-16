@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Criterion benchmarks for Sort Merge Join
 //!
@@ -27,11 +14,13 @@ use arrow::array::{Int64Array, RecordBatch, StringArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use datafusion_common::NullEquality;
+use datafusion_common::{JoinSide, NullEquality};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::expressions::col;
+use datafusion_expr::Operator;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, col};
 use datafusion_physical_plan::collect;
-use datafusion_physical_plan::joins::{SortMergeJoinExec, utils::JoinOn};
+use datafusion_physical_plan::joins::SortMergeJoinExec;
+use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
 use datafusion_physical_plan::test::TestMemoryExec;
 use tokio::runtime::Runtime;
 
@@ -104,10 +93,44 @@ fn schema() -> SchemaRef {
     ]))
 }
 
+/// The join filter `left.data < right.data`.
+fn data_lt_filter() -> JoinFilter {
+    let column_indices = vec![
+        ColumnIndex {
+            index: 1,
+            side: JoinSide::Left,
+        },
+        ColumnIndex {
+            index: 1,
+            side: JoinSide::Right,
+        },
+    ];
+    let intermediate_schema = Schema::new(vec![
+        Field::new("left_data", DataType::Int64, false),
+        Field::new("right_data", DataType::Int64, false),
+    ]);
+    let expression = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("left_data", 0)),
+        Operator::Lt,
+        Arc::new(Column::new("right_data", 1)),
+    ));
+    JoinFilter::new(expression, column_indices, Arc::new(intermediate_schema))
+}
+
 fn do_join(
     left: Arc<dyn datafusion_physical_plan::ExecutionPlan>,
     right: Arc<dyn datafusion_physical_plan::ExecutionPlan>,
     join_type: datafusion_common::JoinType,
+    rt: &Runtime,
+) -> usize {
+    do_join_with_filter(left, right, join_type, None, rt)
+}
+
+fn do_join_with_filter(
+    left: Arc<dyn datafusion_physical_plan::ExecutionPlan>,
+    right: Arc<dyn datafusion_physical_plan::ExecutionPlan>,
+    join_type: datafusion_common::JoinType,
+    filter: Option<JoinFilter>,
     rt: &Runtime,
 ) -> usize {
     let on: JoinOn = vec![(
@@ -118,7 +141,7 @@ fn do_join(
         left,
         right,
         on,
-        None,
+        filter,
         join_type,
         vec![SortOptions::default()],
         NullEquality::NullEqualsNothing,
@@ -164,6 +187,47 @@ fn bench_smj(c: &mut Criterion) {
                 let left = make_exec(&left_batches, &s);
                 let right = make_exec(&right_batches, &s);
                 do_join(left, right, datafusion_common::JoinType::Inner, &rt)
+            })
+        });
+    }
+
+    // 1:100 Inner Join — 20K left, 20K right, 200 distinct keys
+    // Every streamed row matches 100 buffered rows, so the join emits 2M rows.
+    {
+        let n = 20_000;
+        let key_mod = 200;
+        let left_batches = build_sorted_batches(n, key_mod, &s);
+        let right_batches = build_sorted_batches(n, key_mod, &s);
+        group.bench_function(BenchmarkId::new("inner_1to100", n), |b| {
+            b.iter(|| {
+                let left = make_exec(&left_batches, &s);
+                let right = make_exec(&right_batches, &s);
+                do_join(left, right, datafusion_common::JoinType::Inner, &rt)
+            })
+        });
+    }
+
+    // 1:100 Left Join with a filter — 20K left, 20K right, 200 distinct keys
+    // As in `inner_1to100`, every streamed row matches 100 buffered rows on the key,
+    // but here the pairs go through deferred filtering. `left.data < right.data`
+    // keeps about half of them, and none of the last streamed row of each key, which
+    // is null-joined.
+    {
+        let n = 20_000;
+        let key_mod = 200;
+        let left_batches = build_sorted_batches(n, key_mod, &s);
+        let right_batches = build_sorted_batches(n, key_mod, &s);
+        group.bench_function(BenchmarkId::new("left_1to100_filtered", n), |b| {
+            b.iter(|| {
+                let left = make_exec(&left_batches, &s);
+                let right = make_exec(&right_batches, &s);
+                do_join_with_filter(
+                    left,
+                    right,
+                    datafusion_common::JoinType::Left,
+                    Some(data_lt_filter()),
+                    &rt,
+                )
             })
         });
     }

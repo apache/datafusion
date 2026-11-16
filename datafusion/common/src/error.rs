@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! # Error Handling in DataFusion
 //!
@@ -45,7 +32,7 @@ use std::io;
 use std::result;
 use std::sync::Arc;
 
-use crate::utils::datafusion_strsim::{levenshtein, normalized_levenshtein};
+use crate::utils::datafusion_strsim::{levenshtein_with_buffer, normalized_levenshtein};
 use crate::utils::quote_identifier;
 use crate::{Column, DFSchema, Diagnostic, TableReference};
 use arrow::error::ArrowError;
@@ -236,6 +223,7 @@ fn closest_valid_field<'a>(
     ];
 
     let mut best_match: Option<(usize, usize, usize, &Column)> = None;
+    let mut cache = Vec::new();
     for (index, valid_field) in valid_fields.iter().enumerate() {
         let valid_names = [
             valid_field.name().to_lowercase(),
@@ -243,7 +231,7 @@ fn closest_valid_field<'a>(
         ];
         for target in &target_names {
             for valid_name in &valid_names {
-                let distance = levenshtein(target, valid_name);
+                let distance = levenshtein_with_buffer(target, valid_name, &mut cache);
                 let max_len = target.chars().count().max(valid_name.chars().count());
                 // If there are no shared characters, or we would have to edit
                 // more than half of the longer name, don't suggest a potential match.

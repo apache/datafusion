@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! FFI support for [`Session`].
 //!
@@ -329,6 +316,7 @@ fn table_options_to_rhash(mut options: TableOptions) -> SVec<(SString, SString)>
                 #[cfg(feature = "parquet")]
                 ConfigFileType::PARQUET => "parquet",
                 ConfigFileType::CSV => "csv",
+                ConfigFileType::ARROW => "arrow",
             }
             .into(),
         );
@@ -633,6 +621,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
         ConfigFileType::JSON,
         #[cfg(feature = "parquet")]
         ConfigFileType::PARQUET,
+        ConfigFileType::ARROW,
     ];
     for format in formats {
         // It is imperative that if new enum variants are added below that they be
@@ -642,6 +631,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
             #[cfg(feature = "parquet")]
             ConfigFileType::PARQUET => "parquet",
             ConfigFileType::JSON => "json",
+            ConfigFileType::ARROW => "arrow",
         };
         let format_options: HashMap<String, String> = options
             .iter()
@@ -665,7 +655,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
         .iter()
         .filter_map(|(k, v)| {
             let (prefix, _) = k.split_once('.')?;
-            if !["json", "parquet", "csv"].contains(&prefix) {
+            if !["json", "parquet", "csv", "arrow"].contains(&prefix) {
                 Some((k.to_owned(), v.to_owned()))
             } else {
                 None
@@ -684,6 +674,7 @@ fn table_options_from_rhashmap(options: SVec<(SString, SString)>) -> TableOption
             #[cfg(feature = "parquet")]
             "parquet" => Some(ConfigFileType::PARQUET),
             "json" => Some(ConfigFileType::JSON),
+            "arrow" => Some(ConfigFileType::ARROW),
             _ => None,
         });
     table_options
@@ -922,7 +913,9 @@ mod tests {
         table_options.json.schema_infer_max_rec = Some(10);
         #[cfg(feature = "parquet")]
         {
-            table_options.parquet.global.coerce_int96 = Some("123456789".into());
+            table_options.parquet.global.coerce_int96 =
+                Some(datafusion_common::parquet_config::DFTimeUnit::Microsecond);
+            table_options.parquet.global.coerce_int96_tz = Some("UTC".parse()?);
         }
         table_options.current_format = Some(ConfigFileType::JSON);
 

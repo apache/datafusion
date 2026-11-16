@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ##########
 ## QUALIFY Clause Tests
@@ -357,6 +344,71 @@ physical_plan
 10)------------------RepartitionExec: partitioning=Hash([dept@0], 4), input_partitions=1
 11)--------------------AggregateExec: mode=Partial, gby=[dept@1 as dept], aggr=[sum(users.salary)]
 12)----------------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# QUALIFY that references the alias of a volatile expression must filter on
+# the value the query returns: every returned row must satisfy the predicate
+# on the returned value of r; see
+# https://github.com/apache/datafusion/issues/7976
+query B
+select count(*) > 0 from (
+  select row_number() over () as rn, random() as r
+  from generate_series(1, 1000)
+  qualify rn >= 1 and r > 0.5
+) where r <= 0.5;
+----
+false
+
+# the predicate is planned as a filter above the projection, where the alias
+# is a real column, instead of dereferencing the alias into a fresh random();
+# the deterministic rn >= 1 conjunct is still pushed below the projection
+query TT
+EXPLAIN SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn, random() AS r
+FROM users
+QUALIFY rn >= 1 AND r > 0.5;
+----
+logical_plan
+01)Filter: r > Float64(0.5)
+02)--Projection: users.id, row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, random() AS r
+03)----Filter: row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW >= UInt64(1)
+04)------WindowAggr: windowExpr=[[row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------TableScan: users projection=[id]
+physical_plan
+01)FilterExec: r@2 > 0.5
+02)--ProjectionExec: expr=[id@0 as id, row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn, random() as r]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------FilterExec: row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 >= 1
+05)--------BoundedWindowAggExec: wdw=[row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [users.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+06)----------SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# conjuncts are planned independently: a raw window function conjunct takes
+# the normal QUALIFY path, a volatile-alias conjunct filters above the
+# projection on the value the query returns
+query B
+SELECT count(*) > 0 FROM (
+  SELECT random() AS r
+  FROM generate_series(1, 1000)
+  QUALIFY ROW_NUMBER() OVER () >= 1 AND r > 0.5
+) WHERE r <= 0.5;
+----
+false
+
+# a volatile alias and a window function in the same conjunct cannot be split
+query error DataFusion error: Error during planning: QUALIFY clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions\. Add the function to the SELECT list and reference it by alias, or use a subquery
+SELECT id, random() AS r
+FROM users
+QUALIFY r > ROW_NUMBER() OVER (ORDER BY id);
+
+# an OR predicate is planned as one filter. The volatile alias forces that
+# filter above the projection, but the window function is not available there
+query error DataFusion error: Error during planning: QUALIFY clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions\. Add the function to the SELECT list and reference it by alias, or use a subquery
+SELECT id, random() AS r
+FROM users
+QUALIFY ROW_NUMBER() OVER (ORDER BY id) >= 1 OR r > 0.5;
+
+# volatile alias in QUALIFY still requires a window function
+query error DataFusion error: Error during planning: QUALIFY clause requires window functions in the SELECT list or QUALIFY clause
+SELECT id, random() AS r FROM users QUALIFY r > 0.5;
 
 # Clean up
 statement ok

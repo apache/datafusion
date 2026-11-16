@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt::Debug;
 
@@ -24,6 +11,7 @@ use arrow::datatypes::FieldRef;
 use crate::percentile_cont::{
     PercentileCont, create_percentile_accumulator, create_percentile_groups_accumulator,
 };
+use crate::utils::{PercentileParam, PercentileParamState};
 use datafusion_common::Result;
 use datafusion_common::types::logical_float64;
 use datafusion_expr::GroupsAccumulator;
@@ -123,7 +111,11 @@ impl AggregateUDFImpl for Median {
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         create_percentile_accumulator(
             self.name(),
-            0.5,
+            PercentileParam {
+                aggregate_fn_name: "MEDIAN".to_string(),
+                state: PercentileParamState::Resolved(0.5),
+                is_desc: false,
+            },
             args.expr_fields[0].data_type(),
             args.is_distinct,
         )
@@ -139,7 +131,11 @@ impl AggregateUDFImpl for Median {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         create_percentile_groups_accumulator(
             self.name(),
-            0.5,
+            PercentileParam {
+                aggregate_fn_name: "MEDIAN".to_string(),
+                state: PercentileParamState::Resolved(0.5),
+                is_desc: false,
+            },
             args.expr_fields[0].data_type(),
         )
     }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines the merge plan for executing partitions in parallel and then merging the results
 //! into a single partition
@@ -28,9 +15,8 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
-use crate::execution_plan::{
-    CardinalityEffect, EvaluationType, SchedulingType, replace_children_if_necessary,
-};
+use crate::execution_plan::LimitBehavior;
+use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{ProjectionExec, make_with_child};
 use crate::sort_pushdown::SortOrderPushdownResult;
@@ -98,6 +84,9 @@ impl CoalescePartitionsExec {
         // Coalescing partitions loses existing orderings:
         let mut eq_properties = input.equivalence_properties().clone();
         eq_properties.clear_orderings();
+        if input_partitions > 1 {
+            eq_properties.clear_groupings();
+        }
         eq_properties.clear_per_partition_constants();
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
@@ -303,8 +292,16 @@ impl ExecutionPlan for CoalescePartitionsExec {
         true
     }
 
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Merge
+    }
+
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::Equal
+        if self.fetch.is_none() {
+            CardinalityEffect::Equal
+        } else {
+            CardinalityEffect::LowerEqual
+        }
     }
 
     /// Tries to swap `projection` with its input, which is known to be a
@@ -341,18 +338,6 @@ impl ExecutionPlan for CoalescePartitionsExec {
             metrics: self.metrics.clone(),
             cache: Arc::clone(&self.cache),
         }))
-    }
-
-    fn with_preserve_order(
-        &self,
-        preserve_order: bool,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        self.input
-            .with_preserve_order(preserve_order)
-            .and_then(|new_input| {
-                replace_children_if_necessary(Arc::new(self.clone()), vec![new_input])
-                    .ok()
-            })
     }
 
     fn gather_filters_for_pushdown(
@@ -486,8 +471,39 @@ mod tests {
 
     use arrow::array::RecordBatch;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr::expressions::col;
 
     use futures::FutureExt;
+
+    #[test]
+    fn grouping_is_cleared_only_when_partitions_are_merged() -> Result<()> {
+        let input = test::mem_exec(2);
+        let grouping = col("i", &input.schema())?;
+        let input = Arc::new(
+            input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
+        );
+        assert!(
+            input
+                .properties()
+                .equivalence_properties()
+                .grouping_satisfy([Arc::clone(&grouping)])?
+        );
+        let merge = CoalescePartitionsExec::new(input);
+        let properties = merge.properties().equivalence_properties();
+        assert!(properties.geq_class().is_empty());
+        assert!(!properties.grouping_satisfy([grouping])?);
+
+        let input = test::mem_exec(1);
+        let grouping = col("i", &input.schema())?;
+        let input = Arc::new(
+            input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
+        );
+        let merge = CoalescePartitionsExec::new(input);
+        let properties = merge.properties().equivalence_properties();
+        assert_eq!(properties.geq_class().len(), 1);
+        assert!(properties.grouping_satisfy([grouping])?);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn merge() -> Result<()> {
@@ -697,5 +713,22 @@ mod tests {
         assert_eq!(row_count, 400, "Should return exactly 400 rows");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_cardinality_effect_with_fetch() {
+        let input = test::scan_partitioned(4);
+
+        let coalesce = CoalescePartitionsExec::new(Arc::clone(&input));
+        assert!(matches!(
+            coalesce.cardinality_effect(),
+            CardinalityEffect::Equal
+        ));
+
+        let coalesce = CoalescePartitionsExec::new(input).with_fetch(Some(10));
+        assert!(matches!(
+            coalesce.cardinality_effect(),
+            CardinalityEffect::LowerEqual
+        ));
     }
 }

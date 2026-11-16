@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This file implements the symmetric hash join algorithm with range-based
 //! data pruning to join two (potentially infinite) streams.
@@ -336,6 +323,13 @@ impl SymmetricHashJoinExec {
     }
 
     /// Check if order information covers every column in the filter expression.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub fn check_if_order_information_available(&self) -> Result<bool> {
         if let Some(filter) = self.filter() {
             let left = self.left();
@@ -2264,6 +2258,44 @@ mod tests {
             joiner.size() - size_with_visited_rows,
             owned_container_allocation_delta
         );
+    }
+
+    #[test]
+    fn stream_reserves_retained_interval_graph() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let mut stream = create_stream(NoopBatchTransformer::new(), Arc::clone(&schema));
+        stream.update_reservation()?;
+        let size_without_graph = stream.reservation.size();
+
+        let expr: PhysicalExprRef = Arc::new(Column::new("a", 0));
+        let predicate = binary(Arc::clone(&expr), Operator::Gt, lit(0_i32), &schema)?;
+        let graph = ExprIntervalGraph::try_new(predicate, &schema)?;
+        let graph_size = graph.size();
+        stream.graph = Some(graph);
+        stream.update_reservation()?;
+        assert_eq!(stream.reservation.size(), size_without_graph + graph_size);
+        assert_eq!(stream.reservation.size(), stream.size());
+
+        let graph = stream.graph.as_mut().unwrap();
+        let indices = graph.gather_node_indices(&[expr]);
+        let mut ranges = vec![(indices[0].1, Interval::make(Some(1_i32), Some(10_i32))?)];
+        graph.update_ranges(&mut ranges, Interval::TRUE)?;
+        let updated_graph_size = graph.size();
+        stream.update_reservation()?;
+        assert_eq!(
+            stream.reservation.size(),
+            size_without_graph + updated_graph_size
+        );
+        assert_eq!(stream.metrics.stream_memory_usage.value(), stream.size());
+
+        stream.graph = None;
+        stream.update_reservation()?;
+        assert_eq!(stream.reservation.size(), size_without_graph);
+        assert_eq!(
+            stream.metrics.stream_memory_usage.value(),
+            size_without_graph
+        );
+        Ok(())
     }
 
     fn assert_stream_accounts_for_transformer<T: BatchTransformer>(batch_transformer: T) {

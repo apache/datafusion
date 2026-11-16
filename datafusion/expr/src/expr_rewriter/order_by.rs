@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Rewrite for order by expressions
 
@@ -30,12 +17,18 @@ pub fn rewrite_sort_cols_by_aggs(
     sorts: impl IntoIterator<Item = impl Into<Sort>>,
     plan: &LogicalPlan,
 ) -> Result<Vec<Sort>> {
+    let plan_inputs = plan.inputs();
+    let proj_exprs = if plan_inputs.len() == 1 {
+        plan.expressions()
+    } else {
+        vec![]
+    };
     sorts
         .into_iter()
         .map(|e| {
             let sort = e.into();
             Ok(Sort::new(
-                rewrite_sort_col_by_aggs(sort.expr, plan)?,
+                rewrite_sort_col_by_aggs(sort.expr, &plan_inputs, &proj_exprs)?,
                 sort.asc,
                 sort.nulls_first,
             ))
@@ -43,14 +36,15 @@ pub fn rewrite_sort_cols_by_aggs(
         .collect()
 }
 
-fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
-    let plan_inputs = plan.inputs();
-
+fn rewrite_sort_col_by_aggs(
+    expr: Expr,
+    plan_inputs: &[&LogicalPlan],
+    proj_exprs: &[Expr],
+) -> Result<Expr> {
     // Joins, and Unions are not yet handled (should have a projection
     // on top of them)
     if plan_inputs.len() == 1 {
-        let proj_exprs = plan.expressions();
-        rewrite_in_terms_of_projection(expr, &proj_exprs, plan_inputs[0])
+        rewrite_in_terms_of_projection(expr, proj_exprs, plan_inputs[0])
     } else {
         Ok(expr)
     }

@@ -1,24 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::{
     DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_err,
     substrait_datafusion_err, substrait_err,
@@ -38,6 +25,7 @@ use url::Url;
 pub async fn from_read_rel(
     consumer: &impl SubstraitConsumer,
     read: &ReadRel,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
     async fn read_with_schema(
         consumer: &impl SubstraitConsumer,
@@ -45,11 +33,12 @@ pub async fn from_read_rel(
         schema: DFSchema,
         projection: Option<&MaskExpression>,
         filter: Option<&Expression>,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
         let schema = schema.replace_qualifier(table_ref.clone());
 
         let filters = if let Some(f) = filter {
-            let filter_expr = consumer.consume_expression(f, &schema).await?;
+            let filter_expr = consumer.consume_expression(f, &schema, context).await?;
             split_conjunction_owned(filter_expr)
         } else {
             vec![]
@@ -109,6 +98,7 @@ pub async fn from_read_rel(
                 substrait_schema,
                 read.projection.as_ref(),
                 read.filter.as_deref(),
+                context,
             )
             .await
         }
@@ -139,7 +129,7 @@ pub async fn from_read_rel(
                 }));
             }
 
-            let mut rows = vec![];
+            let mut rows = Vec::with_capacity(vt.expressions.len());
             for row in &vt.expressions {
                 if row.fields.len() != substrait_schema.fields().len() {
                     return substrait_err!(
@@ -149,7 +139,7 @@ pub async fn from_read_rel(
                     );
                 }
 
-                let mut row_exprs = vec![];
+                let mut row_exprs = Vec::with_capacity(row.fields.len());
                 let mut name_idx = 0;
                 for expression in &row.fields {
                     // Top-level names are provided through schema
@@ -171,7 +161,11 @@ pub async fn from_read_rel(
                         }
                         _ => {
                             consumer
-                                .consume_expression(expression, &substrait_schema)
+                                .consume_expression(
+                                    expression,
+                                    &substrait_schema,
+                                    context,
+                                )
                                 .await?
                         }
                     };
@@ -231,6 +225,7 @@ pub async fn from_read_rel(
                 substrait_schema,
                 read.projection.as_ref(),
                 read.filter.as_deref(),
+                context,
             )
             .await
         }

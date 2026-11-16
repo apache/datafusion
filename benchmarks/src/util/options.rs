@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::{num::NonZeroUsize, sync::Arc};
 
@@ -33,7 +20,9 @@ use datafusion::{
 use datafusion_common::{DataFusionError, Result};
 use object_store::local::LocalFileSystem;
 
-use super::latency_object_store::LatencyObjectStore;
+use super::simulated_object_store::{
+    BYTES_PER_SECOND, MAX_CONNECTIONS, SimulatedObjectStore,
+};
 
 // Common benchmark options (don't use doc comments otherwise this doc
 // shows up in help files)
@@ -44,11 +33,11 @@ pub struct CommonOpt {
     pub iterations: usize,
 
     /// Number of partitions to process in parallel. Defaults to number of available cores.
-    #[arg(short = 'n', long = "partitions", env)]
+    #[arg(short = 'n', long = "partitions")]
     pub partitions: Option<usize>,
 
     /// Batch size when reading CSV or Parquet files
-    #[arg(short = 's', long = "batch-size", env)]
+    #[arg(short = 's', long = "batch-size")]
     pub batch_size: Option<usize>,
 
     /// The memory pool type to use, should be one of "fair" or "greedy"
@@ -62,17 +51,61 @@ pub struct CommonOpt {
 
     /// The amount of memory to reserve for sort spill operations. DataFusion's default value will be used
     /// if not specified.
-    #[arg(long = "sort-spill-reservation-bytes", value_parser = parse_capacity_limit, env)]
+    #[arg(long = "sort-spill-reservation-bytes", value_parser = parse_capacity_limit)]
     pub sort_spill_reservation_bytes: Option<usize>,
 
     /// Activate debug mode to see more details
     #[arg(short, long, env)]
     pub debug: bool,
 
-    /// Simulate object store latency to mimic remote storage (e.g. S3).
-    /// Adds random latency in the range 20-200ms to each object store operation.
+    /// Serve the local filesystem as if it were remote object storage (e.g. S3
+    /// or GCS): per-request latency, per-connection bandwidth, a bounded
+    /// connection pool, and paginated LIST. See
+    /// [`crate::util::simulated_object_store`].
     #[arg(long = "simulate-latency", env)]
     pub simulate_latency: bool,
+}
+
+/// Session configuration overrides shared by query benchmarks.
+///
+/// Only explicitly supplied CLI arguments override `SessionConfig::from_env()`.
+#[derive(Debug, Args, Clone, Default)]
+pub struct QueryOpt {
+    /// Disable collection of statistics (and cost based optimizations).
+    #[arg(short = 'S', long = "disable-statistics")]
+    disable_statistics: bool,
+
+    /// Prefer hash joins over sort merge joins.
+    #[arg(short = 'j', long = "prefer_hash_join")]
+    prefer_hash_join: Option<bool>,
+
+    /// Allow Piecewise Merge Join instead of Nested Loop Join.
+    #[arg(short = 'w', long = "enable_piecewise_merge_join")]
+    enable_piecewise_merge_join: Option<bool>,
+
+    /// How many bytes to buffer on the probe side of hash joins.
+    #[arg(long)]
+    hash_join_buffering_capacity: Option<usize>,
+}
+
+impl QueryOpt {
+    /// Read standard environment settings, then apply explicit CLI overrides.
+    pub fn config(&self, common: &CommonOpt) -> Result<SessionConfig> {
+        let mut config = common.config()?;
+        if self.disable_statistics {
+            config = config.with_collect_statistics(false);
+        }
+        if let Some(value) = self.prefer_hash_join {
+            config.options_mut().optimizer.prefer_hash_join = value;
+        }
+        if let Some(value) = self.enable_piecewise_merge_join {
+            config.options_mut().optimizer.enable_piecewise_merge_join = value;
+        }
+        if let Some(value) = self.hash_join_buffering_capacity {
+            config.options_mut().execution.hash_join_buffering_capacity = value;
+        }
+        Ok(config)
+    }
 }
 
 impl CommonOpt {
@@ -138,17 +171,18 @@ impl CommonOpt {
         Ok(rt_builder)
     }
 
-    /// Build the runtime environment, optionally wrapping the local filesystem
-    /// with a throttled object store to simulate remote storage latency.
+    /// Build the runtime environment, optionally presenting the local
+    /// filesystem as remote object storage.
     pub fn build_runtime(&self) -> Result<Arc<RuntimeEnv>> {
         let rt = self.runtime_env_builder()?.build_arc()?;
         if self.simulate_latency {
-            let store: Arc<dyn object_store::ObjectStore> =
-                Arc::new(LatencyObjectStore::new(LocalFileSystem::new()));
+            let store = SimulatedObjectStore::new(LocalFileSystem::new());
             let url = ObjectStoreUrl::parse("file:///")?;
-            rt.register_object_store(url.as_ref(), store);
+            rt.register_object_store(url.as_ref(), Arc::new(store));
             println!(
-                "Simulating S3-like object store latency (get: 25-200ms, list: 40-400ms)"
+                "Simulating remote object storage (get TTFB: 19-230ms, head TTFB: \
+                 8-28ms, list TTFB: 40-200ms/page, {} MB/s per connection, {MAX_CONNECTIONS} connections)",
+                BYTES_PER_SECOND / (1024 * 1024),
             );
         }
         Ok(rt)
@@ -182,6 +216,125 @@ fn parse_capacity_limit(limit: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(clap::Parser)]
+    struct TestOptions {
+        #[command(flatten)]
+        common: CommonOpt,
+        #[command(flatten)]
+        query: QueryOpt,
+    }
+
+    #[test]
+    fn session_settings_from_env_and_cli() {
+        use clap::Parser;
+
+        const CHILD: &str = "DATAFUSION_BENCHMARK_SESSION_SETTINGS_TEST";
+        if let Ok(mode) = std::env::var(CHILD) {
+            let mut args = vec!["benchmark"];
+            if mode == "cli" {
+                args.extend([
+                    "--partitions",
+                    "3",
+                    "--batch-size",
+                    "512",
+                    "--sort-spill-reservation-bytes",
+                    "2M",
+                    "--prefer_hash_join",
+                    "true",
+                    "--enable_piecewise_merge_join",
+                    "false",
+                    "--hash-join-buffering-capacity",
+                    "0",
+                    "--disable-statistics",
+                ]);
+            }
+            let options = TestOptions::try_parse_from(args).unwrap();
+            let config = options.query.config(&options.common).unwrap();
+            let settings = config.options();
+            let cli = mode == "cli";
+            assert_eq!(
+                settings.execution.target_partitions,
+                if cli { 3 } else { 2 }
+            );
+            assert_eq!(
+                settings.execution.batch_size.get(),
+                if cli { 512 } else { 256 }
+            );
+            assert_eq!(
+                settings.execution.sort_spill_reservation_bytes,
+                if cli { 2 * 1024 * 1024 } else { 1048576 }
+            );
+            assert_eq!(settings.optimizer.prefer_hash_join, cli);
+            assert_eq!(settings.optimizer.enable_piecewise_merge_join, !cli);
+            assert_eq!(
+                settings.execution.hash_join_buffering_capacity,
+                if cli { 0 } else { 4096 }
+            );
+            assert!(!settings.execution.collect_statistics);
+
+            // The SQL runner uses the same standard environment settings.
+            if !cli {
+                let ctx = crate::sql_benchmark_runner::make_ctx(&options.common).unwrap();
+                assert_eq!(ctx.copied_config().to_props(), config.to_props());
+            }
+            return;
+        }
+
+        // Isolate environment changes from parallel tests and inherited settings.
+        for mode in ["env", "cli"] {
+            let mut command =
+                std::process::Command::new(std::env::current_exe().unwrap());
+            for (key, _) in std::env::vars_os() {
+                if key.to_string_lossy().starts_with("DATAFUSION_") {
+                    command.env_remove(key);
+                }
+            }
+            for key in [
+                "ITERATIONS",
+                "MEM_POOL_TYPE",
+                "MEMORY_LIMIT",
+                "DEBUG",
+                "SIMULATE_LATENCY",
+            ] {
+                command.env_remove(key);
+            }
+            let output = command
+                .args([
+                    "--exact",
+                    "util::options::tests::session_settings_from_env_and_cli",
+                    "--nocapture",
+                ])
+                .env(CHILD, mode)
+                .env("DATAFUSION_EXECUTION_TARGET_PARTITIONS", "2")
+                .env("DATAFUSION_EXECUTION_BATCH_SIZE", "256")
+                .env(
+                    "DATAFUSION_EXECUTION_SORT_SPILL_RESERVATION_BYTES",
+                    "1048576",
+                )
+                .env("DATAFUSION_OPTIMIZER_PREFER_HASH_JOIN", "false")
+                .env("DATAFUSION_OPTIMIZER_ENABLE_PIECEWISE_MERGE_JOIN", "true")
+                .env("DATAFUSION_EXECUTION_HASH_JOIN_BUFFERING_CAPACITY", "4096")
+                .env(
+                    "DATAFUSION_EXECUTION_COLLECT_STATISTICS",
+                    if mode == "cli" { "true" } else { "false" },
+                )
+                // Obsolete aliases must not override the standard settings.
+                .env("PARTITIONS", "8")
+                .env("BATCH_SIZE", "1024")
+                .env("SORT_SPILL_RESERVATION_BYTES", "8M")
+                .env("PREFER_HASH_JOIN", "true")
+                .env("HASH_JOIN_BUFFERING_CAPACITY", "0")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{mode} child failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
 
     #[test]
     fn test_runtime_env_builder_reads_env_var() {
