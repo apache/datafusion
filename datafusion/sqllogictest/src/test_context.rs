@@ -174,10 +174,10 @@ impl TestContext {
                     .expect("register exact sort source");
             }
             "sort_pushdown_custom_rule.slt" => {
-                custom_sort_pushdown::register_custom_ordered_input(
+                custom_sort_pushdown::register_custom_sort_pushdown(
                     test_ctx.session_ctx(),
                 )
-                .expect("register custom ordered input");
+                .expect("register custom projection table");
             }
             "parquet_missing_bounds.slt" => {
                 register_parquet_missing_bounds(&mut test_ctx).await;

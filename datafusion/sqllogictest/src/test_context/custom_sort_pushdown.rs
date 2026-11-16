@@ -68,6 +68,16 @@ pub(super) fn register_custom_sort_pushdown(ctx: &SessionContext) -> Result<()> 
         Arc::new(CustomExec(Arc::new(FilterExec::try_new(predicate, input)?))),
     )?;
 
+    let batch = record_batch!(("a", Int32, [1, 2, 3]), ("b", Int32, [30, 20, 10]))?;
+    let schema = batch.schema();
+    let ordering =
+        [PhysicalSortExpr::new_default(col("a", &schema)?).nulls_last()].into();
+    let input = Arc::new(
+        TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![ordering])?,
+    );
+    ctx.register_table("custom_ordered_input", Arc::new(CustomExec(input)))?;
+
     // The custom node hides the final sort key while selecting its first row.
     // Refining its visible ordering must still preserve that hidden key.
     let batch = record_batch!(
@@ -102,20 +112,6 @@ pub(super) fn register_custom_sort_pushdown(ctx: &SessionContext) -> Result<()> 
     let input = Arc::new(SortExec::new(ordering, input).with_fetch(Some(3)));
     let limit = GlobalLimitExec::new(input, 1, Some(1));
     ctx.register_table("custom_offset_limit", Arc::new(CustomExec(Arc::new(limit))))?;
-    Ok(())
-}
-
-/// Register the ordered input that [`CustomLimitRule`] wraps in a custom limit.
-pub(super) fn register_custom_ordered_input(ctx: &SessionContext) -> Result<()> {
-    let batch = record_batch!(("a", Int32, [1, 2, 3]), ("b", Int32, [30, 20, 10]))?;
-    let schema = batch.schema();
-    let ordering =
-        [PhysicalSortExpr::new_default(col("a", &schema)?).nulls_last()].into();
-    let input = Arc::new(
-        TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
-            .try_with_sort_information(vec![ordering])?,
-    );
-    ctx.register_table("custom_ordered_input", Arc::new(CustomExec(input)))?;
     Ok(())
 }
 
