@@ -4,12 +4,12 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 
-use datafusion_common::tree_node::{Transformed, TransformedResult};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference,
     assert_contains,
 };
-use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
+use datafusion_expr::expr::{Alias, WindowFunction, WindowFunctionParams};
 use datafusion_expr::test::function_stub::{
     count_udaf, max, max_udaf, min_udaf, sum, sum_udaf,
 };
@@ -100,20 +100,45 @@ fn roundtrip_expr(table: TableReference, sql: &str) -> Result<String> {
     Ok(ast.to_string())
 }
 
-fn remove_column_self_aliases(plan: LogicalPlan) -> Result<LogicalPlan> {
+/// Removes aliases that don't change the output schema: unqualified self-aliases,
+/// and aliases nested under a top-level alias, which replaces their names.
+fn normalize_aliases(plan: LogicalPlan) -> Result<LogicalPlan> {
     plan.transform_up_with_subqueries(|plan| {
         plan.map_expressions(|expr| {
-            if let Expr::Alias(alias) = &expr
-                && alias.relation.is_none()
+            let Expr::Alias(alias) = expr else {
+                return Ok(Transformed::no(expr));
+            };
+            if alias.relation.is_none()
                 && alias.metadata.is_none()
                 && let Expr::Column(column) = alias.expr.as_ref()
                 && column.relation.is_none()
                 && column.name == alias.name
             {
-                Ok(Transformed::yes(*alias.expr.clone()))
-            } else {
-                Ok(Transformed::no(expr))
+                return Ok(Transformed::yes(*alias.expr));
             }
+            let Alias {
+                expr: inner,
+                relation,
+                name,
+                metadata,
+            } = alias;
+            (*inner)
+                .transform_up(|e| match e {
+                    Expr::Alias(nested)
+                        if nested.relation.is_none() && nested.metadata.is_none() =>
+                    {
+                        Ok(Transformed::yes(*nested.expr))
+                    }
+                    e => Ok(Transformed::no(e)),
+                })?
+                .map_data(|inner| {
+                    Ok(Expr::Alias(Alias {
+                        expr: Box::new(inner),
+                        relation,
+                        name,
+                        metadata,
+                    }))
+                })
         })
     })
     .data()
@@ -273,7 +298,13 @@ fn roundtrip_statement() -> Result<()> {
             )
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
-            .with_expr_planner(Arc::new(FieldAccessPlanner));
+            .with_expr_planner(Arc::new(FieldAccessPlanner))
+            .with_expr_planner(Arc::new(
+                datafusion_functions_aggregate::planner::AggregateFunctionPlanner,
+            ))
+            .with_expr_planner(Arc::new(
+                datafusion_functions_window::planner::WindowFunctionPlanner,
+            ));
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -284,11 +315,8 @@ fn roundtrip_statement() -> Result<()> {
             .sql_statement_to_plan(roundtrip_statement.clone())
             .unwrap();
 
-        // Explicit output names can add unqualified self-aliases without changing the plan's meaning.
-        assert_eq!(
-            remove_column_self_aliases(plan)?,
-            remove_column_self_aliases(plan_roundtrip)?,
-        );
+        // Explicit output names can add redundant aliases without changing the plan's meaning.
+        assert_eq!(normalize_aliases(plan)?, normalize_aliases(plan_roundtrip)?);
     }
 
     Ok(())
