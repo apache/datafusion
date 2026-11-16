@@ -22,9 +22,7 @@ use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 use datafusion_execution::memory_pool::MemoryPool;
 use datafusion_expr::Operator;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
-use datafusion_physical_expr::expressions::{
-    BinaryExpr, Column, InListExpr, LikeExpr, Literal,
-};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, InListExpr, Literal};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
@@ -41,7 +39,7 @@ pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource>
     Arc::new(source)
 }
 
-/// Rebuild a supported equality, `!=`, `LIKE`, or `IN` filter after selected
+/// Rebuild a supported equality, `!=`, or `IN` filter after selected
 /// columns change to a dictionary representation.
 ///
 /// Dictionary comparison kernels operate on the dictionary's value type, so
@@ -144,34 +142,6 @@ pub fn try_rewrite_dictionary_filter_predicate(
         };
     }
 
-    if let Some(like) = predicate.downcast_ref::<LikeExpr>() {
-        let Some(column) = like.expr().downcast_ref::<Column>() else {
-            return Ok(None);
-        };
-        if !changed_column_indices.contains(&column.index()) {
-            return Ok(None);
-        }
-        let Some(pattern) = like.pattern().downcast_ref::<Literal>() else {
-            return Ok(None);
-        };
-        let value_type = dictionary_value_type(column)?;
-        let value = if pattern.value().is_null() {
-            ScalarValue::try_new_null(value_type)?
-        } else {
-            let Some(value) = try_cast_literal_to_type(pattern.value(), value_type)
-            else {
-                return Ok(None);
-            };
-            value
-        };
-        return Ok(Some(Arc::new(LikeExpr::new(
-            like.negated(),
-            like.case_insensitive(),
-            Arc::clone(like.expr()),
-            Arc::new(Literal::new(value)),
-        ))));
-    }
-
     if let Some(in_list) = predicate.downcast_ref::<InListExpr>() {
         let Some(column) = in_list.expr().downcast_ref::<Column>() else {
             return Ok(None);
@@ -270,38 +240,6 @@ mod tests {
 
         assert!(
             try_rewrite_dictionary_filter_predicate(&predicate, &schema, &[0])?.is_none()
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn rewrite_like_literal_for_dictionary_column() -> Result<()> {
-        let schema = Schema::new(vec![dictionary_field("url")]);
-        let predicate: Arc<dyn PhysicalExpr> = Arc::new(LikeExpr::new(
-            false,
-            false,
-            Arc::new(Column::new("url", 0)),
-            Arc::new(Literal::new(ScalarValue::Utf8View(Some(
-                "%google%".to_string(),
-            )))),
-        ));
-
-        let rewritten =
-            try_rewrite_dictionary_filter_predicate(&predicate, &schema, &[0])?
-                .expect("dictionary LIKE should be rewritten");
-        let rewritten = rewritten
-            .downcast_ref::<LikeExpr>()
-            .expect("rewritten predicate should remain LIKE");
-
-        assert!(!rewritten.negated());
-        assert!(!rewritten.case_insensitive());
-        assert_eq!(
-            rewritten
-                .pattern()
-                .downcast_ref::<Literal>()
-                .expect("pattern should remain a literal")
-                .value(),
-            &ScalarValue::Utf8(Some("%google%".to_string()))
         );
         Ok(())
     }
