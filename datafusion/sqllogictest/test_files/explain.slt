@@ -606,8 +606,11 @@ physical_plan
 07)└───────────────────────────┘
 
 # number is not a valid format
-query error DataFusion error: SQL error: ParserError\("Expected: an explain format such as TREE, found: 123 at Line: 1, Column: 16"\)
+query error
 explain format 123 select * from values (1);
+----
+DataFusion error: SQL error: ParserError("Expected: an explain format such as TREE, found: 123 at Line: 1, Column: 16")
+
 
 # verbose tree mode not supported
 query error DataFusion error: Error during planning: EXPLAIN VERBOSE with FORMAT is not supported
@@ -726,11 +729,17 @@ statement ok
 set datafusion.explain.format = "indent";
 
 # no such thing as json mode
-query error DataFusion error: Invalid or Unsupported Configuration: Invalid explain format\. Expected 'indent', 'tree', 'pgjson' or 'graphviz'\. Got 'json'
+query error
 explain format json select * from values (1);
+----
+DataFusion error: Invalid or Unsupported Configuration: Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got 'json'
 
-query error DataFusion error: Invalid or Unsupported Configuration: Invalid explain format\. Expected 'indent', 'tree', 'pgjson' or 'graphviz'\. Got 'foo'
+
+query error
 explain format foo select * from values (1);
+----
+DataFusion error: Invalid or Unsupported Configuration: Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got 'foo'
+
 
 # pgjson mode
 query TT
@@ -905,8 +914,11 @@ statement error DataFusion error: Error during planning: expected boolean for EX
 EXPLAIN (COSTS maybe) SELECT 1;
 
 # Unrecognized argument for a string/ident option.
-statement error DataFusion error: Invalid or Unsupported Configuration: Invalid explain format\. Expected 'indent', 'tree', 'pgjson' or 'graphviz'\. Got 'bogus'
+statement error
 EXPLAIN (FORMAT bogus) SELECT 1;
+----
+DataFusion error: Invalid or Unsupported Configuration: Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got 'bogus'
+
 
 # Legacy keyword form still works on PostgreSQL dialect.
 query TT

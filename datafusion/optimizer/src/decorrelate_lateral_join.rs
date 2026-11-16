@@ -19,7 +19,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{Column, DFSchema, Result, ScalarValue, TableReference};
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, SubqueryAlias};
+use datafusion_expr::{Filter, LogicalPlan, LogicalPlanBuilder, SubqueryAlias};
 
 /// Optimizer rule for rewriting lateral joins to joins
 #[derive(Default, Debug)]
@@ -94,6 +94,22 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
     let rewritten_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
+        return Ok(Transformed::no(LogicalPlan::Join(join)));
+    }
+
+    // A HAVING over an ungrouped aggregate can remove the aggregate's only
+    // row. The rewrite below handles neither case correctly, so leave the join
+    // correlated and let the query error instead of returning wrong rows.
+    // <https://github.com/apache/datafusion/issues/21198>
+    // - An inner lateral join becomes an outer join that keeps every outer row,
+    //   so an outer row whose row the HAVING removes comes back with NULLs.
+    // - A HAVING that reads an outer column is moved into the join condition,
+    //   where the count bug handling turns its unmatched rows into a count of 0,
+    //   for a left lateral join too.
+    if pull_up.pulled_up_scalar_agg
+        && let Some(having) = having_over_ungrouped_aggregate(subquery_plan)
+        && (original_join_type == JoinType::Inner || having.predicate.contains_outer())
+    {
         return Ok(Transformed::no(LogicalPlan::Join(join)));
     }
 
@@ -313,6 +329,39 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     };
 
     Ok(Transformed::new(new_plan, true, TreeNodeRecursion::Jump))
+}
+
+/// The `HAVING` of a subquery whose result is an ungrouped aggregate: a
+/// `Filter` between the subquery's output and that aggregate, with only
+/// projections and aliases around them. A filter below the aggregate only
+/// changes the aggregate's input, so it is not returned.
+fn having_over_ungrouped_aggregate(plan: &LogicalPlan) -> Option<&Filter> {
+    match plan {
+        LogicalPlan::Projection(projection) => {
+            having_over_ungrouped_aggregate(&projection.input)
+        }
+        LogicalPlan::SubqueryAlias(alias) => {
+            having_over_ungrouped_aggregate(&alias.input)
+        }
+        LogicalPlan::Filter(filter) => {
+            feeds_ungrouped_aggregate(&filter.input).then_some(filter)
+        }
+        _ => None,
+    }
+}
+
+/// Whether `plan` is an ungrouped aggregate, seen through projections,
+/// aliases and filters.
+fn feeds_ungrouped_aggregate(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Aggregate(aggregate) => aggregate.group_expr.is_empty(),
+        LogicalPlan::Projection(projection) => {
+            feeds_ungrouped_aggregate(&projection.input)
+        }
+        LogicalPlan::SubqueryAlias(alias) => feeds_ungrouped_aggregate(&alias.input),
+        LogicalPlan::Filter(filter) => feeds_ungrouped_aggregate(&filter.input),
+        _ => false,
+    }
 }
 
 /// Extract the Subquery and optional alias from a lateral join's right side.

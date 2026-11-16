@@ -176,6 +176,7 @@ pub fn create_test_schema3() -> Result<SchemaRef> {
     Ok(schema)
 }
 
+/// Creates a sort-merge join with null-aware semantics disabled by default.
 pub fn sort_merge_join_exec(
     left: Arc<dyn ExecutionPlan>,
     right: Arc<dyn ExecutionPlan>,
