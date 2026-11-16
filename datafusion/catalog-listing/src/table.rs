@@ -1105,7 +1105,12 @@ impl ListingTable {
         .await?;
         let meta_fetch_concurrency =
             ctx.config_options().execution.meta_fetch_concurrency.get();
-        let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
+        let mut seen_files = HashSet::new();
+        let file_list = stream::iter(file_list)
+            .flatten_unordered(meta_fetch_concurrency)
+            .try_filter(move |file| {
+                future::ready(seen_files.insert(file.object_meta.location.clone()))
+            });
         // collect the statistics and ordering if required by the config
         let files = file_list
             .map(|part_file| async {
