@@ -601,12 +601,17 @@ impl PhysicalExpr for BinaryExpr {
             Ok(rhs) => rhs,
             // A deterministic RHS may fail on rows the LHS already decided
             // (e.g. `x = 0 OR 1 / x > 1`), so retry on the undecided rows only.
-            Err(e) => match or_rows_to_retry(&lhs, &self.op) {
-                Some(mask) => {
-                    return self.evaluate_pre_selection(batch, lhs, &mask, true);
-                }
-                None => return Err(e),
-            },
+            Err(e) if self.op == Operator::Or => {
+                // Treating the RHS as volatile gives `PreSelection` exactly
+                // when some rows are decided and some are not.
+                return match check_short_circuit_for_or(&lhs, true) {
+                    ShortCircuitStrategy::PreSelection { mask, fill_value } => {
+                        self.evaluate_pre_selection(batch, lhs, &mask, fill_value)
+                    }
+                    _ => Err(e),
+                };
+            }
+            Err(e) => return Err(e),
         };
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
@@ -1374,31 +1379,6 @@ fn check_short_circuit_for_or(
 
     // Evaluate both sides normally.
     ShortCircuitStrategy::None
-}
-
-/// The rows to retry the RHS of `OR` on after it failed on the whole batch:
-/// the rows the LHS did not decide, if it decided any.
-fn or_rows_to_retry(lhs: &ColumnarValue, op: &Operator) -> Option<BooleanArray> {
-    if *op != Operator::Or || lhs.data_type() != DataType::Boolean {
-        return None;
-    }
-    match lhs {
-        ColumnarValue::Array(array) => {
-            let mask = not_true(array.as_boolean());
-            let undecided = mask.true_count();
-            (undecided > 0 && undecided < array.len()).then_some(mask)
-        }
-        ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {
-            unreachable!("should not evaluate rhs on scalar true lhs")
-        }
-        ColumnarValue::Scalar(ScalarValue::Boolean(_)) => {
-            // Nothing should be retried since rhs should be evaluated on all rows
-            None
-        }
-        ColumnarValue::Scalar(_) => {
-            unreachable!("verified above that the data type is boolean")
-        }
-    }
 }
 
 /// Avoids scattering when the selected RHS rows are uniform.
