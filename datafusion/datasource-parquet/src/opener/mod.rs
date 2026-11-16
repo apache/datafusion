@@ -6427,7 +6427,7 @@ mod test {
         batches
     }
 
-    // Proves the opener passes a promoted binary Dictionary schema to arrow-rs.
+    // Proves the opener reads Binary directly as Dictionary(Int32, Utf8).
     #[tokio::test]
     async fn test_rle_binary_column_promotion() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
@@ -6449,24 +6449,57 @@ mod test {
             Some(props),
         )
         .await;
-        let dict_bin_schema = Arc::new(Schema::new(vec![Field::new(
+        let dict_utf8_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let dict_utf8_schema = Arc::new(Schema::new(vec![Field::new(
             "payload",
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            dict_utf8_type.clone(),
             true,
         )]));
         let morselizer = ParquetMorselizerBuilder::new()
             .with_store(Arc::clone(&store))
-            .with_schema(Arc::clone(&dict_bin_schema))
+            .with_schema(Arc::clone(&dict_utf8_schema))
             .with_enable_rle_to_dictionary(true)
             .build();
-        let batches = collect_batches(
-            &morselizer,
-            PartitionedFile::new("binary.parquet".to_string(), bin_size as u64),
-        )
-        .await;
+        let file = PartitionedFile::new("binary.parquet".to_string(), bin_size as u64);
+
+        let prepared = morselizer
+            .prepare_open_file(file.clone())
+            .unwrap()
+            .load()
+            .await
+            .unwrap()
+            .prepare_filters()
+            .unwrap();
         assert_eq!(
-            batches[0].schema().field(0).data_type(),
-            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary))
+            prepared
+                .loaded
+                .reader_metadata
+                .schema()
+                .field(0)
+                .data_type(),
+            &dict_utf8_type
         );
+        let projection = prepared
+            .loaded
+            .prepared
+            .projection
+            .expr_iter()
+            .next()
+            .unwrap();
+        assert!(
+            projection.downcast_ref::<Column>().is_some(),
+            "expected a direct column projection, got {projection}"
+        );
+
+        let batches = collect_batches(&morselizer, file).await;
+        let dictionary = batches[0].column(0).as_dictionary::<Int32Type>();
+        let dictionary_values = dictionary.values().as_string::<i32>();
+        let values = dictionary
+            .keys()
+            .iter()
+            .map(|key| key.map(|key| dictionary_values.value(key as usize)))
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![Some("a"), Some("b"), Some("a")]);
     }
 }

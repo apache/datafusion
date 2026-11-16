@@ -401,6 +401,13 @@ pub struct PhysicalFileStatistics {
 #[doc(hidden)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PhysicalColumnStatistics {
+    /// Minimum compressed dictionary-page byte span across every nonempty row
+    /// group in the file.
+    ///
+    /// `None` means there are no nonempty row groups, at least one nonempty row
+    /// group has no dictionary page, or the format does not provide enough
+    /// metadata to compute its byte span.
+    pub min_dictionary_page_bytes: Option<usize>,
     /// Whether every data page containing this column is dictionary encoded.
     ///
     /// `false` also covers formats or writers that do not provide enough

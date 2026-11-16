@@ -648,7 +648,7 @@ impl ListingTable {
                         column_name,
                     )
                 }
-                Operator::Eq => {
+                Operator::Eq | Operator::NotEq => {
                     let is_column = |expr: &Expr| matches!(expr, Expr::Column(column) if column.name == column_name);
                     (is_column(binary.left.as_ref())
                         && matches!(binary.right.as_ref(), Expr::Literal(_, _)))
@@ -1574,14 +1574,10 @@ mod tests {
     }
 
     #[test]
-    fn dictionary_filter_support_matches_tpch_candidates() {
+    fn dictionary_filter_supports_rewritable_predicates() {
         use datafusion_expr::{col, lit};
 
-        assert!(!ListingTable::filter_supports_dictionary_column(
-            &col("p_type").not_like(lit("MEDIUM POLISHED%")),
-            "p_type"
-        ));
-
+        let url = || Expr::Column(datafusion_common::Column::new_unqualified("URL"));
         let q19_filter = col("l_shipinstruct")
             .eq(lit("DELIVER IN PERSON"))
             .and(col("l_shipmode").in_list(vec![lit("AIR"), lit("AIR REG")], false));
@@ -1596,6 +1592,16 @@ mod tests {
         assert!(!ListingTable::filter_supports_dictionary_column(
             &col("l_shipmode").in_list(vec![lit("AIR")], true),
             "l_shipmode"
+        ));
+        let referer =
+            || Expr::Column(datafusion_common::Column::new_unqualified("Referer"));
+        assert!(ListingTable::filter_supports_dictionary_column(
+            &referer().not_eq(lit("")),
+            "Referer"
+        ));
+        assert!(!ListingTable::filter_supports_dictionary_column(
+            &referer().not_eq(url()),
+            "Referer"
         ));
     }
 

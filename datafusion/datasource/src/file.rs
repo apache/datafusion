@@ -22,7 +22,9 @@ use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 use datafusion_execution::memory_pool::MemoryPool;
 use datafusion_expr::Operator;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, InListExpr, Literal};
+use datafusion_physical_expr::expressions::{
+    BinaryExpr, Column, InListExpr, LikeExpr, Literal,
+};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
@@ -39,8 +41,8 @@ pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource>
     Arc::new(source)
 }
 
-/// Rebuild a supported equality or `IN` filter after selected columns change
-/// to a dictionary representation.
+/// Rebuild a supported equality, `!=`, `LIKE`, or `IN` filter after selected
+/// columns change to a dictionary representation.
 ///
 /// Dictionary comparison kernels operate on the dictionary's value type, so
 /// corresponding literals must be converted to that type. Rebuilding
@@ -99,7 +101,7 @@ pub fn try_rewrite_dictionary_filter_predicate(
                 };
                 Ok(Some(Arc::new(BinaryExpr::new(left, *binary.op(), right))))
             }
-            Operator::Eq => {
+            Operator::Eq | Operator::NotEq => {
                 let left_column = binary
                     .left()
                     .downcast_ref::<Column>()
@@ -136,10 +138,38 @@ pub fn try_rewrite_dictionary_filter_predicate(
                 } else {
                     (literal, Arc::clone(column_expr))
                 };
-                Ok(Some(Arc::new(BinaryExpr::new(left, Operator::Eq, right))))
+                Ok(Some(Arc::new(BinaryExpr::new(left, *binary.op(), right))))
             }
             _ => Ok(None),
         };
+    }
+
+    if let Some(like) = predicate.downcast_ref::<LikeExpr>() {
+        let Some(column) = like.expr().downcast_ref::<Column>() else {
+            return Ok(None);
+        };
+        if !changed_column_indices.contains(&column.index()) {
+            return Ok(None);
+        }
+        let Some(pattern) = like.pattern().downcast_ref::<Literal>() else {
+            return Ok(None);
+        };
+        let value_type = dictionary_value_type(column)?;
+        let value = if pattern.value().is_null() {
+            ScalarValue::try_new_null(value_type)?
+        } else {
+            let Some(value) = try_cast_literal_to_type(pattern.value(), value_type)
+            else {
+                return Ok(None);
+            };
+            value
+        };
+        return Ok(Some(Arc::new(LikeExpr::new(
+            like.negated(),
+            like.case_insensitive(),
+            Arc::clone(like.expr()),
+            Arc::new(Literal::new(value)),
+        ))));
     }
 
     if let Some(in_list) = predicate.downcast_ref::<InListExpr>() {
@@ -183,6 +213,98 @@ pub fn try_rewrite_dictionary_filter_predicate(
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::Field;
+
+    fn dictionary_field(name: &str) -> Field {
+        Field::new(
+            name,
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        )
+    }
+
+    #[test]
+    fn rewrite_not_eq_literal_for_dictionary_column() -> Result<()> {
+        let schema = Schema::new(vec![dictionary_field("referer")]);
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("referer", 0)),
+            Operator::NotEq,
+            Arc::new(Literal::new(ScalarValue::Utf8View(Some(String::new())))),
+        ));
+
+        let rewritten =
+            try_rewrite_dictionary_filter_predicate(&predicate, &schema, &[0])?
+                .expect("dictionary inequality should be rewritten");
+        let rewritten = rewritten
+            .downcast_ref::<BinaryExpr>()
+            .expect("rewritten predicate should remain a binary expression");
+
+        assert_eq!(rewritten.op(), &Operator::NotEq);
+        assert_eq!(
+            rewritten
+                .right()
+                .downcast_ref::<Literal>()
+                .expect("right operand should remain a literal")
+                .value(),
+            &ScalarValue::Utf8(Some(String::new()))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn do_not_rewrite_not_eq_between_columns() -> Result<()> {
+        let schema = Schema::new(vec![
+            dictionary_field("referer"),
+            Field::new("url", DataType::Utf8View, false),
+        ]);
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("referer", 0)),
+            Operator::NotEq,
+            Arc::new(Column::new("url", 1)),
+        ));
+
+        assert!(
+            try_rewrite_dictionary_filter_predicate(&predicate, &schema, &[0])?.is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rewrite_like_literal_for_dictionary_column() -> Result<()> {
+        let schema = Schema::new(vec![dictionary_field("url")]);
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(LikeExpr::new(
+            false,
+            false,
+            Arc::new(Column::new("url", 0)),
+            Arc::new(Literal::new(ScalarValue::Utf8View(Some(
+                "%google%".to_string(),
+            )))),
+        ));
+
+        let rewritten =
+            try_rewrite_dictionary_filter_predicate(&predicate, &schema, &[0])?
+                .expect("dictionary LIKE should be rewritten");
+        let rewritten = rewritten
+            .downcast_ref::<LikeExpr>()
+            .expect("rewritten predicate should remain LIKE");
+
+        assert!(!rewritten.negated());
+        assert!(!rewritten.case_insensitive());
+        assert_eq!(
+            rewritten
+                .pattern()
+                .downcast_ref::<Literal>()
+                .expect("pattern should remain a literal")
+                .value(),
+            &ScalarValue::Utf8(Some("%google%".to_string()))
+        );
+        Ok(())
+    }
 }
 
 /// File format specific behaviors for [`DataSource`]

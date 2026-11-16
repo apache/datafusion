@@ -1049,6 +1049,54 @@ impl AggregateFunctionExpr {
         }
     }
 
+    /// Rebuilds this aggregate expression against `schema` with new argument
+    /// and ordering expressions.
+    ///
+    /// Unlike [`Self::with_new_expressions`], this recalculates the argument,
+    /// return, ordering, and state fields from the supplied schema.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    pub fn with_new_expressions_and_schema(
+        &self,
+        args: Vec<Arc<dyn PhysicalExpr>>,
+        order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        schema: SchemaRef,
+    ) -> Result<Option<AggregateFunctionExpr>> {
+        if args.len() != self.args.len() || order_by_exprs.len() != self.order_bys.len() {
+            return Ok(None);
+        }
+
+        let order_bys = self
+            .order_bys
+            .iter()
+            .zip(order_by_exprs)
+            .map(|(order_by, expr)| PhysicalSortExpr {
+                expr,
+                options: order_by.options,
+            })
+            .collect();
+        let mut builder = AggregateExprBuilder::new(Arc::new(self.fun.clone()), args)
+            .order_by(order_bys)
+            .schema(schema)
+            .alias(self.name.clone())
+            .output_metadata(self.return_field_metadata())
+            .with_ignore_nulls(self.ignore_nulls)
+            .with_distinct(self.is_distinct)
+            .with_reversed(self.is_reversed);
+        if let Some(human_display) = self.human_display() {
+            builder = builder.human_display(human_display);
+        }
+        if let Some(alias) = self.human_display_alias() {
+            builder = builder.human_display_alias(alias);
+        }
+        builder.build().map(Some)
+    }
+
     /// Rewrites [`AggregateFunctionExpr`], with new expressions given. The argument should be consistent
     /// with the return value of the [`AggregateFunctionExpr::all_expressions`] method.
     /// Returns `Some(Arc<dyn AggregateExpr>)` if re-write is supported, otherwise returns `None`.
@@ -1297,9 +1345,18 @@ mod tests {
             Ok(arg_types[0].clone())
         }
 
-        /// Always fails, reporting how many ORDER BY expressions it was given.
+        /// Always fails, exposing the planning fields supplied to the accumulator.
         fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-            not_impl_err!("accumulator with {} order_bys", acc_args.order_bys.len())
+            not_impl_err!(
+                "accumulator with {} order_bys, arg_type={}, return_type={}, schema_type={}, ignore_nulls={}, distinct={}, reversed={}",
+                acc_args.order_bys.len(),
+                acc_args.expr_fields[0].data_type(),
+                acc_args.return_type(),
+                acc_args.schema.field(0).data_type(),
+                acc_args.ignore_nulls,
+                acc_args.is_distinct,
+                acc_args.is_reversed
+            )
         }
 
         fn order_sensitivity(&self) -> AggregateOrderSensitivity {
@@ -1357,6 +1414,96 @@ mod tests {
         assert_eq!(expr.state_fields()?.len(), 2);
         let err = expr.create_accumulator().unwrap_err();
         assert!(err.message().contains("accumulator with 1 order_bys"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn rebuild_with_schema_recomputes_fields_and_preserves_options() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("v", DataType::Utf8View, true),
+            Field::new("k", DataType::Int64, true),
+        ]));
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let rewritten_schema = Arc::new(Schema::new(vec![
+            Field::new("v", dictionary_type.clone(), true),
+            Field::new("k", DataType::UInt32, true),
+        ]));
+        let sort_options = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let fun = AggregateUDF::from(DefaultStateUdaf::new(false));
+        let original =
+            AggregateExprBuilder::new(Arc::new(fun), vec![Arc::new(Column::new("v", 0))])
+                .order_by(vec![PhysicalSortExpr {
+                    expr: Arc::new(Column::new("k", 1)),
+                    options: sort_options,
+                }])
+                .schema(input_schema)
+                .alias("agg")
+                .output_metadata(Some(test_metadata()))
+                .human_display("default_state_udaf(v) ORDER BY [k DESC NULLS FIRST]")
+                .human_display_alias("agg")
+                .with_ignore_nulls(true)
+                .with_distinct(true)
+                .with_reversed(true)
+                .build()?;
+
+        let rebuilt = original
+            .with_new_expressions_and_schema(
+                vec![Arc::new(Column::new("v", 0))],
+                vec![Arc::new(Column::new("k", 1))],
+                Arc::clone(&rewritten_schema),
+            )?
+            .expect("expression counts match");
+
+        assert_eq!(rebuilt.fun(), original.fun());
+        assert_eq!(rebuilt.name(), "agg");
+        assert_eq!(
+            rebuilt.human_display(),
+            Some("default_state_udaf(v) ORDER BY [k DESC NULLS FIRST]")
+        );
+        assert_eq!(rebuilt.human_display_alias(), Some("agg"));
+        assert!(rebuilt.ignore_nulls());
+        assert!(rebuilt.is_distinct());
+        assert!(rebuilt.is_reversed());
+        assert_eq!(rebuilt.order_bys()[0].options, sort_options);
+        assert_eq!(
+            rebuilt.order_bys()[0]
+                .expr
+                .data_type(rewritten_schema.as_ref())?,
+            DataType::UInt32
+        );
+        assert_eq!(rebuilt.field().data_type(), &dictionary_type);
+        assert_eq!(
+            rebuilt.field().metadata().get("some_key"),
+            Some(&"some_value".to_string())
+        );
+        assert_eq!(
+            rebuilt
+                .state_fields()?
+                .iter()
+                .map(|field| field.data_type().clone())
+                .collect::<Vec<_>>(),
+            vec![dictionary_type, DataType::UInt32]
+        );
+
+        let error = rebuilt.create_accumulator().unwrap_err();
+        assert!(error.message().contains(
+            "arg_type=Dictionary(Int32, Utf8), return_type=Dictionary(Int32, Utf8), schema_type=Dictionary(Int32, Utf8), ignore_nulls=true, distinct=true, reversed=true"
+        ));
+
+        assert!(
+            original
+                .with_new_expressions_and_schema(
+                    vec![],
+                    vec![Arc::new(Column::new("k", 1))],
+                    rewritten_schema,
+                )?
+                .is_none()
+        );
 
         Ok(())
     }
