@@ -1135,7 +1135,11 @@ impl ListingTable {
                     .with_statistics(statistics)
                     .with_ordering(ordering);
                 Ok(match physical_statistics {
-                    Some(statistics) => part_file.with_extension(statistics),
+                    Some(statistics) => {
+                        let mut part_file = part_file;
+                        part_file.extensions.insert_arc(statistics);
+                        part_file
+                    }
                     None => part_file,
                 })
             })
@@ -1379,7 +1383,7 @@ impl ListingTable {
     ) -> datafusion_common::Result<(
         Arc<Statistics>,
         Option<LexOrdering>,
-        Option<PhysicalFileStatistics>,
+        Option<Arc<PhysicalFileStatistics>>,
     )> {
         let path = TableScopedPath {
             table: part_file.table_reference.clone(),
@@ -1398,9 +1402,11 @@ impl ListingTable {
             return Ok((
                 Arc::clone(&cached.statistics),
                 cached.ordering.clone(),
-                physical_statistics_required
-                    .then(|| cached.physical_statistics.as_deref().cloned())
-                    .flatten(),
+                if physical_statistics_required {
+                    cached.physical_statistics.clone()
+                } else {
+                    None
+                },
             ));
         }
 
@@ -1423,29 +1429,21 @@ impl ListingTable {
         };
 
         let statistics = Arc::new(file_meta.statistics);
+        let physical_statistics = file_meta.physical_statistics.map(Arc::new);
 
         // Store in cache
         if let Some(cache) = &self.collected_statistics {
-            let cached = CachedFileMetadata::new(
+            let mut cached = CachedFileMetadata::new(
                 meta.clone(),
                 Arc::clone(&self.file_schema_fingerprint),
                 Arc::clone(&statistics),
                 file_meta.ordering.clone(),
             );
-            let cached = match &file_meta.physical_statistics {
-                Some(physical_statistics) => {
-                    cached.with_physical_statistics(physical_statistics.clone())
-                }
-                None => cached,
-            };
+            cached.physical_statistics = physical_statistics.clone();
             cache.put(&path, cached);
         }
 
-        Ok((
-            statistics,
-            file_meta.ordering,
-            file_meta.physical_statistics,
-        ))
+        Ok((statistics, file_meta.ordering, physical_statistics))
     }
 }
 
