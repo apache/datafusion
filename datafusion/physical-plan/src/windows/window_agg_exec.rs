@@ -598,7 +598,9 @@ impl WindowAggStream {
                 &mut self.input,
                 Box::pin(EmptyRecordBatchStream::new(input_schema)),
             ));
-            if let Some(output) = self.compute_aggregates()? {
+            let output = self.compute_aggregates()?;
+            self.batches.clear();
+            if let Some(output) = output {
                 debug_assert!(output.num_rows() > 0);
                 for offset in (0..output.num_rows()).step_by(self.batch_size) {
                     let len = self.batch_size.min(output.num_rows() - offset);
@@ -678,6 +680,60 @@ mod tests {
             .sum(|m| matches!(m.value(), MetricValue::OutputBatches(_)))
             .expect("output batch metric");
         assert_eq!(output_batches.as_usize(), 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn releases_input_batches_before_emitting_output() -> Result<()> {
+        use arrow::array::{ArrayRef, Int64Array};
+        use datafusion_execution::config::SessionConfig;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let first: ArrayRef = Arc::new(Int64Array::from_iter_values(0..5));
+        let second: ArrayRef = Arc::new(Int64Array::from_iter_values(5..10));
+        let first_weak = Arc::downgrade(&first);
+        let second_weak = Arc::downgrade(&second);
+        let batches = vec![
+            RecordBatch::try_new(Arc::clone(&schema), vec![first])?,
+            RecordBatch::try_new(Arc::clone(&schema), vec![second])?,
+        ];
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let args = vec![crate::expressions::col("a", &schema)?];
+        let window_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count(a)".to_string(),
+            &args,
+            &[],
+            &[],
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+        let window = Arc::new(WindowAggExec::try_new(vec![window_expr], input, true)?);
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(4)),
+        );
+        let mut stream = window.execute(0, context)?;
+        drop(window);
+
+        let first_output = stream
+            .next()
+            .await
+            .transpose()?
+            .expect("first output batch");
+        assert_eq!(first_output.num_rows(), 4);
+        assert!(first_weak.upgrade().is_none());
+        assert!(second_weak.upgrade().is_none());
+        assert_eq!(stream.next().await.transpose()?.unwrap().num_rows(), 4);
+        assert_eq!(stream.next().await.transpose()?.unwrap().num_rows(), 2);
+        assert!(stream.next().await.is_none());
         Ok(())
     }
 
