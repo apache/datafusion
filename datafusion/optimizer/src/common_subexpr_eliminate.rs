@@ -2026,7 +2026,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ "
-        Aggregate: groupBy=[[]], aggr=[[sum(test.a + test.b) FILTER (WHERE __common_expr_1 AS test.c > Int32(0)) AS sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)), COUNT(test.a + test.b) FILTER (WHERE __common_expr_1 AS test.c > Int32(0)) AS COUNT(test.a + test.b) FILTER (WHERE test.c > Int32(0))]]
+        Aggregate: groupBy=[[]], aggr=[[sum(test.a + test.b) FILTER (WHERE __common_expr_1 AS test.c > Int32(0)) AS sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)), count(test.a + test.b) FILTER (WHERE __common_expr_1 AS test.c > Int32(0)) AS count(test.a + test.b) FILTER (WHERE test.c > Int32(0))]]
           Projection: test.c > Int32(0) AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
@@ -2047,7 +2047,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ "
-        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a + test.b) FILTER (WHERE test.c > Int32(0)), COUNT(__common_expr_1 AS test.a + test.b)]]
+        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a + test.b) FILTER (WHERE test.c > Int32(0)), count(__common_expr_1 AS test.a + test.b)]]
           Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "

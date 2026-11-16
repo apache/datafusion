@@ -4920,7 +4920,7 @@ mod tests {
             .aggregate(vec![col("user")], vec![count(lit(1))])?
             .project(vec![
                 leaf_udf_expr(col("user")).is_not_null().alias("has_name"),
-                col("COUNT(Int32(1))"),
+                col("count(Int32(1))"),
             ])?
             .build()?;
 
