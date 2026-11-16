@@ -1,29 +1,19 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::MemorySourceConfig;
-use datafusion::datasource::physical_plan::CsvSource;
+use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
+use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::config::{ConfigOptions, CsvOptions};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, ScalarValue};
 use datafusion_datasource::TableSchemaBuilder;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -33,6 +23,7 @@ use datafusion_expr::{
     Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
+use datafusion_functions::core::expr_fn::get_field;
 use datafusion_physical_expr::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr, binary, cast, col,
 };
@@ -1916,5 +1907,131 @@ fn test_sort_merge_join_interleaved_projection_embeds() -> Result<()> {
     "
     );
 
+    Ok(())
+}
+
+/// Splitting a projection rebuilds it, so it has to carry over the metadata the
+/// planner attached; otherwise the rule's schema check fails the whole query.
+/// Mirrors `keeps_metadata_of_constant_input` in `eliminate_constant_join`, but
+/// over Parquet, because only a source that absorbs the leaf projection makes
+/// the split fire at all.
+#[tokio::test]
+async fn split_keeps_field_metadata() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("leaf_split_metadata.parquet");
+    let path = path.to_str().expect("temp path is not utf-8");
+
+    let ctx = SessionContext::new();
+    // Below the five rows, so `EnsureRequirements` inserts the repartition that
+    // the split needs.
+    ctx.sql("SET datafusion.execution.batch_size = 2").await?;
+    ctx.sql("SET datafusion.execution.target_partitions = 4")
+        .await?;
+    ctx.sql(&format!(
+        "COPY (SELECT column1 AS id, column2 AS s FROM VALUES \
+           (1, {{value: 100}}), (2, {{value: 200}}), (3, {{value: 150}}), \
+           (4, {{value: 300}}), (5, {{value: 250}})) \
+         TO '{path}' STORED AS PARQUET"
+    ))
+    .await?
+    .collect()
+    .await?;
+    ctx.register_parquet("t", path, ParquetReadOptions::default())
+        .await?;
+
+    let metadata =
+        FieldMetadata::from(HashMap::from([("k".to_string(), "v".to_string())]));
+    let df = ctx.table("t").await?.select(vec![
+        get_field(datafusion_expr::col("s"), "value")
+            .alias_with_metadata("v", Some(metadata)),
+        (datafusion_expr::col("id") + datafusion_expr::lit(1i64)).alias("w"),
+    ])?;
+
+    // The physical plan is what the rule rewrites, so the assertion has to come
+    // from it rather than from the DataFrame's logical schema.
+    let plan = df.create_physical_plan().await?;
+    assert_eq!(
+        plan.schema().field(0).metadata().get("k"),
+        Some(&"v".to_string())
+    );
+
+    Ok(())
+}
+
+/// The split only handles round robin partitioning, because hash and range keys
+/// reference columns by index and would have to be remapped against the
+/// rewritten child schema. No SQL reaches this shape, so the test builds it:
+/// above a join, the leaf is already extracted into its own projection below the
+/// join, and nothing else puts a projection on a hash repartition.
+#[tokio::test]
+async fn split_declines_hash_repartition() -> Result<()> {
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new(
+            "s",
+            DataType::Struct(vec![Field::new("value", DataType::Int64, true)].into()),
+            true,
+        ),
+    ]));
+    let config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        Arc::new(ParquetSource::new(Arc::clone(&schema))),
+    )
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .build();
+    // Parquet absorbs a leaf projection, so the split would commit here if the
+    // partitioning check did not stop it first.
+    let hash = Arc::new(RepartitionExec::try_new(
+        DataSourceExec::from_data_source(config),
+        Partitioning::Hash(vec![col("id", &schema)?], 4),
+    )?);
+
+    let leaf: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::new(
+        "get_field",
+        datafusion_functions::core::get_field(),
+        vec![
+            col("s", &schema)?,
+            Arc::new(Literal::new(ScalarValue::from("value"))),
+        ],
+        Arc::new(Field::new("v", DataType::Int64, true)),
+        Arc::new(ConfigOptions::default()),
+    ));
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![
+            ProjectionExpr {
+                expr: leaf,
+                alias: "v".to_string(),
+            },
+            ProjectionExpr {
+                expr: binary(
+                    col("id", &schema)?,
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+                    &schema,
+                )?,
+                alias: "w".to_string(),
+            },
+        ],
+        hash,
+    )?);
+
+    let optimized = ProjectionPushdown::new()
+        .optimize(Arc::clone(&projection), &ConfigOptions::default())?;
+    let actual = displayable(optimized.as_ref())
+        .indent(true)
+        .to_string()
+        .trim()
+        .to_string();
+
+    // Unchanged. Without the check the scan absorbs the leaf and the hash keys
+    // are left indexing the old schema.
+    assert_snapshot!(
+        actual,
+        @r"
+    ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+      RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+    "
+    );
     Ok(())
 }

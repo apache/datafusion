@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
@@ -26,6 +13,7 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
     util::pretty::pretty_format_columns,
 };
+use datafusion_common::float_semantics;
 use datafusion_common::internal_datafusion_err;
 use datafusion_common::{
     Result, ScalarValue,
@@ -123,6 +111,19 @@ impl ColumnarValue {
         match self {
             ColumnarValue::Array(array_value) => array_value.data_type().clone(),
             ColumnarValue::Scalar(scalar_value) => scalar_value.data_type(),
+        }
+    }
+
+    /// Applies DataFusion's [float equality semantics] to this value, so that
+    /// `-0.0` becomes `+0.0`. Values without floats are returned unchanged.
+    ///
+    /// [float equality semantics]: datafusion_common::float_semantics
+    pub fn normalize(self) -> Self {
+        match self {
+            ColumnarValue::Array(array) => {
+                ColumnarValue::Array(float_semantics::normalize(array))
+            }
+            ColumnarValue::Scalar(scalar) => ColumnarValue::Scalar(scalar.normalize()),
         }
     }
 
@@ -467,9 +468,38 @@ impl fmt::Display for ColumnarValue {
 mod tests {
     use super::*;
     use arrow::{
-        array::{Date64Array, Int32Array, StructArray},
-        datatypes::{Field, Fields, TimeUnit},
+        array::{AsArray, Date64Array, Float64Array, Int32Array, StructArray},
+        datatypes::{Field, Fields, Float64Type, TimeUnit},
     };
+
+    #[test]
+    fn normalize_rewrites_negative_zero() {
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![-0.0, 1.0]));
+        let ColumnarValue::Array(normalized) = ColumnarValue::Array(array).normalize()
+        else {
+            panic!("expected an array");
+        };
+        let normalized = normalized.as_primitive::<Float64Type>();
+        assert_eq!(normalized.value(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(normalized.value(1), 1.0);
+
+        let scalar = ColumnarValue::Scalar(ScalarValue::Float64(Some(-0.0)));
+        let ColumnarValue::Scalar(ScalarValue::Float64(Some(normalized))) =
+            scalar.normalize()
+        else {
+            panic!("expected a float scalar");
+        };
+        assert_eq!(normalized.to_bits(), 0.0_f64.to_bits());
+
+        // Non-float values are returned as they are
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        let ColumnarValue::Array(normalized) =
+            ColumnarValue::Array(Arc::clone(&array)).normalize()
+        else {
+            panic!("expected an array");
+        };
+        assert!(Arc::ptr_eq(&normalized, &array));
+    }
 
     #[test]
     fn into_array_of_size() {

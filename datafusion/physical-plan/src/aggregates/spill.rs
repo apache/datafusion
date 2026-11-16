@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Spill and replay support shared by the grouped aggregation streams.
 
@@ -27,6 +14,7 @@ use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use futures::StreamExt;
 
 use super::aggregate_hash_table::ClusteredAggregateTableMetrics;
 use super::clustered_final_stream::ClusteredFinalAggregateStream;
@@ -36,7 +24,19 @@ use crate::SendableRecordBatchStream;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
+use crate::spill::gc_nested_arrays;
 use crate::spill::spill_manager::SpillManager;
+use crate::stream::RecordBatchStreamAdapter;
+
+/// Target size in bytes of the batches that spilling writes and replay
+/// merges. A batch can be larger when it holds a larger group.
+///
+/// Replay holds the groups of the batch it merges in memory, and merging
+/// several spill files reserves memory for a few batches of each. A limit of
+/// `batch_size` rows alone does not bound the size of a batch: a few groups
+/// with large state, such as `array_agg` over a low-cardinality key, would fit
+/// in a single batch.
+const SPILL_BATCH_TARGET_BYTES: usize = 1024 * 1024;
 
 /// Spill configuration and accumulated runs of one grouped aggregation stream.
 ///
@@ -223,12 +223,18 @@ impl AggregateSpill {
             return Ok(());
         };
 
-        let max_batch_rows = state_batch.num_rows().min(self.batch_size);
+        let mut max_batch_rows = 0;
         let sorted_iter = IncrementalSortIterator::new(
             state_batch,
             self.spill_expr.clone(),
             self.batch_size,
-        );
+        )
+        .with_max_batch_bytes(SPILL_BATCH_TARGET_BYTES)
+        .inspect(|batch| {
+            if let Ok(batch) = batch {
+                max_batch_rows = max_batch_rows.max(batch.num_rows());
+            }
+        });
         let spill_file = self
             .spill_manager
             .spill_record_batch_iter_and_return_max_batch_memory(
@@ -247,6 +253,27 @@ impl AggregateSpill {
         self.min_spill_batch_rows = self.min_spill_batch_rows.min(max_batch_rows);
 
         Ok(())
+    }
+
+    /// Writes already evaluated output batches to one spill file and returns a
+    /// stream that reads them back.
+    pub(super) fn spill_output(
+        &self,
+        schema: SchemaRef,
+        batches: impl Iterator<Item = Result<RecordBatch>>,
+    ) -> Result<SendableRecordBatchStream> {
+        let spill_manager = SpillManager::new(
+            self.context.runtime_env(),
+            self.spill_manager.metrics.clone(),
+            schema,
+        )
+        .with_compression_type(self.spill_manager.compression);
+        let spill_file = spill_manager
+            .spill_record_batch_iter_and_return_max_batch_memory(batches, self.label)?;
+        let Some((file, max_record_batch_memory)) = spill_file else {
+            return internal_err!("{}: produced an empty output spill", self.label);
+        };
+        spill_manager.read_spill_as_stream(file, Some(max_record_batch_memory))
     }
 
     /// Merges every sorted run, and does the aggregate evaluation with
@@ -281,10 +308,20 @@ impl AggregateSpill {
             .with_expressions(&spill_expr)
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)
+            .with_max_batch_bytes(Some(SPILL_BATCH_TARGET_BYTES))
             .with_reservation(merge_reservation)
             .with_replay_headroom()
             .with_intermediate_merge_sizing(Some(min_spill_batch_rows))
             .build()?;
+        // A merged batch references the whole data buffers of the spilled
+        // batches its rows come from, and can hold all their dictionary
+        // values. Replay keeps the list states of a group, such as those of
+        // `array_agg`, until the group completes, so compact them to hold only
+        // the bytes of their own rows.
+        let merged: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+            merged.schema(),
+            merged.map(|batch| gc_nested_arrays(&batch?)),
+        ));
         let replay = ClusteredFinalAggregateStream::new_with_input_and_metrics(
             &replay_agg,
             &context,

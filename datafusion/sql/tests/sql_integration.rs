@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 // This lint violation is acceptable for tests, so suppress for now
 // Issue: <https://github.com/apache/datafusion/issues/18503>
@@ -5686,10 +5673,13 @@ fn test_custom_type_plan() -> Result<()> {
     let planner = SqlToRel::new_with_options(&context, options);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result.unwrap();
-    let err = planner.statement_to_plan(ast.pop_front().unwrap());
-    assert_contains!(
-        err.unwrap_err().to_string(),
-        "This feature is not implemented: Unsupported SQL type DATETIME"
+    let plan = planner.statement_to_plan(ast.pop_front().unwrap())?;
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns))
+      EmptyRelation: rows=1
+    "#
     );
 
     fn plan_sql(sql: &str) -> LogicalPlan {
@@ -5711,7 +5701,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns))
+    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns, "UTC"))
       EmptyRelation: rows=1
     "#
     );
@@ -5721,7 +5711,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)) AS Timestamp(ns))
+    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)) AS Timestamp(ns, "UTC"))
       EmptyRelation: rows=1
     "#
     );
@@ -5733,7 +5723,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(ns)))
+    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns, "UTC")), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(ns, "UTC")))
       EmptyRelation: rows=1
     "#
     );

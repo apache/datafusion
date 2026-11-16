@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::BooleanBufferBuilder;
 use arrow::datatypes::Schema;
@@ -892,6 +879,50 @@ impl PreparedAccessPlan {
         self
     }
 
+    /// For a scan that emits each row group's rows in reverse, select only
+    /// the rows a `limit` can reach, so the rows ahead of them are never
+    /// decoded.
+    ///
+    /// Row groups are walked in scan order. One whose output row count is
+    /// known up front (every row passes: `all_rows_match`, or statistics
+    /// proved it `fully_matched`) and that has no selection of its own
+    /// contributes its last `min(remaining, num_rows)` rows. The walk stops
+    /// at the first row group whose output is not known, since it may
+    /// produce fewer rows than it holds, and once `limit` rows are covered:
+    /// the scan stops reading before it reaches the row groups after that.
+    pub(crate) fn select_tail_for_limit(
+        mut self,
+        limit: usize,
+        all_rows_match: bool,
+        row_group_meta_data: &[RowGroupMetaData],
+    ) -> Self {
+        let mut remaining = limit;
+        for row_group in &mut self.row_groups {
+            if remaining == 0
+                || !(all_rows_match || row_group.fully_matched)
+                || row_group.selection.selection().is_some()
+            {
+                break;
+            }
+            let index = row_group.selection.row_group_index();
+            let num_rows = usize::try_from(row_group_meta_data[index].num_rows())
+                .unwrap_or(usize::MAX);
+            let take = remaining.min(num_rows);
+            if take < num_rows {
+                row_group.selection = RowGroupSelection::new(
+                    index,
+                    Some(RowSelection::from(vec![
+                        RowSelector::skip(num_rows - take),
+                        RowSelector::select(take),
+                    ])),
+                );
+                self.has_row_selection = true;
+            }
+            remaining -= take;
+        }
+        self
+    }
+
     #[cfg(test)]
     pub(crate) fn row_group_indexes(&self) -> Vec<usize> {
         self.row_groups
@@ -1155,6 +1186,110 @@ mod test {
             assert_eq!(selection.row_count(), 15);
             assert!(selection.as_mask().unwrap().ptr_eq(&group_mask));
         }
+    }
+
+    /// Row groups of 10, 20, 30, 40 rows read back to front (3, 2, 1, 0).
+    fn reversed_plan(plan: ParquetAccessPlan) -> PreparedAccessPlan {
+        plan.prepare(&ROW_GROUP_METADATA).unwrap().reverse()
+    }
+
+    fn selected_rows(plan: &PreparedAccessPlan) -> Vec<Option<Vec<RowSelector>>> {
+        plan.row_groups
+            .iter()
+            .map(|rg| {
+                rg.selection
+                    .selection()
+                    .map(|selection| selection.iter().copied().collect())
+            })
+            .collect()
+    }
+
+    /// Without a predicate every row passes, so each row group's output is
+    /// known: the first one read (40 rows) is cut to its last 25 rows, and
+    /// the walk stops once the limit is covered.
+    #[test]
+    fn select_tail_for_limit_selects_last_rows() {
+        let plan = reversed_plan(ParquetAccessPlan::new_all(4)).select_tail_for_limit(
+            25,
+            true,
+            &ROW_GROUP_METADATA,
+        );
+
+        assert_eq!(
+            selected_rows(&plan),
+            vec![
+                Some(vec![RowSelector::skip(15), RowSelector::select(25)]),
+                None,
+                None,
+                None,
+            ]
+        );
+        assert!(plan.has_row_selection);
+    }
+
+    /// A limit larger than a row group takes it whole and the rest from the
+    /// next one.
+    #[test]
+    fn select_tail_for_limit_spans_row_groups() {
+        let plan = reversed_plan(ParquetAccessPlan::new_all(4)).select_tail_for_limit(
+            50,
+            true,
+            &ROW_GROUP_METADATA,
+        );
+
+        assert_eq!(
+            selected_rows(&plan),
+            vec![
+                None,
+                Some(vec![RowSelector::skip(20), RowSelector::select(10)]),
+                None,
+                None,
+            ]
+        );
+    }
+
+    /// With a predicate, only row groups that statistics proved fully
+    /// matched have a known output; the walk stops at the first one that
+    /// was not.
+    #[test]
+    fn select_tail_for_limit_stops_at_unknown_output() {
+        let mut access_plan = ParquetAccessPlan::new_all(4);
+        access_plan.mark_fully_matched(3);
+        let plan = reversed_plan(access_plan).select_tail_for_limit(
+            50,
+            false,
+            &ROW_GROUP_METADATA,
+        );
+
+        // Row group 3 is taken whole (40 < 50), row group 2 is not fully
+        // matched, so neither it nor anything after it is cut.
+        assert_eq!(selected_rows(&plan), vec![None, None, None, None]);
+        assert!(!plan.has_row_selection);
+    }
+
+    /// A row group that already has a selection (e.g. from the page index)
+    /// has an unknown output too.
+    #[test]
+    fn select_tail_for_limit_stops_at_existing_selection() {
+        let page_selection =
+            RowSelection::from(vec![RowSelector::skip(10), RowSelector::select(30)]);
+        let mut access_plan = ParquetAccessPlan::new_all(4);
+        access_plan.scan_selection(3, page_selection.clone());
+        let plan = reversed_plan(access_plan).select_tail_for_limit(
+            5,
+            true,
+            &ROW_GROUP_METADATA,
+        );
+
+        assert_eq!(
+            selected_rows(&plan),
+            vec![
+                Some(page_selection.iter().copied().collect()),
+                None,
+                None,
+                None
+            ]
+        );
     }
 
     #[test]

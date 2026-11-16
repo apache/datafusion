@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Differential fuzz for the leaf expression pushdown rules.
 //!
@@ -33,7 +20,7 @@
 //! ```text
 //! LEAF_PUSHDOWN_FUZZ_SEED=<seed> LEAF_PUSHDOWN_FUZZ_CASES=1 \
 //!   cargo test --profile ci -p datafusion --features extended_tests \
-//!   --test fuzz -- leaf_pushdown --nocapture
+//!   --test extended_tests -- leaf_pushdown --nocapture
 //! ```
 //!
 //! `LEAF_PUSHDOWN_FUZZ_CASES` also raises the case count of a normal run.
@@ -76,7 +63,7 @@ const INCLUDE_FALSE_BRANCH_UNION_SHAPES: bool = false;
 /// Cases of the short run. Keep this low: the whole test must stay in a few
 /// seconds.
 const DEFAULT_CASES: usize = 250;
-/// Cases of the long run, gated behind the `extended_tests` feature.
+/// Cases of the long run.
 const EXTENDED_CASES: usize = 5000;
 /// Highest share of cases that may fail to plan on both sides. A higher share
 /// means the generator makes junk.
@@ -777,9 +764,6 @@ async fn leaf_pushdown_parquet_fuzz() {
     run_parquet(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", DEFAULT_CASES / 2)).await;
 }
 
-/// The whole `fuzz_cases` tree is behind the `extended_tests` feature today.
-/// The attribute keeps the long run gated if that changes.
-#[cfg(feature = "extended_tests")]
 #[tokio::test(flavor = "multi_thread")]
 async fn leaf_pushdown_fuzz_extended() {
     run_memory(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_CASES)).await;

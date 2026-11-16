@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# A private crate providing a single entry point for all fuzz tests.
+
+[package]
+name = "datafusion-fuzz"
+version = "0.1.0"
+edition = { workspace = true }
+# Ensure this crate is private
+publish = false
+autotests = false
+
+[lints]
+workspace = true
+
+[features]
+extended_tests = []
+
+[dev-dependencies]
+arrow = { workspace = true }
+bytes = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-execution = { workspace = true }
+datafusion-physical-plan = { workspace = true }
+futures = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }
+test-utils = { path = "../../test-utils" }
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+
+[[test]]
+name = "fuzz"
+path = "tests/fuzz.rs"
+required-features = ["extended_tests"]

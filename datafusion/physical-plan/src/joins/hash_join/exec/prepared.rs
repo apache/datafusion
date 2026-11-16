@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Explicit immutable build reuse for embedding executors.
 
@@ -58,7 +45,7 @@ impl fmt::Debug for PreparedHashJoinBuild {
 impl PreparedHashJoinBuild {
     /// Return the retained build reservation, excluding all per-probe state.
     pub fn reserved_bytes(&self) -> usize {
-        self.build.reservation.size()
+        self.build.reservation.size() + self.build.map.reserved_bytes()
     }
 
     /// Return the complete build row count, including duplicate and null keys.
@@ -246,14 +233,15 @@ pub(super) fn prepared_copy_bytes(batches: &[RecordBatch]) -> Result<usize> {
         .ok_or_else(overflow)
 }
 
-/// Bound hashes and flat-key null masks for the largest input batch.
+/// Bound hashes and flat-key null masks for the largest slice the hash map is
+/// filled from.
 pub(super) fn prepared_scratch_bytes(
-    max_batch_rows: usize,
+    chunk_rows: usize,
     num_keys: usize,
     null_equality: NullEquality,
 ) -> Result<usize> {
     let overflow = || exec_datafusion_err!("Prepared hash-join scratch size overflow");
-    let hash_bytes = max_batch_rows
+    let hash_bytes = chunk_rows
         .checked_mul(size_of::<u64>())
         .ok_or_else(overflow)?;
     if null_equality == NullEquality::NullEqualsNull {
@@ -261,7 +249,7 @@ pub(super) fn prepared_scratch_bytes(
     }
     // Allow one logical null mask per key plus the combined mask.
     let masks = num_keys.checked_add(1).ok_or_else(overflow)?;
-    let mask_bytes = max_batch_rows
+    let mask_bytes = chunk_rows
         .div_ceil(8)
         .checked_add(64)
         .and_then(|bytes| bytes.checked_mul(masks))
@@ -303,8 +291,8 @@ impl HashJoinExecBuilder {
     ///   executions. An existing expression handle is preserved for its probe
     ///   consumers, while the build-report accumulator is reset.
     /// * Retain a prepared-build lease if a dynamic-filter expression outlives
-    ///   this plan. Its array/map references preserve allocation lifetime, but
-    ///   the lease is what preserves the corresponding memory charge.
+    ///   this plan. The map carries its own charge, but the IN-list arrays
+    ///   share the build batch, and the lease is what preserves their charge.
     /// * Attach after physical optimizations that rewrite the build child.
     ///   Probe-only rewrites must preserve the attached join's `left()`; replacing
     ///   it or making incompatible key, mode, or join-type changes fails.

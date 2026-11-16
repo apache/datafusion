@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Utility functions to make testing DataFusion based crates easier
 
@@ -740,6 +727,47 @@ pub mod array_conversion {
             create_array!(Utf8, self.to_vec())
         }
     }
+}
+
+/// Extracts names in the first column of a markdown table.
+///
+/// Used to extract names from optimizer rule tables and verify they match
+///
+/// # Example
+///
+/// Given this `source`:
+///
+/// ```text
+/// /// # Built-in Analyzer Rules
+/// ///
+/// /// The rules are applied in the following order.
+/// ///
+/// /// | rule (name in EXPLAIN plan) | struct name                 | summary        |
+/// /// | --------------------------- | --------------------------- | -------------- |
+/// /// | `resolve_grouping_function` | [`ResolveGroupingFunction`] | Rewrites ...   |
+/// /// | `type_coercion`             | [`TypeCoercion`]            | Adds casts ... |
+/// #[derive(Clone, Debug)]
+/// pub struct Analyzer {
+/// ```
+///
+/// returns `["resolve_grouping_function", "type_coercion"]`.
+pub fn documented_rule_names(source: &str, heading: &str) -> Vec<String> {
+    let mut lines = source.lines().skip_while(|line| line.trim() != heading);
+    assert!(lines.next().is_some(), "heading '{heading}' not found");
+
+    lines
+        .map(str::trim)
+        // skip the text between the heading and the table
+        .skip_while(|line| !line.starts_with("/// |"))
+        .take_while(|line| line.starts_with("/// |"))
+        // skip the header and separator rows
+        .skip(2)
+        .map(|line| {
+            let first_column =
+                line.trim_start_matches("/// |").split('|').next().unwrap();
+            first_column.trim().trim_matches('`').to_string()
+        })
+        .collect()
 }
 
 #[cfg(test)]

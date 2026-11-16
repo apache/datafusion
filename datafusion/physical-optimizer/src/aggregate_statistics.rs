@@ -1,35 +1,24 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Utilizing exact statistics from sources to avoid scanning data
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateInputMode, AggregateMode,
 };
+use datafusion_physical_plan::expressions::Literal;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::udaf::{
     AggregateFunctionExpr, StatisticsArgs as PlanStatisticsArgs,
 };
-use datafusion_physical_plan::{ExecutionPlan, expressions};
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
@@ -80,8 +69,12 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 if let Some((optimizable_statistic, name)) =
                     take_optimizable_value_from_statistics(&statistics_args, expr)
                 {
+                    // Keep the metadata of the aggregate field, such as an extension type
                     projections.push(ProjectionExpr {
-                        expr: expressions::lit(optimizable_statistic),
+                        expr: Arc::new(Literal::new_with_metadata(
+                            optimizable_statistic,
+                            Some(FieldMetadata::from(field.as_ref())),
+                        )),
                         alias: name,
                     });
                 } else {
@@ -144,12 +137,13 @@ fn take_optimizable(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPl
     {
         let mut child = Arc::clone(agg_exec.input());
         loop {
-            if let Some(partial_agg_exec) = child.downcast_ref::<AggregateExec>()
-                && partial_agg_exec.mode().input_mode() == AggregateInputMode::Raw
-                && partial_agg_exec.group_expr().is_empty()
-                && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())
-            {
-                return Some(child);
+            // Stop at the first aggregate: only this `Final`'s own `Partial` is usable.
+            if let Some(partial_agg_exec) = child.downcast_ref::<AggregateExec>() {
+                let usable = partial_agg_exec.mode().input_mode()
+                    == AggregateInputMode::Raw
+                    && partial_agg_exec.group_expr().is_empty()
+                    && partial_agg_exec.filter_expr().iter().all(|e| e.is_none());
+                return usable.then(|| Arc::clone(&child));
             }
             if let [childrens_child] = child.children().as_slice() {
                 child = Arc::clone(childrens_child);

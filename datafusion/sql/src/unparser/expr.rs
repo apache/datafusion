@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_expr::expr::{
@@ -1858,13 +1845,13 @@ impl Unparser<'_> {
             }
             DataType::Boolean => Ok(ast::DataType::Bool),
             DataType::Int8 => Ok(self.dialect.int8_cast_dtype()),
-            DataType::Int16 => Ok(ast::DataType::SmallInt(None)),
+            DataType::Int16 => Ok(self.dialect.int16_cast_dtype()),
             DataType::Int32 => Ok(self.dialect.int32_cast_dtype()),
             DataType::Int64 => Ok(self.dialect.int64_cast_dtype()),
-            DataType::UInt8 => Ok(ast::DataType::TinyIntUnsigned(None)),
-            DataType::UInt16 => Ok(ast::DataType::SmallIntUnsigned(None)),
-            DataType::UInt32 => Ok(ast::DataType::IntegerUnsigned(None)),
-            DataType::UInt64 => Ok(ast::DataType::BigIntUnsigned(None)),
+            DataType::UInt8 => Ok(self.dialect.uint8_cast_dtype()),
+            DataType::UInt16 => Ok(self.dialect.uint16_cast_dtype()),
+            DataType::UInt32 => Ok(self.dialect.uint32_cast_dtype()),
+            DataType::UInt64 => Ok(self.dialect.uint64_cast_dtype()),
             DataType::Float16 => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
@@ -3115,6 +3102,110 @@ mod tests {
             let actual = format!("{ast}");
 
             assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    // MySQL `DATETIME` without precision is `DATETIME(0)` and rounds the
+    // literal to whole seconds, which breaks equality and keyset seeks on
+    // sub-second timestamps. The MySQL dialect must carry the unit's precision.
+    #[test]
+    fn mysql_timestamp_cast_keeps_fractional_precision() -> Result<()> {
+        let unparser = Unparser::new(&MySqlDialect {});
+
+        for (scalar, expected) in [
+            (
+                ScalarValue::TimestampSecond(Some(1789980940), None),
+                "CAST('2026-09-21 08:55:40' AS DATETIME)",
+            ),
+            (
+                ScalarValue::TimestampMillisecond(Some(1789980940006), None),
+                "CAST('2026-09-21 08:55:40.006' AS DATETIME(3))",
+            ),
+            (
+                ScalarValue::TimestampMicrosecond(Some(1789980940006000), None),
+                "CAST('2026-09-21 08:55:40.006' AS DATETIME(6))",
+            ),
+            (
+                ScalarValue::TimestampNanosecond(Some(1789980940006000000), None),
+                "CAST('2026-09-21 08:55:40.006' AS DATETIME(6))",
+            ),
+        ] {
+            let ast = unparser.expr_to_sql(&Expr::Literal(scalar, None))?;
+            assert_eq!(format!("{ast}"), expected);
+        }
+
+        let expr = Expr::Cast(Cast::new(
+            Box::new(col("a")),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        ));
+        let ast = unparser.expr_to_sql(&expr)?;
+        assert_eq!(format!("{ast}"), "CAST(`a` AS DATETIME(6))");
+        Ok(())
+    }
+
+    // MySQL's `CAST` only accepts `SIGNED` and `UNSIGNED` as integer target types.
+    #[test]
+    fn mysql_integer_casts() -> Result<()> {
+        let unparser = Unparser::new(&MySqlDialect {});
+        for (data_type, expected) in [
+            (Int8, "CAST(`a` AS SIGNED)"),
+            (DataType::Int16, "CAST(`a` AS SIGNED)"),
+            (DataType::Int32, "CAST(`a` AS SIGNED)"),
+            (DataType::Int64, "CAST(`a` AS SIGNED)"),
+            (DataType::UInt8, "CAST(`a` AS UNSIGNED)"),
+            (DataType::UInt16, "CAST(`a` AS UNSIGNED)"),
+            (DataType::UInt32, "CAST(`a` AS UNSIGNED)"),
+            (DataType::UInt64, "CAST(`a` AS UNSIGNED)"),
+        ] {
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), data_type));
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(format!("{ast}"), expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn default_and_custom_dialect_integer_casts() -> Result<()> {
+        let custom_dialect = CustomDialectBuilder::new()
+            .with_int8_cast_dtype(ast::DataType::SmallInt(None))
+            .with_int16_cast_dtype(ast::DataType::Integer(None))
+            .with_uint8_cast_dtype(ast::DataType::SmallInt(None))
+            .with_uint16_cast_dtype(ast::DataType::Integer(None))
+            .with_uint32_cast_dtype(ast::DataType::BigInt(None))
+            .with_uint64_cast_dtype(ast::DataType::Numeric(ExactNumberInfo::None))
+            .build();
+        let default_unparser = Unparser::new(&DefaultDialect {});
+        let custom_unparser = Unparser::new(&custom_dialect);
+        for (data_type, default_expected, custom_expected) in [
+            (Int8, "CAST(a AS TINYINT)", "CAST(a AS SMALLINT)"),
+            (DataType::Int16, "CAST(a AS SMALLINT)", "CAST(a AS INTEGER)"),
+            (
+                DataType::UInt8,
+                "CAST(a AS TINYINT UNSIGNED)",
+                "CAST(a AS SMALLINT)",
+            ),
+            (
+                DataType::UInt16,
+                "CAST(a AS SMALLINT UNSIGNED)",
+                "CAST(a AS INTEGER)",
+            ),
+            (
+                DataType::UInt32,
+                "CAST(a AS INTEGER UNSIGNED)",
+                "CAST(a AS BIGINT)",
+            ),
+            (
+                DataType::UInt64,
+                "CAST(a AS BIGINT UNSIGNED)",
+                "CAST(a AS NUMERIC)",
+            ),
+        ] {
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), data_type));
+            let ast = default_unparser.expr_to_sql(&expr)?;
+            assert_eq!(format!("{ast}"), default_expected);
+            let ast = custom_unparser.expr_to_sql(&expr)?;
+            assert_eq!(format!("{ast}"), custom_expected);
         }
         Ok(())
     }

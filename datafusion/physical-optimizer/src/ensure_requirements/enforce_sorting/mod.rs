@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Sort enforcement helpers. The standalone `EnforceSorting` rule that
 //! previously lived here has been retired in favour of `EnsureRequirements`
@@ -49,6 +36,7 @@ pub mod sort_pushdown;
 use std::sync::Arc;
 
 use crate::output_requirements::OutputRequirementExec;
+use crate::row_bound::{RowBound, limit_node};
 use crate::utils::{
     add_sort_above, add_sort_above_with_check, is_coalesce_partitions, is_limit,
     is_repartition, is_sort, is_sort_preserving_merge, is_window,
@@ -60,7 +48,7 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::limit::LocalLimitExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -102,8 +90,9 @@ fn update_sort_ctx_children_data(
         child_node.data = if is_sort(child_plan) {
             // child is sort
             true
-        } else if is_limit(child_plan) {
-            // There is no sort linkage for this path, it starts at a limit.
+        } else if is_limit(child_plan) || child_plan.fetch().is_some() {
+            // Removing a sort below a row limit can change which rows survive,
+            // including limits embedded in operators such as FilterExec.
             false
         } else {
             // If a descendent is a sort, and the child maintains the sort.
@@ -427,16 +416,14 @@ pub fn ensure_sorting(
         .zip(requirements.children)
         .enumerate()
     {
-        let physical_ordering = child.plan.output_ordering();
-
         if let Some(required) = required_ordering {
             let eq_properties = child.plan.equivalence_properties();
             let req = required.into_single();
             if !eq_properties.ordering_satisfy_requirement(req.clone())? {
-                // Make sure we preserve the ordering requirements:
-                if physical_ordering.is_some() {
-                    child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
-                }
+                // The new sort supersedes linked sorts even when a projection
+                // hides their keys. Explicit and embedded limits stop sort
+                // linkage, preserving sorts that determine which rows survive.
+                child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
                 child = add_sort_above(
                     child,
                     req,
@@ -446,9 +433,11 @@ pub fn ensure_sorting(
                 );
                 child = update_sort_ctx_children_data(child, true)?;
             }
-        } else if physical_ordering.is_none() || !plan.maintains_input_order()[idx] {
-            // We have a `SortExec` whose effect may be neutralized by another
-            // order-imposing operator, remove this sort:
+        } else if !plan.maintains_input_order()[idx] {
+            // Remove linked sorts only when this operator does not preserve
+            // their row order. A projection can hide the sort key, making
+            // output_ordering() None, while a later LIMIT or OFFSET still
+            // depends on that order to select rows.
             child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
         }
         updated_children.push(child);
@@ -512,17 +501,13 @@ fn analyze_immediate_sort_removal(
             .with_fetch(sort_exec.fetch()),
         ) as _
     } else {
-        // Remove the sort:
+        // Remove the sort, keeping its fetch as a limit:
         node.children = node.children.swap_remove(0).children;
-        if let Some(fetch) = sort_exec.fetch() {
-            // If the sort has a fetch, we need to add a limit:
-            if properties.output_partitioning().partition_count() == 1 {
-                Arc::new(GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch)))
-            } else {
-                Arc::new(LocalLimitExec::new(Arc::clone(sort_input), fetch))
+        match sort_exec.fetch() {
+            Some(fetch) => {
+                limit_node(Arc::clone(sort_input), RowBound::fetch(Some(fetch)))
             }
-        } else {
-            Arc::clone(sort_input)
+            None => Arc::clone(sort_input),
         }
     };
     for child in node.children.iter_mut() {

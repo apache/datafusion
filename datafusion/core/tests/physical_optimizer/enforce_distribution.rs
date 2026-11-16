@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -68,7 +55,7 @@ use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
-use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
+use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -1066,7 +1053,7 @@ async fn aligned_hour_groups_avoid_shuffle_through_partial_aggregate() -> Result
         .with_query_execution_partitions(2)
         .config;
     let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+    check_plan_tree_sanity(&optimized, &config.optimizer)?;
 
     assert_plan!(
         optimized,
@@ -1102,7 +1089,7 @@ async fn crossing_day_groups_keep_shuffle_through_partial_aggregate() -> Result<
         .with_query_execution_partitions(2)
         .config;
     let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+    check_plan_tree_sanity(&optimized, &config.optimizer)?;
 
     assert_plan!(
         optimized,
@@ -1139,10 +1126,10 @@ fn range_transform_aggregate_optimization_is_idempotent() -> Result<()> {
         let input = timestamp_range_input(hour)?;
         let aggregate = partial_final_date_trunc_count(input, precision)?;
         let optimized = EnsureRequirements::new().optimize(aggregate, &config)?;
-        SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+        check_plan_tree_sanity(&optimized, &config.optimizer)?;
         let reoptimized =
             EnsureRequirements::new().optimize(Arc::clone(&optimized), &config)?;
-        SanityCheckPlan::new().optimize(Arc::clone(&reoptimized), &config)?;
+        check_plan_tree_sanity(&reoptimized, &config.optimizer)?;
         assert_plan!(optimized, reoptimized);
     }
     Ok(())
@@ -1168,7 +1155,7 @@ async fn range_transform_locality_does_not_satisfy_join_distribution() -> Result
         .with_query_execution_partitions(2)
         .config;
     let optimized = EnsureRequirements::new().optimize(join, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config)?;
+    check_plan_tree_sanity(&optimized, &config.optimizer)?;
     assert_plan!(
         optimized,
         @r"
@@ -1288,7 +1275,7 @@ fn range_inner_hash_join_rehashes_incompatible_range_partitioning() -> Result<()
 
 /// Optimizes `plan` under both `top_down_join_key_reordering` settings with
 /// round-robin and file-scan repartitioning disabled. Checks the expected plan,
-/// validates it with [`SanityCheckPlan`], and verifies that a second
+/// validates it with [`check_plan_tree_sanity`], and verifies that a second
 /// [`EnsureRequirements`] pass leaves it unchanged.
 fn check_range_join_key_alignment(
     plan: Arc<dyn ExecutionPlan>,
@@ -1312,7 +1299,7 @@ fn check_range_join_key_alignment_with_partitions(
 
         let optimized = config.try_to_plan(Arc::clone(&plan), &[Run::Distribution])?;
         check(&optimized);
-        SanityCheckPlan::new().optimize(Arc::clone(&optimized), &config.config)?;
+        check_plan_tree_sanity(&optimized, &config.config.optimizer)?;
 
         let second = config.try_to_plan(Arc::clone(&optimized), &[Run::Distribution])?;
         assert_eq!(
@@ -1320,7 +1307,7 @@ fn check_range_join_key_alignment_with_partitions(
             displayable(second.as_ref()).indent(true).to_string(),
             "plan changed on the second pass; top_down={top_down}"
         );
-        SanityCheckPlan::new().optimize(second, &config.config)?;
+        check_plan_tree_sanity(&second, &config.config.optimizer)?;
     }
     Ok(())
 }
@@ -4268,15 +4255,11 @@ fn interleave_broken_by_later_rewrite_is_repaired_on_next_pass() -> Result<()> {
         Partitioning::UnknownPartitioning(10)
     ));
     // Without a repair, the plan is rejected rather than executed.
-    assert!(
-        SanityCheckPlan::new()
-            .optimize(Arc::clone(&rewritten), &config)
-            .is_err()
-    );
+    assert!(check_plan_tree_sanity(&rewritten, &config.optimizer).is_err());
 
     // The next distribution pass restores a valid interleave.
     let pass2 = EnsureRequirements::new().optimize(rewritten, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&pass2), &config)?;
+    check_plan_tree_sanity(&pass2, &config.optimizer)?;
     assert_plan!(pass2,
         @r"
     InterleaveExec
@@ -4346,16 +4329,12 @@ fn issue_21826_join_selection_after_distribution_pass() -> Result<()> {
         Partitioning::UnknownPartitioning(10)
     ));
     // Without a repair, the plan is rejected rather than executed.
-    assert!(
-        SanityCheckPlan::new()
-            .optimize(Arc::clone(&reordered), &config)
-            .is_err()
-    );
+    assert!(check_plan_tree_sanity(&reordered, &config.optimizer).is_err());
 
     // The second distribution pass repairs it. The two joins no longer share
     // a partitioning, so the result is a plain union.
     let pass2 = EnsureRequirements::new().optimize(reordered, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&pass2), &config)?;
+    check_plan_tree_sanity(&pass2, &config.optimizer)?;
     assert_plan!(pass2,
         @r"
     UnionExec
@@ -6807,20 +6786,15 @@ impl ExecutionPlan for CountingStatsExec {
 /// recurse to the leaf. With one `StatisticsContext` shared across the pass the
 /// leaf is computed once; with a fresh context per node it is recomputed once
 /// per ancestor. This directly detects a regression where the cache is not
-/// actually shared (e.g. reset on every node), which no plan-output assertion
-/// can catch because the optimized plan is identical either way.
+/// actually shared (for example, by allocating a context per node), which no
+/// plan-output assertion can catch because the optimized plan is identical either
+/// way.
 #[test]
 fn ensure_distribution_shares_statistics_cache() -> Result<()> {
     // Count how many times a leaf's statistics are computed over a stack of
     // `depth` pass-through operators sitting on top of it. Each ancestor's
     // distribution enforcement inspects its child's statistics, which recurse to
     // the leaf.
-    //
-    // The measured arm drives the real `EnsureRequirements` rule, so the sharing
-    // and the cache-reset condition under test are the ones the rule actually
-    // uses — reimplementing them here would keep passing even if the rule
-    // stopped sharing. The baseline arm allocates a fresh `StatisticsContext`
-    // per node, reproducing the behavior before this change.
     fn deep_plan(depth: usize, calls: &Arc<AtomicUsize>) -> Arc<dyn ExecutionPlan> {
         let mut plan: Arc<dyn ExecutionPlan> =
             Arc::new(CountingStatsExec::new(parquet_exec(), Arc::clone(calls)));
@@ -6833,8 +6807,8 @@ fn ensure_distribution_shares_statistics_cache() -> Result<()> {
     fn config() -> ConfigOptions {
         let mut config = ConfigOptions::new();
         config.execution.target_partitions = 10;
-        // Keep the plan a fixpoint so no node is rebuilt and the shared cache is
-        // never reset; statistics are still computed for the round-robin decision.
+        // Keep the plan a fixpoint; statistics are still computed for the
+        // round-robin decision.
         config.optimizer.enable_round_robin_repartition = false;
         config
     }
@@ -6865,8 +6839,8 @@ fn ensure_distribution_shares_statistics_cache() -> Result<()> {
     let (shared_shallow, fresh_shallow) = (via_rule(4)?, per_node_context(4)?);
     let (shared_deep, fresh_deep) = (via_rule(12)?, per_node_context(12)?);
 
-    // Sharing strictly reduces statistics recomputation at any depth. A rule that
-    // stopped sharing (or reset the cache on every node) would make these equal.
+    // Sharing strictly reduces statistics recomputation at any depth. A rule
+    // that stopped sharing would make these equal.
     assert!(
         shared_shallow < fresh_shallow && shared_deep < fresh_deep,
         "shared cache must recompute less: shallow {shared_shallow} vs {fresh_shallow}, \
