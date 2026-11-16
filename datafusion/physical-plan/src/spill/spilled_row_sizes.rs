@@ -38,6 +38,12 @@ pub(crate) struct SpilledRowSizes {
     compacted_columns: Vec<usize>,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many batches this thread measured, for tests that check the cost of a spill.
+    pub(crate) static MEASURED_BATCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl SpilledRowSizes {
     pub(crate) fn new(batch: &RecordBatch) -> Self {
         Self::new_inner(batch, false)
@@ -52,6 +58,8 @@ impl SpilledRowSizes {
     }
 
     fn new_inner(batch: &RecordBatch, views_once: bool) -> Self {
+        #[cfg(test)]
+        MEASURED_BATCHES.with(|count| count.set(count.get() + 1));
         let mut fixed = 0;
         let mut variable = vec![];
         let mut compacted_columns = vec![];

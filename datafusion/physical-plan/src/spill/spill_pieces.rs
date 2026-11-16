@@ -88,6 +88,12 @@ impl SpillPieces {
             let size = batch.get_sliced_size()?;
             return Ok(Self::whole(batch, size, compressed));
         };
+        let size = recorded_size(&batch, compressed)?;
+        // The common case. The checks below only find more batches to write whole,
+        // and they measure every row, which costs about as much as the write.
+        if size <= max_batch_bytes || batch.num_rows() <= 1 {
+            return Ok(Self::whole(batch, size, compressed));
+        }
         let row_sizes = SpilledRowSizes::new_with_shared_views_once(&batch);
         let keep_dictionaries = (0..batch.num_columns())
             .map(|column| !row_sizes.compacted_columns().contains(&column))
@@ -99,7 +105,6 @@ impl SpillPieces {
             .filter(|(_, keep)| **keep)
             .map(|(column, _)| dictionary_values_size(&column.to_data()))
             .sum::<Result<usize>>()?;
-        let size = recorded_size(&batch, compressed)?;
         // The pieces hold at most the bytes that `SpilledRowSizes::new` counts, which
         // copies the bytes of each view. When views share most of those bytes, the
         // pieces could hold many copies of them, so the batch is written whole.
@@ -287,4 +292,60 @@ fn padding(batch: &RecordBatch, alignment: usize) -> usize {
     }
     let buffers: usize = batch.columns().iter().map(|c| buffers(&c.to_data())).sum();
     buffers * alignment
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::array::{Int64Array, StringViewArray};
+    use arrow::datatypes::{DataType, Field};
+
+    use super::*;
+    use crate::spill::spilled_row_sizes::MEASURED_BATCHES;
+
+    fn measured_batches() -> usize {
+        MEASURED_BATCHES.with(|count| count.get())
+    }
+
+    /// A sort spills one batch of `batch_size` rows at a time while it holds its whole
+    /// buffer, so the time it takes to write a batch decides how long that memory stays
+    /// held. Measuring every row costs about as much as the write, and a batch within
+    /// the bound does not need it.
+    #[test]
+    fn batch_within_the_bound_is_written_whole_without_measuring_rows() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("s", DataType::Utf8View, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from_iter_values(0..8192)),
+                Arc::new(StringViewArray::from_iter_values(
+                    (0..8192).map(|i| format!("{i:08} a value longer than twelve bytes")),
+                )),
+            ],
+        )?;
+        let size = recorded_size(&gc_view_arrays(&batch)?, false)?;
+
+        let before = measured_batches();
+        let pieces =
+            SpillPieces::new(&batch, Some(size), false)?.collect::<Result<Vec<_>>>()?;
+        assert_eq!(measured_batches(), before);
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].batch.num_rows(), 8192);
+        assert_eq!(pieces[0].size, size);
+
+        // One byte less, and the batch is measured and split.
+        let pieces = SpillPieces::new(&batch, Some(size - 1), false)?
+            .collect::<Result<Vec<_>>>()?;
+        assert!(measured_batches() > before);
+        assert_eq!(
+            pieces.iter().map(|p| p.batch.num_rows()).sum::<usize>(),
+            8192
+        );
+        assert!(pieces.len() > 1);
+        Ok(())
+    }
 }
