@@ -145,7 +145,8 @@ impl TestContext {
             state_builder = state_builder.with_statistics_registry(registry);
         }
 
-        if file_name == "sort_pushdown.slt" {
+        // Only this file runs with a non default physical optimizer
+        if file_name == "sort_pushdown_custom_rule.slt" {
             let mut rules = PhysicalOptimizer::new().rules;
             let ensure_requirements = rules
                 .iter()
@@ -171,6 +172,12 @@ impl TestContext {
                 .expect("register custom projection table");
                 exact_sort_pushdown::register_exact_sort_source(test_ctx.session_ctx())
                     .expect("register exact sort source");
+            }
+            "sort_pushdown_custom_rule.slt" => {
+                custom_sort_pushdown::register_custom_ordered_input(
+                    test_ctx.session_ctx(),
+                )
+                .expect("register custom ordered input");
             }
             "parquet_missing_bounds.slt" => {
                 register_parquet_missing_bounds(&mut test_ctx).await;

@@ -61,27 +61,6 @@ physical_plan
 03)----CooperativeExec
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
-# The inner ORDER BY determines which rows LIMIT selects. The outer sort
-# must keep those rows, even when LIMIT is implemented by a custom node.
-query II
-SELECT a, b
-FROM (SELECT a, b FROM custom_ordered_input ORDER BY a LIMIT 2) s
-ORDER BY b;
-----
-2 20
-1 30
-
-query TT
-EXPLAIN SELECT a, b
-FROM (SELECT a, b FROM custom_ordered_input ORDER BY a LIMIT 2) s
-ORDER BY b;
-----
-physical_plan
-01)SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[false]
-02)--CustomLocalLimitExec: fetch=2
-03)----CooperativeExec
-04)------CustomDataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST
-
 # The custom node sorts by (a, b), keeps one row, and hides b. Ordering its
 # output by (a, c) must not replace the hidden b tie-breaker that selected c=20.
 query II
