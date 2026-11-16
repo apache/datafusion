@@ -25,18 +25,19 @@
             },
             "groupings": [
               {
-                "groupingExpressions": [
-                  {
-                    "literal": {
-                      "i32": 1
-                    }
-                  },
-                  {
-                    "literal": {
-                      "i32": 1
-                    }
-                  }
-                ]
+                "expressionReferences": [0, 1]
+              }
+            ],
+            "groupingExpressions": [
+              {
+                "literal": {
+                  "i32": 1
+                }
+              },
+              {
+                "literal": {
+                  "i32": 1
+                }
               }
             ],
             "measures": []

@@ -144,7 +144,6 @@ pub mod test {
             Ok(())
         }
 
-        #[expect(deprecated)]
         fn collect_schemas_from_rel(&mut self, rel: &Rel) -> Result<()> {
             let rel_type = rel
                 .rel_type
@@ -182,10 +181,8 @@ pub mod test {
                 }
                 RelType::Aggregate(a) => {
                     self.apply(a.input.as_ref().map(|b| b.as_ref()))?;
-                    for grouping in a.groupings.iter() {
-                        for expr in grouping.grouping_expressions.iter() {
-                            self.collect_schemas_from_expr(expr)?
-                        }
+                    for expr in a.grouping_expressions.iter() {
+                        self.collect_schemas_from_expr(expr)?
                     }
                     for measure in a.measures.iter() {
                         if let Some(agg_fn) = measure.measure.as_ref() {
@@ -470,9 +467,7 @@ pub mod test {
                     }
                 }
                 RexType::DynamicParameter(_) => {}
-                // Enum is deprecated
-                #[expect(deprecated)]
-                RexType::Enum(_) => {}
+                RexType::ExecutionContextVariable(_) => {}
                 RexType::Lambda(_) | RexType::LambdaInvocation(_) => {}
             }
             Ok(())

@@ -15,7 +15,7 @@ use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::nested::Struct as NestedStruct;
 use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
-use substrait::proto::{FetchRel, ReadRel, Rel, fetch_rel};
+use substrait::proto::{FetchRel, ReadRel, Rel};
 
 /// Converts rows of arbitrary expressions into Substrait nested structs.
 ///
@@ -111,20 +111,20 @@ pub fn from_table_scan(
         return Ok(read);
     }
     let empty_schema = Arc::new(DFSchema::empty());
-    let offset_mode = skip
+    let offset_expr = skip
         .map(|skip| producer.handle_expr(&lit(skip), &empty_schema))
         .transpose()?
-        .map(|expr| fetch_rel::OffsetMode::OffsetExpr(Box::new(expr)));
-    let count_mode = fetch
+        .map(Box::new);
+    let count_expr = fetch
         .map(|fetch| producer.handle_expr(&lit(fetch), &empty_schema))
         .transpose()?
-        .map(|expr| fetch_rel::CountMode::CountExpr(Box::new(expr)));
+        .map(Box::new);
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Fetch(Box::new(FetchRel {
             common: None,
             input: Some(read),
-            offset_mode,
-            count_mode,
+            offset_expr,
+            count_expr,
             advanced_extension: None,
         }))),
     }))
@@ -163,7 +163,6 @@ pub fn from_empty_relation(
 
         ReadType::VirtualTable(VirtualTable {
             expressions: vec![NestedStruct { fields }],
-            ..Default::default()
         })
     } else {
         ReadType::VirtualTable(VirtualTable::default())
@@ -197,10 +196,7 @@ pub fn from_values(
             best_effort_filter: None,
             projection: None,
             advanced_extension: None,
-            read_type: Some(ReadType::VirtualTable(VirtualTable {
-                expressions,
-                ..Default::default()
-            })),
+            read_type: Some(ReadType::VirtualTable(VirtualTable { expressions })),
         }))),
     }))
 }

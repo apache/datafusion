@@ -80,7 +80,6 @@ pub(crate) fn negate(
 ) -> Expression {
     let function_anchor = producer.register_function("not".to_string());
 
-    #[expect(deprecated)]
     Expression {
         rex_type: Some(substrait::proto::expression::RexType::ScalarFunction(
             substrait::proto::expression::ScalarFunction {
@@ -91,7 +90,6 @@ pub(crate) fn negate(
                     )),
                 }],
                 output_type: None,
-                args: vec![],
                 options: vec![],
             },
         )),

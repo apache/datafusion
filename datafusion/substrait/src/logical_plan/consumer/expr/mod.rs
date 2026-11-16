@@ -52,6 +52,9 @@ pub async fn from_substrait_rex(
 ) -> datafusion::common::Result<Expr> {
     match &expression.rex_type {
         Some(t) => match t {
+            RexType::ExecutionContextVariable(_) => {
+                not_impl_err!("Execution context variables are not supported")
+            }
             RexType::Literal(expr) => consumer.consume_literal(expr, context).await,
             RexType::Selection(expr) => {
                 consumer
@@ -99,10 +102,6 @@ pub async fn from_substrait_rex(
             }
             RexType::Nested(expr) => {
                 consumer.consume_nested(expr, input_schema, context).await
-            }
-            #[expect(deprecated)]
-            RexType::Enum(expr) => {
-                consumer.consume_enum(expr, input_schema, context).await
             }
             RexType::DynamicParameter(expr) => {
                 consumer
@@ -238,14 +237,14 @@ mod tests {
     async fn window_function_with_range_unit_and_no_order_by()
     -> datafusion::common::Result<()> {
         let substrait = Expression {
-            rex_type: Some(RexType::WindowFunction(
+            rex_type: Some(RexType::WindowFunction(Box::new(
                 substrait::proto::expression::WindowFunction {
                     function_reference: 0,
                     bounds_type: BoundsType::Range as i32,
                     sorts: vec![],
                     ..Default::default()
                 },
-            )),
+            ))),
         };
 
         let mut consumer = test_consumer();
@@ -276,12 +275,12 @@ mod tests {
     #[tokio::test]
     async fn window_function_with_count() -> datafusion::common::Result<()> {
         let substrait = Expression {
-            rex_type: Some(RexType::WindowFunction(
+            rex_type: Some(RexType::WindowFunction(Box::new(
                 substrait::proto::expression::WindowFunction {
                     function_reference: 0,
                     ..Default::default()
                 },
-            )),
+            ))),
         };
 
         let mut consumer = test_consumer();
@@ -310,13 +309,13 @@ mod tests {
     #[tokio::test]
     async fn window_function_with_invalid_invocation() {
         let substrait = Expression {
-            rex_type: Some(RexType::WindowFunction(
+            rex_type: Some(RexType::WindowFunction(Box::new(
                 substrait::proto::expression::WindowFunction {
                     function_reference: 0,
                     invocation: 3,
                     ..Default::default()
                 },
-            )),
+            ))),
         };
 
         let mut consumer = test_consumer();

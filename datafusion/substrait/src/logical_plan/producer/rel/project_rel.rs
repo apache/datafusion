@@ -26,6 +26,7 @@ pub fn from_projection(
     let common = RelCommon {
         emit_kind: Some(emit_kind),
         hint: None,
+        rel_anchor: None,
         advanced_extension: None,
     };
 
@@ -60,6 +61,7 @@ pub fn from_window(
     let common = RelCommon {
         emit_kind: Some(emit_kind),
         hint: None,
+        rel_anchor: None,
         advanced_extension: None,
     };
     let project_rel = Box::new(ProjectRel {
