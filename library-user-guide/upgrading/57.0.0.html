@@ -553,6 +553,22 @@ types (via <code class="docutils literal notranslate"><span class="pre">is::&lt;
 implementations need no changes. <code class="docutils literal notranslate"><span class="pre">ParquetSource::parquet_file_reader_factory</span></code>
 returns the trait object to downcast.</p>
 </section>
+<section id="copy-to-ordering">
+<h3><code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">TO</span></code> ordering<a class="headerlink" href="#copy-to-ordering" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">TO</span></code> no longer guarantees preservation of its input’s ordering. Add an
+explicit <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> when output order matters.</p>
+<p>Previously, if <code class="docutils literal notranslate"><span class="pre">t</span></code> had an existing output ordering of <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">c1</span></code>, the <code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">TO</span></code>
+statement could infer and maintain that order in the written file.</p>
+<div class="highlight-txt notranslate"><div class="highlight"><pre><span></span>COPY (SELECT * FROM t) TO &#39;ordered.parquet&#39;;
+</pre></div>
+</div>
+<p>Now, an explicit <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">c1</span></code> clause is required to preserve this behavior. In
+this case, no extra sorting is needed during execution; this is a syntax change
+that aligns with the SQL specification.</p>
+<div class="highlight-txt notranslate"><div class="highlight"><pre><span></span>COPY (SELECT * FROM t ORDER BY c1) TO &#39;ordered.parquet&#39;;
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -608,6 +624,7 @@ returns the trait object to downcast.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupclusteringmode-full-no-longer-implies-sorted-input"><code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> no longer implies sorted input</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-spark-moved-to-its-own-repository"><code class="docutils literal notranslate"><span class="pre">datafusion-spark</span></code> moved to its own repository</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetfilereaderfactory-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">ParquetFileReaderFactory</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#copy-to-ordering"><code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">TO</span></code> ordering</a></li>
 </ul>
 </li>
 </ul>
