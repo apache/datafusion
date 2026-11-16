@@ -391,7 +391,7 @@ pub fn parse_expr(
                 codec,
             )?),
             parse_escape_char(&like.escape_char)?,
-            false,
+            like.case_insensitive,
         ))),
         ExprType::Case(case) => {
             let when_then_expr = case

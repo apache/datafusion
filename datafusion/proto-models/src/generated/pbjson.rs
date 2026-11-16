@@ -27169,6 +27169,9 @@ impl serde::Serialize for SimilarToNode {
         if !self.escape_char.is_empty() {
             len += 1;
         }
+        if self.case_insensitive {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.SimilarToNode", len)?;
         if self.negated {
             struct_ser.serialize_field("negated", &self.negated)?;
@@ -27181,6 +27184,9 @@ impl serde::Serialize for SimilarToNode {
         }
         if !self.escape_char.is_empty() {
             struct_ser.serialize_field("escapeChar", &self.escape_char)?;
+        }
+        if self.case_insensitive {
+            struct_ser.serialize_field("caseInsensitive", &self.case_insensitive)?;
         }
         struct_ser.end()
     }
@@ -27197,6 +27203,8 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
             "pattern",
             "escape_char",
             "escapeChar",
+            "case_insensitive",
+            "caseInsensitive",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -27205,6 +27213,7 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
             Expr,
             Pattern,
             EscapeChar,
+            CaseInsensitive,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -27230,6 +27239,7 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
                             "expr" => Ok(GeneratedField::Expr),
                             "pattern" => Ok(GeneratedField::Pattern),
                             "escapeChar" | "escape_char" => Ok(GeneratedField::EscapeChar),
+                            "caseInsensitive" | "case_insensitive" => Ok(GeneratedField::CaseInsensitive),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -27253,6 +27263,7 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
                 let mut expr__ = None;
                 let mut pattern__ = None;
                 let mut escape_char__ = None;
+                let mut case_insensitive__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Negated => {
@@ -27279,6 +27290,12 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
                             }
                             escape_char__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::CaseInsensitive => {
+                            if case_insensitive__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("caseInsensitive"));
+                            }
+                            case_insensitive__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(SimilarToNode {
@@ -27286,6 +27303,7 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
                     expr: expr__,
                     pattern: pattern__,
                     escape_char: escape_char__.unwrap_or_default(),
+                    case_insensitive: case_insensitive__.unwrap_or_default(),
                 })
             }
         }
