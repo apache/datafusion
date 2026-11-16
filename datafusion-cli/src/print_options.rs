@@ -61,28 +61,28 @@ impl Display for MaxRows {
     }
 }
 
-/// Maximum output width for tables and explain plans.
+/// Target output width for tables and explain plans.
 ///
 /// ```
 /// use std::num::NonZeroU16;
-/// use datafusion_cli::print_options::MaxWidth;
+/// use datafusion_cli::print_options::TargetWidth;
 ///
-/// assert_eq!("auto".parse::<MaxWidth>().unwrap(), MaxWidth::Auto);
-/// assert_eq!("100".parse::<MaxWidth>().unwrap(), MaxWidth::Limited(NonZeroU16::new(100).unwrap()));
-/// assert_eq!("0".parse::<MaxWidth>().unwrap(), MaxWidth::Unlimited);
+/// assert_eq!("auto".parse::<TargetWidth>().unwrap(), TargetWidth::Auto);
+/// assert_eq!("100".parse::<TargetWidth>().unwrap(), TargetWidth::Limited(NonZeroU16::new(100).unwrap()));
+/// assert_eq!("0".parse::<TargetWidth>().unwrap(), TargetWidth::Unlimited);
 /// ```
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum MaxWidth {
+pub enum TargetWidth {
     /// Read the current width of the output terminal before each query.
     #[default]
     Auto,
     /// Do not limit output width.
     Unlimited,
-    /// Limit output to this many terminal columns.
+    /// Aim for this many terminal columns.
     Limited(NonZeroU16),
 }
 
-impl FromStr for MaxWidth {
+impl FromStr for TargetWidth {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
@@ -94,14 +94,14 @@ impl FromStr for MaxWidth {
                 .map(Self::Limited)
                 .map_err(|_| {
                     format!(
-                        "Invalid maxwidth {value}. Expected auto, 1..65535, or 0/inf for no limit."
+                        "Invalid target width {value}. Expected auto, 1..65535, or 0/inf for no limit."
                     )
                 }),
         }
     }
 }
 
-impl Display for MaxWidth {
+impl Display for TargetWidth {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Auto => f.write_str("auto"),
@@ -111,7 +111,7 @@ impl Display for MaxWidth {
     }
 }
 
-impl MaxWidth {
+impl TargetWidth {
     pub(crate) fn resolve(self) -> Option<u16> {
         match self {
             Self::Auto => terminal_size::terminal_size_of(io::stdout())
@@ -130,8 +130,8 @@ pub struct PrintOptions {
     pub format: PrintFormat,
     pub quiet: bool,
     pub maxrows: MaxRows,
-    /// Maximum output width, independent of the selected output format.
-    pub maxwidth: MaxWidth,
+    /// Target output width, independent of the selected output format.
+    pub target_width: TargetWidth,
     pub color: bool,
     pub instrumented_registry: Arc<InstrumentedObjectStoreRegistry>,
 }
@@ -175,7 +175,7 @@ impl PrintOptions {
             format_options,
             TableOptions {
                 maxrows: self.maxrows,
-                width: self.maxwidth.resolve(),
+                width: self.target_width.resolve(),
                 explain_format: None,
             },
         )
@@ -226,7 +226,7 @@ impl PrintOptions {
             stream,
             query_start_time,
             format_options,
-            self.maxwidth.resolve(),
+            self.target_width.resolve(),
         )
         .await
     }
@@ -335,7 +335,7 @@ mod tests {
             format: PrintFormat::Automatic,
             quiet: true,
             maxrows: MaxRows::Unlimited,
-            maxwidth: MaxWidth::Auto,
+            target_width: TargetWidth::Auto,
             color: true,
             instrumented_registry: Arc::clone(&instrumented_registry),
         };

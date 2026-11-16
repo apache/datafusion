@@ -78,7 +78,7 @@ pub async fn main() {
         quiet: false,
         maxrows: datafusion_cli::print_options::MaxRows::Unlimited,
         color: true,
-        maxwidth: datafusion_cli::print_options::MaxWidth::Auto,
+        target_width: datafusion_cli::print_options::TargetWidth::Auto,
         instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
     };
 

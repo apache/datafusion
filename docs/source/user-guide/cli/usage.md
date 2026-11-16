@@ -37,8 +37,8 @@ Options:
       --maxrows <MAXROWS>
           The max number of rows to display for 'Table' format
           [possible values: numbers(0/10/...), inf(no limit)] [default: 40]
-      --maxwidth <MAXWIDTH>
-          The maximum width of tables and explain plans (auto, 1..65535, 0 or inf for no limit) [default: auto]
+      --target-width <TARGET_WIDTH>
+          Target output width in terminal columns (auto, 1..65535, 0 or inf for no limit). A wide character or TREE node may exceed this width. [default: auto]
       --color
           Enables console syntax highlighting
   -d, --disk-limit <DISK_LIMIT>
@@ -54,10 +54,11 @@ Options:
 
 ## Output width
 
-`--maxwidth auto` (default) fits tables and explain plans to the terminal width.
-Use `--maxwidth 100` for a fixed width, or `--maxwidth 0` / `--maxwidth inf` for
-no limit. Change it in the CLI with `\pset maxwidth <value>`.
-Individual characters wider than the limit are kept intact.
+`--target-width auto` (default) uses the terminal width as the target for tables and explain plans.
+Use `--target-width 100` for a fixed target, or `--target-width 0` / `--target-width inf` for
+no limit. Change it in the CLI with `\pset target_width <value>`.
+A character wider than the target is kept intact. TREE plans use 29-column boxes,
+so a single node can exceed a narrower target.
 
 With `auto`, redirected output is unlimited. CSV, TSV, and JSON output is unchanged.
 

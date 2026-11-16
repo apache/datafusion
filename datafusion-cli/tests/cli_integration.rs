@@ -676,11 +676,25 @@ fn test_cli_wide_result_set_no_crash() {
 }
 
 #[test]
-fn cli_output_respects_maxwidth() {
+fn cli_pset_target_width() {
+    let input = r"\pset target_width
+\pset target_width 80
+\pset target_width invalid
+\pset target_width
+\pset target_width auto
+\pset target_width inf
+\pset target_width
+\q
+";
+    assert_cmd_snapshot!(cli().arg("-q").env_clear().pass_stdin(input));
+}
+
+#[test]
+fn cli_output_respects_target_width() {
     let output = cli()
         .args([
             "-q",
-            "--maxwidth",
+            "--target-width",
             "80",
             "--maxrows",
             "2",

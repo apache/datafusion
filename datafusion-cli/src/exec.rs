@@ -11,7 +11,7 @@ use crate::{
     command::{Command, OutputFormat},
     helper::CliHelper,
     object_storage::{get_object_store, stdin::StdinUtils},
-    print_options::{MaxRows, MaxWidth, PrintOptions},
+    print_options::{MaxRows, PrintOptions, TargetWidth},
 };
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
@@ -255,12 +255,12 @@ impl StatementExecutor {
             && print_options.format == PrintFormat::Table
         {
             let (mut state, plan) = df.into_parts();
-            let render_width = match (table_options.width, print_options.maxwidth) {
+            let render_width = match (table_options.width, print_options.target_width) {
                 (Some(width), _) => {
                     // The renderer emits whole 29-column boxes, rounding its limit up.
                     Some((usize::from(width) / 29 * 29).max(1))
                 }
-                (None, MaxWidth::Unlimited) => Some(0),
+                (None, TargetWidth::Unlimited) => Some(0),
                 _ => None,
             };
             if let Some(width) = render_width {
@@ -380,7 +380,7 @@ struct AdjustedPrintOptions {
 impl AdjustedPrintOptions {
     fn new(inner: PrintOptions) -> Self {
         Self {
-            width: inner.maxwidth.resolve(),
+            width: inner.target_width.resolve(),
             inner,
             explain_format: None,
         }
