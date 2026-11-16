@@ -19,6 +19,9 @@ use datafusion_execution::memory_pool::MemoryPool;
 /// and non-spilling INNER joins. Residual conditions belong to each consuming
 /// join; null-aware joins remain unsupported.
 ///
+/// Preparation chooses the executor. Every consumer uses that executor, even
+/// if its migration setting differs from preparation.
+///
 /// Hash-join gathers copy supported build columns into output buffers,
 /// including contiguous selections. Output batches can therefore outlive this
 /// object without retaining unaccounted cached payload. View, dictionary and
@@ -28,6 +31,7 @@ pub struct PreparedHashJoinBuild {
     build: Arc<JoinBuildData>,
     keys: Vec<usize>,
     null_equality: NullEquality,
+    regular: bool,
 }
 
 impl fmt::Debug for PreparedHashJoinBuild {
@@ -53,7 +57,11 @@ impl PreparedHashJoinBuild {
         self.build.batch.num_rows()
     }
 
-    /// Create independent mutable state for one consuming join.
+    pub(super) fn is_regular(&self) -> bool {
+        self.regular
+    }
+
+    /// Create independent mutable state for one consuming legacy join.
     pub(super) fn probe_data(&self, probe_threads: usize) -> JoinLeftData {
         JoinLeftData {
             build: Arc::clone(&self.build),
@@ -62,6 +70,12 @@ impl PreparedHashJoinBuild {
             visited_indices_bitmap: Mutex::new(BooleanBufferBuilder::new(0)),
             probe_completion: ProbeCompletion::new(probe_threads),
         }
+    }
+
+    /// Create independent [`RegularJoinLeftData`] for one consuming regular join.
+    /// Prepared builds currently support INNER only, so no unmatched-row state is needed.
+    pub(super) fn regular_probe_data(&self) -> RegularJoinLeftData {
+        RegularJoinLeftData::new(Arc::clone(&self.build), None, 0)
     }
 
     /// Validate the build descriptor and current execution restrictions without
@@ -105,8 +119,10 @@ impl HashJoinExec {
     ///   embedding executor. This method does not provide a cache.
     ///
     /// Errors and cancellation release unfinished work. `config` controls
-    /// perfect-map and dynamic-filter choices. Byte keys use hash membership
-    /// to avoid copying payloads into range bounds and IN-list literals.
+    /// the executor, perfect-map and dynamic-filter choices.
+    /// The prepared build selects each consumer's executor independently of
+    /// the consumer's `enable_migration_hash_join` setting. Byte keys use hash
+    /// membership to avoid copying payloads into range bounds and IN-list literals.
     /// Consumer-local dynamic-filter allocations are outside this reservation.
     ///
     /// # Example
@@ -169,6 +185,7 @@ impl HashJoinExec {
         let count = MetricBuilder::new(&metrics_set)
             .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, 0);
         let reservation = MemoryConsumer::new("PreparedHashJoinBuild").register(&pool);
+        let regular = config.execution.enable_migration_hash_join;
         let data = collect_left_input(
             self.random_state.random_state().clone(),
             input,
@@ -189,6 +206,7 @@ impl HashJoinExec {
             build: data.build,
             keys,
             null_equality: self.null_equality,
+            regular,
         }))
     }
 }
