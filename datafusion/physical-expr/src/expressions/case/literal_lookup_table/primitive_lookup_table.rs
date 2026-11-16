@@ -270,6 +270,7 @@ impl_to_hashable_key!(@float | f64 => u64);
 #[cfg(test)]
 mod tests {
     use super::{ToHashableKey, max_linear_lookup_literals};
+    use arrow::array::downcast_primitive;
     use arrow::datatypes::{IntervalMonthDayNano, i256};
 
     #[test]
@@ -282,7 +283,6 @@ mod tests {
         assert_eq!(max_linear_lookup_literals::<IntervalMonthDayNano>(), 8);
         assert_eq!(max_linear_lookup_literals::<i256>(), 4);
     }
-    use arrow::array::downcast_primitive;
 
     // This test ensure that all arrow primitive types implement ToHashableKey
     // otherwise the code will not compile
