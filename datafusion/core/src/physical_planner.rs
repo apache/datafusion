@@ -95,6 +95,8 @@ use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+#[cfg(doc)]
+use datafusion_physical_optimizer::ensure_requirements::enforce_distribution::adjust_input_keys_ordering;
 use datafusion_physical_optimizer::sanity_checker::{
     check_plan_tree_sanity, input_requirements_hold,
 };
@@ -1913,9 +1915,6 @@ impl DefaultPhysicalPlanner {
                     // Use ordinary sort-merge join when hash join is not preferred.
                     // Null-aware joins not handled above fall back to CollectLeft
                     // HashJoin because their semantics are not supported by sort-merge join.
-                    // The join keys are an unordered set of equalities, so they may be
-                    // reshuffled (together with their sort options) to match the input
-                    // orderings and avoid sorting.
                     let (join_on, sort_options) =
                         sort_merge_join_keys(&physical_left, &physical_right, &join_on)?;
                     Arc::new(SortMergeJoinExec::try_new(
@@ -3743,115 +3742,60 @@ enum PlanAsyncExpr {
     Async(AsyncMapper, PlannedExprResult),
 }
 
-/// Chooses the join key order and per-key [`SortOptions`] of a [`SortMergeJoinExec`], so that as
-/// few inputs as possible need a `SortExec`.
+/// Chooses the join key order and per-key [`SortOptions`] of a [`SortMergeJoinExec`].
 ///
-/// The join keys are an unordered set of equalities, so they can be permuted freely. Candidates
-/// are derived from each known output ordering of each input: its entries that (after normalizing
-/// through the equivalence group) are join keys become the leading keys, in that order and with
-/// those options, and the remaining keys follow with the default options. Each candidate is
-/// scored by how many inputs `ordering_satisfy` confirms are already sorted on it, so constants,
-/// equal columns and any key order are handled. The default (original key order, default options)
-/// wins ties, so plans that already match are unchanged.
+/// The keys are an unordered set of equalities, so each input proposes the longest
+/// permutation of its keys that it is already sorted on. A proposal replaces the default
+/// (original order, `ASC NULLS FIRST`) only if strictly more inputs are sorted on it.
 ///
-/// Cost: nothing is done if neither input has an ordering; otherwise one candidate per known
-/// ordering, each verified with two `ordering_satisfy` calls.
+/// The chosen order is not final: [`adjust_input_keys_ordering`] (run by [`EnsureRequirements`] optimizer)
+/// may reshuffle the keys again, e.g. to match the partitioning of the inputs, which can bring
+/// a `SortExec` back that this choice avoided.
 fn sort_merge_join_keys(
     left: &Arc<dyn ExecutionPlan>,
     right: &Arc<dyn ExecutionPlan>,
     on: &join_utils::JoinOn,
 ) -> Result<(join_utils::JoinOn, Vec<SortOptions>)> {
-    let left_eq = left.equivalence_properties();
-    let right_eq = right.equivalence_properties();
-
-    // The baseline candidate is the join keys in the order they were provided, all with the
-    // default sort options. Other candidates replace it only if they strictly reduce the number
-    // of inputs that still need sorting.
-    let mut best = (on.clone(), vec![SortOptions::default(); on.len()]);
-    if left_eq.oeq_class().is_empty() && right_eq.oeq_class().is_empty() {
-        return Ok(best);
-    }
-
-    // Scores a candidate (join keys and their sort options) by the number of inputs that are
-    // already sorted on it and therefore need no `SortExec`: 0 (both inputs need a sort),
-    // 1 (one input is already sorted) or 2 (neither input needs a sort).
-    let score = |candidate: &(join_utils::JoinOn, Vec<SortOptions>)| -> Result<usize> {
-        let satisfied = |eq: &datafusion_physical_expr::EquivalenceProperties,
-                         left_side: bool| {
-            eq.ordering_satisfy(candidate.0.iter().zip(&candidate.1).map(
-                |((l, r), options)| {
-                    PhysicalSortExpr::new(
-                        Arc::clone(if left_side { l } else { r }),
-                        *options,
-                    )
-                },
-            ))
-        };
-        Ok(usize::from(satisfied(left_eq, true)?)
-            + usize::from(satisfied(right_eq, false)?))
+    let (left_keys, right_keys): (Vec<_>, Vec<_>) = on.iter().cloned().unzip();
+    let inputs = [
+        (left.equivalence_properties(), left_keys),
+        (right.equivalence_properties(), right_keys),
+    ];
+    // Number of inputs already sorted on the keys at `order` with `options`.
+    let sorted_inputs = |order: &[usize], options: &[SortOptions]| {
+        inputs.iter().try_fold(0, |sorted, (eq, keys)| {
+            let sort_exprs = order.iter().zip(options).map(|(&i, &options)| {
+                PhysicalSortExpr::new(Arc::clone(&keys[i]), options)
+            });
+            Ok::<_, DataFusionError>(
+                sorted + usize::from(eq.ordering_satisfy(sort_exprs)?),
+            )
+        })
     };
-    let mut best_score = score(&best)?;
 
-    // Derive candidates from the orderings of both inputs, left first and then right. The left
-    // orderings may not lead to any improvement (e.g. the left input is unsorted or sorted on
-    // other columns), but the right input's orderings can still give a better score, so a
-    // candidate that only the right input is already sorted on is still found. Stop early once
-    // a candidate scores 2, as no input needs sorting anymore.
-    for (eq, driven_by_left) in [(left_eq, true), (right_eq, false)] {
-        if best_score == 2 {
-            break;
+    let mut best_order: Vec<usize> = (0..on.len()).collect();
+    let mut best_options = vec![SortOptions::default(); on.len()];
+    let mut best_sorted = sorted_inputs(&best_order, &best_options)?;
+    for (eq, keys) in &inputs {
+        if best_sorted == inputs.len() || eq.oeq_class().is_empty() {
+            continue;
         }
-        // The join key of the driving side, normalized through its equivalence group, so that
-        // equal columns match the entries of the ordering below.
-        let keys: Vec<_> = on
-            .iter()
-            .map(|(l, r)| {
-                eq.eq_group().normalize_expr(Arc::clone(if driven_by_left {
-                    l
-                } else {
-                    r
-                }))
-            })
-            .collect();
-        for ordering in eq.oeq_class().iter() {
-            // `used[j]` is true once join key `j` was found in this lex ordering and moved to the
-            // front of the candidate. Each key is used at most once, so an expression that
-            // appears twice in the ordering only matches one key.
-            let mut used = vec![false; on.len()];
-            let mut candidate =
-                (Vec::with_capacity(on.len()), Vec::with_capacity(on.len()));
-            // Walk the ordering in order: every sort expression that is a (not yet used) join
-            // key adds that key to the candidate, with the sort options of the ordering.
-            // Sort expressions that are not join keys are skipped; `ordering_satisfy` in
-            // `score` decides whether the skipped ones (e.g. constants) are harmless.
-            for sort_expr in ordering.iter() {
-                let expr = eq.eq_group().normalize_expr(Arc::clone(&sort_expr.expr));
-                if let Some(j) = (0..on.len()).find(|&j| !used[j] && keys[j].eq(&expr)) {
-                    used[j] = true;
-                    candidate.0.push(on[j].clone());
-                    candidate.1.push(sort_expr.options);
-                }
-            }
-            if candidate.0.is_empty() {
-                continue;
-            }
-            // The join keys that were not found in the ordering follow, in their provided order
-            // and with the default sort options.
-            for (key, _) in on.iter().zip(&used).filter(|(_, used)| !**used) {
-                candidate.0.push(key.clone());
-                candidate.1.push(SortOptions::default());
-            }
-            let candidate_score = score(&candidate)?;
-            if candidate_score > best_score {
-                best = candidate;
-                best_score = candidate_score;
-                if best_score == 2 {
-                    break;
-                }
-            }
+        let (sort_exprs, mut order) = eq.find_longest_permutation(keys)?;
+        if order.is_empty() {
+            continue;
+        }
+        let mut options: Vec<_> = sort_exprs.iter().map(|e| e.options).collect();
+        // Keys this input is not sorted on follow in their original order.
+        let unsorted: Vec<_> = (0..on.len()).filter(|i| !order.contains(i)).collect();
+        options.resize(on.len(), SortOptions::default());
+        order.extend(unsorted);
+        let sorted = sorted_inputs(&order, &options)?;
+        if sorted > best_sorted {
+            (best_order, best_options, best_sorted) = (order, options, sorted);
         }
     }
-    Ok(best)
+    let on = best_order.into_iter().map(|i| on[i].clone()).collect();
+    Ok((on, best_options))
 }
 
 fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
