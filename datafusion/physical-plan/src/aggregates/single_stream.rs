@@ -12,7 +12,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, assert_ne_or_internal_err};
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryLimit, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::StreamExt;
 
@@ -121,6 +121,8 @@ struct Aggregating {
     hash_table: AggregateHashTable<SingleMarker>,
     /// `None` if spilling is not supported by the configured `DiskManager`.
     spill_context: Option<Box<AggregateSpill>>,
+    /// Reserved conversion/sort workspace for flat DISTINCT COUNT spilling.
+    distinct_spill_buffer_bytes: Option<usize>,
 }
 
 struct Outputting {
@@ -174,17 +176,30 @@ impl SingleHashAggregateStream {
         )?;
 
         let can_spill = context.runtime_env().disk_manager.tmp_files_enabled();
+        let distinct_schema = hash_table.distinct_count_spill_schema();
+        let distinct_spill_buffer_bytes =
+            (can_spill && distinct_schema.is_some()).then(|| {
+                let batch_target = batch_size.saturating_mul(128).clamp(1, 1024 * 1024);
+                match context.memory_pool().memory_limit() {
+                    MemoryLimit::Finite(limit) => batch_target.min((limit / 8).max(1)),
+                    MemoryLimit::Infinite | MemoryLimit::Unknown => batch_target,
+                }
+            });
         let spill_context = if can_spill {
-            Some(Box::new(AggregateSpill::try_new(
+            let mut spill = AggregateSpill::try_new(
                 "SingleHashAggregateSpill",
                 agg,
                 context,
                 partition,
                 batch_size,
                 &GroupClusteringMode::None,
-                &state_schema,
+                distinct_schema.as_ref().unwrap_or(&state_schema),
                 spill_metrics,
-            )?))
+            )?;
+            if let Some(buffer_bytes) = distinct_spill_buffer_bytes {
+                spill.use_distinct_count_replay(buffer_bytes);
+            }
+            Some(Box::new(spill))
         } else {
             None
         };
@@ -195,7 +210,14 @@ impl SingleHashAggregateStream {
                 .register(context.memory_pool());
 
         // Reserve memory for the initial hash table. that we hold for the lifetime of the stream.
-        reservation.try_grow(hash_table.memory_size())?;
+        let initial_size = hash_table.memory_size();
+        reservation.try_grow(
+            if let Some(buffer_bytes) = distinct_spill_buffer_bytes {
+                2 * initial_size + buffer_bytes.min(initial_size)
+            } else {
+                initial_size
+            },
+        )?;
 
         Ok(Self {
             reservation,
@@ -208,6 +230,7 @@ impl SingleHashAggregateStream {
                 input,
                 hash_table,
                 spill_context,
+                distinct_spill_buffer_bytes,
             }),
         })
     }
@@ -299,6 +322,16 @@ impl Aggregating {
     /// Reserve memory for the current aggregate table.
     fn reservation_size(&self) -> usize {
         let table_size = self.hash_table.memory_size();
+        if let Some(buffer_bytes) = self.distinct_spill_buffer_bytes {
+            // Hash buffers can double on an insertion. Leave that growth space
+            // reserved before updating the next bounded input chunk, in addition
+            // to the conversion workspace needed to make spilling progress.
+            // Small tables only reserve small spill batches, so concurrent
+            // streams do not each claim a fixed part of the shared memory pool.
+            return table_size
+                .saturating_mul(2)
+                .saturating_add(buffer_bytes.min(table_size));
+        }
         if self.spill_context.is_some() {
             // Count extra space needed for in-memory sorting and spilling. Only
             // count memory for indices, the payload will be materialize incrementally
@@ -315,6 +348,93 @@ impl Aggregating {
 
     fn has_spills(&self) -> bool {
         self.spill_context.as_ref().is_some_and(|s| s.has_spills())
+    }
+
+    fn spill_table(&mut self, reservation: &MemoryReservation) -> Result<()> {
+        let spill = self
+            .spill_context
+            .as_mut()
+            .expect("spill context is configured");
+        if self.distinct_spill_buffer_bytes.is_some() {
+            // Conversion needs less headroom than another hash-table growth.
+            // Use the available space for larger runs when the full growth
+            // reservation no longer fits, retaining the existing quota otherwise.
+            let table_bytes = self.hash_table.memory_size();
+            let conversion_reservation = table_bytes.saturating_add(table_bytes / 2);
+            if conversion_reservation > reservation.size() {
+                match reservation.try_resize(conversion_reservation) {
+                    Ok(()) | Err(DataFusionError::ResourcesExhausted(_)) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            let buffer_bytes = reservation.size().saturating_sub(table_bytes).max(1);
+            let single_group = self.hash_table.building_group_count() == 1;
+            if let Some(state) = self
+                .hash_table
+                .take_distinct_count_batches(spill.schema(), buffer_bytes)?
+            {
+                let retained_bytes = state.retained_bytes + self.hash_table.memory_size();
+                for batch in state.batches {
+                    let (batch, unique_groups) = batch?;
+                    // Moving the hash state into the iterator does not free it.
+                    // Include the flat batch, sorted output and sorting indices
+                    // until this run has been written and its iterator dropped.
+                    reservation.try_resize(reservation.size().max(
+                        retained_bytes
+                            + 2 * batch.get_array_memory_size()
+                            + batch.num_rows()
+                                * (size_of::<(u32, u64)>() + 2 * size_of::<u32>()),
+                    ))?;
+                    spill.sort_distinct_and_spill(batch, single_group, unique_groups)?;
+                }
+            }
+        } else {
+            spill.sort_and_spill(self.hash_table.take_state_batch()?)?;
+        }
+        reservation.try_resize(self.reservation_size())?;
+        Ok(())
+    }
+
+    fn aggregate_input_batch(
+        &mut self,
+        batch: &RecordBatch,
+        reservation: &MemoryReservation,
+    ) -> Result<()> {
+        let rows_per_chunk = self.distinct_spill_buffer_bytes.map_or_else(
+            || batch.num_rows().max(1),
+            |buffer_bytes| {
+                let row_bytes =
+                    batch.get_array_memory_size() / batch.num_rows().max(1) + 128;
+                (buffer_bytes / row_bytes).max(1)
+            },
+        );
+        for offset in (0..batch.num_rows().max(1)).step_by(rows_per_chunk) {
+            let chunk;
+            let input = if offset == 0 && rows_per_chunk >= batch.num_rows() {
+                batch
+            } else {
+                chunk =
+                    batch.slice(offset, rows_per_chunk.min(batch.num_rows() - offset));
+                &chunk
+            };
+            self.hash_table.aggregate_batch(input)?;
+            match reservation.try_resize(self.reservation_size()) {
+                Ok(()) => {}
+                Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
+                    if self.spill_context.is_none() {
+                        return Err(oom.context("Single hash aggregate cannot spill because temporary files are not enabled in the DiskManager"));
+                    }
+                    assert_ne_or_internal_err!(
+                        self.hash_table.building_group_count(),
+                        0,
+                        "Single hash aggregate ran out of memory with no aggregated groups"
+                    );
+                    self.spill_table(reservation)?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
     }
 
     /// See the "Optimization: DISTINCT LIMIT Soft Limit" section in
@@ -337,33 +457,7 @@ impl Aggregating {
 
         while let Some(batch) = self.input.next().await.transpose()? {
             let _timer = elapsed_compute.timer();
-            self.hash_table.aggregate_batch(&batch)?;
-
-            match reservation.try_resize(self.reservation_size()) {
-                Ok(()) => {}
-                Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
-                    let Some(spill_context) = self.spill_context.as_mut() else {
-                        return Err(oom.context(
-                            "Single hash aggregate cannot spill because temporary files are not enabled in the DiskManager",
-                        ));
-                    };
-                    assert_ne_or_internal_err!(
-                        self.hash_table.building_group_count(),
-                        0,
-                        "Single hash aggregate ran out of memory with no aggregated groups"
-                    );
-                    spill_context.sort_and_spill(self.hash_table.take_state_batch()?)?;
-                    reservation
-                        .try_resize(self.hash_table.memory_size())
-                        .map_err(|e| {
-                            e.context(
-                                "Decreasing allocation after spilling should succeed",
-                            )
-                        })?;
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
+            self.aggregate_input_batch(&batch, reservation)?;
 
             // Soft group limits are usually small and rarely coincide with
             // spilling. Once spilling has occurred, skip this optimization to
@@ -374,15 +468,14 @@ impl Aggregating {
         }
 
         // Release upstream resources before producing output or replaying spills.
-        drop(self.input);
         let _timer = elapsed_compute.timer();
 
-        if let Some(mut spill_context) = self.spill_context.filter(|s| s.has_spills()) {
+        if self.has_spills() {
             // Input was exhausted after spilling. Spill the last in-memory run.
-            let mut hash_table = self.hash_table;
-            hash_table
-                .take_state_batch()
-                .and_then(|batch| spill_context.sort_and_spill(batch))?;
+            self.spill_table(reservation)?;
+            let spill_context = self.spill_context.take().expect("spill runs exist");
+            drop(self.input);
+            let hash_table = self.hash_table;
 
             // Construct the replay stream: an ordered final aggregate stream
             // over the sort-preserving merge of all spill runs.
@@ -399,6 +492,7 @@ impl Aggregating {
         }
 
         // Either all the input fit in memory or hit soft group limit with no spilling
+        drop(self.input);
         let mut hash_table = self.hash_table;
         hash_table.start_output()?;
         Ok(Some(ExecutionStage::Outputting(Outputting { hash_table })))

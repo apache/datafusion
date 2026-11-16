@@ -10,6 +10,18 @@ use std::sync::Arc;
 
 use crate::accumulator::AggregateMetrics;
 
+/// Bounded batches of group indices and distinct values, including a null value
+/// for each group with no non-null input. The iterator owns the drained state.
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub type DistinctCountValues =
+    Box<dyn Iterator<Item = Result<(Vec<usize>, ArrayRef)>> + Send>;
+
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmitTo {
@@ -274,6 +286,37 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     ///
     /// [`Accumulator::state`]: crate::accumulator::Accumulator::state
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
+
+    /// Whether this accumulator can spill DISTINCT COUNT as flat values.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    fn supports_distinct_count_spill(&self) -> bool {
+        false
+    }
+
+    /// Drain DISTINCT COUNT state in batches of at most `batch_size` values.
+    /// Group indices retain their original meaning. Every empty group emits one
+    /// null marker so that replay can return a zero count for it. The accumulator
+    /// is reset, while the returned iterator owns its former allocations; callers
+    /// must keep those allocations reserved until the iterator is dropped.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    fn take_distinct_count_values(
+        &mut self,
+        _batch_size: usize,
+    ) -> Result<DistinctCountValues> {
+        not_impl_err!("Flat DISTINCT COUNT spilling is not implemented")
+    }
 
     /// Returns intermediate aggregate state without changing the logical state
     /// or group indices.

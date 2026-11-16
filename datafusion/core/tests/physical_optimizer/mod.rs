@@ -24,6 +24,7 @@ mod projection_pushdown;
 mod pushdown_sort;
 mod replace_with_order_preserving_variants;
 mod sanity_checker;
+mod single_distinct_aggregation;
 #[expect(clippy::needless_pass_by_value)]
 mod test_utils;
 mod update_aggr_exprs;
