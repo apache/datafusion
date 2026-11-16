@@ -5,7 +5,7 @@
 use super::{Between, Expr, Like, predicate_bounds};
 use crate::ValueOrLambda;
 use crate::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
+    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Case, Cast, InList,
     InSubquery, Lambda, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams, in_subquery_tuple_values,
 };
@@ -318,66 +318,13 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(field, _) => Ok(field.is_nullable()),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
-                let nullable_then = case.when_then_expr.iter().find_map(|(w, t)| {
-                    let is_nullable = match t.nullable(input_schema) {
-                        Err(e) => return Some(Err(e)),
-                        Ok(n) => n,
-                    };
-
-                    // Branches with a then expression that is not nullable do not impact the
-                    // nullability of the case expression.
-                    if !is_nullable {
-                        return None;
-                    }
-
-                    // For case-with-expression assume all 'then' expressions are reachable
-                    if case.expr.is_some() {
-                        return Some(Ok(()));
-                    }
-
-                    // For branches with a nullable 'then' expression, try to determine
-                    // if the 'then' expression is ever reachable in the situation where
-                    // it would evaluate to null.
-                    let bounds = match predicate_bounds::evaluate_bounds(
-                        w,
-                        Some(unwrap_certainly_null_expr(t)),
-                        input_schema,
-                    ) {
-                        Err(e) => return Some(Err(e)),
-                        Ok(b) => b,
-                    };
-
-                    let can_be_true =
-                        match bounds.contains_value(ScalarValue::Boolean(Some(true))) {
-                            Err(e) => return Some(Err(e)),
-                            Ok(b) => b,
-                        };
-
-                    if !can_be_true {
-                        // If the derived 'when' expression can never evaluate to true, the
-                        // 'then' expression is not reachable when it would evaluate to NULL.
-                        // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
-                        None
-                    } else {
-                        // The branch might be taken
-                        Some(Ok(()))
-                    }
-                });
-
-                if let Some(nullable_then) = nullable_then {
-                    // There is at least one reachable nullable 'then' expression, so the case
-                    // expression itself is nullable.
-                    // Use `Result::map` to propagate the error from `nullable_then` if there is one.
-                    nullable_then.map(|_| true)
-                } else if let Some(e) = &case.else_expr {
-                    // There are no reachable nullable 'then' expressions, so all we still need to
-                    // check is the 'else' expression's nullability.
-                    e.nullable(input_schema)
-                } else {
-                    // CASE produces NULL if there is no `else` expr
-                    // (aka when none of the `when_then_exprs` match)
-                    Ok(true)
-                }
+                case_nullable(case, input_schema, |i| match case.when_then_expr.get(i) {
+                    Some((_, then)) => then.nullable(input_schema),
+                    None => case
+                        .else_expr
+                        .as_ref()
+                        .map_or(Ok(true), |e| e.nullable(input_schema)),
+                })
             }
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarFunction(_)
@@ -710,7 +657,7 @@ impl ExprSchemable for Expr {
                 Ok(Arc::new(metadata.add_to_field(Field::new(
                     &schema_name,
                     data_type,
-                    self.nullable(schema)?,
+                    case_nullable(case, schema, |i| Ok(fields[i].is_nullable()))?,
                 ))))
             }
             Expr::Like(_)
@@ -839,6 +786,79 @@ fn verify_function_arguments<F: UDFCoercionExt>(
             )
         )
     })
+}
+
+/// The nullability of `case`, given the nullability of each value branch:
+/// the THEN expressions in order, then the ELSE.
+fn case_nullable(
+    case: &Case,
+    input_schema: &dyn ExprSchema,
+    mut branch_nullable: impl FnMut(usize) -> Result<bool>,
+) -> Result<bool> {
+    let nullable_then = case
+        .when_then_expr
+        .iter()
+        .enumerate()
+        .find_map(|(i, (w, t))| {
+            let is_nullable = match branch_nullable(i) {
+                Err(e) => return Some(Err(e)),
+                Ok(n) => n,
+            };
+
+            // Branches with a then expression that is not nullable do not impact the
+            // nullability of the case expression.
+            if !is_nullable {
+                return None;
+            }
+
+            // For case-with-expression assume all 'then' expressions are reachable
+            if case.expr.is_some() {
+                return Some(Ok(()));
+            }
+
+            // For branches with a nullable 'then' expression, try to determine
+            // if the 'then' expression is ever reachable in the situation where
+            // it would evaluate to null.
+            let bounds = match predicate_bounds::evaluate_bounds(
+                w,
+                Some(unwrap_certainly_null_expr(t)),
+                input_schema,
+            ) {
+                Err(e) => return Some(Err(e)),
+                Ok(b) => b,
+            };
+
+            let can_be_true =
+                match bounds.contains_value(ScalarValue::Boolean(Some(true))) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(b) => b,
+                };
+
+            if !can_be_true {
+                // If the derived 'when' expression can never evaluate to true, the
+                // 'then' expression is not reachable when it would evaluate to NULL.
+                // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                None
+            } else {
+                // The branch might be taken
+                Some(Ok(()))
+            }
+        });
+
+    if let Some(nullable_then) = nullable_then {
+        // There is at least one reachable nullable 'then' expression, so the case
+        // expression itself is nullable.
+        // Use `Result::map` to propagate the error from `nullable_then` if there is one.
+        nullable_then.map(|_| true)
+    } else if case.else_expr.is_some() {
+        // There are no reachable nullable 'then' expressions, so all we still need to
+        // check is the 'else' expression's nullability.
+        branch_nullable(case.when_then_expr.len())
+    } else {
+        // CASE produces NULL if there is no `else` expr
+        // (aka when none of the `when_then_exprs` match)
+        Ok(true)
+    }
 }
 
 /// Returns the innermost [Expr] that is provably null if `expr` is null.
