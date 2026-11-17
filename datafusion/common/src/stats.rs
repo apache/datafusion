@@ -763,6 +763,10 @@ impl Statistics {
             for (col_stats, item_cs) in
                 column_statistics.iter_mut().zip(&stat.column_statistics)
             {
+                // Check before null_count is accumulated so it pairs with acc_num_rows.
+                let acc_all_null = is_all_null_or_empty(col_stats, &acc_num_rows);
+                let item_all_null = is_all_null_or_empty(item_cs, &stat.num_rows);
+
                 col_stats.null_count = col_stats.null_count.add(&item_cs.null_count);
 
                 // NDV must be computed before min/max update (needs pre-merge ranges)
@@ -778,10 +782,7 @@ impl Statistics {
                 };
 
                 // Skip min/max from all-null or empty inputs so their
-                // Absent bounds don't wipe out known bounds from other
-                // files. See https://github.com/apache/datafusion/issues/26748
-                let acc_all_null = is_all_null_or_empty(col_stats, &acc_num_rows);
-                let item_all_null = is_all_null_or_empty(item_cs, &stat.num_rows);
+                // Absent bounds don't wipe out known bounds from other files.
                 match (acc_all_null, item_all_null) {
                     (false, false) => {
                         precision_min(&mut col_stats.min_value, &item_cs.min_value);
@@ -3640,5 +3641,73 @@ mod tests {
         );
         assert_eq!(merged.num_rows, Precision::Exact(23));
         assert_eq!(merged.column_statistics[0].null_count, Precision::Exact(5));
+    }
+
+    /// The accumulator's all-null check must use its pre-merge null_count,
+    /// not one that already includes the incoming item's nulls.
+    #[test]
+    fn test_try_merge_iter_partial_nulls_on_both_sides() {
+        let schema = Schema::new(vec![Field::new("x", DataType::Int32, true)]);
+        let col = |rows, nulls, min: i32, max: i32| {
+            Statistics::default()
+                .with_num_rows(Precision::Exact(rows))
+                .add_column_statistics(
+                    ColumnStatistics::new_unknown()
+                        .with_null_count(Precision::Exact(nulls))
+                        .with_min_value(Precision::Exact(ScalarValue::from(min)))
+                        .with_max_value(Precision::Exact(ScalarValue::from(max))),
+                )
+        };
+
+        // acc: 10 rows / 3 nulls, item: 8 rows / 7 nulls. Neither is all-null,
+        // so bounds must cover both sides.
+        let merged = Statistics::try_merge_iter(
+            &[col(10, 3, 1, 100), col(8, 7, 500, 600)],
+            &schema,
+        )
+        .unwrap();
+        assert_eq!(
+            merged.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::from(1))
+        );
+        assert_eq!(
+            merged.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::from(600))
+        );
+        assert_eq!(merged.column_statistics[0].null_count, Precision::Exact(10));
+    }
+
+    #[test]
+    fn test_try_merge_iter_all_null_first_then_partial_nulls() {
+        let schema = Schema::new(vec![Field::new("x", DataType::Int32, true)]);
+        let stats_null = Statistics::default()
+            .with_num_rows(Precision::Exact(5))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(5))
+                    .with_min_value(Precision::Absent)
+                    .with_max_value(Precision::Absent),
+            );
+        let stats_real = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(2))
+                    .with_min_value(Precision::Exact(ScalarValue::from(1)))
+                    .with_max_value(Precision::Exact(ScalarValue::from(100))),
+            );
+
+        // all-null acc + item with some nulls → take item's bounds
+        let merged =
+            Statistics::try_merge_iter(&[stats_null, stats_real], &schema).unwrap();
+        assert_eq!(
+            merged.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::from(1))
+        );
+        assert_eq!(
+            merged.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::from(100))
+        );
+        assert_eq!(merged.column_statistics[0].null_count, Precision::Exact(7));
     }
 }
