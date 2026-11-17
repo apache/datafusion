@@ -406,10 +406,11 @@ mod tests {
                 key_types.push(DataType::Timestamp(unit, timezone.map(Into::into)));
             }
         }
-        for (key_type_index, key_type) in key_types.into_iter().enumerate() {
-            if key_type_index % KEY_TYPE_SHARD_COUNT != shard {
-                continue;
-            }
+        for key_type in key_types
+            .into_iter()
+            .skip(shard)
+            .step_by(KEY_TYPE_SHARD_COUNT)
+        {
             for nullable in [false, true] {
                 for batch_size in [1, 2, 7, 8, 63, 1024] {
                     let rows = 129.max(batch_size + 1);
