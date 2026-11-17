@@ -352,6 +352,40 @@ async fn test_pruned_partition_list_null_partition_name_is_configurable() {
     );
 }
 
+#[tokio::test]
+async fn test_pruned_partition_list_non_string_literal_spellings() {
+    let (store, state) = make_test_store_and_state(&[
+        ("tablepath/p=01/file.parquet", 100),
+        ("tablepath/p=1/file.parquet", 100),
+    ]);
+
+    let pruned = pruned_partition_list(
+        state.as_ref(),
+        store.as_ref(),
+        &ListingTableUrl::parse("file:///tablepath/").unwrap(),
+        &[Expr::eq(col("p"), lit(1i32))],
+        ".parquet",
+        &[(String::from("p"), DataType::Int32)],
+    )
+    .await
+    .expect("partition pruning failed")
+    .try_collect::<Vec<_>>()
+    .await
+    .unwrap();
+
+    assert_eq!(pruned.len(), 2);
+    assert_eq!(
+        pruned[0].object_meta.location.as_ref(),
+        "tablepath/p=01/file.parquet"
+    );
+    assert_eq!(&pruned[0].partition_values, &[ScalarValue::Int32(Some(1))]);
+    assert_eq!(
+        pruned[1].object_meta.location.as_ref(),
+        "tablepath/p=1/file.parquet"
+    );
+    assert_eq!(&pruned[1].partition_values, &[ScalarValue::Int32(Some(1))]);
+}
+
 pub fn make_test_store_and_state(
     files: &[(&str, u64)],
 ) -> (Arc<InMemory>, Arc<dyn Session>) {

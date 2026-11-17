@@ -257,7 +257,19 @@ pub fn evaluate_partition_prefix<'a>(
     }
 
     let mut parts = Vec::with_capacity(partition_cols.len());
-    for (p, _) in partition_cols {
+    for (p, data_type) in partition_cols {
+        // Only string partition values have a unique path spelling for prefix pruning.
+        let is_string = match data_type {
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => true,
+            DataType::Dictionary(_, value_type) => matches!(
+                value_type.as_ref(),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            ),
+            _ => false,
+        };
+        if !is_string {
+            break;
+        }
         match partition_values.get(p.as_str()) {
             Some(PartitionValue::Single(val)) => {
                 // if a partition only has a single literal value, then it can be added to the
@@ -975,7 +987,7 @@ mod tests {
                 partitions,
                 &[col("a").eq(lit("foo")).and(col("b").eq(lit("bar")))],
             ),
-            Some(Path::from("a=foo/b=bar")),
+            Some(Path::from("a=foo")),
         );
 
         assert_eq!(
@@ -984,7 +996,7 @@ mod tests {
                 // list of filters should be evaluated as AND
                 &[col("a").eq(lit("foo")), col("b").eq(lit("bar")),],
             ),
-            Some(Path::from("a=foo/b=bar")),
+            Some(Path::from("a=foo")),
         );
 
         assert_eq!(
@@ -995,7 +1007,7 @@ mod tests {
                     .and(col("b").eq(lit("1")))
                     .and(col("c").eq(lit("true")))],
             ),
-            Some(Path::from("a=foo/b=1/c=true")),
+            Some(Path::from("a=foo")),
         );
 
         // no prefix when filter is empty
@@ -1040,26 +1052,44 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_date_partition_prefix() {
-        let partitions = &[("a".to_string(), DataType::Date32)];
-        assert_eq!(
-            evaluate_partition_prefix(
-                partitions,
-                &[col("a").eq(Expr::Literal(ScalarValue::Date32(Some(3)), None))],
+    fn test_non_string_partition_prefixes_are_not_pruned_by_spelling() {
+        for (data_type, value) in [
+            (DataType::Date32, ScalarValue::Date32(Some(3))),
+            (
+                DataType::Date64,
+                ScalarValue::Date64(Some(4 * 24 * 60 * 60 * 1000)),
             ),
-            Some(Path::from("a=1970-01-04")),
-        );
+            (DataType::Int32, ScalarValue::Int32(Some(1))),
+            (DataType::Float64, ScalarValue::Float64(Some(1.0))),
+            (
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
+                ScalarValue::TimestampMicrosecond(Some(0), None),
+            ),
+        ] {
+            let partitions = &[("p".to_string(), data_type)];
+            assert_eq!(
+                evaluate_partition_prefix(
+                    partitions,
+                    &[col("p").eq(Expr::Literal(value, None))]
+                ),
+                None,
+            );
+        }
+    }
 
-        let partitions = &[("a".to_string(), DataType::Date64)];
-        assert_eq!(
-            evaluate_partition_prefix(
-                partitions,
-                &[col("a").eq(Expr::Literal(
-                    ScalarValue::Date64(Some(4 * 24 * 60 * 60 * 1000)),
-                    None
-                )),],
-            ),
-            Some(Path::from("a=1970-01-05")),
-        );
+    #[test]
+    fn test_string_partition_prefixes() {
+        for data_type in [
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+        ] {
+            let partitions = &[("a".to_string(), data_type)];
+            assert_eq!(
+                evaluate_partition_prefix(partitions, &[col("a").eq(lit("foo"))]),
+                Some(Path::from("a=foo")),
+            );
+        }
     }
 }
