@@ -145,6 +145,7 @@ use crate::PhysicalOptimizerRule;
 use crate::optimizer::{
     ConfigOnlyContext, PhysicalOptimizerContext, with_statistics_context,
 };
+use enforce_distribution::{replace_interleave_with_union, resolve_auto_join_mode};
 
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
@@ -192,9 +193,6 @@ impl PhysicalOptimizerRule for EnsureRequirements {
         // A hash join still in `Auto` mode declares no distribution, so it would
         // get no repartitioning. `JoinSelection` normally picks the mode earlier;
         // when it hasn't, pick one here that enforcement can satisfy.
-        use super::enforce_distribution::{
-            replace_interleave_with_union, resolve_auto_join_mode,
-        };
         let plan = plan
             .transform_down(|plan| {
                 replace_interleave_with_union(plan)?
