@@ -10,25 +10,29 @@
 //! relation boundaries without inspecting or rebuilding DataFusion plans.
 
 use super::{
-    SubstraitConsumer, SubstraitConsumerContext, substrait_fun_name, substrait_to_df_name,
+    SubstraitConsumer, SubstraitConsumerContext, name_to_op, substrait_fun_name,
+    substrait_to_df_name,
 };
 use crate::variation_const::DICTIONARY_MAP_TYPE_VARIATION_REF;
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::coalesce::CoalesceFunc;
+use datafusion::functions::core::named_struct::NamedStructFunc;
+use datafusion::functions_window::lead_lag::WindowShift;
 use datafusion::logical_expr::{
-    ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature,
+    ArrayFunctionArgument, ArrayFunctionSignature, Operator, TypeSignature,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Weak};
 use substrait::proto::expression::field_reference::RootType;
 use substrait::proto::expression::literal::LiteralType;
+use substrait::proto::expression::nested::NestedType;
 use substrait::proto::expression::reference_segment::ReferenceType;
 use substrait::proto::expression::{Cast, Literal, RexType};
 use substrait::proto::function_argument::ArgType;
 use substrait::proto::rel::RelType;
 use substrait::proto::rel_common::EmitKind;
 use substrait::proto::r#type::Kind;
-use substrait::proto::{Expression, Rel, RelCommon, Type};
+use substrait::proto::{Expression, FunctionArgument, Rel, RelCommon, Type};
 
 type ShapeId = usize;
 type NameId = usize;
@@ -49,6 +53,8 @@ struct Name {
 
 enum FunctionRule {
     CommonResult,
+    CommonArguments,
+    NamedStruct,
     ArrayArguments(Vec<ArrayFunctionArgument>),
 }
 
@@ -89,6 +95,12 @@ impl ResolvedNames {
         for (anchor, name) in &consumer.get_extensions().functions {
             let name = substrait_fun_name(name);
             let registry = consumer.get_function_registry();
+            if registry
+                .udwf(name)
+                .is_ok_and(|function| function.inner().is::<WindowShift>())
+            {
+                inference.window_shifts.insert(*anchor);
+            }
             if registry.higher_order_function(name).is_ok() {
                 continue;
             }
@@ -97,17 +109,38 @@ impl ResolvedNames {
                     .map(|name| registry.udf(name))
                     .unwrap_or(Err(error))
             });
-            let Ok(function) = function else { continue };
-            let rule = if function.inner().is::<CoalesceFunc>() {
-                Some(FunctionRule::CommonResult)
-            } else if let TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
-                arguments,
-                ..
-            }) = &function.signature().type_signature
-            {
-                Some(FunctionRule::ArrayArguments(arguments.clone()))
-            } else {
-                None
+            let rule = match function {
+                Ok(function) if function.inner().is::<CoalesceFunc>() => {
+                    Some(FunctionRule::CommonResult)
+                }
+                Ok(function) if function.inner().is::<NamedStructFunc>() => {
+                    Some(FunctionRule::NamedStruct)
+                }
+                Ok(function) => match &function.signature().type_signature {
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments,
+                        ..
+                    }) => Some(FunctionRule::ArrayArguments(arguments.clone())),
+                    _ => None,
+                },
+                Err(_)
+                    if matches!(
+                        name_to_op(name),
+                        Some(
+                            Operator::Eq
+                                | Operator::NotEq
+                                | Operator::Lt
+                                | Operator::LtEq
+                                | Operator::Gt
+                                | Operator::GtEq
+                                | Operator::IsDistinctFrom
+                                | Operator::IsNotDistinctFrom
+                        )
+                    ) =>
+                {
+                    Some(FunctionRule::CommonArguments)
+                }
+                Err(_) => None,
             };
             if let Some(rule) = rule {
                 inference.functions.insert(*anchor, rule);
@@ -146,6 +179,7 @@ struct Inference {
     names: Vec<Name>,
     annotations: Vec<(NodeId, ShapeId)>,
     functions: HashMap<u32, FunctionRule>,
+    window_shifts: HashSet<u32>,
 }
 
 impl Inference {
@@ -312,6 +346,55 @@ impl Inference {
         self.shape(shape)
     }
 
+    fn arguments(
+        &mut self,
+        arguments: &[FunctionArgument],
+        input: &[ShapeId],
+    ) -> Vec<ShapeId> {
+        arguments
+            .iter()
+            .filter_map(|argument| match &argument.arg_type {
+                Some(ArgType::Value(expr)) => Some(self.expression(expr, input)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn named_struct(
+        &mut self,
+        arguments: &[FunctionArgument],
+        shapes: &[ShapeId],
+    ) -> Option<ShapeId> {
+        let (pairs, remainder) = arguments.as_chunks::<2>();
+        if !remainder.is_empty() || arguments.len() != shapes.len() {
+            return None;
+        }
+        let names = pairs
+            .iter()
+            .map(|[key, _]| {
+                let Some(ArgType::Value(Expression {
+                    rex_type: Some(RexType::Literal(literal)),
+                })) = &key.arg_type
+                else {
+                    return None;
+                };
+                match &literal.literal_type {
+                    Some(LiteralType::String(name) | LiteralType::FixedChar(name)) => {
+                        Some(name.clone())
+                    }
+                    Some(LiteralType::VarChar(name)) => Some(name.value.clone()),
+                    _ => None,
+                }
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let fields = names
+            .into_iter()
+            .zip(shapes.as_chunks::<2>().0)
+            .map(|(name, [_, value])| (self.name(Some(name)), *value))
+            .collect();
+        Some(self.shape(Shape::Struct(fields)))
+    }
+
     fn expression(&mut self, expr: &Expression, input: &[ShapeId]) -> ShapeId {
         match expr.rex_type.as_ref() {
             Some(RexType::Literal(literal)) => {
@@ -363,12 +446,7 @@ impl Inference {
                 self.common_result(&results)
             }
             Some(RexType::ScalarFunction(function)) => {
-                let mut arguments = vec![];
-                for arg in &function.arguments {
-                    if let Some(ArgType::Value(expr)) = &arg.arg_type {
-                        arguments.push(self.expression(expr, input));
-                    }
-                }
+                let arguments = self.arguments(&function.arguments, input);
                 let output = self.optional_type(
                     function.output_type.as_ref(),
                     &mut std::iter::empty(),
@@ -378,6 +456,14 @@ impl Inference {
                         for argument in arguments {
                             self.equate(output, argument);
                         }
+                    }
+                    Some(FunctionRule::CommonArguments) => {
+                        self.common_result(&arguments);
+                    }
+                    Some(FunctionRule::NamedStruct) => {
+                        return self
+                            .named_struct(&function.arguments, &arguments)
+                            .unwrap_or(output);
                     }
                     Some(FunctionRule::ArrayArguments(signature))
                         if signature.len() == arguments.len() =>
@@ -406,6 +492,41 @@ impl Inference {
                 }
                 output
             }
+            Some(RexType::WindowFunction(function)) => {
+                let arguments = self.arguments(&function.arguments, input);
+                for partition in &function.partitions {
+                    self.expression(partition, input);
+                }
+                for sort in &function.sorts {
+                    if let Some(expr) = &sort.expr {
+                        self.expression(expr, input);
+                    }
+                }
+                let output = self.optional_type(
+                    function.output_type.as_ref(),
+                    &mut std::iter::empty(),
+                );
+                if self.window_shifts.contains(&function.function_reference) {
+                    for index in [0, 2] {
+                        if let Some(argument) = arguments.get(index) {
+                            self.equate(output, *argument);
+                        }
+                    }
+                }
+                output
+            }
+            Some(RexType::Nested(nested)) => match &nested.nested_type {
+                Some(NestedType::List(list)) => {
+                    let elements = list
+                        .values
+                        .iter()
+                        .map(|value| self.expression(value, input))
+                        .collect::<Vec<_>>();
+                    let element = self.common_result(&elements);
+                    self.shape(Shape::List(element))
+                }
+                _ => self.shape(Shape::Leaf),
+            },
             Some(RexType::SingularOrList(list)) => {
                 let value = list.value.as_ref().map(|v| self.expression(v, input));
                 for option in &list.options {
