@@ -1899,6 +1899,7 @@ impl ExecutionPlan for HashJoinExec {
             self.null_equality,
             &self.join_type,
             &self.join_schema,
+            self.filter.as_ref(),
         )?;
         // Project statistics if there is a projection
         let stats = stats.project(self.projection.as_ref());
@@ -3541,7 +3542,7 @@ mod tests {
     use crate::filter::FilterExecBuilder;
     use crate::joins::hash_join::stream::lookup_join_hashmap;
     use crate::statistics::StatisticsContext;
-    use crate::test::{TestMemoryExec, assert_join_metrics};
+    use crate::test::{TestMemoryExec, assert_join_metrics, exec::StatisticsExec};
     use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
@@ -3558,7 +3559,7 @@ mod tests {
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type};
     use datafusion_common::hash_utils::create_hashes;
-    use datafusion_common::stats::Precision;
+    use datafusion_common::stats::{ColumnStatistics, Precision};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
         ScalarValue, assert_batches_eq, assert_batches_sorted_eq, assert_contains,
@@ -6035,6 +6036,64 @@ mod tests {
         };
         assert_eq!(num_rows(None)?, Precision::Inexact(40));
         assert_eq!(num_rows(Some(0))?, Precision::Inexact(10));
+        Ok(())
+    }
+
+    #[test]
+    fn residual_filter_is_used_by_statistics_context() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+        ]);
+        let column_stats = |min: i64, max: i64, distinct_count: usize| ColumnStatistics {
+            null_count: Precision::Exact(0),
+            max_value: Precision::Exact(ScalarValue::Int64(Some(max))),
+            min_value: Precision::Exact(ScalarValue::Int64(Some(min))),
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Exact(distinct_count),
+            byte_size: Precision::Absent,
+        };
+        let input_stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![column_stats(1, 100, 100), column_stats(1, 50, 50)],
+        };
+        let left: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(input_stats.clone(), schema.clone()));
+        let right: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(input_stats, schema));
+        let on = vec![(
+            Arc::new(Column::new("key", 0)) as PhysicalExprRef,
+            Arc::new(Column::new("key", 0)) as PhysicalExprRef,
+        )];
+        let filter = JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("left_value", 0)),
+                Operator::Lt,
+                Arc::new(Column::new("right_value", 1)),
+            )),
+            vec![
+                ColumnIndex {
+                    index: 1,
+                    side: JoinSide::Left,
+                },
+                ColumnIndex {
+                    index: 1,
+                    side: JoinSide::Right,
+                },
+            ],
+            Arc::new(Schema::new(vec![
+                Field::new("left_value", DataType::Int64, false),
+                Field::new("right_value", DataType::Int64, false),
+            ])),
+        );
+        let join = HashJoinExecBuilder::new(left, right, on, JoinType::Inner)
+            .with_filter(Some(filter))
+            .build()?;
+
+        let stats = StatisticsContext::new().compute(&join, &StatisticsArgs::new())?;
+
+        assert_eq!(stats.num_rows, Precision::Inexact(49));
         Ok(())
     }
 
