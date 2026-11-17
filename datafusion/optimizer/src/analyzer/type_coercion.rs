@@ -12,10 +12,12 @@ use std::sync::{Arc, LazyLock};
 use crate::analyzer::AnalyzerRule;
 use crate::utils::{NamePreserver, merge_into_schema};
 
-use arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::metadata::{FieldMetadata, merge_metadata_for_union};
+use datafusion_common::metadata::{
+    FieldMetadata, merge_metadata_for_union, strip_extension_type,
+};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -1427,20 +1429,12 @@ fn coerce_arguments_for_signature<F: UDFCoercionExt>(
     schema: &DFSchema,
     func: &F,
 ) -> Result<Vec<Expr>> {
-    let (current_fields, coerced_fields) =
-        coerced_argument_fields(&expressions, schema, func)?;
+    let coerced_types = coerced_argument_types(&expressions, schema, func)?;
 
     expressions
         .into_iter()
-        .zip(current_fields)
-        .zip(coerced_fields)
-        .map(|((expr, current_field), coerced_field)| {
-            if current_field.data_type() == coerced_field.data_type() {
-                Ok(expr)
-            } else {
-                expr.cast_to(coerced_field.data_type(), schema)
-            }
-        })
+        .zip(coerced_types)
+        .map(|(expr, data_type)| expr.cast_to(&data_type, schema))
         .collect()
 }
 
@@ -1453,40 +1447,43 @@ fn coerce_scalar_function_arguments_for_signature<F: UDFCoercionExt>(
     schema: &DFSchema,
     func: &F,
 ) -> Result<Vec<Expr>> {
-    let (current_fields, coerced_fields) =
-        coerced_argument_fields(&expressions, schema, func)?;
+    let coerced_types = coerced_argument_types(&expressions, schema, func)?;
 
     expressions
         .into_iter()
-        .zip(current_fields)
-        .zip(coerced_fields)
-        .map(|((expr, current_field), coerced_field)| {
-            coerce_scalar_function_argument(expr, &current_field, &coerced_field, schema)
+        .zip(coerced_types)
+        .map(|(expr, data_type)| {
+            coerce_scalar_function_argument(expr, &data_type, schema)
         })
         .collect()
 }
 
-fn coerced_argument_fields<F: UDFCoercionExt>(
+fn coerced_argument_types<F: UDFCoercionExt>(
     expressions: &[Expr],
     schema: &DFSchema,
     func: &F,
-) -> Result<(Vec<FieldRef>, Vec<FieldRef>)> {
+) -> Result<Vec<DataType>> {
     let current_fields = expressions
         .iter()
         .map(|e| e.to_field(schema).map(|(_, f)| f))
         .collect::<Result<Vec<_>>>()?;
-    let coerced_fields = fields_with_udf(&current_fields, func)?;
-    Ok((current_fields, coerced_fields))
+
+    fields_with_udf(&current_fields, func).map(|fields| {
+        fields
+            .into_iter()
+            .map(|field| field.data_type().clone())
+            .collect()
+    })
 }
 
 fn coerce_scalar_function_argument(
     expr: Expr,
-    current_field: &FieldRef,
-    coerced_field: &FieldRef,
+    data_type: &DataType,
     schema: &DFSchema,
 ) -> Result<Expr> {
-    let data_type = coerced_field.data_type();
-    if current_field.data_type() == data_type {
+    if matches!(&expr, Expr::Cast(_) | Expr::TryCast(_))
+        && expr.get_type(schema)? == *data_type
+    {
         return Ok(expr);
     }
 
@@ -1494,8 +1491,14 @@ fn coerce_scalar_function_argument(
         return expr.cast_to(data_type, schema);
     };
 
-    if let Ok(value) = value.cast_to(data_type) {
-        let metadata = metadata.map(|_| FieldMetadata::new_from_field(coerced_field));
+    if value.data_type() != *data_type
+        && let Ok(value) = value.cast_to(data_type)
+    {
+        let metadata = metadata.map(|metadata| {
+            let mut metadata = metadata.into_inner();
+            strip_extension_type(&mut metadata);
+            FieldMetadata::from(metadata)
+        });
         return Ok(Expr::Literal(value, metadata));
     }
 
@@ -1827,7 +1830,6 @@ mod test {
         ExprSchemable, Filter, Limit, LogicalPlan, Operator, ScalarFunctionArgs,
         ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union,
         Volatility, cast, col, create_udaf, grouping_set, is_true, lit, placeholder,
-        try_cast,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -3700,85 +3702,32 @@ mod test {
     }
 
     #[test]
-    fn scalar_function_argument_literal_metadata_and_casts() -> Result<()> {
-        let ext_and_custom = FieldMetadata::from(
-            Metadata::new()
-                .with("ARROW:extension:name", "example.id")
-                .with("ARROW:extension:metadata", "{}")
-                .with("origin", "lit"),
-        );
-        let custom_only = FieldMetadata::from(Metadata::new().with("origin", "lit"));
-        let only_ext = FieldMetadata::from(
-            Metadata::new().with("ARROW:extension:name", "example.id"),
-        );
-
-        let udf = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF {
-            signature: Signature::exact(
-                vec![
-                    DataType::Int64,
-                    DataType::Int64,
-                    DataType::Int64,
-                    DataType::Int64,
-                    DataType::Int32,
-                    DataType::Int64,
-                    DataType::Int64,
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                ],
-                Volatility::Immutable,
+    fn literal_coercion_preserves_metadata_presence() -> Result<()> {
+        let extension = Metadata::new()
+            .with("ARROW:extension:name", "example.id")
+            .with("ARROW:extension:metadata", "{}");
+        for (metadata, expected) in [
+            (None, None),
+            (
+                Some(FieldMetadata::new_empty()),
+                Some(FieldMetadata::new_empty()),
             ),
-        }));
-
-        let bad_timestamp = Expr::Literal(
-            ScalarValue::Utf8(Some("not_a_timestamp".to_string())),
-            Some(ext_and_custom.clone()),
-        );
-        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(
-            udf,
-            vec![
-                Expr::Literal(ScalarValue::Int32(Some(1)), None),
-                Expr::Literal(
-                    ScalarValue::Int32(Some(2)),
-                    Some(FieldMetadata::new_empty()),
-                ),
-                Expr::Literal(ScalarValue::Int32(Some(3)), Some(only_ext)),
-                Expr::Literal(ScalarValue::Int32(Some(4)), Some(ext_and_custom.clone())),
-                Expr::Literal(ScalarValue::Int32(Some(5)), Some(ext_and_custom.clone())),
-                cast(lit(6_i32), DataType::Int64),
-                try_cast(lit(7_i32), DataType::Int64),
-                bad_timestamp.clone(),
-            ],
-        ));
-
-        let schema = DFSchema::empty();
-        let mut rewriter = TypeCoercionRewriter::new(&schema);
-        let Expr::ScalarFunction(ScalarFunction { args, .. }) =
-            expr.rewrite(&mut rewriter).data()?
-        else {
-            panic!("expected ScalarFunction");
-        };
-
-        assert_eq!(
-            args,
-            vec![
-                Expr::Literal(ScalarValue::Int64(Some(1)), None),
-                Expr::Literal(
-                    ScalarValue::Int64(Some(2)),
-                    Some(FieldMetadata::new_empty()),
-                ),
-                Expr::Literal(
-                    ScalarValue::Int64(Some(3)),
-                    Some(FieldMetadata::new_empty()),
-                ),
-                Expr::Literal(ScalarValue::Int64(Some(4)), Some(custom_only)),
-                Expr::Literal(ScalarValue::Int32(Some(5)), Some(ext_and_custom)),
-                cast(lit(6_i32), DataType::Int64),
-                try_cast(lit(7_i32), DataType::Int64),
-                cast(
-                    bad_timestamp,
-                    DataType::Timestamp(TimeUnit::Nanosecond, None)
-                ),
-            ]
-        );
+            (
+                Some(FieldMetadata::from(extension.clone())),
+                Some(FieldMetadata::new_empty()),
+            ),
+            (
+                Some(FieldMetadata::from(extension.with("origin", "lit"))),
+                Some(FieldMetadata::from(Metadata::new().with("origin", "lit"))),
+            ),
+        ] {
+            let actual = super::coerce_scalar_function_argument(
+                Expr::Literal(ScalarValue::Int32(Some(1)), metadata),
+                &DataType::Int64,
+                &DFSchema::empty(),
+            )?;
+            assert_eq!(actual, Expr::Literal(ScalarValue::Int64(Some(1)), expected));
+        }
         Ok(())
     }
 }

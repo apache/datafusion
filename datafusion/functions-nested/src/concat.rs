@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crate::make_array::array_array_with_field;
+use crate::make_array::make_array_inner;
 use crate::utils::{
     align_array_dimensions, check_datatypes, list_inner_field, list_type_with_element,
     make_scalar_function,
@@ -548,15 +548,7 @@ fn concat_internal<O: OffsetSizeTrait>(
 fn array_append_inner(args: &[ArrayRef], return_type: &DataType) -> Result<ArrayRef> {
     let [array, values] = take_function_args("array_append", args)?;
     match array.data_type() {
-        DataType::Null => {
-            let field = list_inner_field("array_append", return_type)?;
-            match return_type {
-                DataType::LargeList(_) => {
-                    array_array_with_field::<i64>(std::slice::from_ref(values), field)
-                }
-                _ => array_array_with_field::<i32>(std::slice::from_ref(values), field),
-            }
-        }
+        DataType::Null => make_array_inner(&[Arc::clone(values)]),
         DataType::List(_) => general_append_and_prepend::<i32>(args, true, return_type),
         DataType::LargeList(_) => {
             general_append_and_prepend::<i64>(args, true, return_type)
@@ -568,15 +560,7 @@ fn array_append_inner(args: &[ArrayRef], return_type: &DataType) -> Result<Array
 fn array_prepend_inner(args: &[ArrayRef], return_type: &DataType) -> Result<ArrayRef> {
     let [values, array] = take_function_args("array_prepend", args)?;
     match array.data_type() {
-        DataType::Null => {
-            let field = list_inner_field("array_prepend", return_type)?;
-            match return_type {
-                DataType::LargeList(_) => {
-                    array_array_with_field::<i64>(std::slice::from_ref(values), field)
-                }
-                _ => array_array_with_field::<i32>(std::slice::from_ref(values), field),
-            }
-        }
+        DataType::Null => make_array_inner(&[Arc::clone(values)]),
         DataType::List(_) => general_append_and_prepend::<i32>(args, false, return_type),
         DataType::LargeList(_) => {
             general_append_and_prepend::<i64>(args, false, return_type)
@@ -729,37 +713,5 @@ mod tests {
                 input.data_type(),
             )
         })
-    }
-
-    #[test]
-    fn test_null_append_prepend_uses_return_type_field() -> Result<()> {
-        use arrow::array::AsArray;
-
-        let null_list: ArrayRef = Arc::new(arrow::array::NullArray::new(2));
-        let values: ArrayRef =
-            Arc::new(arrow::array::Int64Array::from(vec![Some(10), None]));
-        let field = Arc::new(
-            Field::new("element", DataType::Int64, true)
-                .with_metadata(arrow::datatypes::Metadata::new().with("origin", "ret")),
-        );
-
-        let list_type = DataType::List(Arc::clone(&field));
-        let appended = array_append_inner(
-            &[Arc::clone(&null_list), Arc::clone(&values)],
-            &list_type,
-        )?;
-        assert_eq!(appended.data_type(), &list_type);
-        assert_eq!(appended.null_count(), 0);
-        assert_eq!(appended.as_list::<i32>().values(), &values);
-        assert_eq!(appended.as_list::<i32>().value_offsets(), &[0, 1, 2]);
-
-        let large_list_type = DataType::LargeList(field);
-        let prepended =
-            array_prepend_inner(&[Arc::clone(&values), null_list], &large_list_type)?;
-        assert_eq!(prepended.data_type(), &large_list_type);
-        assert_eq!(prepended.null_count(), 0);
-        assert_eq!(prepended.as_list::<i64>().values(), &values);
-        assert_eq!(prepended.as_list::<i64>().value_offsets(), &[0, 1, 2]);
-        Ok(())
     }
 }

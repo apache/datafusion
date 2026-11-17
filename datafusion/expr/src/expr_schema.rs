@@ -21,8 +21,8 @@ use crate::{
 use arrow::compute::can_cast_types;
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
-use datafusion_common::metadata::strip_extension_type;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
     not_impl_err, plan_datafusion_err, plan_err,
@@ -88,17 +88,22 @@ fn cast_output_field(
         && target_field.is_nullable()
         && target_field.metadata().is_empty();
 
+    let metadata = if is_type_only {
+        // Type-only cast: propagate source metadata, stripping extension type keys
+        let mut meta = source_field.metadata().clone();
+        meta.remove(EXTENSION_TYPE_NAME_KEY);
+        meta.remove(EXTENSION_TYPE_METADATA_KEY);
+        meta
+    } else {
+        // Explicit target field: use target metadata exactly
+        target_field.metadata().clone()
+    };
+
     let mut f = source_field
         .as_ref()
         .clone()
-        .with_data_type(target_field.data_type().clone());
-    if is_type_only {
-        // Type-only cast: propagate source metadata, stripping extension type keys
-        strip_extension_type(f.metadata_mut());
-    } else {
-        // Explicit target field: use target metadata exactly
-        f.set_metadata(target_field.metadata().clone());
-    }
+        .with_data_type(target_field.data_type().clone())
+        .with_metadata(metadata);
     if force_nullable {
         f = f.with_nullable(true);
     }

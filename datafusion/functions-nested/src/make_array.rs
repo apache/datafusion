@@ -127,6 +127,19 @@ impl ScalarUDFImpl for MakeArray {
     }
 }
 
+/// `make_array_inner` is the implementation of the `make_array` function.
+/// Constructs an array using the input `data` as `ArrayRef`.
+/// Returns a reference-counted `Array` instance result.
+pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
+    let data_type = arrays.iter().find_map(|arg| {
+        let arg_type = arg.data_type();
+        (!arg_type.is_null()).then_some(arg_type)
+    });
+
+    let data_type = data_type.unwrap_or(&Null);
+    array_array::<i32>(arrays, data_type.clone(), Field::LIST_FIELD_DEFAULT_NAME)
+}
+
 /// Convert zero or more [`ArrayRef`] of the same type into a
 /// `ListArray` or 'LargeListArray' depending on the offset size.
 ///
@@ -182,7 +195,7 @@ pub fn array_array<O: OffsetSizeTrait>(
     array_array_with_field::<O>(args, Arc::new(Field::new(field_name, data_type, true)))
 }
 
-pub(crate) fn array_array_with_field<O: OffsetSizeTrait>(
+fn array_array_with_field<O: OffsetSizeTrait>(
     args: &[ArrayRef],
     field: FieldRef,
 ) -> Result<ArrayRef> {
