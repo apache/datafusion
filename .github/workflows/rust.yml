@@ -7,8 +7,8 @@
 # Some actions use Runs-On to run on ASF infrastructure:
 # https://datafusion.apache.org/contributor-guide/#ci-runners
 #
-# Small, short jobs run on `ubuntu-slim`, which starts quickly even when the
-# shared `ubuntu-latest` pool is backed up. A job belongs there if it stays
+# Short jobs use small Runs-On runners in the merge queue when enabled.
+# Elsewhere they use `ubuntu-slim`. These jobs must stay
 # well within one vCPU, 5 GB of memory, and 15 minutes, and needs no Docker.
 # Slim has no Rust toolchain; slim jobs that run Cargo set up Rust with
 # `.github/actions/setup-rustup`.
@@ -733,7 +733,7 @@ jobs:
   vendor:
     name: Verify Vendored Code
     if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
-    runs-on: ubuntu-slim
+    runs-on: &small-runner ${{ github.event_name == 'merge_group' && vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=2,image=ubuntu24-full-x64,tag=datafusion', github.run_id) || 'ubuntu-slim' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
@@ -751,7 +751,7 @@ jobs:
   check-fmt:
     name: Check cargo fmt
     if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
-    runs-on: ubuntu-slim
+    runs-on: *small-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
@@ -763,7 +763,7 @@ jobs:
   check-workflow-tool-installs:
     name: Check GitHub Actions install tooling
     if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
-    runs-on: ubuntu-slim
+    runs-on: *small-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Check workflow tool installs
@@ -805,7 +805,7 @@ jobs:
     name: check Cargo.toml formatting
     needs: linux-build-lib
     if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
-    runs-on: ubuntu-slim
+    runs-on: *small-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -883,7 +883,7 @@ jobs:
   # See: https://github.com/apache/datafusion/pull/14305
   examples-check-datafusion-crates:
     name: Check datafusion crates used in datafusion-examples
-    runs-on: ubuntu-slim
+    runs-on: *small-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - run: python3 ci/scripts/check_examples_datafusion_crates.py
@@ -948,7 +948,7 @@ jobs:
   depcheck:
     name: Circular Dependency Check
     if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
-    runs-on: ubuntu-slim
+    runs-on: *small-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
