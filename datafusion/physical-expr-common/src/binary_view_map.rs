@@ -1082,7 +1082,7 @@ mod tests {
 
     /// A long value whose hash collides with an inline value sharing its
     /// 4-byte prefix must not read the inline bytes as a buffer reference.
-    /// Hashes only collide with the `force_hash_collisions` feature.
+    #[cfg(feature = "force_hash_collisions")]
     #[test]
     fn test_long_value_colliding_with_inline_value() {
         let mut test_map = TestMap::new();
