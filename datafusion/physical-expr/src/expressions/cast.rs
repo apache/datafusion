@@ -15,7 +15,7 @@ use arrow::util::display::{ArrayFormatterFactory, DurationFormat, FormatOptions}
 use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::metadata::FieldMetadata;
+use datafusion_common::metadata::strip_extension_type;
 use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
@@ -325,17 +325,12 @@ impl CastExpr {
         // Type-only cast: pass through the source metadata and nullability,
         // stripping extension type keys (the cast is to a plain storage type).
         source_result.map(|source_field| {
-            Arc::new(
-                source_field
-                    .as_ref()
-                    .clone()
-                    .with_data_type(self.cast_type().clone())
-                    .with_metadata(
-                        FieldMetadata::new_from_field(&source_field)
-                            .without_extension_type()
-                            .into_inner(),
-                    ),
-            )
+            let mut field = source_field
+                .as_ref()
+                .clone()
+                .with_data_type(self.cast_type().clone());
+            strip_extension_type(field.metadata_mut());
+            Arc::new(field)
         })
     }
 

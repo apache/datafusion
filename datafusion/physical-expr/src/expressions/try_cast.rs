@@ -11,10 +11,11 @@ use arrow::compute;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
+use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
 use compute::can_cast_types;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
+use datafusion_common::metadata::strip_extension_type;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_expr::ColumnarValue;
 
@@ -167,18 +168,13 @@ impl PhysicalExpr for TryCastExpr {
 
         // Pass-through metadata from source (stripping extension keys)
         source_result.map(|source_field| {
-            let mut metadata = source_field.metadata().clone();
-            metadata.remove(EXTENSION_TYPE_NAME_KEY);
-            metadata.remove(EXTENSION_TYPE_METADATA_KEY);
-
-            Arc::new(
-                source_field
-                    .as_ref()
-                    .clone()
-                    .with_data_type(self.cast_type().clone())
-                    .with_nullable(true) // TRY_CAST is always nullable
-                    .with_metadata(metadata),
-            )
+            let mut field = source_field
+                .as_ref()
+                .clone()
+                .with_data_type(self.cast_type().clone())
+                .with_nullable(true); // TRY_CAST is always nullable
+            strip_extension_type(field.metadata_mut());
+            Arc::new(field)
         })
     }
 
@@ -371,6 +367,7 @@ mod tests {
         },
         datatypes::*,
     };
+    use arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     // runs an end-to-end test of physical type cast

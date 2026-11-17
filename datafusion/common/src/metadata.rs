@@ -225,6 +225,20 @@ pub fn merge_metadata_for_union<'a>(
         })
 }
 
+/// Removes extension type information for a cast to a plain storage type.
+/// Ordinary field metadata is preserved.
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub fn strip_extension_type(metadata: &mut Metadata) {
+    metadata.remove(EXTENSION_TYPE_NAME_KEY);
+    metadata.remove(EXTENSION_TYPE_METADATA_KEY);
+}
+
 /// Literal metadata
 ///
 /// Stores metadata associated with a literal expressions
@@ -348,25 +362,6 @@ impl FieldMetadata {
         Self {
             inner: field.metadata().clone(),
         }
-    }
-
-    /// Removes extension type information for a cast to a plain storage type.
-    /// Ordinary field metadata is preserved.
-    ///
-    /// # Public Only for Internal Use:
-    ///
-    /// This is not a public API and is for internal use only; see [API policy] for details.
-    ///
-    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
-    #[doc(hidden)]
-    pub fn without_extension_type(mut self) -> Self {
-        if self.inner.contains_key(EXTENSION_TYPE_NAME_KEY)
-            || self.inner.contains_key(EXTENSION_TYPE_METADATA_KEY)
-        {
-            self.inner.remove(EXTENSION_TYPE_NAME_KEY);
-            self.inner.remove(EXTENSION_TYPE_METADATA_KEY);
-        }
-        self
     }
 
     /// Create a new metadata instance from a map of string keys to string values.

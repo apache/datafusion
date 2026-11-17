@@ -10,15 +10,14 @@ use std::vec;
 use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData,
-    NullArray, OffsetSizeTrait, new_null_array,
+    NullArray, OffsetSizeTrait, new_empty_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef};
 use arrow::datatypes::{DataType::Null, Field};
 use datafusion_common::metadata::coerced_fields_metadata;
-use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{Result, internal_err, plan_err};
-use datafusion_expr::binary::{try_common_struct_type, type_union_resolution};
+use datafusion_common::{DataFusionError, Result, internal_err, plan_datafusion_err};
+use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, Volatility,
@@ -128,19 +127,6 @@ impl ScalarUDFImpl for MakeArray {
     }
 }
 
-/// `make_array_inner` is the implementation of the `make_array` function.
-/// Constructs an array using the input `data` as `ArrayRef`.
-/// Returns a reference-counted `Array` instance result.
-pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    let data_type = arrays.iter().find_map(|arg| {
-        let arg_type = arg.data_type();
-        (!arg_type.is_null()).then_some(arg_type)
-    });
-
-    let data_type = data_type.unwrap_or(&Null);
-    array_array::<i32>(arrays, data_type.clone(), Field::LIST_FIELD_DEFAULT_NAME)
-}
-
 /// Convert zero or more [`ArrayRef`] of the same type into a
 /// `ListArray` or 'LargeListArray' depending on the offset size.
 ///
@@ -196,17 +182,19 @@ pub fn array_array<O: OffsetSizeTrait>(
     array_array_with_field::<O>(args, Arc::new(Field::new(field_name, data_type, true)))
 }
 
-fn array_array_with_field<O: OffsetSizeTrait>(
+pub(crate) fn array_array_with_field<O: OffsetSizeTrait>(
     args: &[ArrayRef],
     field: FieldRef,
 ) -> Result<ArrayRef> {
     let data_type = field.data_type();
     if args.is_empty() {
-        // If input is empty, combined output is an empty array with `Null` data type
-        let array = new_null_array(&Null, 0);
-        return Ok(Arc::new(
-            SingleRowListArrayBuilder::new(array).build_list_array(),
-        ));
+        let values = new_empty_array(data_type);
+        return Ok(Arc::new(GenericListArray::<O>::try_new(
+            field,
+            OffsetBuffer::new_zeroed(1),
+            values,
+            None,
+        )?));
     }
 
     let mut data = Vec::with_capacity(args.len());
@@ -253,16 +241,64 @@ fn array_array_with_field<O: OffsetSizeTrait>(
 }
 
 pub fn coerce_types_inner(arg_types: &[DataType], name: &str) -> Result<Vec<DataType>> {
-    let common_type = try_common_struct_type(arg_types)
-        .ok()
-        .or_else(|| type_union_resolution(arg_types));
-    if let Some(common_type) = common_type {
-        Ok(vec![common_type; arg_types.len()])
-    } else {
-        plan_err!(
-            "Failed to unify argument types of {}: [{}]",
-            name,
+    try_type_union_resolution(arg_types).map_err(|err| match err {
+        DataFusionError::Execution(_) => plan_datafusion_err!(
+            "Failed to unify argument types of {name}: [{}]",
             arg_types.iter().join(", ")
-        )
+        ),
+        err => err,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::AsArray;
+    use arrow::datatypes::{Fields, Metadata};
+
+    #[test]
+    fn empty_array_array_with_field_preserves_field_and_offset() -> Result<()> {
+        let field = Arc::new(
+            Field::new("element", DataType::Int32, false)
+                .with_metadata(Metadata::new().with("origin", "spark")),
+        );
+        let array = array_array_with_field::<i64>(&[], Arc::clone(&field))?;
+        assert_eq!(array.len(), 1);
+        assert_eq!(array.null_count(), 0);
+        assert_eq!(array.data_type(), &DataType::LargeList(field));
+        assert_eq!(array.as_list::<i64>().value_length(0), 0);
+
+        let array = array_array::<i64>(&[], DataType::Int32, "element")?;
+        assert_eq!(
+            array.data_type(),
+            &DataType::LargeList(Arc::new(Field::new("element", DataType::Int32, true),))
+        );
+        assert_eq!(array.as_list::<i64>().value_length(0), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn coerce_types_inner_propagates_metadata_conflict_and_maps_unification_error() {
+        let s1 = DataType::Struct(Fields::from(vec![
+            Field::new("v", DataType::Utf8, true)
+                .with_metadata(Metadata::new().with("ARROW:extension:name", "ext.a")),
+        ]));
+        let s2 = DataType::Struct(Fields::from(vec![
+            Field::new("v", DataType::Utf8, true)
+                .with_metadata(Metadata::new().with("ARROW:extension:name", "ext.b")),
+        ]));
+        let err = coerce_types_inner(&[s1, s2], "make_array").unwrap_err();
+        assert!(
+            matches!(&err, DataFusionError::Plan(msg) if msg.contains("ARROW:extension:name")),
+            "unexpected error: {err}"
+        );
+
+        let incompatible = [DataType::Boolean, DataType::Int64];
+        let err = coerce_types_inner(&incompatible, "custom_array").unwrap_err();
+        assert!(matches!(&err, DataFusionError::Plan(_)), "{err}");
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: Failed to unify argument types of custom_array: [Boolean, Int64]"
+        );
     }
 }
