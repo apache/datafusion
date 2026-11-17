@@ -3283,6 +3283,9 @@ fn build_in_memory(
         let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
 
         array_map_created_count.add(1);
+        if array_map.is_sorted() {
+            grouped_map_count.add(1);
+        }
         metrics.build_mem_used.add(array_map.size());
 
         Map::ArrayMap(array_map)
@@ -3402,7 +3405,11 @@ fn build_in_memory(
         Map::HashMap(hashmap) => {
             hashmap.group_rows(&map_reservation, &metrics.build_mem_used)
         }
-        Map::ArrayMap(_) => false,
+        Map::ArrayMap(array_map) => array_map.group_rows(
+            &left_values[0],
+            &map_reservation,
+            &metrics.build_mem_used,
+        )?,
     };
     if grouped {
         grouped_map_count.add(1);
@@ -3992,19 +3999,22 @@ mod tests {
         grouped_build(|row| row * 1_000_003, Arc::clone(&pool) as _).await?;
         let limit = pool.peak.load(Ordering::Relaxed);
 
-        // With 10 rows for each of 1,000 sparse keys, for a hash map
-        let key = |row| (row % 1_000) * 1_000_003;
+        // With 10 rows for each of 1,000 keys, with sparse keys for a hash map
+        // and dense keys for an `ArrayMap`
+        for spacing in [1_000_003, 1] {
+            let key = |row| (row % 1_000) * spacing;
 
-        // The build still fits, whether or not there is room to group
-        let pool = Arc::new(GreedyMemoryPool::new(limit));
-        grouped_build(key, pool).await?;
+            // The build still fits, whether or not there is room to group
+            let pool = Arc::new(GreedyMemoryPool::new(limit));
+            grouped_build(key, pool).await?;
 
-        // With the memory a grouped build peaks at, it groups its rows
-        let pool = Arc::new(PeakPool::default());
-        assert_eq!(grouped_build(key, Arc::clone(&pool) as _).await?, 1);
-        let peak = pool.peak.load(Ordering::Relaxed);
-        let pool = Arc::new(GreedyMemoryPool::new(peak));
-        assert_eq!(grouped_build(key, pool).await?, 1);
+            // With the memory a grouped build peaks at, it groups its rows
+            let pool = Arc::new(PeakPool::default());
+            assert_eq!(grouped_build(key, Arc::clone(&pool) as _).await?, 1);
+            let peak = pool.peak.load(Ordering::Relaxed);
+            let pool = Arc::new(GreedyMemoryPool::new(peak));
+            assert_eq!(grouped_build(key, pool).await?, 1);
+        }
         Ok(())
     }
 
