@@ -1954,7 +1954,7 @@ impl EquivalenceProperties {
     }
 }
 
-/// Readable display of the [`EquivalenceProperties::facts`], separated by `; `.
+/// Readable display of the facts, separated by `; `.
 ///
 /// Format:
 /// ```text
