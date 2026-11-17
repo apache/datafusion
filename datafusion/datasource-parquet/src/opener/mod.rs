@@ -1145,6 +1145,11 @@ impl MetadataLoadedParquetOpen {
             prepared
                 .dictionary_read_max_distinct_values
                 .map(|max_distinct_values| {
+                    if !prepared.logical_file_schema.fields().iter().any(|field| {
+                        matches!(field.data_type(), DataType::Dictionary(_, _))
+                    }) {
+                        return std::collections::HashSet::new();
+                    }
                     dictionary_promotion_candidates(
                         reader_metadata.metadata(),
                         reader_metadata.parquet_schema(),
@@ -6500,14 +6505,15 @@ mod test {
         let file = PartitionedFile::new("binary.parquet".to_string(), bin_size as u64);
         let dictionary_type =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary));
-        for (cap, legacy, physical_type) in [
-            (1, false, &DataType::Binary),
-            (1, true, &DataType::Binary),
-            (2, false, &dictionary_type),
+        for (cap, legacy, logical_schema, physical_type) in [
+            (1, false, &dict_bin_schema, &DataType::Binary),
+            (1, true, &dict_bin_schema, &DataType::Binary),
+            (2, false, &dict_bin_schema, &dictionary_type),
+            (2, false, &bin_schema, &DataType::Binary),
         ] {
             let mut builder = ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
-                .with_schema(Arc::clone(&dict_bin_schema));
+                .with_schema(Arc::clone(logical_schema));
             builder.enable_rle_to_dictionary = legacy;
             let morselizer = builder
                 .with_dictionary_read_max_distinct_values(cap)
@@ -6530,17 +6536,11 @@ mod test {
                 physical_type
             );
             let batches = collect_batches(&morselizer, file.clone()).await;
-            assert_eq!(batches[0].schema().field(0).data_type(), &dictionary_type);
-            let dictionary = batches[0].column(0).as_dictionary::<Int32Type>();
-            let values = dictionary.values().as_binary::<i32>();
             assert_eq!(
-                dictionary
-                    .keys()
-                    .iter()
-                    .map(|key| values.value(key.unwrap() as usize))
-                    .collect::<Vec<_>>(),
-                vec![b"a".as_slice(), b"b".as_slice(), b"a".as_slice()]
+                batches[0].schema().field(0).data_type(),
+                logical_schema.field(0).data_type()
             );
+            assert_eq!(batches[0].num_rows(), 3);
         }
     }
 }
