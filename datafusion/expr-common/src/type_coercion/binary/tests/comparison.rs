@@ -895,6 +895,97 @@ fn test_type_union_coercion_prefers_finer_timestamp_unit() {
     );
 }
 
+#[test]
+fn test_struct_type_union_field_contracts() -> Result<()> {
+    let struct_type =
+        |data_type, nullable, origin: &str| {
+            DataType::Struct(
+                vec![Field::new("value", data_type, nullable).with_metadata(
+                    HashMap::from([("origin".to_string(), origin.to_string())]),
+                )]
+                .into(),
+            )
+        };
+    let inputs = [
+        DataType::Null,
+        struct_type(DataType::Int32, false, "first"),
+        struct_type(DataType::Int64, true, "second"),
+    ];
+    assert_eq!(
+        try_type_union_resolution_with_struct(&inputs)?,
+        vec![struct_type(DataType::Int64, true, "first"); 3],
+    );
+    assert_eq!(
+        try_type_union_resolution(&[inputs[2].clone(), inputs[1].clone()])?,
+        vec![struct_type(DataType::Int64, true, "second"); 2],
+    );
+    Ok(())
+}
+
+#[test]
+fn test_struct_type_union_requires_matching_field_names() {
+    let inputs = [["a,b", "c"], ["a", "b,c"]].map(|names| {
+        DataType::Struct(
+            names
+                .into_iter()
+                .map(|name| Field::new(name, DataType::Int32, false))
+                .collect::<Vec<_>>()
+                .into(),
+        )
+    });
+    assert!(
+        try_type_union_resolution_with_struct(&inputs)
+            .unwrap_err()
+            .to_string()
+            .contains("Expected structs with matching field names")
+    );
+}
+
+#[test]
+fn test_reordered_struct_type_union_fields() -> Result<()> {
+    let a = Field::new("a", DataType::Int32, false).with_metadata(HashMap::from([
+        ("origin".to_string(), "first".to_string()),
+        ("only_first".to_string(), "1".to_string()),
+    ]));
+    let other_a = Field::new("a", DataType::Int64, true).with_metadata(HashMap::from([
+        ("origin".to_string(), "second".to_string()),
+        ("only_second".to_string(), "2".to_string()),
+    ]));
+    let inputs = [
+        DataType::Struct(vec![a, Field::new("b", DataType::Utf8, true)].into()),
+        DataType::Struct(vec![Field::new("b", DataType::Utf8, false), other_a].into()),
+    ];
+    let expected_fields: Fields = vec![
+        Field::new("b", DataType::Utf8, true),
+        Field::new("a", DataType::Int64, true).with_metadata(HashMap::from([
+            ("origin".to_string(), "first".to_string()),
+            ("only_first".to_string(), "1".to_string()),
+            ("only_second".to_string(), "2".to_string()),
+        ])),
+    ]
+    .into();
+    assert_eq!(
+        try_type_union_resolution(&inputs)?,
+        vec![DataType::Struct(expected_fields.clone()); 2]
+    );
+
+    // An enclosing, ordered struct keeps the first inner field order.
+    let wrap =
+        |data_type| DataType::Struct(vec![Field::new("nested", data_type, true)].into());
+    let expected = wrap(DataType::Struct(
+        vec![
+            Arc::clone(&expected_fields[1]),
+            Arc::clone(&expected_fields[0]),
+        ]
+        .into(),
+    ));
+    assert_eq!(
+        try_type_union_resolution(&inputs.map(wrap))?,
+        vec![expected; 2]
+    );
+    Ok(())
+}
+
 /// Tests that `type_union_resolution` unifies Map types by recursing into the
 /// key/value types, so a Map whose value type is Null (e.g. `MAP {'k': NULL}`)
 /// unifies with a concretely-typed Map in a VALUES list.

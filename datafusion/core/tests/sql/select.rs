@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use super::*;
+use arrow::array::AsArray;
 use datafusion_common::{ParamValues, ScalarValue, metadata::ScalarAndMetadata};
 use insta::assert_snapshot;
 
@@ -576,6 +577,70 @@ async fn test_recursive_cte_batch_schema_stable_with_order_by_limit() -> Result<
         assert_eq!(
             actual_names, expected_names,
             "batch {i} schema field names leaked from recursive branch"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_coalesce_struct_field_metadata() -> Result<()> {
+    use arrow::array::StructArray;
+    use arrow::buffer::NullBuffer;
+    use datafusion::logical_expr::{Volatility, create_udf};
+    let ctx = SessionContext::new();
+    let mut columns: Vec<ArrayRef> = Vec::new();
+    for (origin, nullable, values, nulls) in [
+        (
+            "a",
+            false,
+            vec![Some(1), Some(2), Some(3)],
+            Some(NullBuffer::from(vec![true, false, true])),
+        ),
+        ("b", true, vec![Some(4), None, Some(6)], None),
+    ] {
+        let field = Field::new("v", DataType::Int32, nullable)
+            .with_metadata(HashMap::from([("origin".to_string(), origin.to_string())]));
+        columns.push(Arc::new(StructArray::new(
+            vec![field].into(),
+            vec![Arc::new(Int32Array::from(values))],
+            nulls,
+        )));
+    }
+    let source_type = columns[0].data_type().clone();
+    ctx.register_udf(create_udf(
+        "volatile_identity",
+        vec![source_type.clone()],
+        source_type,
+        Volatility::Volatile,
+        Arc::new(|args| Ok(args[0].clone())),
+    ));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", columns[0].data_type().clone(), true),
+        Field::new("b", columns[1].data_type().clone(), false),
+    ]));
+    ctx.register_batch("t", RecordBatch::try_new(schema, columns)?)?;
+    let expected = DataType::Struct(
+        vec![
+            Field::new("v", DataType::Int32, true)
+                .with_metadata(HashMap::from([("origin".to_string(), "a".to_string())])),
+        ]
+        .into(),
+    );
+    for sql in [
+        "SELECT coalesce(a, b) FROM t",
+        "SELECT coalesce(volatile_identity(a), b) FROM t",
+    ] {
+        let df = ctx.sql(sql).await?;
+        assert_eq!(df.schema().field(0).data_type(), &expected, "{sql}");
+        assert!(!df.schema().field(0).is_nullable(), "{sql}");
+        let batches = df.collect().await?;
+        let values = batches[0].column(0).as_struct();
+        assert_eq!(values.data_type(), &expected, "{sql}");
+        assert_eq!(values.null_count(), 0, "{sql}");
+        assert_eq!(
+            values.column(0).as_ref(),
+            &Int32Array::from(vec![Some(1), None, Some(3)]),
+            "{sql}"
         );
     }
     Ok(())
