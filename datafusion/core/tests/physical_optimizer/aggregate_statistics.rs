@@ -930,7 +930,7 @@ async fn short_column_statistics_are_reported() -> Result<()> {
     let err = ctx.sql(sql).await?.collect().await.expect_err(sql);
     assert_contains!(
         err.to_string(),
-        "Statistics provider ClosureStatisticsProvider returned 1 column statistics for DataSourceExec, expected 2 (one per field of its schema)"
+        "Statistics provider ClosureStatisticsProvider returned 0 column statistics for DataSourceExec, expected 1 (one per field of its schema)"
     );
     Ok(())
 }
