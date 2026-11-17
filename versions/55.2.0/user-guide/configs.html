@@ -1267,7 +1267,7 @@ used to execute your SQL query:</p>
 <p>Adjusting the following configuration values influences how the optimizer selects the join algorithm
 used to execute your SQL query.</p>
 <section id="allow-symmetric-joins-without-pruning-bool-default-true">
-<h3>allow_symmetric_joins_without_pruning (bool, default = true)<a class="headerlink" href="#allow-symmetric-joins-without-pruning-bool-default-true" title="Link to this heading">#</a></h3>
+<span id="allow_symmetric_joins_without_pruning-bool-default--true"></span><h3>allow_symmetric_joins_without_pruning (bool, default = true)<a class="headerlink" href="#allow-symmetric-joins-without-pruning-bool-default-true" title="Link to this heading">#</a></h3>
 <p>Controls whether symmetric hash joins are allowed for unbounded data sources even when their inputs
 lack ordering or filtering.</p>
 <ul class="simple">
@@ -1275,7 +1275,7 @@ lack ordering or filtering.</p>
 </ul>
 </section>
 <section id="prefer-hash-join-bool-default-true">
-<h3>prefer_hash_join (bool, default = true)<a class="headerlink" href="#prefer-hash-join-bool-default-true" title="Link to this heading">#</a></h3>
+<span id="prefer_hash_join-bool-default--true"></span><h3>prefer_hash_join (bool, default = true)<a class="headerlink" href="#prefer-hash-join-bool-default-true" title="Link to this heading">#</a></h3>
 <p>Determines whether the optimizer prefers Hash Join over Sort Merge Join during physical plan selection.</p>
 <ul class="simple">
 <li><p>true: favors HashJoin for faster execution when sufficient memory is available.</p></li>
@@ -1283,7 +1283,7 @@ lack ordering or filtering.</p>
 </ul>
 </section>
 <section id="enable-piecewise-merge-join-bool-default-false">
-<h3>enable_piecewise_merge_join (bool, default = false)<a class="headerlink" href="#enable-piecewise-merge-join-bool-default-false" title="Link to this heading">#</a></h3>
+<span id="enable_piecewise_merge_join-bool-default--false"></span><h3>enable_piecewise_merge_join (bool, default = false)<a class="headerlink" href="#enable-piecewise-merge-join-bool-default-false" title="Link to this heading">#</a></h3>
 <p>Enables the experimental Piecewise Merge Join algorithm.</p>
 <ul class="simple">
 <li><p>When enabled, the physical planner may select PiecewiseMergeJoin if there is exactly one range

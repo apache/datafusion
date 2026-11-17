@@ -807,7 +807,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <li><p><a class="reference internal" href="#var-sample">var_sample</a></p></li>
 </ul>
 <section id="array-agg">
-<h3><code class="docutils literal notranslate"><span class="pre">array_agg</span></code><a class="headerlink" href="#array-agg" title="Link to this heading">#</a></h3>
+<span id="array_agg"></span><h3><code class="docutils literal notranslate"><span class="pre">array_agg</span></code><a class="headerlink" href="#array-agg" title="Link to this heading">#</a></h3>
 <p>Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.
 This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the argument expression.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_agg</span><span class="p">(</span><span class="n">expression</span><span class="w"> </span><span class="p">[</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">])</span>
@@ -868,7 +868,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="bit-and">
-<h3><code class="docutils literal notranslate"><span class="pre">bit_and</span></code><a class="headerlink" href="#bit-and" title="Link to this heading">#</a></h3>
+<span id="bit_and"></span><h3><code class="docutils literal notranslate"><span class="pre">bit_and</span></code><a class="headerlink" href="#bit-and" title="Link to this heading">#</a></h3>
 <p>Computes the bitwise AND of all non-null input values.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">bit_and</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
@@ -881,7 +881,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="bit-or">
-<h3><code class="docutils literal notranslate"><span class="pre">bit_or</span></code><a class="headerlink" href="#bit-or" title="Link to this heading">#</a></h3>
+<span id="bit_or"></span><h3><code class="docutils literal notranslate"><span class="pre">bit_or</span></code><a class="headerlink" href="#bit-or" title="Link to this heading">#</a></h3>
 <p>Computes the bitwise OR of all non-null input values.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">bit_or</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
@@ -894,7 +894,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="bit-xor">
-<h3><code class="docutils literal notranslate"><span class="pre">bit_xor</span></code><a class="headerlink" href="#bit-xor" title="Link to this heading">#</a></h3>
+<span id="bit_xor"></span><h3><code class="docutils literal notranslate"><span class="pre">bit_xor</span></code><a class="headerlink" href="#bit-xor" title="Link to this heading">#</a></h3>
 <p>Computes the bitwise exclusive OR of all non-null input values.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">bit_xor</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
@@ -907,7 +907,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="bool-and">
-<h3><code class="docutils literal notranslate"><span class="pre">bool_and</span></code><a class="headerlink" href="#bool-and" title="Link to this heading">#</a></h3>
+<span id="bool_and"></span><h3><code class="docutils literal notranslate"><span class="pre">bool_and</span></code><a class="headerlink" href="#bool-and" title="Link to this heading">#</a></h3>
 <p>Returns true if all non-null input values are true, otherwise false.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">bool_and</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
@@ -931,7 +931,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="bool-or">
-<h3><code class="docutils literal notranslate"><span class="pre">bool_or</span></code><a class="headerlink" href="#bool-or" title="Link to this heading">#</a></h3>
+<span id="bool_or"></span><h3><code class="docutils literal notranslate"><span class="pre">bool_or</span></code><a class="headerlink" href="#bool-or" title="Link to this heading">#</a></h3>
 <p>Returns true if all non-null input values are true, otherwise false.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">bool_and</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
@@ -986,7 +986,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="first-value">
-<h3><code class="docutils literal notranslate"><span class="pre">first_value</span></code><a class="headerlink" href="#first-value" title="Link to this heading">#</a></h3>
+<span id="first_value"></span><h3><code class="docutils literal notranslate"><span class="pre">first_value</span></code><a class="headerlink" href="#first-value" title="Link to this heading">#</a></h3>
 <p>Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">first_value</span><span class="p">(</span><span class="n">expression</span><span class="w"> </span><span class="p">[</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">])</span>
 </pre></div>
@@ -1038,7 +1038,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="last-value">
-<h3><code class="docutils literal notranslate"><span class="pre">last_value</span></code><a class="headerlink" href="#last-value" title="Link to this heading">#</a></h3>
+<span id="last_value"></span><h3><code class="docutils literal notranslate"><span class="pre">last_value</span></code><a class="headerlink" href="#last-value" title="Link to this heading">#</a></h3>
 <p>Returns the last element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">last_value</span><span class="p">(</span><span class="n">expression</span><span class="w"> </span><span class="p">[</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">])</span>
 </pre></div>
@@ -1138,7 +1138,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="string-agg">
-<h3><code class="docutils literal notranslate"><span class="pre">string_agg</span></code><a class="headerlink" href="#string-agg" title="Link to this heading">#</a></h3>
+<span id="string_agg"></span><h3><code class="docutils literal notranslate"><span class="pre">string_agg</span></code><a class="headerlink" href="#string-agg" title="Link to this heading">#</a></h3>
 <p>Concatenates the values of string expressions and places separator values between them. If ordering is required, strings are concatenated in the specified order. This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the first argument expression.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">string_agg</span><span class="p">([</span><span class="k">DISTINCT</span><span class="p">]</span><span class="w"> </span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="k">delimiter</span><span class="w"> </span><span class="p">[</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">])</span>
 </pre></div>
@@ -1222,7 +1222,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="var-pop">
-<h3><code class="docutils literal notranslate"><span class="pre">var_pop</span></code><a class="headerlink" href="#var-pop" title="Link to this heading">#</a></h3>
+<span id="var_pop"></span><h3><code class="docutils literal notranslate"><span class="pre">var_pop</span></code><a class="headerlink" href="#var-pop" title="Link to this heading">#</a></h3>
 <p>Returns the statistical population variance of a set of numbers.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">var_pop</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
@@ -1241,15 +1241,15 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="var-population">
-<h3><code class="docutils literal notranslate"><span class="pre">var_population</span></code><a class="headerlink" href="#var-population" title="Link to this heading">#</a></h3>
+<span id="var_population"></span><h3><code class="docutils literal notranslate"><span class="pre">var_population</span></code><a class="headerlink" href="#var-population" title="Link to this heading">#</a></h3>
 <p><em>Alias of <a class="reference internal" href="#var-pop">var_pop</a>.</em></p>
 </section>
 <section id="var-samp">
-<h3><code class="docutils literal notranslate"><span class="pre">var_samp</span></code><a class="headerlink" href="#var-samp" title="Link to this heading">#</a></h3>
+<span id="var_samp"></span><h3><code class="docutils literal notranslate"><span class="pre">var_samp</span></code><a class="headerlink" href="#var-samp" title="Link to this heading">#</a></h3>
 <p><em>Alias of <a class="reference internal" href="#var">var</a>.</em></p>
 </section>
 <section id="var-sample">
-<h3><code class="docutils literal notranslate"><span class="pre">var_sample</span></code><a class="headerlink" href="#var-sample" title="Link to this heading">#</a></h3>
+<span id="var_sample"></span><h3><code class="docutils literal notranslate"><span class="pre">var_sample</span></code><a class="headerlink" href="#var-sample" title="Link to this heading">#</a></h3>
 <p><em>Alias of <a class="reference internal" href="#var">var</a>.</em></p>
 </section>
 </section>
@@ -1304,7 +1304,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 <p><em>Alias of <a class="reference internal" href="#covar-samp">covar_samp</a>.</em></p>
 </section>
 <section id="covar-pop">
-<h3><code class="docutils literal notranslate"><span class="pre">covar_pop</span></code><a class="headerlink" href="#covar-pop" title="Link to this heading">#</a></h3>
+<span id="covar_pop"></span><h3><code class="docutils literal notranslate"><span class="pre">covar_pop</span></code><a class="headerlink" href="#covar-pop" title="Link to this heading">#</a></h3>
 <p>Returns the sample covariance of a set of number pairs.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">covar_samp</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span><span class="w"> </span><span class="n">expression2</span><span class="p">)</span>
 </pre></div>
@@ -1329,7 +1329,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="covar-samp">
-<h3><code class="docutils literal notranslate"><span class="pre">covar_samp</span></code><a class="headerlink" href="#covar-samp" title="Link to this heading">#</a></h3>
+<span id="covar_samp"></span><h3><code class="docutils literal notranslate"><span class="pre">covar_samp</span></code><a class="headerlink" href="#covar-samp" title="Link to this heading">#</a></h3>
 <p>Returns the sample covariance of a set of number pairs.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">covar_samp</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span><span class="w"> </span><span class="n">expression2</span><span class="p">)</span>
 </pre></div>
@@ -1360,7 +1360,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="nth-value">
-<h3><code class="docutils literal notranslate"><span class="pre">nth_value</span></code><a class="headerlink" href="#nth-value" title="Link to this heading">#</a></h3>
+<span id="nth_value"></span><h3><code class="docutils literal notranslate"><span class="pre">nth_value</span></code><a class="headerlink" href="#nth-value" title="Link to this heading">#</a></h3>
 <p>Returns the nth value in a group of values.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">nth_value</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
@@ -1390,7 +1390,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="regr-avgx">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_avgx</span></code><a class="headerlink" href="#regr-avgx" title="Link to this heading">#</a></h3>
+<span id="regr_avgx"></span><h3><code class="docutils literal notranslate"><span class="pre">regr_avgx</span></code><a class="headerlink" href="#regr-avgx" title="Link to this heading">#</a></h3>
 <p>Computes the average of the independent variable (input) expression_x for the non-null paired data points.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_avgx</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
@@ -1427,7 +1427,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="regr-avgy">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_avgy</span></code><a class="headerlink" href="#regr-avgy" title="Link to this heading">#</a></h3>
+<span id="regr_avgy"></span><h3><code class="docutils literal notranslate"><span class="pre">regr_avgy</span></code><a class="headerlink" href="#regr-avgy" title="Link to this heading">#</a></h3>
 <p>Computes the average of the dependent variable (output) expression_y for the non-null paired data points.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_avgy</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
@@ -1465,7 +1465,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="regr-count">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_count</span></code><a class="headerlink" href="#regr-count" title="Link to this heading">#</a></h3>
+<span id="regr_count"></span><h3><code class="docutils literal notranslate"><span class="pre">regr_count</span></code><a class="headerlink" href="#regr-count" title="Link to this heading">#</a></h3>
 <p>Counts the number of non-null paired data points.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_count</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
@@ -1502,7 +1502,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="regr-intercept">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_intercept</span></code><a class="headerlink" href="#regr-intercept" title="Link to this heading">#</a></h3>
+<span id="regr_intercept"></span><h3><code class="docutils literal notranslate"><span class="pre">regr_intercept</span></code><a class="headerlink" href="#regr-intercept" title="Link to this heading">#</a></h3>
 <p>Computes the y-intercept of the linear regression line. For the equation (y = kx + b), this function returns b.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_intercept</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
@@ -1540,7 +1540,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="regr-r2">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_r2</span></code><a class="headerlink" href="#regr-r2" title="Link to this heading">#</a></h3>
+<span id="regr_r2"></span><h3><code class="docutils literal notranslate"><span class="pre">regr_r2</span></code><a class="headerlink" href="#regr-r2" title="Link to this heading">#</a></h3>
 <p>Computes the square of the correlation coefficient between the independent and dependent variables.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_r2</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
@@ -1577,7 +1577,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="regr-slope">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_slope</span></code><a class="headerlink" href="#regr-slope" title="Link to this heading">#</a></h3>
+<span id="regr_slope"></span><h3><code class="docutils literal notranslate"><span class="pre">regr_slope</span></code><a class="headerlink" href="#regr-slope" title="Link to this heading">#</a></h3>
 <p>Returns the slope of the linear regression line for non-null pairs in aggregate columns. Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k*X + b) using minimal RSS fitting.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_slope</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
@@ -1614,7 +1614,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="regr-sxx">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_sxx</span></code><a class="headerlink" href="#regr-sxx" title="Link to this heading">#</a></h3>
+<span id="regr_sxx"></span><h3><code class="docutils literal notranslate"><span class="pre">regr_sxx</span></code><a class="headerlink" href="#regr-sxx" title="Link to this heading">#</a></h3>
 <p>Computes the sum of squares of the independent variable.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_sxx</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
@@ -1651,7 +1651,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="regr-sxy">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_sxy</span></code><a class="headerlink" href="#regr-sxy" title="Link to this heading">#</a></h3>
+<span id="regr_sxy"></span><h3><code class="docutils literal notranslate"><span class="pre">regr_sxy</span></code><a class="headerlink" href="#regr-sxy" title="Link to this heading">#</a></h3>
 <p>Computes the sum of products of paired data points.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_sxy</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
@@ -1686,7 +1686,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="regr-syy">
-<h3><code class="docutils literal notranslate"><span class="pre">regr_syy</span></code><a class="headerlink" href="#regr-syy" title="Link to this heading">#</a></h3>
+<span id="regr_syy"></span><h3><code class="docutils literal notranslate"><span class="pre">regr_syy</span></code><a class="headerlink" href="#regr-syy" title="Link to this heading">#</a></h3>
 <p>Computes the sum of squares of the dependent variable.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_syy</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
@@ -1751,7 +1751,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="stddev-pop">
-<h3><code class="docutils literal notranslate"><span class="pre">stddev_pop</span></code><a class="headerlink" href="#stddev-pop" title="Link to this heading">#</a></h3>
+<span id="stddev_pop"></span><h3><code class="docutils literal notranslate"><span class="pre">stddev_pop</span></code><a class="headerlink" href="#stddev-pop" title="Link to this heading">#</a></h3>
 <p>Returns the population standard deviation of a set of numbers.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">stddev_pop</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
@@ -1775,7 +1775,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="stddev-samp">
-<h3><code class="docutils literal notranslate"><span class="pre">stddev_samp</span></code><a class="headerlink" href="#stddev-samp" title="Link to this heading">#</a></h3>
+<span id="stddev_samp"></span><h3><code class="docutils literal notranslate"><span class="pre">stddev_samp</span></code><a class="headerlink" href="#stddev-samp" title="Link to this heading">#</a></h3>
 <p><em>Alias of <a class="reference internal" href="#stddev">stddev</a>.</em></p>
 </section>
 </section>
@@ -1788,7 +1788,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 <li><p><a class="reference internal" href="#approx-percentile-cont-with-weight">approx_percentile_cont_with_weight</a></p></li>
 </ul>
 <section id="approx-distinct">
-<h3><code class="docutils literal notranslate"><span class="pre">approx_distinct</span></code><a class="headerlink" href="#approx-distinct" title="Link to this heading">#</a></h3>
+<span id="approx_distinct"></span><h3><code class="docutils literal notranslate"><span class="pre">approx_distinct</span></code><a class="headerlink" href="#approx-distinct" title="Link to this heading">#</a></h3>
 <p>Returns the approximate number of distinct input values calculated using the HyperLogLog algorithm.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">approx_distinct</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
@@ -1812,7 +1812,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="approx-median">
-<h3><code class="docutils literal notranslate"><span class="pre">approx_median</span></code><a class="headerlink" href="#approx-median" title="Link to this heading">#</a></h3>
+<span id="approx_median"></span><h3><code class="docutils literal notranslate"><span class="pre">approx_median</span></code><a class="headerlink" href="#approx-median" title="Link to this heading">#</a></h3>
 <p>Returns the approximate median (50th percentile) of input values. It is an alias of <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont(0.5)</span> <span class="pre">WITHIN</span> <span class="pre">GROUP</span> <span class="pre">(ORDER</span> <span class="pre">BY</span> <span class="pre">x)</span></code>.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">approx_median</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
@@ -1836,7 +1836,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="approx-percentile-cont">
-<h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code><a class="headerlink" href="#approx-percentile-cont" title="Link to this heading">#</a></h3>
+<span id="approx_percentile_cont"></span><h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code><a class="headerlink" href="#approx-percentile-cont" title="Link to this heading">#</a></h3>
 <p>Returns the approximate percentile of input values using the t-digest algorithm.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont</span><span class="p">(</span><span class="n">percentile</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="n">centroids</span><span class="p">])</span><span class="w"> </span><span class="n">WITHIN</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
@@ -1884,7 +1884,7 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 </section>
 </section>
 <section id="approx-percentile-cont-with-weight">
-<h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code><a class="headerlink" href="#approx-percentile-cont-with-weight" title="Link to this heading">#</a></h3>
+<span id="approx_percentile_cont_with_weight"></span><h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code><a class="headerlink" href="#approx-percentile-cont-with-weight" title="Link to this heading">#</a></h3>
 <p>Returns the weighted approximate percentile of input values using the t-digest algorithm.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont_with_weight</span><span class="p">(</span><span class="n">weight</span><span class="p">,</span><span class="w"> </span><span class="n">percentile</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="n">centroids</span><span class="p">])</span><span class="w"> </span><span class="n">WITHIN</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">)</span>
 </pre></div>

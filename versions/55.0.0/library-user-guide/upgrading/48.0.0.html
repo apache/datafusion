@@ -498,9 +498,9 @@
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-48-0-0">
-<h2>DataFusion 48.0.0<a class="headerlink" href="#datafusion-48-0-0" title="Link to this heading">#</a></h2>
+<span id="datafusion-4800"></span><h2>DataFusion 48.0.0<a class="headerlink" href="#datafusion-48-0-0" title="Link to this heading">#</a></h2>
 <section id="expr-literal-has-optional-metadata">
-<h3><code class="docutils literal notranslate"><span class="pre">Expr::Literal</span></code> has optional metadata<a class="headerlink" href="#expr-literal-has-optional-metadata" title="Link to this heading">#</a></h3>
+<span id="exprliteral-has-optional-metadata"></span><h3><code class="docutils literal notranslate"><span class="pre">Expr::Literal</span></code> has optional metadata<a class="headerlink" href="#expr-literal-has-optional-metadata" title="Link to this heading">#</a></h3>
 <p>The <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html#variant.Literal"><code class="docutils literal notranslate"><span class="pre">Expr::Literal</span></code></a> variant now includes optional metadata, which allows for
 carrying through Arrow field metadata to support extension types and other uses.</p>
 <p>This means code such as</p>
@@ -523,7 +523,7 @@ carrying through Arrow field metadata to support extension types and other uses.
 has not changed and returns an <code class="docutils literal notranslate"><span class="pre">Expr::Literal</span></code> with no metadata.</p>
 </section>
 <section id="expr-windowfunction-is-now-boxed">
-<h3><code class="docutils literal notranslate"><span class="pre">Expr::WindowFunction</span></code> is now <code class="docutils literal notranslate"><span class="pre">Box</span></code>ed<a class="headerlink" href="#expr-windowfunction-is-now-boxed" title="Link to this heading">#</a></h3>
+<span id="exprwindowfunction-is-now-boxed"></span><h3><code class="docutils literal notranslate"><span class="pre">Expr::WindowFunction</span></code> is now <code class="docutils literal notranslate"><span class="pre">Box</span></code>ed<a class="headerlink" href="#expr-windowfunction-is-now-boxed" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">Expr::WindowFunction</span></code> is now a <code class="docutils literal notranslate"><span class="pre">Box&lt;WindowFunction&gt;</span></code> instead of a <code class="docutils literal notranslate"><span class="pre">WindowFunction</span></code> directly.
 This change was made to reduce the size of <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and improve performance when
 planning queries (see <a class="reference external" href="https://github.com/apache/datafusion/pull/16207#issuecomment-2922659103">details on #16207</a>).</p>
@@ -610,7 +610,7 @@ example</p>
 </div>
 </section>
 <section id="listingoptions-default-for-collect-stat-changed-from-true-to-false">
-<h3><code class="docutils literal notranslate"><span class="pre">ListingOptions</span></code> default for <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> changed from <code class="docutils literal notranslate"><span class="pre">true</span></code> to <code class="docutils literal notranslate"><span class="pre">false</span></code><a class="headerlink" href="#listingoptions-default-for-collect-stat-changed-from-true-to-false" title="Link to this heading">#</a></h3>
+<span id="listingoptions-default-for-collect_stat-changed-from-true-to-false"></span><h3><code class="docutils literal notranslate"><span class="pre">ListingOptions</span></code> default for <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> changed from <code class="docutils literal notranslate"><span class="pre">true</span></code> to <code class="docutils literal notranslate"><span class="pre">false</span></code><a class="headerlink" href="#listingoptions-default-for-collect-stat-changed-from-true-to-false" title="Link to this heading">#</a></h3>
 <p>This makes it agree with the default for <code class="docutils literal notranslate"><span class="pre">SessionConfig</span></code>.
 Most users won’t be impacted by this change but if you were using <code class="docutils literal notranslate"><span class="pre">ListingOptions</span></code> directly
 and relied on the default value of <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> being <code class="docutils literal notranslate"><span class="pre">true</span></code>, you will need to
@@ -657,7 +657,7 @@ the <code class="docutils literal notranslate"><span class="pre">return_field</s
 crate.</p>
 </section>
 <section id="fileformat-supports-filters-pushdown-replaced-with-filesource-try-pushdown-filters">
-<h3><code class="docutils literal notranslate"><span class="pre">FileFormat::supports_filters_pushdown</span></code> replaced with <code class="docutils literal notranslate"><span class="pre">FileSource::try_pushdown_filters</span></code><a class="headerlink" href="#fileformat-supports-filters-pushdown-replaced-with-filesource-try-pushdown-filters" title="Link to this heading">#</a></h3>
+<span id="fileformatsupports_filters_pushdown-replaced-with-filesourcetry_pushdown_filters"></span><h3><code class="docutils literal notranslate"><span class="pre">FileFormat::supports_filters_pushdown</span></code> replaced with <code class="docutils literal notranslate"><span class="pre">FileSource::try_pushdown_filters</span></code><a class="headerlink" href="#fileformat-supports-filters-pushdown-replaced-with-filesource-try-pushdown-filters" title="Link to this heading">#</a></h3>
 <p>To support more general filter pushdown, the <code class="docutils literal notranslate"><span class="pre">FileFormat::supports_filters_pushdown</span></code> was replaced with
 <code class="docutils literal notranslate"><span class="pre">FileSource::try_pushdown_filters</span></code>.
 If you implemented a custom <code class="docutils literal notranslate"><span class="pre">FileFormat</span></code> that uses a custom <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> you will need to implement

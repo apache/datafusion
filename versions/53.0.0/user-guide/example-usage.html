@@ -579,7 +579,7 @@ unexpectedly.</p>
 <p>To illustrate this behavior, consider the <a class="reference download internal" download="" href="../_downloads/3cce4d737d8c5814f5b50d859d21ba53/capitalized_example.csv"><span class="xref download myst"><code class="docutils literal notranslate"><span class="pre">capitalized_example.csv</span></code></span></a> file:</p>
 </section>
 <section id="id1">
-<h2>Run a SQL query against data stored in a CSV:<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<span id="run-a-sql-query-against-data-stored-in-a-csv-1"></span><h2>Run a SQL query against data stored in a CSV:<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
 
 <span class="cp">#[tokio::main]</span>
@@ -599,7 +599,7 @@ unexpectedly.</p>
 </div>
 </section>
 <section id="id2">
-<h2>Use the DataFrame API to process data stored in a CSV:<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<span id="use-the-dataframe-api-to-process-data-stored-in-a-csv-1"></span><h2>Use the DataFrame API to process data stored in a CSV:<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">functions_aggregate</span><span class="p">::</span><span class="n">expr_fn</span><span class="p">::</span><span class="n">min</span><span class="p">;</span>
 
@@ -624,7 +624,7 @@ unexpectedly.</p>
 </div>
 </section>
 <section id="id3">
-<h2>Output from both examples<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<span id="output-from-both-examples-1"></span><h2>Output from both examples<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>+---+--------+
 | A | MIN(b) |
 +---+--------+

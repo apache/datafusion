@@ -498,12 +498,12 @@
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-55-0-0">
-<h2>DataFusion 55.0.0<a class="headerlink" href="#datafusion-55-0-0" title="Link to this heading">#</a></h2>
+<span id="datafusion-5500"></span><h2>DataFusion 55.0.0<a class="headerlink" href="#datafusion-55-0-0" title="Link to this heading">#</a></h2>
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">55.0.0</span></code> has not been released yet. The information provided
 in this section pertains to features and changes that have already been merged
 to the main branch and are awaiting release in this version.</p>
 <section id="dataframe-fill-null-now-borrows-its-arguments">
-<h3><code class="docutils literal notranslate"><span class="pre">DataFrame::fill_null</span></code> now borrows its arguments<a class="headerlink" href="#dataframe-fill-null-now-borrows-its-arguments" title="Link to this heading">#</a></h3>
+<span id="dataframefill_null-now-borrows-its-arguments"></span><h3><code class="docutils literal notranslate"><span class="pre">DataFrame::fill_null</span></code> now borrows its arguments<a class="headerlink" href="#dataframe-fill-null-now-borrows-its-arguments" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">DataFrame::fill_null</span></code> previously took its arguments by value:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
 <span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">fill_null</span><span class="p">(</span>
@@ -538,7 +538,7 @@ to the main branch and are awaiting release in this version.</p>
 </div>
 </section>
 <section id="filescanconfig-partitioned-by-file-group-removed">
-<h3><code class="docutils literal notranslate"><span class="pre">FileScanConfig::partitioned_by_file_group</span></code> removed<a class="headerlink" href="#filescanconfig-partitioned-by-file-group-removed" title="Link to this heading">#</a></h3>
+<span id="filescanconfigpartitioned_by_file_group-removed"></span><h3><code class="docutils literal notranslate"><span class="pre">FileScanConfig::partitioned_by_file_group</span></code> removed<a class="headerlink" href="#filescanconfig-partitioned-by-file-group-removed" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">FileScanConfig::partitioned_by_file_group</span></code> and
 <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder::with_partitioned_by_file_group(...)</span></code> have been removed.
 Use <code class="docutils literal notranslate"><span class="pre">FileScanConfig::output_partitioning</span></code> and
@@ -600,12 +600,12 @@ arm.</p>
 <p>Use <code class="docutils literal notranslate"><span class="pre">temp_file.size()</span></code> instead of <a class="reference external" href="https://docs.rs/datafusion-execution/latest/datafusion_execution/disk_manager/struct.RefCountedTempFile.html#method.current_disk_usage"><code class="docutils literal notranslate"><span class="pre">RefCountedTempFile::current_disk_usage</span></code></a>.</p>
 </section>
 <section id="dialect-available-replaced-by-dialect-available">
-<h3><code class="docutils literal notranslate"><span class="pre">Dialect::AVAILABLE</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code><a class="headerlink" href="#dialect-available-replaced-by-dialect-available" title="Link to this heading">#</a></h3>
+<span id="dialectavailable-replaced-by-dialectavailable"></span><h3><code class="docutils literal notranslate"><span class="pre">Dialect::AVAILABLE</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code><a class="headerlink" href="#dialect-available-replaced-by-dialect-available" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_common::config::Dialect::AVAILABLE</span></code> has been removed. Use
 <code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code> instead.</p>
 </section>
 <section id="spill-record-batch-by-size-removed">
-<h3><code class="docutils literal notranslate"><span class="pre">spill_record_batch_by_size</span></code> removed<a class="headerlink" href="#spill-record-batch-by-size-removed" title="Link to this heading">#</a></h3>
+<span id="spill_record_batch_by_size-removed"></span><h3><code class="docutils literal notranslate"><span class="pre">spill_record_batch_by_size</span></code> removed<a class="headerlink" href="#spill-record-batch-by-size-removed" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_plan::spill::spill_record_batch_by_size</span></code> has been removed.
 This function was deprecated in DataFusion <code class="docutils literal notranslate"><span class="pre">46.0.0</span></code>.</p>
 <p>Use <code class="docutils literal notranslate"><span class="pre">datafusion_physical_plan::spill::SpillManager::spill_record_batch_by_size</span></code>
@@ -676,7 +676,7 @@ UDFs relying on that behavior must now explicitly enable dictionary
 preservation. <code class="docutils literal notranslate"><span class="pre">TypeSignatureClass::Any</span></code> is unaffected.</p>
 </section>
 <section id="groupsaccumulator-merge-batch-no-longer-takes-opt-filter">
-<h3><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::merge_batch</span></code> no longer takes <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code><a class="headerlink" href="#groupsaccumulator-merge-batch-no-longer-takes-opt-filter" title="Link to this heading">#</a></h3>
+<span id="groupsaccumulatormerge_batch-no-longer-takes-opt_filter"></span><h3><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::merge_batch</span></code> no longer takes <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code><a class="headerlink" href="#groupsaccumulator-merge-batch-no-longer-takes-opt-filter" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">opt_filter</span></code> argument has been removed from
 <code class="docutils literal notranslate"><span class="pre">datafusion_expr_common::groups_accumulator::GroupsAccumulator::merge_batch</span></code>:</p>
 <div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="w"> </span> fn merge_batch(
@@ -720,7 +720,7 @@ it was <code class="docutils literal notranslate"><span class="pre">None</span><
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/22775">issue #22775</a> for details.</p>
 </section>
 <section id="groupsaccumulator-convert-to-state-is-now-required">
-<h3><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::convert_to_state</span></code> is now required<a class="headerlink" href="#groupsaccumulator-convert-to-state-is-now-required" title="Link to this heading">#</a></h3>
+<span id="groupsaccumulatorconvert_to_state-is-now-required"></span><h3><code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::convert_to_state</span></code> is now required<a class="headerlink" href="#groupsaccumulator-convert-to-state-is-now-required" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_expr_common::groups_accumulator::GroupsAccumulator::convert_to_state</span></code>
 no longer provides a default implementation, and the
 <code class="docutils literal notranslate"><span class="pre">GroupsAccumulator::supports_convert_to_state</span></code> capability method has been
@@ -748,7 +748,7 @@ do not exchange this struct with libraries built against older major versions.</
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/23081">issue #23081</a> for details.</p>
 </section>
 <section id="is-dynamic-physical-expr-is-deprecated">
-<h3><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated<a class="headerlink" href="#is-dynamic-physical-expr-is-deprecated" title="Link to this heading">#</a></h3>
+<span id="is_dynamic_physical_expr-is-deprecated"></span><h3><code class="docutils literal notranslate"><span class="pre">is_dynamic_physical_expr</span></code> is deprecated<a class="headerlink" href="#is-dynamic-physical-expr-is-deprecated" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr_common::physical_expr::is_dynamic_physical_expr</span></code> is
 deprecated. It was a thin wrapper over <code class="docutils literal notranslate"><span class="pre">snapshot_generation(expr)</span> <span class="pre">!=</span> <span class="pre">0</span></code> used to
 ask “does this predicate contain a dynamic filter?”.</p>
@@ -781,7 +781,7 @@ notified when they do), use the new <code class="docutils literal notranslate"><
 </div>
 </section>
 <section id="pruningpredicate-try-new-is-deprecated">
-<h3><code class="docutils literal notranslate"><span class="pre">PruningPredicate::try_new</span></code> is deprecated<a class="headerlink" href="#pruningpredicate-try-new-is-deprecated" title="Link to this heading">#</a></h3>
+<span id="pruningpredicatetry_new-is-deprecated"></span><h3><code class="docutils literal notranslate"><span class="pre">PruningPredicate::try_new</span></code> is deprecated<a class="headerlink" href="#pruningpredicate-try-new-is-deprecated" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_pruning::PruningPredicate::try_new</span></code> is deprecated. Use
 <code class="docutils literal notranslate"><span class="pre">PruningPredicateBuilder</span></code> instead. The deprecated constructor remains available
 in DataFusion 55 and preserves its existing behavior.</p>
@@ -796,7 +796,7 @@ in DataFusion 55 and preserves its existing behavior.</p>
 </div>
 </section>
 <section id="filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics">
-<h3><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new</span></code> no longer builds a pruner for static predicates without statistics<a class="headerlink" href="#filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics" title="Link to this heading">#</a></h3>
+<span id="fileprunertry_new-no-longer-builds-a-pruner-for-static-predicates-without-statistics"></span><h3><code class="docutils literal notranslate"><span class="pre">FilePruner::try_new</span></code> no longer builds a pruner for static predicates without statistics<a class="headerlink" href="#filepruner-try-new-no-longer-builds-a-pruner-for-static-predicates-without-statistics" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_pruning::FilePruner::try_new</span></code> now returns <code class="docutils literal notranslate"><span class="pre">None</span></code> when the predicate
 is purely static <em>and</em> the file carries no usable column statistics, because
 such a pruner can never prune anything beyond what planning already did.
@@ -815,7 +815,7 @@ as a supertrait:</p>
 </div>
 </section>
 <section id="executionplan-partition-statistics-deprecated-in-favor-of-statistics-from-inputs">
-<h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> deprecated in favor of <code class="docutils literal notranslate"><span class="pre">statistics_from_inputs</span></code><a class="headerlink" href="#executionplan-partition-statistics-deprecated-in-favor-of-statistics-from-inputs" title="Link to this heading">#</a></h3>
+<span id="executionplanpartition_statistics-deprecated-in-favor-of-statistics_from_inputs"></span><h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> deprecated in favor of <code class="docutils literal notranslate"><span class="pre">statistics_from_inputs</span></code><a class="headerlink" href="#executionplan-partition-statistics-deprecated-in-favor-of-statistics-from-inputs" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> is deprecated. Statistics computation is
 now split into two parts:</p>
 <ul class="simple">
@@ -891,7 +891,7 @@ created with the context:</p>
 </div>
 </section>
 <section id="ddlstatement-createexternaltable-and-createfunction-are-now-boxed">
-<h3><code class="docutils literal notranslate"><span class="pre">DdlStatement::CreateExternalTable</span></code> and <code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> are now boxed<a class="headerlink" href="#ddlstatement-createexternaltable-and-createfunction-are-now-boxed" title="Link to this heading">#</a></h3>
+<span id="ddlstatementcreateexternaltable-and-createfunction-are-now-boxed"></span><h3><code class="docutils literal notranslate"><span class="pre">DdlStatement::CreateExternalTable</span></code> and <code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> are now boxed<a class="headerlink" href="#ddlstatement-createexternaltable-and-createfunction-are-now-boxed" title="Link to this heading">#</a></h3>
 <p>The two largest variants of <code class="docutils literal notranslate"><span class="pre">datafusion_expr::DdlStatement</span></code> are now
 <code class="docutils literal notranslate"><span class="pre">Box</span></code>ed:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
@@ -987,7 +987,7 @@ details, including the per-variant size breakdown and benchmark
 results.</p>
 </section>
 <section id="executionplan-with-new-children-and-executionplan-with-new-children-and-same-properties-deprecated">
-<h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::with_new_children</span></code> and <code class="docutils literal notranslate"><span class="pre">ExecutionPlan::with_new_children_and_same_properties</span></code> deprecated<a class="headerlink" href="#executionplan-with-new-children-and-executionplan-with-new-children-and-same-properties-deprecated" title="Link to this heading">#</a></h3>
+<span id="executionplanwith_new_children-and-executionplanwith_new_children_and_same_properties-deprecated"></span><h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::with_new_children</span></code> and <code class="docutils literal notranslate"><span class="pre">ExecutionPlan::with_new_children_and_same_properties</span></code> deprecated<a class="headerlink" href="#executionplan-with-new-children-and-executionplan-with-new-children-and-same-properties-deprecated" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">with_new_children</span></code> and <code class="docutils literal notranslate"><span class="pre">with_new_children_and_same_properties</span></code> have been
 deprecated. These methods are used to replace the child plans of an
 <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> while leaving the plan otherwise identical.</p>
@@ -1048,7 +1048,7 @@ call <code class="docutils literal notranslate"><span class="pre">replace_childr
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23903">PR #23903</a> for details.</p>
 </section>
 <section id="listingoptions-target-partitions-and-collect-stat-removed">
-<h3><code class="docutils literal notranslate"><span class="pre">ListingOptions::target_partitions</span></code> and <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> removed<a class="headerlink" href="#listingoptions-target-partitions-and-collect-stat-removed" title="Link to this heading">#</a></h3>
+<span id="listingoptionstarget_partitions-and-collect_stat-removed"></span><h3><code class="docutils literal notranslate"><span class="pre">ListingOptions::target_partitions</span></code> and <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> removed<a class="headerlink" href="#listingoptions-target-partitions-and-collect-stat-removed" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">target_partitions</span></code> and <code class="docutils literal notranslate"><span class="pre">collect_stat</span></code> fields on
 <code class="docutils literal notranslate"><span class="pre">datafusion_catalog_listing::ListingOptions</span></code>, their builder methods
 (<code class="docutils literal notranslate"><span class="pre">with_target_partitions</span></code>, <code class="docutils literal notranslate"><span class="pre">with_collect_stat</span></code>), and the
@@ -1174,7 +1174,7 @@ encoded after it add a field that older readers ignore.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23643">PR #23643</a> for details.</p>
 </section>
 <section id="time-interval-now-returns-a-time-instead-of-an-interval">
-<h3><code class="docutils literal notranslate"><span class="pre">time</span> <span class="pre">±</span> <span class="pre">interval</span></code> now returns a <code class="docutils literal notranslate"><span class="pre">time</span></code> instead of an <code class="docutils literal notranslate"><span class="pre">interval</span></code><a class="headerlink" href="#time-interval-now-returns-a-time-instead-of-an-interval" title="Link to this heading">#</a></h3>
+<span id="time--interval-now-returns-a-time-instead-of-an-interval"></span><h3><code class="docutils literal notranslate"><span class="pre">time</span> <span class="pre">±</span> <span class="pre">interval</span></code> now returns a <code class="docutils literal notranslate"><span class="pre">time</span></code> instead of an <code class="docutils literal notranslate"><span class="pre">interval</span></code><a class="headerlink" href="#time-interval-now-returns-a-time-instead-of-an-interval" title="Link to this heading">#</a></h3>
 <p>Adding or subtracting an <code class="docutils literal notranslate"><span class="pre">interval</span></code> to/from a <code class="docutils literal notranslate"><span class="pre">time</span></code> value now returns a <code class="docutils literal notranslate"><span class="pre">time</span></code>
 that wraps within the 24-hour clock, matching PostgreSQL and DuckDB. Previously
 DataFusion returned an <code class="docutils literal notranslate"><span class="pre">interval</span></code>.</p>
@@ -1365,7 +1365,7 @@ documentation for how plans and extension codecs cross the boundary.</p>
 the catalog changes.</p>
 </section>
 <section id="ffi-logicalextensioncodec-task-ctx-provider-is-now-private">
-<h3><code class="docutils literal notranslate"><span class="pre">FFI_LogicalExtensionCodec::task_ctx_provider</span></code> is now private<a class="headerlink" href="#ffi-logicalextensioncodec-task-ctx-provider-is-now-private" title="Link to this heading">#</a></h3>
+<span id="ffi_logicalextensioncodectask_ctx_provider-is-now-private"></span><h3><code class="docutils literal notranslate"><span class="pre">FFI_LogicalExtensionCodec::task_ctx_provider</span></code> is now private<a class="headerlink" href="#ffi-logicalextensioncodec-task-ctx-provider-is-now-private" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">task_ctx_provider</span></code> field on
 <code class="docutils literal notranslate"><span class="pre">datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec</span></code> was
 <code class="docutils literal notranslate"><span class="pre">pub</span></code> and is now crate-private, matching <code class="docutils literal notranslate"><span class="pre">FFI_PhysicalExtensionCodec</span></code>.</p>
@@ -1404,7 +1404,7 @@ on a non-future value does not compile:</p>
 </div>
 </section>
 <section id="movingmin-and-movingmax-changed-to-pub-crate">
-<h3><code class="docutils literal notranslate"><span class="pre">MovingMin</span></code> and <code class="docutils literal notranslate"><span class="pre">MovingMax</span></code> changed to <code class="docutils literal notranslate"><span class="pre">pub(crate)</span></code><a class="headerlink" href="#movingmin-and-movingmax-changed-to-pub-crate" title="Link to this heading">#</a></h3>
+<span id="movingmin-and-movingmax-changed-to-pubcrate"></span><h3><code class="docutils literal notranslate"><span class="pre">MovingMin</span></code> and <code class="docutils literal notranslate"><span class="pre">MovingMax</span></code> changed to <code class="docutils literal notranslate"><span class="pre">pub(crate)</span></code><a class="headerlink" href="#movingmin-and-movingmax-changed-to-pub-crate" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">MovingMin</span></code> and <code class="docutils literal notranslate"><span class="pre">MovingMax</span></code> in <code class="docutils literal notranslate"><span class="pre">datafusion_functions_aggregate::min_max</span></code> have been changed from <code class="docutils literal notranslate"><span class="pre">pub</span></code> to <code class="docutils literal notranslate"><span class="pre">pub(crate)</span></code> visibility as they are internal helper data structures for DataFusion’s sliding window aggregators.</p>
 <p><strong>Who is affected:</strong></p>
 <ul class="simple">
@@ -1413,12 +1413,12 @@ on a non-future value does not compile:</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23827">PR #23827</a> for details.</p>
 </section>
 <section id="executionplan-apply-expressions-is-now-a-required-method">
-<h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::apply_expressions</span></code> is now a required method<a class="headerlink" href="#executionplan-apply-expressions-is-now-a-required-method" title="Link to this heading">#</a></h3>
+<span id="executionplanapply_expressions-is-now-a-required-method"></span><h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::apply_expressions</span></code> is now a required method<a class="headerlink" href="#executionplan-apply-expressions-is-now-a-required-method" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">apply_expressions</span></code> has been added as a <strong>required</strong> method on the <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>, <code class="docutils literal notranslate"><span class="pre">FileSource</span></code>, and <code class="docutils literal notranslate"><span class="pre">DataSource</span></code> traits. Any custom implementation of
 these traits must now implement <code class="docutils literal notranslate"><span class="pre">apply_expressions</span></code>. See docs on <code class="docutils literal notranslate"><span class="pre">ExecutionPlan::apply_expressions</span></code> for migration details.</p>
 </section>
 <section id="windowexpr-evaluate-stateful-now-takes-a-windowevalcontext">
-<h3><code class="docutils literal notranslate"><span class="pre">WindowExpr::evaluate_stateful</span></code> now takes a <code class="docutils literal notranslate"><span class="pre">WindowEvalContext</span></code><a class="headerlink" href="#windowexpr-evaluate-stateful-now-takes-a-windowevalcontext" title="Link to this heading">#</a></h3>
+<span id="windowexprevaluate_stateful-now-takes-a-windowevalcontext"></span><h3><code class="docutils literal notranslate"><span class="pre">WindowExpr::evaluate_stateful</span></code> now takes a <code class="docutils literal notranslate"><span class="pre">WindowEvalContext</span></code><a class="headerlink" href="#windowexpr-evaluate-stateful-now-takes-a-windowevalcontext" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">WindowExpr::evaluate_stateful</span></code> (and the provided
 <code class="docutils literal notranslate"><span class="pre">AggregateWindowExpr::aggregate_evaluate_stateful</span></code> method) take a new
 <code class="docutils literal notranslate"><span class="pre">WindowEvalContext</span></code> argument carrying stream-level information that is shared
@@ -1472,7 +1472,7 @@ available (for example, when the input is sorted by the partition keys and
 partition ends are detected directly).</p>
 </section>
 <section id="partitionbatchstate-most-recent-row-removed">
-<h3><code class="docutils literal notranslate"><span class="pre">PartitionBatchState::most_recent_row</span></code> removed<a class="headerlink" href="#partitionbatchstate-most-recent-row-removed" title="Link to this heading">#</a></h3>
+<span id="partitionbatchstatemost_recent_row-removed"></span><h3><code class="docutils literal notranslate"><span class="pre">PartitionBatchState::most_recent_row</span></code> removed<a class="headerlink" href="#partitionbatchstate-most-recent-row-removed" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">most_recent_row</span></code> field and the <code class="docutils literal notranslate"><span class="pre">set_most_recent_row</span></code> method have been
 removed from <code class="docutils literal notranslate"><span class="pre">datafusion_expr::window_state::PartitionBatchState</span></code>. The most
 recent input row is a property of the whole input stream rather than
@@ -1492,7 +1492,7 @@ via <code class="docutils literal notranslate"><span class="pre">WindowEvalConte
 each partition’s state.</p>
 </section>
 <section id="msrv-updated-to-1-94-0">
-<h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0<a class="headerlink" href="#msrv-updated-to-1-94-0" title="Link to this heading">#</a></h3>
+<span id="msrv-updated-to-1940"></span><h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.94.0<a class="headerlink" href="#msrv-updated-to-1-94-0" title="Link to this heading">#</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.94.0/"><code class="docutils literal notranslate"><span class="pre">1.94.0</span></code></a>.</p>
 </section>
 <section id="cachedparquetfilereader-removed-parquetfilereader-fields-are-now-private">
@@ -1539,7 +1539,7 @@ or <code class="docutils literal notranslate"><span class="pre">CachedParquetFil
 </div>
 </section>
 <section id="array-distance-scalar-function-now-rejects-multidimensional-arrays">
-<h3><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> scalar function now rejects multidimensional arrays<a class="headerlink" href="#array-distance-scalar-function-now-rejects-multidimensional-arrays" title="Link to this heading">#</a></h3>
+<span id="array_distance-scalar-function-now-rejects-multidimensional-arrays"></span><h3><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> scalar function now rejects multidimensional arrays<a class="headerlink" href="#array-distance-scalar-function-now-rejects-multidimensional-arrays" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">array_distance</span></code> only supports one-dimensional arrays. Previously, when given
 multidimensional arrays, it computed the distance using only the first
 subarray and ignored the remaining subarrays. For example:</p>
@@ -1554,7 +1554,7 @@ subarray and ignored the remaining subarrays. For example:</p>
 supports one-dimensional arrays.</p>
 </section>
 <section id="parquetobjectreader-parquetobjectwriter-deprecated-upstream">
-<h3><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code> / <code class="docutils literal notranslate"><span class="pre">ParquetObjectWriter</span></code> deprecated upstream<a class="headerlink" href="#parquetobjectreader-parquetobjectwriter-deprecated-upstream" title="Link to this heading">#</a></h3>
+<span id="parquetobjectreader--parquetobjectwriter-deprecated-upstream"></span><h3><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code> / <code class="docutils literal notranslate"><span class="pre">ParquetObjectWriter</span></code> deprecated upstream<a class="headerlink" href="#parquetobjectreader-parquetobjectwriter-deprecated-upstream" title="Link to this heading">#</a></h3>
 <p>The <a class="reference external" href="https://crates.io/crates/parquet"><code class="docutils literal notranslate"><span class="pre">parquet</span></code> crate</a> deprecated <a class="reference external" href="https://docs.rs/parquet/59.1.0/parquet/arrow/async_reader/struct.ParquetObjectReader.html"><code class="docutils literal notranslate"><span class="pre">ParquetObjectReader</span></code></a>
 and <a class="reference external" href="https://docs.rs/parquet/59.1.0/parquet/arrow/async_writer/struct.ParquetObjectWriter.html"><code class="docutils literal notranslate"><span class="pre">ParquetObjectWriter</span></code></a> in favor of implementing
 <a class="reference external" href="https://docs.rs/parquet/59.1.0/parquet/arrow/async_reader/trait.AsyncFileReader.html"><code class="docutils literal notranslate"><span class="pre">AsyncFileReader</span></code></a> directly (see the example on the <a class="reference external" href="https://docs.rs/parquet/59.1.0/parquet/arrow/async_reader/trait.AsyncFileReader.html"><code class="docutils literal notranslate"><span class="pre">AsyncFileReader</span></code></a> trait and

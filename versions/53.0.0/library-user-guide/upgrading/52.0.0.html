@@ -491,7 +491,7 @@
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-52-0-0">
-<h2>DataFusion 52.0.0<a class="headerlink" href="#datafusion-52-0-0" title="Link to this heading">#</a></h2>
+<span id="datafusion-5200"></span><h2>DataFusion 52.0.0<a class="headerlink" href="#datafusion-52-0-0" title="Link to this heading">#</a></h2>
 <section id="changes-to-dfschema-api">
 <h3>Changes to DFSchema API<a class="headerlink" href="#changes-to-dfschema-api" title="Link to this heading">#</a></h3>
 <p>To permit more efficient planning, several methods on <code class="docutils literal notranslate"><span class="pre">DFSchema</span></code> have been
@@ -529,7 +529,7 @@ Configuration</a> user’s guide.</p>
 <p>Note that the internal API has changed to use a trait <code class="docutils literal notranslate"><span class="pre">ListFilesCache</span></code> instead of a type alias.</p>
 </section>
 <section id="newlines-in-values-moved-from-filescanconfig-to-csvoptions">
-<h3><code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> moved from <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> to <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code><a class="headerlink" href="#newlines-in-values-moved-from-filescanconfig-to-csvoptions" title="Link to this heading">#</a></h3>
+<span id="newlines_in_values-moved-from-filescanconfig-to-csvoptions"></span><h3><code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> moved from <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> to <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code><a class="headerlink" href="#newlines-in-values-moved-from-filescanconfig-to-csvoptions" title="Link to this heading">#</a></h3>
 <p>The CSV-specific <code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> configuration option has been moved from <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> to <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code>, as it only applies to CSV file parsing.</p>
 <p><strong>Who is affected:</strong></p>
 <ul class="simple">
@@ -779,7 +779,7 @@ which is <a class="reference external" href="https://github.com/apache/datafusio
 </div>
 </section>
 <section id="build-row-filter-signature-simplified">
-<h3><code class="docutils literal notranslate"><span class="pre">build_row_filter</span></code> signature simplified<a class="headerlink" href="#build-row-filter-signature-simplified" title="Link to this heading">#</a></h3>
+<span id="build_row_filter-signature-simplified"></span><h3><code class="docutils literal notranslate"><span class="pre">build_row_filter</span></code> signature simplified<a class="headerlink" href="#build-row-filter-signature-simplified" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">build_row_filter</span></code> function in <code class="docutils literal notranslate"><span class="pre">datafusion-datasource-parquet</span></code> has been simplified to take a single schema parameter instead of two.
 The expectation is now that the filter has been adapted to the physical file schema (the arrow representation of the parquet file’s schema) before being passed to this function
 using a <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code> for example.</p>
@@ -836,7 +836,7 @@ order-sensitive (but not an ordered-set aggregate), do not advertise
 signatures (for example, explicit ordering as a function argument) instead.</p>
 </section>
 <section id="aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false">
-<h3><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_null_handling_clause</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code><a class="headerlink" href="#aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false" title="Link to this heading">#</a></h3>
+<span id="aggregateudfimplsupports_null_handling_clause-now-defaults-to-false"></span><h3><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_null_handling_clause</span></code> now defaults to <code class="docutils literal notranslate"><span class="pre">false</span></code><a class="headerlink" href="#aggregateudfimpl-supports-null-handling-clause-now-defaults-to-false" title="Link to this heading">#</a></h3>
 <p>This method specifies whether an aggregate function allows <code class="docutils literal notranslate"><span class="pre">IGNORE</span> <span class="pre">NULLS</span></code>/<code class="docutils literal notranslate"><span class="pre">RESPECT</span> <span class="pre">NULLS</span></code>
 during SQL parsing, with the implication it respects these configs during computation.</p>
 <p>Most DataFusion aggregate functions silently ignored this syntax in prior versions

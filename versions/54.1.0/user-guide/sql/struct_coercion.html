@@ -512,7 +512,7 @@
 <h2>Coercion Paths Using Name-Based Matching<a class="headerlink" href="#coercion-paths-using-name-based-matching" title="Link to this heading">#</a></h2>
 <p>The following query operations use name-based field mapping for struct coercion:</p>
 <section id="array-literal-construction">
-<h3>1. Array Literal Construction<a class="headerlink" href="#array-literal-construction" title="Link to this heading">#</a></h3>
+<span id="1-array-literal-construction"></span><h3>1. Array Literal Construction<a class="headerlink" href="#array-literal-construction" title="Link to this heading">#</a></h3>
 <p>When creating array literals with struct elements that have different field orders:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Structs with reordered fields in array literal</span>
 <span class="k">SELECT</span><span class="w"> </span><span class="p">[</span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="p">,</span><span class="w"> </span><span class="err">{</span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="p">];</span>
@@ -528,7 +528,7 @@
 </ul>
 </section>
 <section id="array-construction-from-columns">
-<h3>2. Array Construction from Columns<a class="headerlink" href="#array-construction-from-columns" title="Link to this heading">#</a></h3>
+<span id="2-array-construction-from-columns"></span><h3>2. Array Construction from Columns<a class="headerlink" href="#array-construction-from-columns" title="Link to this heading">#</a></h3>
 <p>When constructing arrays from table columns with different struct schemas:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">t_left</span><span class="w"> </span><span class="p">(</span><span class="n">s</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="nb">int</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="nb">int</span><span class="p">))</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="p">);</span>
 <span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">t_right</span><span class="w"> </span><span class="p">(</span><span class="n">s</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">y</span><span class="w"> </span><span class="nb">int</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="nb">int</span><span class="p">))</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="err">{</span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="p">);</span>
@@ -546,7 +546,7 @@
 </ul>
 </section>
 <section id="union-operations">
-<h3>3. UNION Operations<a class="headerlink" href="#union-operations" title="Link to this heading">#</a></h3>
+<span id="3-union-operations"></span><h3>3. UNION Operations<a class="headerlink" href="#union-operations" title="Link to this heading">#</a></h3>
 <p>When combining query results with different struct field orders:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">s</span>
 <span class="k">UNION</span><span class="w"> </span><span class="k">ALL</span>
@@ -562,7 +562,7 @@
 </ul>
 </section>
 <section id="common-table-expressions-ctes">
-<h3>4. Common Table Expressions (CTEs)<a class="headerlink" href="#common-table-expressions-ctes" title="Link to this heading">#</a></h3>
+<span id="4-common-table-expressions-ctes"></span><h3>4. Common Table Expressions (CTEs)<a class="headerlink" href="#common-table-expressions-ctes" title="Link to this heading">#</a></h3>
 <p>When multiple CTEs produce structs with different field orders that are combined:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">WITH</span>
 <span class="w">  </span><span class="n">t1</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">s</span><span class="p">),</span>
@@ -576,7 +576,7 @@
 </div>
 </section>
 <section id="values-clauses">
-<h3>5. VALUES Clauses<a class="headerlink" href="#values-clauses" title="Link to this heading">#</a></h3>
+<span id="5-values-clauses"></span><h3>5. VALUES Clauses<a class="headerlink" href="#values-clauses" title="Link to this heading">#</a></h3>
 <p>When creating tables or temporary results with struct values in different field orders:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="err">{</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="err">{</span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="p">);</span>
 
@@ -586,7 +586,7 @@
 </div>
 </section>
 <section id="join-operations">
-<h3>6. JOIN Operations<a class="headerlink" href="#join-operations" title="Link to this heading">#</a></h3>
+<span id="6-join-operations"></span><h3>6. JOIN Operations<a class="headerlink" href="#join-operations" title="Link to this heading">#</a></h3>
 <p>When joining tables where the JOIN condition involves structs with different field orders:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">orders</span><span class="w"> </span><span class="p">(</span><span class="n">customer</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">name</span><span class="w"> </span><span class="nb">varchar</span><span class="p">,</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="nb">int</span><span class="p">));</span>
 <span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">customers</span><span class="w"> </span><span class="p">(</span><span class="n">info</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="nb">int</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="nb">varchar</span><span class="p">));</span>
@@ -598,7 +598,7 @@
 </div>
 </section>
 <section id="aggregate-functions">
-<h3>7. Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Link to this heading">#</a></h3>
+<span id="7-aggregate-functions"></span><h3>7. Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Link to this heading">#</a></h3>
 <p>When collecting structs with different field orders using aggregate functions like <code class="docutils literal notranslate"><span class="pre">array_agg</span></code>:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">array_agg</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="p">(</span>
 <span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">s</span>
@@ -612,7 +612,7 @@
 </div>
 </section>
 <section id="window-functions">
-<h3>8. Window Functions<a class="headerlink" href="#window-functions" title="Link to this heading">#</a></h3>
+<span id="8-window-functions"></span><h3>8. Window Functions<a class="headerlink" href="#window-functions" title="Link to this heading">#</a></h3>
 <p>When using window functions with struct expressions having different field orders:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
 <span class="w">  </span><span class="n">id</span><span class="p">,</span>
@@ -729,7 +729,7 @@ before non-<code class="docutils literal notranslate"><span class="pre">NULL</sp
 <section id="best-practices">
 <h2>Best Practices<a class="headerlink" href="#best-practices" title="Link to this heading">#</a></h2>
 <section id="be-explicit-with-schema-definitions">
-<h3>1. Be Explicit with Schema Definitions<a class="headerlink" href="#be-explicit-with-schema-definitions" title="Link to this heading">#</a></h3>
+<span id="1-be-explicit-with-schema-definitions"></span><h3>1. Be Explicit with Schema Definitions<a class="headerlink" href="#be-explicit-with-schema-definitions" title="Link to this heading">#</a></h3>
 <p>When joining or combining structs, define target schemas explicitly:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Good: explicit schema definition</span>
 <span class="k">SELECT</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="k">data</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">,</span><span class="w"> </span><span class="n">active</span><span class="w"> </span><span class="nb">BOOLEAN</span><span class="p">))</span>
@@ -738,7 +738,7 @@ before non-<code class="docutils literal notranslate"><span class="pre">NULL</sp
 </div>
 </section>
 <section id="use-named-struct-constructors">
-<h3>2. Use Named Struct Constructors<a class="headerlink" href="#use-named-struct-constructors" title="Link to this heading">#</a></h3>
+<span id="2-use-named-struct-constructors"></span><h3>2. Use Named Struct Constructors<a class="headerlink" href="#use-named-struct-constructors" title="Link to this heading">#</a></h3>
 <p>Prefer named struct constructors for clarity:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Good: field names are explicit</span>
 <span class="k">SELECT</span><span class="w"> </span><span class="n">named_struct</span><span class="p">(</span><span class="s1">&#39;id&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;name&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;Alice&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;active&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">true</span><span class="p">);</span>
@@ -749,7 +749,7 @@ before non-<code class="docutils literal notranslate"><span class="pre">NULL</sp
 </div>
 </section>
 <section id="test-field-mappings">
-<h3>3. Test Field Mappings<a class="headerlink" href="#test-field-mappings" title="Link to this heading">#</a></h3>
+<span id="3-test-field-mappings"></span><h3>3. Test Field Mappings<a class="headerlink" href="#test-field-mappings" title="Link to this heading">#</a></h3>
 <p>Always verify that field mappings work as expected:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Use arrow_typeof to verify unified schema</span>
 <span class="k">SELECT</span><span class="w"> </span><span class="n">arrow_typeof</span><span class="p">([</span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="p">,</span><span class="w"> </span><span class="err">{</span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="p">]);</span>
@@ -758,7 +758,7 @@ before non-<code class="docutils literal notranslate"><span class="pre">NULL</sp
 </div>
 </section>
 <section id="handle-partial-field-overlap-explicitly">
-<h3>4. Handle Partial Field Overlap Explicitly<a class="headerlink" href="#handle-partial-field-overlap-explicitly" title="Link to this heading">#</a></h3>
+<span id="4-handle-partial-field-overlap-explicitly"></span><h3>4. Handle Partial Field Overlap Explicitly<a class="headerlink" href="#handle-partial-field-overlap-explicitly" title="Link to this heading">#</a></h3>
 <p>When combining structs with partial field overlap, use explicit CAST:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Instead of relying on implicit coercion</span>
 <span class="k">SELECT</span><span class="w"> </span><span class="p">[</span>
@@ -769,7 +769,7 @@ before non-<code class="docutils literal notranslate"><span class="pre">NULL</sp
 </div>
 </section>
 <section id="document-struct-schemas">
-<h3>5. Document Struct Schemas<a class="headerlink" href="#document-struct-schemas" title="Link to this heading">#</a></h3>
+<span id="5-document-struct-schemas"></span><h3>5. Document Struct Schemas<a class="headerlink" href="#document-struct-schemas" title="Link to this heading">#</a></h3>
 <p>In complex queries, document the expected struct schemas:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Expected schema: {customer_id: INT, name: VARCHAR, age: INT}</span>
 <span class="k">SELECT</span><span class="w"> </span><span class="err">{</span>

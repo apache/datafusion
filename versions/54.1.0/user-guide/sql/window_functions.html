@@ -625,7 +625,7 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 <li><p><a class="reference internal" href="#row-number">row_number</a></p></li>
 </ul>
 <section id="cume-dist">
-<h3><code class="docutils literal notranslate"><span class="pre">cume_dist</span></code><a class="headerlink" href="#cume-dist" title="Link to this heading">#</a></h3>
+<span id="cume_dist"></span><h3><code class="docutils literal notranslate"><span class="pre">cume_dist</span></code><a class="headerlink" href="#cume-dist" title="Link to this heading">#</a></h3>
 <p>Relative rank of the current row: (number of rows preceding or peer with the current row) / (total rows).</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">cume_dist</span><span class="p">()</span>
 </pre></div>
@@ -649,7 +649,7 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 </section>
 </section>
 <section id="dense-rank">
-<h3><code class="docutils literal notranslate"><span class="pre">dense_rank</span></code><a class="headerlink" href="#dense-rank" title="Link to this heading">#</a></h3>
+<span id="dense_rank"></span><h3><code class="docutils literal notranslate"><span class="pre">dense_rank</span></code><a class="headerlink" href="#dense-rank" title="Link to this heading">#</a></h3>
 <p>Returns the rank of the current row without gaps. This function ranks rows in a dense manner, meaning consecutive ranks are assigned even for identical values.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">dense_rank</span><span class="p">()</span>
 </pre></div>
@@ -713,7 +713,7 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 </section>
 </section>
 <section id="percent-rank">
-<h3><code class="docutils literal notranslate"><span class="pre">percent_rank</span></code><a class="headerlink" href="#percent-rank" title="Link to this heading">#</a></h3>
+<span id="percent_rank"></span><h3><code class="docutils literal notranslate"><span class="pre">percent_rank</span></code><a class="headerlink" href="#percent-rank" title="Link to this heading">#</a></h3>
 <p>Returns the percentage rank of the current row within its partition. The value ranges from 0 to 1 and is computed as <code class="docutils literal notranslate"><span class="pre">(rank</span> <span class="pre">-</span> <span class="pre">1)</span> <span class="pre">/</span> <span class="pre">(total_rows</span> <span class="pre">-</span> <span class="pre">1)</span></code>.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">percent_rank</span><span class="p">()</span>
 </pre></div>
@@ -766,7 +766,7 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 </section>
 </section>
 <section id="row-number">
-<h3><code class="docutils literal notranslate"><span class="pre">row_number</span></code><a class="headerlink" href="#row-number" title="Link to this heading">#</a></h3>
+<span id="row_number"></span><h3><code class="docutils literal notranslate"><span class="pre">row_number</span></code><a class="headerlink" href="#row-number" title="Link to this heading">#</a></h3>
 <p>Number of the current row within its partition, counting from 1.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">row_number</span><span class="p">()</span>
 </pre></div>
@@ -804,7 +804,7 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 <li><p><a class="reference internal" href="#nth-value">nth_value</a></p></li>
 </ul>
 <section id="first-value">
-<h3><code class="docutils literal notranslate"><span class="pre">first_value</span></code><a class="headerlink" href="#first-value" title="Link to this heading">#</a></h3>
+<span id="first_value"></span><h3><code class="docutils literal notranslate"><span class="pre">first_value</span></code><a class="headerlink" href="#first-value" title="Link to this heading">#</a></h3>
 <p>Returns value evaluated at the row that is the first row of the window frame.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">first_value</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
@@ -872,7 +872,7 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 </section>
 </section>
 <section id="last-value">
-<h3><code class="docutils literal notranslate"><span class="pre">last_value</span></code><a class="headerlink" href="#last-value" title="Link to this heading">#</a></h3>
+<span id="last_value"></span><h3><code class="docutils literal notranslate"><span class="pre">last_value</span></code><a class="headerlink" href="#last-value" title="Link to this heading">#</a></h3>
 <p>Returns value evaluated at the row that is the last row of the window frame.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">last_value</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
@@ -943,7 +943,7 @@ Instead, the rows retain their separate identities. Behind the scenes, the windo
 </section>
 </section>
 <section id="nth-value">
-<h3><code class="docutils literal notranslate"><span class="pre">nth_value</span></code><a class="headerlink" href="#nth-value" title="Link to this heading">#</a></h3>
+<span id="nth_value"></span><h3><code class="docutils literal notranslate"><span class="pre">nth_value</span></code><a class="headerlink" href="#nth-value" title="Link to this heading">#</a></h3>
 <p>Returns the value evaluated at the nth row of the window frame (counting from 1). Returns NULL if no such row exists.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">nth_value</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="p">)</span>
 </pre></div>

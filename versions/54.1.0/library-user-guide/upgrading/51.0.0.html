@@ -494,19 +494,19 @@
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-51-0-0">
-<h2>DataFusion 51.0.0<a class="headerlink" href="#datafusion-51-0-0" title="Link to this heading">#</a></h2>
+<span id="datafusion-5100"></span><h2>DataFusion 51.0.0<a class="headerlink" href="#datafusion-51-0-0" title="Link to this heading">#</a></h2>
 <section id="arrow-parquet-updated-to-57-0-0">
-<h3><code class="docutils literal notranslate"><span class="pre">arrow</span></code> / <code class="docutils literal notranslate"><span class="pre">parquet</span></code> updated to 57.0.0<a class="headerlink" href="#arrow-parquet-updated-to-57-0-0" title="Link to this heading">#</a></h3>
+<span id="arrow--parquet-updated-to-5700"></span><h3><code class="docutils literal notranslate"><span class="pre">arrow</span></code> / <code class="docutils literal notranslate"><span class="pre">parquet</span></code> updated to 57.0.0<a class="headerlink" href="#arrow-parquet-updated-to-57-0-0" title="Link to this heading">#</a></h3>
 </section>
 <section id="upgrade-to-arrow-57-0-0-and-parquet-57-0-0">
-<h3>Upgrade to arrow <code class="docutils literal notranslate"><span class="pre">57.0.0</span></code> and parquet <code class="docutils literal notranslate"><span class="pre">57.0.0</span></code><a class="headerlink" href="#upgrade-to-arrow-57-0-0-and-parquet-57-0-0" title="Link to this heading">#</a></h3>
+<span id="upgrade-to-arrow-5700-and-parquet-5700"></span><h3>Upgrade to arrow <code class="docutils literal notranslate"><span class="pre">57.0.0</span></code> and parquet <code class="docutils literal notranslate"><span class="pre">57.0.0</span></code><a class="headerlink" href="#upgrade-to-arrow-57-0-0-and-parquet-57-0-0" title="Link to this heading">#</a></h3>
 <p>This version of DataFusion upgrades the underlying Apache Arrow implementation
 to version <code class="docutils literal notranslate"><span class="pre">57.0.0</span></code>, including several dependent crates such as <code class="docutils literal notranslate"><span class="pre">prost</span></code>,
 <code class="docutils literal notranslate"><span class="pre">tonic</span></code>, <code class="docutils literal notranslate"><span class="pre">pyo3</span></code>, and <code class="docutils literal notranslate"><span class="pre">substrait</span></code>. . See the <a class="reference external" href="https://github.com/apache/arrow-rs/releases/tag/57.0.0">release
 notes</a> for more details.</p>
 </section>
 <section id="msrv-updated-to-1-88-0">
-<h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.88.0<a class="headerlink" href="#msrv-updated-to-1-88-0" title="Link to this heading">#</a></h3>
+<span id="msrv-updated-to-1880"></span><h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.88.0<a class="headerlink" href="#msrv-updated-to-1-88-0" title="Link to this heading">#</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.88.0/"><code class="docutils literal notranslate"><span class="pre">1.88.0</span></code></a>.</p>
 </section>
 <section id="functionregistry-exposes-two-additional-methods">
@@ -555,7 +555,7 @@ notes</a> for more details.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/17601">issue #17601</a> for more details.</p>
 </section>
 <section id="sessionstate-s-sql-to-statement-method-takes-dialect-rather-than-a-str">
-<h3><code class="docutils literal notranslate"><span class="pre">SessionState</span></code>’s <code class="docutils literal notranslate"><span class="pre">sql_to_statement</span></code> method takes <code class="docutils literal notranslate"><span class="pre">Dialect</span></code> rather than a <code class="docutils literal notranslate"><span class="pre">str</span></code><a class="headerlink" href="#sessionstate-s-sql-to-statement-method-takes-dialect-rather-than-a-str" title="Link to this heading">#</a></h3>
+<span id="sessionstates-sql_to_statement-method-takes-dialect-rather-than-a-str"></span><h3><code class="docutils literal notranslate"><span class="pre">SessionState</span></code>’s <code class="docutils literal notranslate"><span class="pre">sql_to_statement</span></code> method takes <code class="docutils literal notranslate"><span class="pre">Dialect</span></code> rather than a <code class="docutils literal notranslate"><span class="pre">str</span></code><a class="headerlink" href="#sessionstate-s-sql-to-statement-method-takes-dialect-rather-than-a-str" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">dialect</span></code> parameter of <code class="docutils literal notranslate"><span class="pre">sql_to_statement</span></code> method defined in <code class="docutils literal notranslate"><span class="pre">datafusion::execution::session_state::SessionState</span></code>
 has changed from <code class="docutils literal notranslate"><span class="pre">&amp;str</span></code> to <code class="docutils literal notranslate"><span class="pre">&amp;Dialect</span></code>.
 <code class="docutils literal notranslate"><span class="pre">Dialect</span></code> is an enum defined in the <code class="docutils literal notranslate"><span class="pre">datafusion-common</span></code>
@@ -580,7 +580,7 @@ Users may need to update their paths to account for these changes.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/17713">issue #17713</a> for more details.</p>
 </section>
 <section id="filescanconfig-projection-renamed-to-filescanconfig-projection-exprs">
-<h3><code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection</span></code> renamed to <code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection_exprs</span></code><a class="headerlink" href="#filescanconfig-projection-renamed-to-filescanconfig-projection-exprs" title="Link to this heading">#</a></h3>
+<span id="filescanconfigprojection-renamed-to-filescanconfigprojection_exprs"></span><h3><code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection</span></code> renamed to <code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection_exprs</span></code><a class="headerlink" href="#filescanconfig-projection-renamed-to-filescanconfig-projection-exprs" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">projection</span></code> field in <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> has been renamed to <code class="docutils literal notranslate"><span class="pre">projection_exprs</span></code> and its type has changed from <code class="docutils literal notranslate"><span class="pre">Option&lt;Vec&lt;usize&gt;&gt;</span></code> to <code class="docutils literal notranslate"><span class="pre">Option&lt;ProjectionExprs&gt;</span></code>. This change enables more powerful projection pushdown capabilities by supporting arbitrary physical expressions rather than just column indices.</p>
 <p><strong>Impact on direct field access:</strong></p>
 <p>If you directly access the <code class="docutils literal notranslate"><span class="pre">projection</span></code> field:</p>
@@ -618,7 +618,7 @@ Users may need to update their paths to account for these changes.</p>
 the computed <em>schema</em> of the query, consistent with the behavior of <code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">table_name</span></code>.</p>
 </section>
 <section id="datafusion-execution-time-zone-default-configuration-changed">
-<h3><code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code> default configuration changed<a class="headerlink" href="#datafusion-execution-time-zone-default-configuration-changed" title="Link to this heading">#</a></h3>
+<span id="datafusionexecutiontime_zone-default-configuration-changed"></span><h3><code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code> default configuration changed<a class="headerlink" href="#datafusion-execution-time-zone-default-configuration-changed" title="Link to this heading">#</a></h3>
 <p>The default value for <code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code> previously was a string value of <code class="docutils literal notranslate"><span class="pre">+00:00</span></code> (GMT/Zulu time).
 This was changed to be an <code class="docutils literal notranslate"><span class="pre">Option&lt;String&gt;</span></code> with a default of <code class="docutils literal notranslate"><span class="pre">None</span></code>. If you want to change the timezone back
 to the previous value you can execute the sql:</p>
@@ -630,7 +630,7 @@ to the previous value you can execute the sql:</p>
 <code class="docutils literal notranslate"><span class="pre">now</span></code>, <code class="docutils literal notranslate"><span class="pre">current_date</span></code>, <code class="docutils literal notranslate"><span class="pre">current_time</span></code>, and <code class="docutils literal notranslate"><span class="pre">to_timestamp</span></code> among others.</p>
 </section>
 <section id="introduction-of-tableschema-and-changes-to-filesource-with-schema-method">
-<h3>Introduction of <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> and changes to <code class="docutils literal notranslate"><span class="pre">FileSource::with_schema()</span></code> method<a class="headerlink" href="#introduction-of-tableschema-and-changes-to-filesource-with-schema-method" title="Link to this heading">#</a></h3>
+<span id="introduction-of-tableschema-and-changes-to-filesourcewith_schema-method"></span><h3>Introduction of <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> and changes to <code class="docutils literal notranslate"><span class="pre">FileSource::with_schema()</span></code> method<a class="headerlink" href="#introduction-of-tableschema-and-changes-to-filesource-with-schema-method" title="Link to this heading">#</a></h3>
 <p>A new <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> struct has been introduced in the <code class="docutils literal notranslate"><span class="pre">datafusion-datasource</span></code> crate to better manage table schemas with partition columns. This struct helps distinguish between:</p>
 <ul class="simple">
 <li><p><strong>File schema</strong>: The schema of actual data files on disk</p></li>
@@ -700,7 +700,7 @@ to the previous value you can execute the sql:</p>
 </div>
 </section>
 <section id="aggregateudfimpl-is-ordered-set-aggregate-has-been-renamed-to-aggregateudfimpl-supports-within-group-clause">
-<h3><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_ordered_set_aggregate</span></code> has been renamed to <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_within_group_clause</span></code><a class="headerlink" href="#aggregateudfimpl-is-ordered-set-aggregate-has-been-renamed-to-aggregateudfimpl-supports-within-group-clause" title="Link to this heading">#</a></h3>
+<span id="aggregateudfimplis_ordered_set_aggregate-has-been-renamed-to-aggregateudfimplsupports_within_group_clause"></span><h3><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_ordered_set_aggregate</span></code> has been renamed to <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_within_group_clause</span></code><a class="headerlink" href="#aggregateudfimpl-is-ordered-set-aggregate-has-been-renamed-to-aggregateudfimpl-supports-within-group-clause" title="Link to this heading">#</a></h3>
 <p>This method has been renamed to better reflect the actual impact it has for aggregate UDF implementations.
 The accompanying <code class="docutils literal notranslate"><span class="pre">AggregateUDF::is_ordered_set_aggregate</span></code> has also been renamed to <code class="docutils literal notranslate"><span class="pre">AggregateUDF::supports_within_group_clause</span></code>.
 No functionality has been changed with regards to this method; it still refers only to permitting use of <code class="docutils literal notranslate"><span class="pre">WITHIN</span> <span class="pre">GROUP</span></code>

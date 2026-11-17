@@ -491,20 +491,20 @@
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-53-0-0">
-<h2>DataFusion 53.0.0<a class="headerlink" href="#datafusion-53-0-0" title="Link to this heading">#</a></h2>
+<span id="datafusion-5300"></span><h2>DataFusion 53.0.0<a class="headerlink" href="#datafusion-53-0-0" title="Link to this heading">#</a></h2>
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code> has not been released yet. The information provided
 *in this section pertains to features and changes that have already been merged
 *to the main branch and are awaiting release in this version. See <a class="reference external" href="https://github.com/apache/datafusion/issues/19692">#19692</a> for
 *more details.</p>
 <section id="upgrade-arrow-parquet-to-58-0-0-and-object-store-to-0-13-0">
-<h3>Upgrade arrow/parquet to 58.0.0 and object_store to 0.13.0<a class="headerlink" href="#upgrade-arrow-parquet-to-58-0-0-and-object-store-to-0-13-0" title="Link to this heading">#</a></h3>
+<span id="upgrade-arrowparquet-to-5800-and-object_store-to-0130"></span><h3>Upgrade arrow/parquet to 58.0.0 and object_store to 0.13.0<a class="headerlink" href="#upgrade-arrow-parquet-to-58-0-0-and-object-store-to-0-13-0" title="Link to this heading">#</a></h3>
 <p>DataFusion 53.0.0 uses <code class="docutils literal notranslate"><span class="pre">arrow</span></code> and <code class="docutils literal notranslate"><span class="pre">parquet</span></code> 58.0.0, and <code class="docutils literal notranslate"><span class="pre">object_store</span></code> 0.13.0.
 This may require updates to your Cargo.toml if you have direct dependencies on
 these crates.</p>
 <p>See the <a class="reference external" href="https://github.com/apache/arrow-rs/releases/tag/58.0.0">Arrow 58.0.0 release notes</a> and the <a class="reference external" href="https://github.com/apache/arrow-rs/releases/tag/58.0.0">object_store 0.13.0 upgrade guide</a> for details on breaking changes in those versions.</p>
 </section>
 <section id="executionplan-properties-now-returns-arc-planproperties">
-<h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::properties</span></code> now returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;PlanProperties&gt;</span></code><a class="headerlink" href="#executionplan-properties-now-returns-arc-planproperties" title="Link to this heading">#</a></h3>
+<span id="executionplanproperties-now-returns-arcplanproperties"></span><h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::properties</span></code> now returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;PlanProperties&gt;</span></code><a class="headerlink" href="#executionplan-properties-now-returns-arc-planproperties" title="Link to this heading">#</a></h3>
 <p>Now <code class="docutils literal notranslate"><span class="pre">ExecutionPlan::properties()</span></code> returns <code class="docutils literal notranslate"><span class="pre">&amp;Arc&lt;PlanProperties&gt;</span></code> instead of a
 reference. This make it possible to cheaply clone properties and reuse them across multiple
 <code class="docutils literal notranslate"><span class="pre">ExecutionPlans</span></code>. It also makes it possible to optimize [<code class="docutils literal notranslate"><span class="pre">ExecutionPlan::with_new_children</span></code>]
@@ -580,7 +580,7 @@ outer relations.</p>
 </div>
 </section>
 <section id="filesinkconfig-adds-file-output-mode">
-<h3><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> adds <code class="docutils literal notranslate"><span class="pre">file_output_mode</span></code><a class="headerlink" href="#filesinkconfig-adds-file-output-mode" title="Link to this heading">#</a></h3>
+<span id="filesinkconfig-adds-file_output_mode"></span><h3><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> adds <code class="docutils literal notranslate"><span class="pre">file_output_mode</span></code><a class="headerlink" href="#filesinkconfig-adds-file-output-mode" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> now includes a <code class="docutils literal notranslate"><span class="pre">file_output_mode:</span> <span class="pre">FileOutputMode</span></code> field to control
 single-file vs directory output behavior. Any code constructing <code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> via struct
 literals must initialize this field.</p>
@@ -834,7 +834,7 @@ updates:</p>
 </div>
 </section>
 <section id="generate-series-and-range-table-functions-changed">
-<h3><code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions changed<a class="headerlink" href="#generate-series-and-range-table-functions-changed" title="Link to this heading">#</a></h3>
+<span id="generate_series-and-range-table-functions-changed"></span><h3><code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions changed<a class="headerlink" href="#generate-series-and-range-table-functions-changed" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions now return an empty set when the interval is invalid, instead of an error.
 This behavior is consistent with systems like PostgreSQL.</p>
 <p>Before:</p>

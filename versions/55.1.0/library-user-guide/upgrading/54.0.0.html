@@ -498,9 +498,9 @@
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-54-0-0">
-<h2>DataFusion 54.0.0<a class="headerlink" href="#datafusion-54-0-0" title="Link to this heading">#</a></h2>
+<span id="datafusion-5400"></span><h2>DataFusion 54.0.0<a class="headerlink" href="#datafusion-54-0-0" title="Link to this heading">#</a></h2>
 <section id="aggregatefunctionexpr-human-display-now-returns-option-str">
-<h3><code class="docutils literal notranslate"><span class="pre">AggregateFunctionExpr::human_display()</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;str&gt;</span></code><a class="headerlink" href="#aggregatefunctionexpr-human-display-now-returns-option-str" title="Link to this heading">#</a></h3>
+<span id="aggregatefunctionexprhuman_display-now-returns-optionstr"></span><h3><code class="docutils literal notranslate"><span class="pre">AggregateFunctionExpr::human_display()</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;str&gt;</span></code><a class="headerlink" href="#aggregatefunctionexpr-human-display-now-returns-option-str" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_expr::aggregate::AggregateFunctionExpr::human_display()</span></code>
 now returns <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;str&gt;</span></code> instead of <code class="docutils literal notranslate"><span class="pre">&amp;str</span></code>.</p>
 <p>If your code read the display text directly, handle the <code class="docutils literal notranslate"><span class="pre">None</span></code> case and fall
@@ -530,7 +530,7 @@ order-by expressions.</p>
 physical expression, optional filter, and order-by expressions.</p>
 </section>
 <section id="expr-unalias-nested-preserves-aliases-with-metadata">
-<h3><code class="docutils literal notranslate"><span class="pre">Expr::unalias_nested()</span></code> preserves aliases with metadata<a class="headerlink" href="#expr-unalias-nested-preserves-aliases-with-metadata" title="Link to this heading">#</a></h3>
+<span id="exprunalias_nested-preserves-aliases-with-metadata"></span><h3><code class="docutils literal notranslate"><span class="pre">Expr::unalias_nested()</span></code> preserves aliases with metadata<a class="headerlink" href="#expr-unalias-nested-preserves-aliases-with-metadata" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">Expr::unalias_nested()</span></code> no longer removes aliases that carry non-empty
 <code class="docutils literal notranslate"><span class="pre">FieldMetadata</span></code>. This preserves user-provided output field metadata. Code that
 needs to remove all aliases, including aliases with metadata, should unwrap
@@ -561,7 +561,7 @@ only the alias name</p></li>
 to update their expected strings.</p>
 </section>
 <section id="string-numeric-comparison-coercion-now-prefers-numeric-types">
-<h3>String/numeric comparison coercion now prefers numeric types<a class="headerlink" href="#string-numeric-comparison-coercion-now-prefers-numeric-types" title="Link to this heading">#</a></h3>
+<span id="stringnumeric-comparison-coercion-now-prefers-numeric-types"></span><h3>String/numeric comparison coercion now prefers numeric types<a class="headerlink" href="#string-numeric-comparison-coercion-now-prefers-numeric-types" title="Link to this heading">#</a></h3>
 <p>Previously, comparing a numeric column with a string value (e.g.,
 <code class="docutils literal notranslate"><span class="pre">WHERE</span> <span class="pre">int_col</span> <span class="pre">&gt;</span> <span class="pre">'100'</span></code>) coerced both sides to strings and performed a
 lexicographic comparison. This produced surprising results — for example,
@@ -651,7 +651,7 @@ field semantics, use <code class="docutils literal notranslate"><span class="pre
 only have a <code class="docutils literal notranslate"><span class="pre">DataType</span></code>.</p>
 </section>
 <section id="comparison-coercion-numeric-removed-replaced-by-comparison-coercion">
-<h3><code class="docutils literal notranslate"><span class="pre">comparison_coercion_numeric</span></code> removed, replaced by <code class="docutils literal notranslate"><span class="pre">comparison_coercion</span></code><a class="headerlink" href="#comparison-coercion-numeric-removed-replaced-by-comparison-coercion" title="Link to this heading">#</a></h3>
+<span id="comparison_coercion_numeric-removed-replaced-by-comparison_coercion"></span><h3><code class="docutils literal notranslate"><span class="pre">comparison_coercion_numeric</span></code> removed, replaced by <code class="docutils literal notranslate"><span class="pre">comparison_coercion</span></code><a class="headerlink" href="#comparison-coercion-numeric-removed-replaced-by-comparison-coercion" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">comparison_coercion_numeric</span></code> function has been removed. Its behavior
 (preferring numeric types for string/numeric comparisons) is now the default in
 <code class="docutils literal notranslate"><span class="pre">comparison_coercion</span></code>. A new function, <code class="docutils literal notranslate"><span class="pre">type_union_coercion</span></code>, handles contexts
@@ -665,7 +665,7 @@ string-preferring behavior</p></li>
 </ul>
 </section>
 <section id="executionplan-partition-statistics-now-returns-arc-statistics">
-<h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Arc&lt;Statistics&gt;</span></code><a class="headerlink" href="#executionplan-partition-statistics-now-returns-arc-statistics" title="Link to this heading">#</a></h3>
+<span id="executionplanpartition_statistics-now-returns-arcstatistics"></span><h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Arc&lt;Statistics&gt;</span></code><a class="headerlink" href="#executionplan-partition-statistics-now-returns-arc-statistics" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::partition_statistics</span></code> now returns <code class="docutils literal notranslate"><span class="pre">Result&lt;Arc&lt;Statistics&gt;&gt;</span></code> instead of <code class="docutils literal notranslate"><span class="pre">Result&lt;Statistics&gt;</span></code>. This avoids cloning <code class="docutils literal notranslate"><span class="pre">Statistics</span></code> when it is shared across multiple consumers.</p>
 <p><strong>Before:</strong></p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">partition_statistics</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">partition</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Statistics</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
@@ -691,7 +691,7 @@ string-preferring behavior</p></li>
 </div>
 </section>
 <section id="remove-as-any-from-physicalexpr-scalarudfimpl-aggregateudfimpl-windowudfimpl-executionplan-tableprovider-schemaprovider-catalogprovider-catalogproviderlist-tablesource-filesource-fileformat-fileformatfactory-datasource-and-datasink">
-<h3>Remove <code class="docutils literal notranslate"><span class="pre">as_any</span></code> from <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code>, <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>, <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>, <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code>, <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code>, <code class="docutils literal notranslate"><span class="pre">CatalogProviderList</span></code>, <code class="docutils literal notranslate"><span class="pre">TableSource</span></code>, <code class="docutils literal notranslate"><span class="pre">FileSource</span></code>, <code class="docutils literal notranslate"><span class="pre">FileFormat</span></code>, <code class="docutils literal notranslate"><span class="pre">FileFormatFactory</span></code>, <code class="docutils literal notranslate"><span class="pre">DataSource</span></code>, and <code class="docutils literal notranslate"><span class="pre">DataSink</span></code><a class="headerlink" href="#remove-as-any-from-physicalexpr-scalarudfimpl-aggregateudfimpl-windowudfimpl-executionplan-tableprovider-schemaprovider-catalogprovider-catalogproviderlist-tablesource-filesource-fileformat-fileformatfactory-datasource-and-datasink" title="Link to this heading">#</a></h3>
+<span id="remove-as_any-from-physicalexpr-scalarudfimpl-aggregateudfimpl-windowudfimpl-executionplan-tableprovider-schemaprovider-catalogprovider-catalogproviderlist-tablesource-filesource-fileformat-fileformatfactory-datasource-and-datasink"></span><h3>Remove <code class="docutils literal notranslate"><span class="pre">as_any</span></code> from <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code>, <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">WindowUDFImpl</span></code>, <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>, <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code>, <code class="docutils literal notranslate"><span class="pre">SchemaProvider</span></code>, <code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code>, <code class="docutils literal notranslate"><span class="pre">CatalogProviderList</span></code>, <code class="docutils literal notranslate"><span class="pre">TableSource</span></code>, <code class="docutils literal notranslate"><span class="pre">FileSource</span></code>, <code class="docutils literal notranslate"><span class="pre">FileFormat</span></code>, <code class="docutils literal notranslate"><span class="pre">FileFormatFactory</span></code>, <code class="docutils literal notranslate"><span class="pre">DataSource</span></code>, and <code class="docutils literal notranslate"><span class="pre">DataSink</span></code><a class="headerlink" href="#remove-as-any-from-physicalexpr-scalarudfimpl-aggregateudfimpl-windowudfimpl-executionplan-tableprovider-schemaprovider-catalogprovider-catalogproviderlist-tablesource-filesource-fileformat-fileformatfactory-datasource-and-datasink" title="Link to this heading">#</a></h3>
 <p>Now that we have a more recent minimum version of Rust, we can take advantage of
 trait upcasting. This reduces the amount of boilerplate code that
 users need to implement. In your implementations of the traits listed above,
@@ -728,7 +728,7 @@ dereference through the <code class="docutils literal notranslate"><span class="
 </div></blockquote>
 </section>
 <section id="pruningstatistics-row-counts-no-longer-takes-a-column-parameter">
-<h3><code class="docutils literal notranslate"><span class="pre">PruningStatistics::row_counts</span></code> no longer takes a <code class="docutils literal notranslate"><span class="pre">column</span></code> parameter<a class="headerlink" href="#pruningstatistics-row-counts-no-longer-takes-a-column-parameter" title="Link to this heading">#</a></h3>
+<span id="pruningstatisticsrow_counts-no-longer-takes-a-column-parameter"></span><h3><code class="docutils literal notranslate"><span class="pre">PruningStatistics::row_counts</span></code> no longer takes a <code class="docutils literal notranslate"><span class="pre">column</span></code> parameter<a class="headerlink" href="#pruningstatistics-row-counts-no-longer-takes-a-column-parameter" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">row_counts</span></code> method on the <code class="docutils literal notranslate"><span class="pre">PruningStatistics</span></code> trait no longer takes a
 <code class="docutils literal notranslate"><span class="pre">&amp;Column</span></code> argument, since row counts are a container-level property (the same
 for every column).</p>
@@ -913,7 +913,7 @@ struct literal, or pattern-matches it without <code class="docutils literal notr
 <code class="docutils literal notranslate"><span class="pre">ExecutionProps::new()</span></code> and include <code class="docutils literal notranslate"><span class="pre">..</span></code> in exhaustive patterns.</p>
 </section>
 <section id="items-in-datafusion-functions-strings-are-no-longer-public">
-<h3>Items in <code class="docutils literal notranslate"><span class="pre">datafusion_functions::strings</span></code> are no longer public<a class="headerlink" href="#items-in-datafusion-functions-strings-are-no-longer-public" title="Link to this heading">#</a></h3>
+<span id="items-in-datafusion_functionsstrings-are-no-longer-public"></span><h3>Items in <code class="docutils literal notranslate"><span class="pre">datafusion_functions::strings</span></code> are no longer public<a class="headerlink" href="#items-in-datafusion-functions-strings-are-no-longer-public" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">StringArrayBuilder</span></code>, <code class="docutils literal notranslate"><span class="pre">LargeStringArrayBuilder</span></code>, <code class="docutils literal notranslate"><span class="pre">StringViewArrayBuilder</span></code>,
 <code class="docutils literal notranslate"><span class="pre">ColumnarValueRef</span></code>, and <code class="docutils literal notranslate"><span class="pre">append_view</span></code> have been reduced to <code class="docutils literal notranslate"><span class="pre">pub(crate)</span></code>. They
 were only ever used to implement <code class="docutils literal notranslate"><span class="pre">concat</span></code> and <code class="docutils literal notranslate"><span class="pre">concat_ws</span></code> inside the crate. If
@@ -949,7 +949,7 @@ and affected calls to <code class="docutils literal notranslate"><span class="pr
 <a class="reference external" href="https://github.com/apache/datafusion/pull/21603">PR #21603</a> for details.</p>
 </section>
 <section id="conversion-from-configfileencryptionproperties-configfiledecryptionproperties-is-now-fallible">
-<h3>Conversion from <code class="docutils literal notranslate"><span class="pre">ConfigFileEncryptionProperties</span></code> / <code class="docutils literal notranslate"><span class="pre">ConfigFileDecryptionProperties</span></code> is now fallible<a class="headerlink" href="#conversion-from-configfileencryptionproperties-configfiledecryptionproperties-is-now-fallible" title="Link to this heading">#</a></h3>
+<span id="conversion-from-configfileencryptionproperties--configfiledecryptionproperties-is-now-fallible"></span><h3>Conversion from <code class="docutils literal notranslate"><span class="pre">ConfigFileEncryptionProperties</span></code> / <code class="docutils literal notranslate"><span class="pre">ConfigFileDecryptionProperties</span></code> is now fallible<a class="headerlink" href="#conversion-from-configfileencryptionproperties-configfiledecryptionproperties-is-now-fallible" title="Link to this heading">#</a></h3>
 <p>Previously, <code class="docutils literal notranslate"><span class="pre">datafusion_common::config::ConfigFileEncryptionProperties</span></code> and
 <code class="docutils literal notranslate"><span class="pre">datafusion_common::config::ConfigFileDecryptionProperties</span></code> implemented infallible
 conversions into Parquet’s encryption/decryption types (via <code class="docutils literal notranslate"><span class="pre">From</span></code> / <code class="docutils literal notranslate"><span class="pre">Into</span></code>).
@@ -983,7 +983,7 @@ where <code class="docutils literal notranslate"><span class="pre">config_encryp
 <a class="reference external" href="https://github.com/apache/datafusion/pull/21985">PR #21985</a> for details.</p>
 </section>
 <section id="approx-percentile-cont-approx-percentile-cont-with-weight-approx-median-now-coerce-to-floats">
-<h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_median</span></code> now coerce to floats<a class="headerlink" href="#approx-percentile-cont-approx-percentile-cont-with-weight-approx-median-now-coerce-to-floats" title="Link to this heading">#</a></h3>
+<span id="approx_percentile_cont-approx_percentile_cont_with_weight-approx_median-now-coerce-to-floats"></span><h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_median</span></code> now coerce to floats<a class="headerlink" href="#approx-percentile-cont-approx-percentile-cont-with-weight-approx-median-now-coerce-to-floats" title="Link to this heading">#</a></h3>
 <p>The type signatures of <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code>, <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code>, and
 <code class="docutils literal notranslate"><span class="pre">approx_median</span></code> now coerce integer input values to <code class="docutils literal notranslate"><span class="pre">Float64</span></code> before computing the approximation.
 As a result, these functions always return a float, even when the input column is an integer type.</p>
@@ -1004,7 +1004,7 @@ As a result, these functions always return a float, even when the input column i
 </div>
 </section>
 <section id="partitionedfile-extensions-is-now-a-type-keyed-map">
-<h3><code class="docutils literal notranslate"><span class="pre">PartitionedFile::extensions</span></code> is now a type-keyed map<a class="headerlink" href="#partitionedfile-extensions-is-now-a-type-keyed-map" title="Link to this heading">#</a></h3>
+<span id="partitionedfileextensions-is-now-a-type-keyed-map"></span><h3><code class="docutils literal notranslate"><span class="pre">PartitionedFile::extensions</span></code> is now a type-keyed map<a class="headerlink" href="#partitionedfile-extensions-is-now-a-type-keyed-map" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">PartitionedFile.extensions</span></code> previously held a single
 <code class="docutils literal notranslate"><span class="pre">Option&lt;Arc&lt;dyn</span> <span class="pre">Any</span> <span class="pre">+</span> <span class="pre">Send</span> <span class="pre">+</span> <span class="pre">Sync&gt;&gt;</span></code> slot, so two independent components
 could not both attach data to the same file without colliding. The field
@@ -1041,7 +1041,7 @@ read <code class="docutils literal notranslate"><span class="pre">partitioned_fi
 </ul>
 </section>
 <section id="arrays-zip-struct-field-names-changed">
-<h3><code class="docutils literal notranslate"><span class="pre">arrays_zip</span></code> struct field names changed<a class="headerlink" href="#arrays-zip-struct-field-names-changed" title="Link to this heading">#</a></h3>
+<span id="arrays_zip-struct-field-names-changed"></span><h3><code class="docutils literal notranslate"><span class="pre">arrays_zip</span></code> struct field names changed<a class="headerlink" href="#arrays-zip-struct-field-names-changed" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">arrays_zip</span></code> (and its alias <code class="docutils literal notranslate"><span class="pre">list_zip</span></code>) scalar function now names its
 output struct fields <code class="docutils literal notranslate"><span class="pre">&quot;1&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;2&quot;</span></code>, …, <code class="docutils literal notranslate"><span class="pre">&quot;n&quot;</span></code> (1-indexed, matching DuckDB and
 Spark) instead of <code class="docutils literal notranslate"><span class="pre">c0</span></code>, <code class="docutils literal notranslate"><span class="pre">c1</span></code>, …, <code class="docutils literal notranslate"><span class="pre">c{n-1}</span></code>.</p>
@@ -1054,7 +1054,7 @@ etc. (e.g. <code class="docutils literal notranslate"><span class="pre">arrays_z
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/20886">PR #20886</a> for details.</p>
 </section>
 <section id="box-c-and-arc-c-treenodecontainer-impls-now-require-c-default">
-<h3><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code><a class="headerlink" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default" title="Link to this heading">#</a></h3>
+<span id="boxc-and-arcc-treenodecontainer-impls-now-require-c-default"></span><h3><code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> impls now require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code><a class="headerlink" href="#box-c-and-arc-c-treenodecontainer-impls-now-require-c-default" title="Link to this heading">#</a></h3>
 <p>The generic <code class="docutils literal notranslate"><span class="pre">TreeNodeContainer</span></code> implementations for <code class="docutils literal notranslate"><span class="pre">Box&lt;C&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Arc&lt;C&gt;</span></code> now
 require <code class="docutils literal notranslate"><span class="pre">C:</span> <span class="pre">Default</span></code>. This change was necessary as part of optimizing tree
 rewriting to reduce heap allocations.</p>
@@ -1331,7 +1331,7 @@ so user-defined higher-order functions can be registered</p>
 </section>
 </section>
 <section id="new-dialect-spark-variant">
-<h3>New <code class="docutils literal notranslate"><span class="pre">Dialect::Spark</span></code> variant<a class="headerlink" href="#new-dialect-spark-variant" title="Link to this heading">#</a></h3>
+<span id="new-dialectspark-variant"></span><h3>New <code class="docutils literal notranslate"><span class="pre">Dialect::Spark</span></code> variant<a class="headerlink" href="#new-dialect-spark-variant" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">Dialect</span></code> enum in <code class="docutils literal notranslate"><span class="pre">datafusion_common::config</span></code> now includes a <code class="docutils literal notranslate"><span class="pre">Spark</span></code> variant.
 If you match exhaustively on <code class="docutils literal notranslate"><span class="pre">Dialect</span></code>, add a <code class="docutils literal notranslate"><span class="pre">Dialect::Spark</span></code> arm.</p>
 </section>

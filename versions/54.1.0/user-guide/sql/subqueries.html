@@ -530,7 +530,7 @@ Subqueries can be used in <code class="docutils literal notranslate"><span class
 <li><p><a class="reference internal" href="#not-in">[ NOT ] IN</a></p></li>
 </ul>
 <section id="not-exists">
-<h3>[ NOT ] EXISTS<a class="headerlink" href="#not-exists" title="Link to this heading">#</a></h3>
+<span id="-not--exists"></span><h3>[ NOT ] EXISTS<a class="headerlink" href="#not-exists" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">EXISTS</span></code> operator returns all rows where a
 <em><a class="reference internal" href="#correlated-subqueries">correlated subquery</a></em> produces one or more matches for
 that row. <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">EXISTS</span></code> returns all rows where a <em>correlated subquery</em> produces
@@ -540,7 +540,7 @@ zero matches for that row. Only <em>correlated subqueries</em> are supported.</p
 </div>
 </section>
 <section id="not-in">
-<h3>[ NOT ] IN<a class="headerlink" href="#not-in" title="Link to this heading">#</a></h3>
+<span id="-not--in"></span><h3>[ NOT ] IN<a class="headerlink" href="#not-in" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">IN</span></code> operator returns all rows where a given expression’s value can be found
 in the results of a <em><a class="reference internal" href="#correlated-subqueries">correlated subquery</a></em>.
 <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> returns all rows where a given expression’s value cannot be found in
@@ -628,7 +628,7 @@ operated on by the outer query.</p>
 </div>
 <p>To reference columns from other tables in the same <code class="docutils literal notranslate"><span class="pre">FROM</span></code> clause, use <a class="reference internal" href="select.html#lateral-join"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">LATERAL</span> <span class="pre">JOIN</span></code></span></a>.</p>
 <section id="id1">
-<h3>Example<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
+<span id="example-1"></span><h3>Example<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
 <p>The following query returns the average of maximum values per room.
 The inner query returns the maximum value for each field from each room.
 The outer query uses the results of the inner query and returns the average
@@ -780,7 +780,7 @@ in the predicate expression).</p>
 </pre></div>
 </div>
 <section id="id3">
-<h3>Examples<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<span id="examples-1"></span><h3>Examples<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
 <p>The following query calculates the averages of even and odd numbers in table <code class="docutils literal notranslate"><span class="pre">y</span></code>
 and returns the averages that are equal to the maximum value of <code class="docutils literal notranslate"><span class="pre">column_1</span></code>
 in table <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p>
