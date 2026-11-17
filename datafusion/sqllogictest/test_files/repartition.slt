@@ -139,3 +139,74 @@ statement ok
 DROP TABLE t1;
 
 # End repartition on empty columns test
+
+# Start reorder aggregate keys with duplicate group column names test.
+# See https://github.com/apache/datafusion/issues/27221
+
+# Force partitioned hash joins so the join reorders the aggregate's keys
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 0;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 0;
+
+statement ok
+CREATE TABLE t1 (a INT) AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE t2 (a INT) AS VALUES (10), (20), (30);
+
+statement ok
+CREATE TABLE t3 (a INT) AS VALUES (100), (200), (300);
+
+statement ok
+CREATE TABLE t4 (k1 INT, k2 INT, k3 INT, v VARCHAR) AS VALUES
+  (1, 20, 300, 'x'),
+  (2, 30, 100, 'y'),
+  (3, 10, 200, 'z');
+
+# Two keys swapped
+query IIT
+SELECT g.a1, g.a2, t4.v
+FROM (SELECT t1.a AS a1, t2.a AS a2 FROM t1 CROSS JOIN t2 GROUP BY t1.a, t2.a) g
+JOIN t4 ON g.a2 = t4.k2 AND g.a1 = t4.k1
+ORDER BY t4.v;
+----
+1 20 x
+2 30 y
+3 10 z
+
+# Three keys in an order that is not its own inverse
+query IIIT
+SELECT g.a1, g.a2, g.a3, t4.v
+FROM (
+  SELECT t1.a AS a1, t2.a AS a2, t3.a AS a3
+  FROM t1 CROSS JOIN t2 CROSS JOIN t3
+  GROUP BY t1.a, t2.a, t3.a
+) g
+JOIN t4 ON g.a3 = t4.k3 AND g.a1 = t4.k1 AND g.a2 = t4.k2
+ORDER BY t4.v;
+----
+1 20 300 x
+2 30 100 y
+3 10 200 z
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold;
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold_rows;
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+DROP TABLE t3;
+
+statement ok
+DROP TABLE t4;
+
+# End reorder aggregate keys with duplicate group column names test
