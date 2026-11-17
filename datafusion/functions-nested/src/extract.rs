@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front, array_pop_back, and array_any_value functions.
 
@@ -31,7 +18,6 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::cast::{
     as_int64_array, as_large_list_view_array, as_list_view_array,
 };
-use datafusion_common::internal_err;
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::utils::offset_span_len;
 use datafusion_common::{
@@ -48,7 +34,7 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
-use crate::utils::{list_inner_field, make_scalar_function};
+use crate::utils::make_scalar_function;
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(
@@ -608,7 +594,7 @@ where
     // Carry the input's list field through to the output so that the returned
     // type matches the one promised by `return_type` / `return_field_from_args`,
     // including the field name, nullability and metadata.
-    let field = list_inner_field("general_array_slice", array.data_type())?;
+    let field = Arc::clone(array.value_field());
 
     // `use_nulls` is false because we never call `try_extend_nulls`: null rows are
     // emitted as empty slices. Arrow still allocates a validity buffer on its own
@@ -696,14 +682,7 @@ where
     let values = array.values();
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
-    let field = match array.data_type() {
-        ListView(field) | LargeListView(field) => Arc::clone(field),
-        other => {
-            return internal_err!(
-                "general_list_view_array_slice got unexpected data type: {other}"
-            );
-        }
-    };
+    let field = Arc::clone(array.value_field());
 
     // See the note on `use_nulls` in `general_array_slice`.
     let mut mutable =

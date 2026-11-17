@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+name: Install rustup
+description: 'Install rustup and the toolchain from rust-toolchain.toml on a runner without Rust, such as ubuntu-slim'
+runs:
+  using: "composite"
+  steps:
+    - name: Install rustup and the toolchain
+      shell: bash
+      run: |
+        RETRY=("ci/scripts/retry" timeout 120)
+        "${RETRY[@]}" curl -sSf -o "$RUNNER_TEMP/rustup-init.sh" https://sh.rustup.rs
+        sh "$RUNNER_TEMP/rustup-init.sh" -y --no-modify-path --profile minimal --default-toolchain none
+        CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
+        export PATH="$CARGO_BIN:$PATH"
+        echo "$CARGO_BIN" >> "$GITHUB_PATH"
+        # With no toolchain argument, rustup installs the toolchain and the
+        # components that rust-toolchain.toml names.
+        "${RETRY[@]}" rustup toolchain install
+    - name: Configure rust runtime env
+      uses: ./.github/actions/setup-rust-runtime

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tree node implementation for Logical Expressions
 
@@ -72,8 +59,6 @@ impl TreeNode for Expr {
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 lists_of_exprs.apply_elements(f)
             }
-            // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[expect(deprecated)]
             Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
@@ -81,7 +66,6 @@ impl TreeNode for Expr {
             | Expr::Literal(_, _)
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
-            | Expr::Wildcard { .. }
             | Expr::Placeholder(_)
             | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
@@ -126,10 +110,7 @@ impl TreeNode for Expr {
         f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
-            // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[expect(deprecated)]
             Expr::Column(_)
-            | Expr::Wildcard { .. }
             | Expr::Placeholder(Placeholder { .. })
             | Expr::OuterReferenceColumn(_, _)
             | Expr::Exists { .. }

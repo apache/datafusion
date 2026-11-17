@@ -1,25 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::string::common::*;
 use crate::utils::make_scalar_function;
-use arrow::array::{ArrayRef, AsArray};
+use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use datafusion_common::types::logical_string;
+use datafusion_common::utils::map_dictionary_values;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
@@ -43,9 +31,7 @@ fn btrim(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::LargeUtf8 => general_trim::<i64, TrimBoth>(&args, false),
         DataType::Utf8View => general_trim::<i32, TrimBoth>(&args, true),
         DataType::Dictionary(_, _) => {
-            let dictionary = args[0].as_any_dictionary();
-            let trimmed = btrim(&[Arc::clone(dictionary.values())])?;
-            Ok(dictionary.with_values(trimmed))
+            map_dictionary_values(&args[0], |values| btrim(&[Arc::clone(values)]))
         }
         other => exec_err!(
             "Unsupported data type {other:?} for function btrim, expected Utf8, LargeUtf8 or Utf8View."

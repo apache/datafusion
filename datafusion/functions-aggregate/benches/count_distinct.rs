@@ -1,25 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, Int8Array, Int16Array, Int32Array, Int64Array, UInt8Array,
-    UInt16Array, UInt32Array,
+    Array, ArrayRef, Decimal32Array, Decimal64Array, Decimal128Array, Int8Array,
+    Int16Array, Int32Array, Int64Array, UInt8Array, UInt16Array, UInt32Array,
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -100,6 +87,33 @@ fn create_i32_array(n_distinct: usize) -> Int32Array {
     (0..BATCH_SIZE)
         .map(|_| Some(rng.random_range(0..n_distinct as i32)))
         .collect()
+}
+
+fn create_decimal32_array(n_distinct: usize) -> Decimal32Array {
+    let mut rng = StdRng::seed_from_u64(42);
+    (0..BATCH_SIZE)
+        .map(|_| Some(rng.random_range(0..n_distinct as i32)))
+        .collect::<Decimal32Array>()
+        .with_precision_and_scale(9, 2)
+        .unwrap()
+}
+
+fn create_decimal64_array(n_distinct: usize) -> Decimal64Array {
+    let mut rng = StdRng::seed_from_u64(42);
+    (0..BATCH_SIZE)
+        .map(|_| Some(rng.random_range(0..n_distinct as i64)))
+        .collect::<Decimal64Array>()
+        .with_precision_and_scale(18, 2)
+        .unwrap()
+}
+
+fn create_decimal128_array(n_distinct: usize) -> Decimal128Array {
+    let mut rng = StdRng::seed_from_u64(42);
+    (0..BATCH_SIZE)
+        .map(|_| Some(rng.random_range(0..n_distinct as i128)))
+        .collect::<Decimal128Array>()
+        .with_precision_and_scale(38, 2)
+        .unwrap()
 }
 
 fn prepare_args(data_type: DataType) -> (Arc<Schema>, AccumulatorArgs<'static>) {
@@ -208,6 +222,45 @@ fn count_distinct_benchmark(c: &mut Criterion) {
         c.bench_function(&format!("count_distinct i32 {pct}% distinct"), |b| {
             b.iter(|| {
                 let mut accumulator = prepare_accumulator(DataType::Int32);
+                accumulator
+                    .update_batch(std::slice::from_ref(&values))
+                    .unwrap()
+            })
+        });
+    }
+
+    // Decimal types. Decimal128 already uses the native distinct accumulator
+    // and serves as a reference for Decimal32 and Decimal64.
+    for pct in [80, 99] {
+        let n_distinct = BATCH_SIZE * pct / 100;
+
+        // Decimal32
+        let values = Arc::new(create_decimal32_array(n_distinct)) as ArrayRef;
+        c.bench_function(&format!("count_distinct decimal32 {pct}% distinct"), |b| {
+            b.iter(|| {
+                let mut accumulator = prepare_accumulator(DataType::Decimal32(9, 2));
+                accumulator
+                    .update_batch(std::slice::from_ref(&values))
+                    .unwrap()
+            })
+        });
+
+        // Decimal64
+        let values = Arc::new(create_decimal64_array(n_distinct)) as ArrayRef;
+        c.bench_function(&format!("count_distinct decimal64 {pct}% distinct"), |b| {
+            b.iter(|| {
+                let mut accumulator = prepare_accumulator(DataType::Decimal64(18, 2));
+                accumulator
+                    .update_batch(std::slice::from_ref(&values))
+                    .unwrap()
+            })
+        });
+
+        // Decimal128
+        let values = Arc::new(create_decimal128_array(n_distinct)) as ArrayRef;
+        c.bench_function(&format!("count_distinct decimal128 {pct}% distinct"), |b| {
+            b.iter(|| {
+                let mut accumulator = prepare_accumulator(DataType::Decimal128(38, 2));
                 accumulator
                     .update_batch(std::slice::from_ref(&values))
                     .unwrap()

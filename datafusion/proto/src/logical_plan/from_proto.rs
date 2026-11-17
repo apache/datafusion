@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -28,10 +15,10 @@ use datafusion_execution::registry::FunctionRegistry;
 use datafusion_expr::dml::{
     InsertOp, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
 };
+use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{
     Alias, Lambda, LambdaVariable, NullTreatment, Placeholder, Sort,
 };
-use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet,
@@ -404,7 +391,7 @@ pub fn parse_expr(
                 codec,
             )?),
             parse_escape_char(&like.escape_char)?,
-            false,
+            like.case_insensitive,
         ))),
         ExprType::Case(case) => {
             let when_then_expr = case
@@ -486,17 +473,6 @@ pub fn parse_expr(
             parse_exprs(&in_list.list, ctx, codec)?,
             in_list.negated,
         ))),
-        ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
-            let qualifier = qualifier
-                .to_owned()
-                .map(TableReference::try_from)
-                .transpose()?;
-            #[expect(deprecated)]
-            Ok(Expr::Wildcard {
-                qualifier,
-                options: Box::new(WildcardOptions::default()),
-            })
-        }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
             fun_name,
             args,

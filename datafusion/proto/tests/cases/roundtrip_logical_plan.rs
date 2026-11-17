@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{
     ArrayRef, FixedSizeListArray, Int32Builder, LargeListViewArray, ListViewArray,
@@ -87,7 +74,7 @@ use datafusion_expr::dml::{
 };
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, LambdaVariable, Like,
-    NullTreatment, ScalarFunction, Unnest, WildcardOptions,
+    NullTreatment, ScalarFunction, Unnest,
 };
 use datafusion_expr::logical_plan::{
     ExplainOption, Extension, UserDefinedLogicalNodeCore,
@@ -1079,6 +1066,34 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         _ => panic!(),
     }
 
+    Ok(())
+}
+
+/// Unset and `false` must stay distinct so that an unset table option still
+/// falls back to the session default
+#[test]
+fn roundtrip_csv_options_match_columns_by_header() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = CsvLogicalExtensionCodec {};
+    for value in [None, Some(false), Some(true)] {
+        let mut options = TableOptions::default().csv;
+        options.match_columns_by_header = value;
+
+        let mut buf = vec![];
+        codec.try_encode_file_format(
+            &mut buf,
+            Arc::new(CsvFormatFactory::new_with_options(options)),
+        )?;
+        let decoded = codec.try_decode_file_format(&buf, &ctx.task_ctx())?;
+        let decoded = decoded
+            .as_ref()
+            .downcast_ref::<CsvFormatFactory>()
+            .unwrap()
+            .options
+            .as_ref()
+            .unwrap();
+        assert_eq!(decoded.match_columns_by_header, value);
+    }
     Ok(())
 }
 
@@ -2858,30 +2873,6 @@ fn roundtrip_unnest_outer() {
 }
 
 #[test]
-fn roundtrip_wildcard() {
-    #[expect(deprecated)]
-    let test_expr = Expr::Wildcard {
-        qualifier: None,
-        options: Box::new(WildcardOptions::default()),
-    };
-
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
-fn roundtrip_qualified_wildcard() {
-    #[expect(deprecated)]
-    let test_expr = Expr::Wildcard {
-        qualifier: Some("foo".into()),
-        options: Box::new(WildcardOptions::default()),
-    };
-
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
 fn roundtrip_like() {
     fn like(negated: bool, escape_char: Option<char>) {
         let test_expr = Expr::Like(Like::new(
@@ -2921,21 +2912,23 @@ fn roundtrip_ilike() {
 
 #[test]
 fn roundtrip_similar_to() {
-    fn similar_to(negated: bool, escape_char: Option<char>) {
+    fn similar_to(negated: bool, escape_char: Option<char>, case_insensitive: bool) {
         let test_expr = Expr::SimilarTo(Like::new(
             negated,
             Box::new(col("col")),
             Box::new(lit("[0-9]+")),
             escape_char,
-            false,
+            case_insensitive,
         ));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
     }
-    similar_to(true, Some('X'));
-    similar_to(false, Some('\\'));
-    similar_to(true, None);
-    similar_to(false, None);
+    similar_to(true, Some('X'), false);
+    similar_to(false, Some('\\'), false);
+    similar_to(true, None, false);
+    similar_to(false, None, false);
+    similar_to(false, None, true);
+    similar_to(true, Some('X'), true);
 }
 
 #[test]
@@ -3907,7 +3900,7 @@ async fn roundtrip_join_null_aware() -> Result<()> {
         (
             "
             SELECT k
-            FROM (VALUES (1, 1, 2), (2, 3, 4)) AS t1(k, a, b)
+            FROM (VALUES (1, 1, 2), (2, 3, CAST(NULL AS INT))) AS t1(k, a, b)
             WHERE (a, b) NOT IN (
                 SELECT x, y
                 FROM (VALUES (1, CAST(NULL AS INT), 2)) AS t2(k, x, y)

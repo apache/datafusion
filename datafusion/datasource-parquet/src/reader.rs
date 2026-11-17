@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ParquetFileReaderFactory`] and [`DefaultParquetFileReaderFactory`] for
 //! low level control of parquet file readers
@@ -68,7 +55,7 @@ pub trait ParquetFileSchemaProvider: Debug + Send + Sync + 'static {
 /// such as pre-cached metadata, I/O coalescing, etc.
 ///
 /// See [`DefaultParquetFileReaderFactory`] for a simple implementation.
-pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
+pub trait ParquetFileReaderFactory: Any + Debug + Send + Sync {
     /// Provides an `AsyncFileReader` for reading data from a parquet file specified
     ///
     /// # Notes
@@ -90,6 +77,18 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>>;
+}
+
+impl dyn ParquetFileReaderFactory {
+    /// Returns `true` if this factory is of type `T`.
+    pub fn is<T: ParquetFileReaderFactory>(&self) -> bool {
+        (self as &dyn Any).is::<T>()
+    }
+
+    /// Attempts to downcast this factory to a concrete type `T`.
+    pub fn downcast_ref<T: ParquetFileReaderFactory>(&self) -> Option<&T> {
+        (self as &dyn Any).downcast_ref()
+    }
 }
 
 /// Default implementation of [`ParquetFileReaderFactory`]

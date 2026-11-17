@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -1561,6 +1548,13 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
 
     /// Decode a custom extension expression from `buf`.
     ///
+    /// Expressions can instead name themselves on the wire and be decoded by a
+    /// per-type decoder registered on the session — see
+    /// [`ExtensionExprFromProto`] and [`ExtensionExprFromProto::register_proto`]. That path
+    /// resolves by name rather than by codec registration order, so two crates
+    /// claiming the same name collide at registration. This method stays the
+    /// fallback for everything unnamed or unregistered.
+    ///
     /// `inputs` holds the already-decoded children carried in the
     /// `PhysicalExtensionExprNode.inputs` field. If the codec instead embeds
     /// nested `PhysicalExprNode`s *inside* `buf`, decode them through
@@ -1573,6 +1567,8 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync + Any {
     /// cache-hits on its `expr_id` and re-shares one `Arc<dyn PhysicalExpr>`.
     ///
     /// [`parse_physical_expr`]: crate::physical_plan::from_proto::parse_physical_expr
+    /// [`ExtensionExprFromProto`]: datafusion_physical_plan::proto::ExtensionExprFromProto
+    /// [`ExtensionExprFromProto::register_proto`]: datafusion_physical_plan::proto::ExtensionExprFromProto::register_proto
     fn try_decode_expr(
         &self,
         _buf: &[u8],

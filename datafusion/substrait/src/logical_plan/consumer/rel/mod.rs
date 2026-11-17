@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod aggregate_rel;
 mod cross_rel;
@@ -37,8 +24,8 @@ pub use read_rel::*;
 pub use set_rel::*;
 pub use sort_rel::*;
 
-use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::utils::NameTracker;
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use async_recursion::async_recursion;
 use datafusion::common::{Column, not_impl_err, substrait_datafusion_err, substrait_err};
 use datafusion::logical_expr::builder::project;
@@ -53,25 +40,34 @@ use substrait::proto::{Rel, RelCommon, rel_common};
 pub async fn from_substrait_rel(
     consumer: &impl SubstraitConsumer,
     relation: &Rel,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
     let plan: datafusion::common::Result<LogicalPlan> = match &relation.rel_type {
         Some(rel_type) => match rel_type {
-            RelType::Read(rel) => consumer.consume_read(rel).await,
-            RelType::Filter(rel) => consumer.consume_filter(rel).await,
-            RelType::Fetch(rel) => consumer.consume_fetch(rel).await,
-            RelType::Aggregate(rel) => consumer.consume_aggregate(rel).await,
-            RelType::Sort(rel) => consumer.consume_sort(rel).await,
-            RelType::Join(rel) => consumer.consume_join(rel).await,
-            RelType::Project(rel) => consumer.consume_project(rel).await,
-            RelType::Set(rel) => consumer.consume_set(rel).await,
-            RelType::ExtensionSingle(rel) => consumer.consume_extension_single(rel).await,
-            RelType::ExtensionMulti(rel) => consumer.consume_extension_multi(rel).await,
-            RelType::ExtensionLeaf(rel) => consumer.consume_extension_leaf(rel).await,
-            RelType::Cross(rel) => consumer.consume_cross(rel).await,
-            RelType::Window(rel) => {
-                consumer.consume_consistent_partition_window(rel).await
+            RelType::Read(rel) => consumer.consume_read(rel, context).await,
+            RelType::Filter(rel) => consumer.consume_filter(rel, context).await,
+            RelType::Fetch(rel) => consumer.consume_fetch(rel, context).await,
+            RelType::Aggregate(rel) => consumer.consume_aggregate(rel, context).await,
+            RelType::Sort(rel) => consumer.consume_sort(rel, context).await,
+            RelType::Join(rel) => consumer.consume_join(rel, context).await,
+            RelType::Project(rel) => consumer.consume_project(rel, context).await,
+            RelType::Set(rel) => consumer.consume_set(rel, context).await,
+            RelType::ExtensionSingle(rel) => {
+                consumer.consume_extension_single(rel, context).await
             }
-            RelType::Exchange(rel) => consumer.consume_exchange(rel).await,
+            RelType::ExtensionMulti(rel) => {
+                consumer.consume_extension_multi(rel, context).await
+            }
+            RelType::ExtensionLeaf(rel) => {
+                consumer.consume_extension_leaf(rel, context).await
+            }
+            RelType::Cross(rel) => consumer.consume_cross(rel, context).await,
+            RelType::Window(rel) => {
+                consumer
+                    .consume_consistent_partition_window(rel, context)
+                    .await
+            }
+            RelType::Exchange(rel) => consumer.consume_exchange(rel, context).await,
             rt => not_impl_err!("{rt:?} rel not supported yet"),
         },
         None => return substrait_err!("rel must set rel_type"),

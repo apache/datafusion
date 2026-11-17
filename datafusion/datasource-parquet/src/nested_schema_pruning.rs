@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Schema-driven nested projection pruning.
 //!
@@ -139,9 +126,9 @@ pub(crate) fn clip_for_cast(
 /// This is the second half of merging several nested accesses to one root:
 /// callers union the offsets required by each access, then use this function
 /// to derive the Arrow type the Parquet reader emits for that union. Partial
-/// projection is supported through the same struct, list, and large-list
-/// shapes as [`clip_for_cast`]. Any partial selection below another wrapper
-/// returns `None`, preserving the total-fallback property of cast clipping.
+/// projection is supported through the same struct and wrapper shapes as
+/// [`clip_for_cast`]. Any partial selection below another wrapper returns
+/// `None`, preserving the total-fallback property of cast clipping.
 pub(crate) fn type_for_leaf_subset(
     physical: &DataType,
     kept: &[usize],
@@ -351,6 +338,28 @@ fn project_type_for_leaves(
         DataType::LargeList(item) => {
             Ok(project_type_for_leaves(item.data_type(), kept, next_leaf)?
                 .map(|projected| DataType::LargeList(field_with_type(item, projected))))
+        }
+        DataType::ListView(item) => {
+            Ok(project_type_for_leaves(item.data_type(), kept, next_leaf)?
+                .map(|projected| DataType::ListView(field_with_type(item, projected))))
+        }
+        DataType::LargeListView(item) => Ok(project_type_for_leaves(
+            item.data_type(),
+            kept,
+            next_leaf,
+        )?
+        .map(|projected| DataType::LargeListView(field_with_type(item, projected)))),
+        DataType::FixedSizeList(item, size) => Ok(project_type_for_leaves(
+            item.data_type(),
+            kept,
+            next_leaf,
+        )?
+        .map(|projected| {
+            DataType::FixedSizeList(field_with_type(item, projected), *size)
+        })),
+        DataType::Dictionary(key, value) => {
+            Ok(project_type_for_leaves(value, kept, next_leaf)?
+                .map(|projected| DataType::Dictionary(key.clone(), Box::new(projected))))
         }
         _ => {
             let start = *next_leaf;
@@ -602,15 +611,51 @@ mod tests {
     /// must fall back instead of predicting a type the reader may not emit.
     #[test]
     fn type_for_leaf_subset_rejects_unsupported_partial_wrapper() {
-        let physical = DataType::FixedSizeList(
+        let physical = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
             Arc::new(Field::new(
-                "item",
+                "values",
                 struct_of(vec![int64("x"), utf8("pad")]),
                 true,
             )),
-            2,
         );
         assert!(type_for_leaf_subset(&physical, &[0]).is_none());
+    }
+
+    /// The read plan keeps only [`clip_for_cast`]'s leaf offsets and derives
+    /// the emitted type from them, so [`type_for_leaf_subset`] must reproduce
+    /// the clipped type for every wrapper the clip descends through.
+    #[test]
+    fn type_for_leaf_subset_matches_clip_through_wrappers() {
+        let item = |fields| Arc::new(Field::new("item", struct_of(fields), true));
+        let wrappers: [fn(FieldRef) -> DataType; 6] = [
+            DataType::List,
+            DataType::LargeList,
+            DataType::ListView,
+            DataType::LargeListView,
+            |item| DataType::FixedSizeList(item, 2),
+            |item| {
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(item.data_type().clone()),
+                )
+            },
+        ];
+        for wrap in wrappers {
+            let physical = struct_of(vec![
+                wrap(item(vec![int64("a"), utf8("b")])).into_field("skip"),
+                wrap(item(vec![utf8("pad"), int64("x")])).into_field("keep"),
+            ]);
+            let narrow = struct_of(vec![wrap(item(vec![int64("x")])).into_field("keep")]);
+            let (kept, clipped) = clip_for_cast(&physical, &narrow).unwrap();
+            assert_eq!(kept, vec![3], "{physical}");
+            assert_eq!(clipped, narrow, "{physical}");
+            assert_eq!(
+                type_for_leaf_subset(&physical, &kept),
+                Some(narrow),
+                "{physical}"
+            );
+        }
     }
 
     /// Two levels of `list<struct>` nesting, the inner one also narrowed,

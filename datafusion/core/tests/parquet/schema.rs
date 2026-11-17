@@ -1,24 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests for parquet schema handling
 use std::{collections::HashMap, fs, path::Path};
 
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef, LargeListArray, ListArray, StructArray};
+use arrow::buffer::OffsetBuffer;
+use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
 use tempfile::TempDir;
 
@@ -187,6 +176,40 @@ async fn schema_merge_can_preserve_metadata() {
     assert_metadata(&actual, &expected_metadata);
 }
 
+/// Expressions pushed into the parquet scan see the field metadata of the table schema
+#[tokio::test]
+async fn pushed_down_projection_sees_field_metadata() {
+    let tmp_dir = TempDir::new().unwrap();
+    let table_dir = tmp_dir.path().join("parquet_test");
+
+    let f1 = Field::new("id", DataType::Int32, true)
+        .with_metadata(make_meta("ARROW:extension:name", "example.ext"));
+    let f2 = Field::new("name", DataType::Utf8, true);
+    write_files(table_dir.as_path(), vec![Schema::new(vec![f1, f2])]);
+    let table_path = table_dir.to_str().unwrap().to_string();
+
+    let ctx = SessionContext::new();
+    let options = ParquetReadOptions::default().skip_metadata(false);
+    ctx.register_parquet("t", &table_path, options)
+        .await
+        .unwrap();
+
+    let actual = ctx
+        .sql("SELECT arrow_metadata(id, 'ARROW:extension:name') AS m FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_snapshot!(batches_to_sort_string(&actual), @r"
+    +-------------+
+    | m           |
+    +-------------+
+    | example.ext |
+    +-------------+
+    ");
+}
+
 /// A column that only some files carry must be inferred as nullable, because
 /// reading the files without it yields nulls, even when every file that has
 /// the column declares it required.
@@ -324,4 +347,131 @@ fn assert_metadata(batches: &[RecordBatch], expected_metadata: &HashMap<String, 
     for batch in batches {
         assert_eq!(batch.schema().metadata(), expected_metadata,);
     }
+}
+
+#[tokio::test]
+async fn schema_merge_marks_missing_nested_children_nullable() {
+    for kind in ["struct", "list", "large_list"] {
+        let dir = TempDir::new().unwrap();
+        for (name, id, with_y) in [("a.parquet", 1, true), ("b.parquet", 2, false)] {
+            let mut fields = vec![Arc::new(Field::new("x", DataType::Int32, false))];
+            let mut arrays: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![id]))];
+            if with_y {
+                fields.push(Arc::new(Field::new("y", DataType::Int32, false)));
+                arrays.push(Arc::new(Int32Array::from(vec![10])));
+            }
+            let s = StructArray::new(fields.into(), arrays, None);
+            let s: ArrayRef = match kind {
+                "struct" => Arc::new(s),
+                "list" => Arc::new(ListArray::new(
+                    Arc::new(Field::new("item", s.data_type().clone(), false)),
+                    OffsetBuffer::new(vec![0_i32, 1].into()),
+                    Arc::new(s),
+                    None,
+                )),
+                "large_list" => Arc::new(LargeListArray::new(
+                    Arc::new(Field::new("item", s.data_type().clone(), false)),
+                    OffsetBuffer::new(vec![0_i64, 1].into()),
+                    Arc::new(s),
+                    None,
+                )),
+                _ => unreachable!(),
+            };
+            write_nested_file(
+                &dir,
+                name,
+                vec![
+                    Field::new("id", DataType::Int32, false),
+                    Field::new("s", s.data_type().clone(), false),
+                ],
+                vec![Arc::new(Int32Array::from(vec![id])), s],
+                EnabledStatistics::Page,
+            );
+        }
+        for skip_metadata in [true, false] {
+            for pushdown in [true, false] {
+                let config = SessionConfig::new()
+                    .set_bool("datafusion.execution.parquet.pushdown_filters", pushdown);
+                let ctx = SessionContext::new_with_config(config);
+                ctx.register_parquet(
+                    "t",
+                    dir.path().to_str().unwrap(),
+                    ParquetReadOptions::default().skip_metadata(skip_metadata),
+                )
+                .await
+                .unwrap();
+                let df = ctx.table("t").await.unwrap();
+                let mut data_type = df
+                    .schema()
+                    .field_with_unqualified_name("s")
+                    .unwrap()
+                    .data_type();
+                if let DataType::List(item) | DataType::LargeList(item) = data_type {
+                    assert!(!item.is_nullable());
+                    data_type = item.data_type();
+                }
+                let DataType::Struct(fields) = data_type else {
+                    panic!("expected struct")
+                };
+                let child = if kind == "struct" {
+                    "s.y"
+                } else {
+                    "get_field(s[1], 'y')"
+                };
+                assert!(!fields[0].is_nullable());
+                assert!(fields[1].is_nullable());
+                let batches = ctx
+                    .sql(&format!("SELECT id, {child} AS y FROM t ORDER BY id"))
+                    .await
+                    .unwrap()
+                    .collect()
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    batches_to_sort_string(&batches).trim(),
+                    "+----+----+\n| id | y  |\n+----+----+\n| 1  | 10 |\n| 2  |    |\n+----+----+"
+                );
+                let batches = ctx
+                    .sql(&format!("SELECT id FROM t WHERE {child} IS NULL"))
+                    .await
+                    .unwrap()
+                    .collect()
+                    .await
+                    .unwrap();
+                assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+                assert_eq!(
+                    batches[0]
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .value(0),
+                    2
+                );
+            }
+        }
+    }
+}
+
+fn write_nested_file(
+    dir: &TempDir,
+    name: &str,
+    fields: Vec<Field>,
+    arrays: Vec<ArrayRef>,
+    statistics: EnabledStatistics,
+) {
+    let schema = Arc::new(Schema::new(fields));
+    let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(1))
+        .set_statistics_enabled(statistics)
+        .build();
+    let mut writer = ArrowWriter::try_new(
+        fs::File::create(dir.path().join(name)).unwrap(),
+        schema,
+        Some(props),
+    )
+    .unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
 }
