@@ -672,6 +672,8 @@ pub(crate) fn contains_struct(data_type: &DataType) -> bool {
         DataType::List(f)
         | DataType::LargeList(f)
         | DataType::FixedSizeList(f, _)
+        | DataType::ListView(f)
+        | DataType::LargeListView(f)
         | DataType::Map(f, _) => contains_struct(f.data_type()),
         DataType::Dictionary(_, value) => contains_struct(value),
         DataType::RunEndEncoded(_, values) => contains_struct(values.data_type()),
@@ -724,8 +726,8 @@ fn with_field_names_of(data_type: &DataType, named: &DataType) -> Option<DataTyp
             with_field_names_of(data_type, named_values.data_type())
         }
         // a list literal takes the element names of a list column even if the two use
-        // different list types, as a `List` literal next to a `LargeList` column: the
-        // literal keeps its own list type, and coercion converts between them
+        // different list types, as a `List` literal next to a `LargeList` or `ListView`
+        // column: the literal keeps its own list type, and coercion converts between them
         (DataType::List(field), named) => {
             Some(DataType::List(renamed_field(field, list_element(named)?)?))
         }
@@ -753,12 +755,15 @@ fn with_field_names_of(data_type: &DataType, named: &DataType) -> Option<DataTyp
     }
 }
 
-/// Returns the element field of any list type (`List`, `LargeList`, `FixedSizeList`).
+/// Returns the element field of any list type. A literal is never a list view (Substrait
+/// has no type for it), but a table column can be.
 fn list_element(data_type: &DataType) -> Option<&FieldRef> {
     match data_type {
         DataType::List(field)
         | DataType::LargeList(field)
-        | DataType::FixedSizeList(field, _) => Some(field),
+        | DataType::FixedSizeList(field, _)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field) => Some(field),
         _ => None,
     }
 }
