@@ -7,28 +7,30 @@
 
 name: Release Version Labeler
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
+# `pull_request_target` is disabled by ASF infra policy, so label on every push
+# to `main`. Each run labels the pull requests merged in the last week that have
+# no release label yet, so a later push also labels a merge whose own push did
+# not run this workflow, such as one with a skip marker in its commit message.
 on:
-  pull_request_target:
-    types:
-      - closed
+  push:
     branches:
       - main
 
 jobs:
   label:
-    if: github.event.pull_request.merged == true
+    # A fork that syncs its main branch also gets this push, and has nothing to label.
+    if: github.repository == 'apache/datafusion'
     runs-on: ubuntu-slim
     permissions:
       pull-requests: write
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          sparse-checkout: ci/scripts
+          persist-credentials: false
       - name: Add the target release version
-        uses: actions/github-script@v9.0.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           script: |
             const labeler = require('./ci/scripts/release_version_labeler.js');
