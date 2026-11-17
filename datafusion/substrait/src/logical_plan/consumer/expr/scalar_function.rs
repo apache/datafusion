@@ -96,18 +96,12 @@ pub async fn from_scalar_function(
             );
         }
         // an operator always combines its operands, so they need the same field names
-        name_struct_literals_like_siblings(
-            &mut args.iter_mut().collect::<Vec<_>>(),
-            input_schema,
-        );
+        name_struct_literals_like_siblings(&mut args, input_schema);
         // In those cases we build a balanced tree of BinaryExprs
         arg_list_to_binary_op_tree(op, args)
     } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
         // these combine their arguments too, as in `s BETWEEN low AND high`
-        name_struct_literals_like_siblings(
-            &mut args.iter_mut().collect::<Vec<_>>(),
-            input_schema,
-        );
+        name_struct_literals_like_siblings(&mut args, input_schema);
         builder.build(consumer, f, args)
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
@@ -138,10 +132,7 @@ fn build_naming_struct_literals_if_needed(
     }
     // doesn't type-check: retry with the literals renamed
     let mut renamed_args = args;
-    name_struct_literals_like_siblings(
-        &mut renamed_args.iter_mut().collect::<Vec<_>>(),
-        input_schema,
-    );
+    name_struct_literals_like_siblings(&mut renamed_args, input_schema);
     let renamed = build(renamed_args)?;
     // if renaming doesn't help either, keep the original so the error stays the same
     Ok(if renamed.get_type(input_schema).is_ok() {

@@ -594,10 +594,11 @@ pub(crate) fn from_substrait_literal(
 ///
 /// A literal whose shape differs from the column's (another number of fields, other
 /// nesting) is left as it is, and so is everything if no expression has a struct type.
-pub(crate) fn name_struct_literals_like_siblings(
-    exprs: &mut [&mut Expr],
+pub(crate) fn name_struct_literals_like_siblings<'a>(
+    exprs: impl IntoIterator<Item = &'a mut Expr>,
     input_schema: &DFSchema,
 ) {
+    let mut exprs = exprs.into_iter().collect::<Vec<_>>();
     // the names come from the first expression that isn't a literal and contains a struct
     let Some(named_type) = exprs
         .iter()

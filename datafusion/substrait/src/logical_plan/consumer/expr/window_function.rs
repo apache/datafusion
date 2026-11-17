@@ -87,7 +87,7 @@ pub async fn from_window_function(
     // Datafusion does not support aggregate functions with no arguments, so
     // we inject a dummy argument that does not affect the query, but allows
     // us to bypass this limitation.
-    let args = if fun.name() == "count" && window.arguments.is_empty() {
+    let mut args = if fun.name() == "count" && window.arguments.is_empty() {
         vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)]
     } else {
         from_substrait_func_args(consumer, &window.arguments, input_schema, context)
@@ -106,11 +106,7 @@ pub async fn from_window_function(
 
     // a struct literal argument has generated field names; it takes those of a
     // same-shaped argument, whose type it must share (e.g. a default value)
-    let mut args = args;
-    name_struct_literals_like_siblings(
-        &mut args.iter_mut().collect::<Vec<_>>(),
-        input_schema,
-    );
+    name_struct_literals_like_siblings(&mut args, input_schema);
 
     Ok(Expr::from(expr::WindowFunction {
         fun,

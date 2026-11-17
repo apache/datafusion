@@ -24,10 +24,8 @@ pub async fn from_singular_or_list(
     let mut list =
         from_substrait_rex_vec(consumer, substrait_list, input_schema, context).await?;
     // the value is compared with each list item, field names included
-    let mut compared = std::iter::once(&mut value)
-        .chain(list.iter_mut())
-        .collect::<Vec<_>>();
-    name_struct_literals_like_siblings(&mut compared, input_schema);
+    let compared = std::iter::once(&mut value).chain(&mut list);
+    name_struct_literals_like_siblings(compared, input_schema);
     Ok(Expr::InList(InList {
         expr: Box::new(value),
         list,

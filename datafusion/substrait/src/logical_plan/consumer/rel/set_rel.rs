@@ -131,20 +131,29 @@ fn name_projected_struct_literals(
             // derive the schema again, as rebuilding a union keeps its old one
             Ok(LogicalPlan::Union(Union::try_new_with_loose_types(inputs)?))
         }
-        LogicalPlan::Limit(_)
-        | LogicalPlan::Sort(_)
-        | LogicalPlan::Distinct(Distinct::All(_))
-        | LogicalPlan::SubqueryAlias(_) => {
-            let child =
-                name_projected_struct_literals(input.inputs()[0].clone(), named_types)?;
+        _ => {
+            let Some(child) = columns_input(&input) else {
+                return Ok(input);
+            };
+            let child = name_projected_struct_literals(child.clone(), named_types)?;
             input.with_new_exprs(input.expressions(), vec![child])
         }
-        LogicalPlan::Aggregate(ref aggregate) if removes_duplicates(aggregate) => {
-            let child =
-                name_projected_struct_literals(input.inputs()[0].clone(), named_types)?;
-            input.with_new_exprs(input.expressions(), vec![child])
+    }
+}
+
+/// The input of `plan` if `plan` passes its input's columns through unchanged, in the
+/// same positions: a `LIMIT`, an `ORDER BY`, a `DISTINCT`, a subquery alias, or an
+/// aggregate that only removes duplicate rows.
+fn columns_input(plan: &LogicalPlan) -> Option<&LogicalPlan> {
+    match plan {
+        LogicalPlan::Limit(Limit { input, .. })
+        | LogicalPlan::Sort(Sort { input, .. })
+        | LogicalPlan::Distinct(Distinct::All(input))
+        | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => Some(input),
+        LogicalPlan::Aggregate(aggregate) if removes_duplicates(aggregate) => {
+            Some(&aggregate.input)
         }
-        _ => Ok(input),
+        _ => None,
     }
 }
 
@@ -173,17 +182,7 @@ fn projects_literal(input: &LogicalPlan, column: usize) -> bool {
             .inputs
             .iter()
             .all(|input| projects_literal(input, column)),
-        // these pass their input's columns through unchanged
-        LogicalPlan::Limit(Limit { input, .. })
-        | LogicalPlan::Sort(Sort { input, .. })
-        | LogicalPlan::Distinct(Distinct::All(input))
-        | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
-            projects_literal(input, column)
-        }
-        LogicalPlan::Aggregate(aggregate) if removes_duplicates(aggregate) => {
-            projects_literal(&aggregate.input, column)
-        }
-        _ => false,
+        _ => columns_input(input).is_some_and(|input| projects_literal(input, column)),
     }
 }
 

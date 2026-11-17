@@ -44,10 +44,7 @@ pub async fn from_nested(
             }
             // the elements of a list share one type, so a struct literal element takes the
             // field names of a struct column element, as in `[s, {c0: 1, c1: 'x'}]`
-            name_struct_literals_like_siblings(
-                &mut args.iter_mut().collect::<Vec<_>>(),
-                input_schema,
-            );
+            name_struct_literals_like_siblings(&mut args, input_schema);
 
             let make_array_udf = consumer.get_function_registry().udf("make_array")?;
             Ok(Expr::ScalarFunction(

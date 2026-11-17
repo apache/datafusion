@@ -66,12 +66,11 @@ pub async fn from_if_then(
         None => None,
     };
     // the branches' results must have the same type, field names included
-    let mut results = when_then_expr
+    let results = when_then_expr
         .iter_mut()
         .map(|(_, then)| then.as_mut())
-        .chain(else_expr.as_deref_mut())
-        .collect::<Vec<_>>();
-    name_struct_literals_like_siblings(&mut results, input_schema);
+        .chain(else_expr.as_deref_mut());
+    name_struct_literals_like_siblings(results, input_schema);
     Ok(Expr::Case(Case {
         expr,
         when_then_expr,
