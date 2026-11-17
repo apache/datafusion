@@ -32,10 +32,10 @@ use object_store::{ObjectMeta, ObjectStore};
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_to_arrow_schema;
-use parquet::basic::{ColumnOrder, Encoding, SortOrder, Type as PhysicalType};
+use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
 use parquet::file::metadata::{
-    ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder,
-    ParquetMetaDataReader, RowGroupMetaData, SortingColumn,
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
+    RowGroupMetaData, SortingColumn,
 };
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
@@ -48,20 +48,7 @@ use std::sync::Arc;
 /// would be too unreliable otherwise.
 const PARTIAL_NDV_THRESHOLD: f64 = 0.75;
 
-fn is_all_dictionary_encoded(column: &ColumnChunkMetaData) -> bool {
-    column.dictionary_page_offset().is_some()
-        && column.page_encoding_stats_mask().is_some_and(|mask| {
-            mask.as_i32() != 0
-                && mask.encodings().all(|encoding| {
-                    matches!(
-                        encoding,
-                        Encoding::PLAIN_DICTIONARY | Encoding::RLE_DICTIONARY
-                    )
-                })
-        })
-}
-
-pub(crate) fn dictionary_promotion_candidates(
+fn dictionary_promotion_candidates(
     metadata: &ParquetMetaData,
     schema_descr: &SchemaDescriptor,
     max_distinct_values: Option<usize>,
@@ -79,20 +66,23 @@ pub(crate) fn dictionary_promotion_candidates(
                 None => row_groups
                     .iter()
                     .any(|rg| rg.column(col_idx).dictionary_page_offset().is_some()),
-                Some(max) => {
-                    !row_groups.is_empty()
-                        && row_groups
-                            .iter()
-                            .try_fold(0_u128, |upper_bound, row_group| {
-                                let column = row_group.column(col_idx);
-                                if !is_all_dictionary_encoded(column) {
-                                    return None;
-                                }
-                                let count = column.statistics()?.distinct_count_opt()?;
-                                Some(upper_bound.saturating_add(count as u128))
-                            })
-                            .is_some_and(|upper_bound| upper_bound <= max as u128)
-                }
+                Some(max) => row_groups
+                    .iter()
+                    .try_fold(0_u128, |upper_bound, row_group| {
+                        let row_count = u64::try_from(row_group.num_rows()).ok()?;
+                        let column = row_group.column(col_idx);
+                        if row_count > 0 && column.dictionary_page_offset().is_none() {
+                            return None;
+                        }
+                        // Row counts bound missing NDVs, and summing deliberately
+                        // counts values repeated across row groups more than once.
+                        let estimate = column
+                            .statistics()
+                            .and_then(|stats| stats.distinct_count_opt())
+                            .unwrap_or(row_count);
+                        Some(upper_bound.saturating_add(estimate as u128))
+                    })
+                    .is_some_and(|upper_bound| upper_bound <= max as u128),
             };
             eligible.then(|| parts[0].clone())
         })
@@ -195,7 +185,7 @@ pub struct DFParquetMetadata<'a> {
     pub coerce_int96_tz: Option<Arc<str>>,
     /// If true, promote string/binary columns with dictionary pages to `Dictionary(Int32, ...)`.
     enable_rle_to_dictionary: bool,
-    /// Optional NDV cap for dictionary-only columns.
+    /// Optional upper estimate for dictionary column cardinality.
     dictionary_read_max_distinct_values: Option<usize>,
 }
 
@@ -225,7 +215,7 @@ impl<'a> DFParquetMetadata<'a> {
         self
     }
 
-    /// Set the dictionary-only NDV cap; `None` preserves legacy behavior.
+    /// Set the estimated dictionary cardinality cap; `None` preserves legacy behavior.
     pub fn with_dictionary_read_max_distinct_values(
         mut self,
         max_distinct_values: Option<usize>,

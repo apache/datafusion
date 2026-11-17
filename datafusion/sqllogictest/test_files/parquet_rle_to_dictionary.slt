@@ -105,16 +105,19 @@ statement ok
 set datafusion.execution.parquet.enable_rle_to_dictionary = false;
 
 statement ok
-set datafusion.execution.parquet.dictionary_read_max_distinct_values = 2;
+set datafusion.execution.parquet.dictionary_read_max_distinct_values = 6;
 
-# Missing NDV statistics fail closed.
+# Without NDV statistics, the row count is the conservative estimate.
 statement ok
 CREATE EXTERNAL TABLE threshold_no_ndv STORED AS PARQUET LOCATION 'test_files/scratch/parquet_rle_to_dictionary/products.parquet';
 
 query TT
 SELECT DISTINCT arrow_typeof(product_category), arrow_typeof(status) FROM threshold_no_ndv;
 ----
-Utf8View Utf8View
+Dictionary(Int32, Utf8) Dictionary(Int32, Utf8)
+
+statement ok
+set datafusion.execution.parquet.dictionary_read_max_distinct_values = 2;
 
 statement ok
 set datafusion.execution.parquet.write_row_group_number_distinct_values = true;
@@ -131,6 +134,10 @@ COPY (SELECT column1 AS exact_cap, column2 AS mixed_card FROM (VALUES ('x','a'),
 ----
 3
 
+# The cap remains authoritative when the legacy flag is also enabled.
+statement ok
+set datafusion.execution.parquet.enable_rle_to_dictionary = true;
+
 statement ok
 CREATE EXTERNAL TABLE thresholded STORED AS PARQUET LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold/';
 
@@ -138,24 +145,6 @@ query TT
 SELECT DISTINCT arrow_typeof(exact_cap), arrow_typeof(mixed_card) FROM thresholded;
 ----
 Dictionary(Int32, Utf8) Utf8View
-
-# Even below the NDV cap, a column chunk that falls back to plain data pages
-# remains plain.
-query I
-COPY (SELECT concat('value-', repeat('x', 32), '-', value::varchar) AS category FROM range(1000)) TO 'test_files/scratch/parquet_rle_to_dictionary/threshold_plain_fallback.parquet' STORED AS PARQUET OPTIONS ('format.dictionary_enabled' true, 'format.dictionary_page_size_limit' 128, 'format.data_pagesize_limit' 1024);
-----
-1000
-
-statement ok
-set datafusion.execution.parquet.dictionary_read_max_distinct_values = 2000;
-
-statement ok
-CREATE EXTERNAL TABLE threshold_plain_fallback STORED AS PARQUET LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold_plain_fallback.parquet';
-
-query T
-SELECT DISTINCT arrow_typeof(category) FROM threshold_plain_fallback;
-----
-Utf8View
 
 statement ok
 reset datafusion.execution.parquet.write_row_group_number_distinct_values;

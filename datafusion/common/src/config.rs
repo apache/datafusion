@@ -1451,14 +1451,14 @@ config_namespace! {
         /// a user-supplied schema are not promoted because the Parquet footer is
         /// not read at DDL time, so dictionary pages cannot be detected per column.
         /// Setting `dictionary_read_max_distinct_values` also enables dictionary
-        /// reads using its stricter eligibility rules.
+        /// reads using its cardinality estimate.
         /// See <https://github.com/apache/datafusion/issues/24112>
         pub enable_rle_to_dictionary: bool, default = false
 
-        /// (reading) If set, promote top-level string and binary columns only when
-        /// all data pages are dictionary encoded and the per-file NDV sum is within
-        /// this cap. It enables dictionary reads; missing statistics fail closed.
-        /// Later files may still be cast by schema adaptation.
+        /// (reading) If set, infer top-level string and binary columns as dictionaries
+        /// when every nonempty row group has a dictionary page and the per-file sum
+        /// of row-group NDVs is within this cap. Missing NDVs use the row count, so
+        /// the estimate intentionally overcounts. Computed during schema inference.
         pub dictionary_read_max_distinct_values: Option<usize>, default = None
 
         /// (reading) Which byte range of a split file reads each row group.
