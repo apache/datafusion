@@ -2757,8 +2757,9 @@ async fn roundtrip_lambda_parameter_struct_field_names() -> Result<()> {
 
 // Substrait literals carry no struct field names, so a struct literal combined with a
 // struct column must take the column's field names for the two to have the same type.
-#[tokio::test]
-async fn roundtrip_struct_literal_next_to_struct_column() -> Result<()> {
+
+/// A context with a table `structs` whose column `s` is a list of structs.
+async fn struct_lists_ctx() -> Result<SessionContext> {
     let ctx = create_context().await?;
     ctx.sql(
         "CREATE TABLE structs AS SELECT [named_struct('a', 1, 'b', 'x')] AS s \
@@ -2767,50 +2768,69 @@ async fn roundtrip_struct_literal_next_to_struct_column() -> Result<()> {
     .await?
     .collect()
     .await?;
+    Ok(ctx)
+}
 
+#[tokio::test]
+async fn roundtrip_struct_literal_in_coalesce() -> Result<()> {
     // coalesce is simplified to a CASE whose ELSE branch is the literal
     roundtrip_with_ctx(
         "SELECT coalesce(s, [named_struct('a', 0, 'b', 'z')]) FROM structs",
-        ctx.clone(),
+        struct_lists_ctx().await?,
     )
     .await?;
+    Ok(())
+}
 
-    // a NULL struct in the ELSE branch, from https://github.com/apache/datafusion/issues/14632
+/// A NULL struct in the ELSE branch, from https://github.com/apache/datafusion/issues/14632
+#[tokio::test]
+async fn roundtrip_struct_literal_in_case_else() -> Result<()> {
     roundtrip(
         "SELECT (CASE WHEN column1 IS NOT NULL THEN named_struct('f1', column1) ELSE NULL END) AS res \
          FROM (VALUES ('a'), (NULL))",
     )
-    .await?;
+    .await
+}
 
-    ctx.sql("CREATE TABLE struct_rows AS SELECT named_struct('a', 1, 'b', 'x') AS st")
-        .await?
-        .collect()
-        .await?;
+/// Checks a set operation with a NULL struct in one input. The consumer rebuilds a union
+/// with the alias above it rather than in each input, so the plans can't be compared as
+/// text: this checks the output type and that the plan runs instead.
+async fn assert_union_with_null_struct_roundtrips(sql: &str) -> Result<()> {
+    let ctx = struct_rows_ctx().await?;
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+    assert_eq!(
+        plan.schema().field(0).data_type(),
+        plan2.schema().field(0).data_type()
+    );
+    DataFrame::new(ctx.state(), plan2).collect().await?;
+    Ok(())
+}
 
-    // a set operation input padded with a NULL struct, on either side. The consumer
-    // rebuilds a union with the alias above it rather than in each input, so the plans
-    // can't be compared as text: check the output type and that the plan runs instead.
-    for sql in [
+#[tokio::test]
+async fn roundtrip_struct_literal_union_with_null_second_input() -> Result<()> {
+    assert_union_with_null_struct_roundtrips(
         "SELECT st AS r FROM struct_rows UNION ALL SELECT NULL AS r FROM struct_rows",
-        "SELECT NULL AS r FROM struct_rows UNION ALL SELECT st AS r FROM struct_rows",
-    ] {
-        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
-        let plan2 = substrait_roundtrip(&plan, &ctx).await?;
-        assert_eq!(
-            plan.schema().field(0).data_type(),
-            plan2.schema().field(0).data_type()
-        );
-        DataFrame::new(ctx.state(), plan2).collect().await?;
-    }
+    )
+    .await
+}
 
-    // struct literals in an IN list
+#[tokio::test]
+async fn roundtrip_struct_literal_union_with_null_first_input() -> Result<()> {
+    assert_union_with_null_struct_roundtrips(
+        "SELECT NULL AS r FROM struct_rows UNION ALL SELECT st AS r FROM struct_rows",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_struct_literal_in_list() -> Result<()> {
     roundtrip_with_ctx(
         "SELECT st IN (named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y')) \
          FROM struct_rows",
-        ctx.clone(),
+        struct_rows_ctx().await?,
     )
     .await?;
-
     Ok(())
 }
 
@@ -3134,26 +3154,29 @@ async fn roundtrip_struct_literal_window_function_argument() -> Result<()> {
     assert_struct_literal_roundtrip_rows(&ctx, plan, |_| {}).await
 }
 
+// A nested CASE whose results are all literals has no column to take names from: it
+// must take them from the outer CASE's column, whether it comes before or after it.
 #[tokio::test]
-async fn roundtrip_struct_literal_in_nested_case_with_only_literal_results() -> Result<()>
-{
+async fn roundtrip_struct_literal_in_nested_case_after_column() -> Result<()> {
     let ctx = struct_rows_ctx().await?;
-    // the inner CASE has no column to take names from; it comes second, then first
-    for sql in [
-        "SELECT CASE WHEN st IS NOT NULL THEN st \
+    let sql = "SELECT CASE WHEN st IS NOT NULL THEN st \
            ELSE CASE WHEN random() > 2 THEN named_struct('a', 0, 'b', 'z') \
                      ELSE named_struct('a', 9, 'b', 'w') END \
-         END AS r FROM struct_rows",
-        "SELECT CASE WHEN st IS NULL \
+         END AS r FROM struct_rows";
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    assert_struct_literal_roundtrip_rows(&ctx, plan, |_| {}).await
+}
+
+#[tokio::test]
+async fn roundtrip_struct_literal_in_nested_case_before_column() -> Result<()> {
+    let ctx = struct_rows_ctx().await?;
+    let sql = "SELECT CASE WHEN st IS NULL \
            THEN CASE WHEN random() > 2 THEN named_struct('a', 0, 'b', 'z') \
                      ELSE named_struct('a', 9, 'b', 'w') END \
            ELSE st \
-         END AS r FROM struct_rows",
-    ] {
-        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
-        assert_struct_literal_roundtrip_rows(&ctx, plan, |_| {}).await?;
-    }
-    Ok(())
+         END AS r FROM struct_rows";
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    assert_struct_literal_roundtrip_rows(&ctx, plan, |_| {}).await
 }
 
 #[tokio::test]
