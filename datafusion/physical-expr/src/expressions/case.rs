@@ -239,7 +239,7 @@ impl CaseBody {
             Arc::clone(expr)
                 .transform_down(|e| {
                     if !precomputed.is_empty()
-                        && is_precomputable(&e, schema)
+                        && e.placement() == ExpressionPlacement::MoveTowardsLeafNodes
                         && let Some(k) = precomputed.get_index_of(&e)
                     {
                         let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(
