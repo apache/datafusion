@@ -298,6 +298,93 @@ impl PartitionEvaluator for RankEvaluator {
         }
     }
 
+    fn evaluate_rows(
+        &mut self,
+        values: &[ArrayRef],
+        start: usize,
+        end: usize,
+    ) -> Result<Option<ArrayRef>> {
+        use datafusion_expr::window_state::adjacent_distinct;
+        if !matches!(self.rank_type, RankType::Basic | RankType::Dense) {
+            return Ok(None);
+        }
+        let n = end - start;
+        // neq[k]: rows start+k and start+k+1 are not peers; without ORDER BY columns every row is a peer
+        let neq = if values.is_empty() {
+            None
+        } else {
+            let rows: Vec<ArrayRef> = values.iter().map(|c| c.slice(start, n)).collect();
+            let Some(neq) = adjacent_distinct(&rows) else {
+                return Ok(None);
+            };
+            Some(neq)
+        };
+        let first_row = get_row_at_idx(values, start)?;
+        let first_is_new = self
+            .state
+            .last_rank_data
+            .as_ref()
+            .is_none_or(|last| last != &first_row);
+        let mut out: Vec<u64> = Vec::with_capacity(n);
+        let st = &mut self.state;
+        for k in 0..n {
+            let new_rank = if k == 0 {
+                first_is_new
+            } else {
+                neq.as_ref().is_some_and(|b| b.value(k - 1))
+            };
+            if new_rank {
+                st.last_rank_boundary += st.current_group_count;
+                st.current_group_count = 1;
+                st.n_rank += 1;
+            } else {
+                st.current_group_count += 1;
+            }
+            out.push(match self.rank_type {
+                RankType::Dense => st.n_rank as u64,
+                _ => st.last_rank_boundary as u64 + 1,
+            });
+        }
+        st.last_rank_data = Some(get_row_at_idx(values, end - 1)?);
+        Ok(Some(Arc::new(UInt64Array::from(out))))
+    }
+
+    fn evaluate_segments(
+        &mut self,
+        values: &[ArrayRef],
+        segments: &[Range<usize>],
+        _frames: &[Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        use datafusion_expr::window_state::adjacent_distinct;
+        if !matches!(self.rank_type, RankType::Basic | RankType::Dense) {
+            return Ok(None);
+        }
+        let n = segments.last().map_or(0, |s| s.end);
+        let neq = if values.is_empty() {
+            None
+        } else {
+            let Some(neq) = adjacent_distinct(values) else {
+                return Ok(None);
+            };
+            Some(neq)
+        };
+        let differs = |k: usize| neq.as_ref().is_some_and(|b| b.value(k));
+        let dense = matches!(self.rank_type, RankType::Dense);
+        let mut out: Vec<u64> = Vec::with_capacity(n);
+        for seg in segments {
+            // rank: 1 + the rows before the peer group; dense rank: the peer groups so far
+            let (mut rank, mut group) = (1u64, 1u64);
+            for i in seg.start..seg.end {
+                if i > seg.start && differs(i - 1) {
+                    rank = (i - seg.start) as u64 + 1;
+                    group += 1;
+                }
+                out.push(if dense { group } else { rank });
+            }
+        }
+        Ok(Some(Arc::new(UInt64Array::from(out))))
+    }
+
     fn evaluate_all_with_rank(
         &self,
         num_rows: usize,

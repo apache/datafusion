@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
+use std::cell::OnceCell;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
@@ -98,6 +99,27 @@ pub trait WindowExpr: Send + Sync + Debug {
         internal_err!("evaluate_stateful is not implemented for {}", self.name())
     }
 
+    /// Evaluates this expression on the complete partitions of `block` (consecutive row
+    /// ranges that cover its batch, each a whole partition) and returns one result per row of the batch.
+    ///
+    /// The default evaluates every partition with [`WindowExpr::evaluate_stateful`] on a throw-away
+    /// state: it is the very call the stream makes for a partition that starts and ends inside one
+    /// input batch, so any implementation of this trait gets the stream's results. An implementation
+    /// that can do better (one pass over all partitions) overrides it.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    fn evaluate_complete_partitions(
+        &self,
+        block: &CompletePartitions<'_>,
+    ) -> Result<ArrayRef> {
+        evaluate_complete_partitions_stateful(self, block)
+    }
+
     /// Expressions that's from the window function's partition by clause, empty if absent
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>];
 
@@ -158,6 +180,100 @@ pub trait WindowExpr: Send + Sync + Debug {
     }
 }
 
+/// A run of complete partitions inside one input batch, as handed to
+/// [`WindowExpr::evaluate_complete_partitions`]. The per-partition slices of the batch that the generic
+/// fallback needs are built once, on first use, and shared by every expression of the window operator.
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub struct CompletePartitions<'a> {
+    batch: &'a RecordBatch,
+    ranges: &'a [Range<usize>],
+    slices: OnceCell<Vec<RecordBatch>>,
+}
+
+impl<'a> CompletePartitions<'a> {
+    /// `ranges` are consecutive row ranges that cover `batch`, one per partition.
+    pub fn new(batch: &'a RecordBatch, ranges: &'a [Range<usize>]) -> Self {
+        Self {
+            batch,
+            ranges,
+            slices: OnceCell::new(),
+        }
+    }
+
+    /// The rows of all partitions.
+    pub fn batch(&self) -> &'a RecordBatch {
+        self.batch
+    }
+
+    /// The row range of each partition inside [`Self::batch`].
+    pub fn ranges(&self) -> &'a [Range<usize>] {
+        self.ranges
+    }
+
+    /// One slice of `batch` per partition.
+    pub fn slices(&self) -> &[RecordBatch] {
+        self.slices.get_or_init(|| {
+            self.ranges
+                .iter()
+                .map(|r| self.batch.slice(r.start, r.end - r.start))
+                .collect()
+        })
+    }
+}
+
+/// The generic implementation of [`WindowExpr::evaluate_complete_partitions`].
+pub(crate) fn evaluate_complete_partitions_stateful<W: WindowExpr + ?Sized>(
+    expr: &W,
+    block: &CompletePartitions<'_>,
+) -> Result<ArrayRef> {
+    let field = expr.field()?;
+    let partitions = block.ranges();
+    if partitions.is_empty() {
+        return Ok(new_empty_array(field.data_type()));
+    }
+    let ctx = WindowEvalContext::default();
+    // the maps hold one entry at a time; their key plays no role in the evaluation
+    let key = PartitionKey::new();
+    let mut batches = PartitionBatches::default();
+    let mut states = PartitionWindowAggStates::default();
+    let mut out: Vec<ArrayRef> = Vec::with_capacity(partitions.len());
+    for (range, slice) in partitions.iter().zip(block.slices()) {
+        batches.clear();
+        states.clear();
+        let mut partition = PartitionBatchState::new_with_batch(slice.clone());
+        partition.is_end = true;
+        batches.insert(key.clone(), partition);
+        expr.evaluate_stateful(&batches, &mut states, &ctx)?;
+        let Some(state) = states.get(&key) else {
+            return internal_err!(
+                "{} produced no state for a complete partition",
+                expr.name()
+            );
+        };
+        let out_col = &state.state.out_col;
+        if out_col.len() != range.end - range.start {
+            return internal_err!(
+                "{} produced {} rows for a complete partition of {}",
+                expr.name(),
+                out_col.len(),
+                range.end - range.start
+            );
+        }
+        out.push(Arc::clone(out_col));
+    }
+    if out.len() == 1 {
+        return Ok(out.swap_remove(0));
+    }
+    let refs: Vec<&dyn Array> = out.iter().map(|a| a.as_ref()).collect();
+    arrow::compute::concat(&refs).map_err(|e| arrow_datafusion_err!(e))
+}
+
 /// Stores the physical expressions used inside the `WindowExpr`.
 pub struct WindowPhysicalExpressions {
     /// Window function arguments
@@ -209,6 +325,58 @@ pub trait AggregateWindowExpr: WindowExpr {
             0,
             false,
         )
+    }
+
+    /// [`WindowExpr::evaluate_complete_partitions`] without a call per partition:
+    /// the arguments are evaluated once for the whole run, the frames of all rows are computed in
+    /// one pass, and the accumulator restarts its state at every partition boundary
+    /// ([`Accumulator::evaluate_window_segments`]).
+    ///
+    /// Returns `Ok(None)` when the expression, the frame or the accumulator has no such
+    /// implementation, or when a `RANGE` key or its search target lies outside the range in which
+    /// the per-row code is exact: the caller then evaluates one partition at a time.
+    fn aggregate_evaluate_complete_partitions(
+        &self,
+        batch: &RecordBatch,
+        partitions: &[Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        if self.filter_expr().is_some() || batch.num_rows() == 0 {
+            return Ok(None);
+        }
+        let values = self.evaluate_args(batch)?;
+        let mut frames: Vec<Range<usize>> = Vec::with_capacity(batch.num_rows());
+        if self.is_constant_in_partition() {
+            // every row sees its whole partition
+            for partition in partitions {
+                frames.extend(std::iter::repeat_n(
+                    partition.clone(),
+                    partition.end - partition.start,
+                ));
+            }
+        } else {
+            let order_bys = get_orderby_values(self.order_by_columns(batch)?);
+            let sort_options = self.order_by().iter().map(|o| o.options).collect();
+            let mut window_frame_ctx = WindowFrameContext::new(
+                Arc::clone(self.get_window_frame()),
+                sort_options,
+            );
+            if !window_frame_ctx.calculate_ranges_segmented(
+                &order_bys,
+                partitions,
+                &mut frames,
+            )? {
+                return Ok(None);
+            }
+        }
+        if !partitions.iter().all(|partition| {
+            frames
+                .get(partition.clone())
+                .is_some_and(|f| frames_are_well_formed(f, partition.clone()))
+        }) {
+            return Ok(None);
+        }
+        let mut accumulator = self.get_accumulator()?;
+        accumulator.evaluate_window_segments(&values, partitions, &frames)
     }
 
     /// Statefully evaluates the window function against the batch. Maintains
@@ -296,7 +464,7 @@ pub trait AggregateWindowExpr: WindowExpr {
         most_recent_row_order_bys: Option<&[ArrayRef]>,
         last_range: &mut Range<usize>,
         window_frame_ctx: &mut WindowFrameContext,
-        mut idx: usize,
+        idx: usize,
         not_end: bool,
     ) -> Result<ArrayRef> {
         let values = self.evaluate_args(record_batch)?;
@@ -334,34 +502,69 @@ pub trait AggregateWindowExpr: WindowExpr {
         }
         let order_bys = get_orderby_values(self.order_by_columns(record_batch)?);
 
-        // We iterate on each row to perform a running calculation.
         let length = values[0].len();
-        let mut row_wise_results: Vec<ScalarValue> =
-            Vec::with_capacity(length.saturating_sub(idx));
         let is_causal = self.get_window_frame().is_causal();
-        // These ordering arrays do not change during this evaluation. Compare
-        // their last/most-recent rows lazily once, since comparator setup can
-        // scan entire dictionary arrays to compute logical nulls.
-        let mut row_ahead = None;
-        while idx < length {
-            // Start search from the last_range. This squeezes searched range.
-            let cur_range =
-                window_frame_ctx.calculate_range(&order_bys, last_range, length, idx)?;
-            // Exit if the range is non-causal and extends all the way:
-            if cur_range.end == length
-                && !is_causal
-                && not_end
-                && !is_end_bound_safe(
-                    window_frame_ctx,
-                    &order_bys,
-                    most_recent_row_order_bys,
-                    self.order_by(),
-                    idx,
-                    &mut row_ahead,
-                )?
-            {
-                break;
+        let check_tail = !is_causal && not_end;
+
+        // Frames of all new rows in one pass; rows whose frame reaches the end of the
+        // buffered data may still need more input and are handled one at a time below.
+        let mut ranges: Vec<Range<usize>> = Vec::new();
+        window_frame_ctx.calculate_ranges(
+            &order_bys,
+            last_range,
+            length,
+            idx,
+            check_tail,
+            &mut ranges,
+        )?;
+        if check_tail {
+            // These ordering arrays do not change during this evaluation. Compare
+            // their last/most-recent rows lazily once, since comparator setup can
+            // scan entire dictionary arrays to compute logical nulls.
+            let mut row_ahead = None;
+            let mut next = idx + ranges.len();
+            let mut prev = ranges.last().cloned().unwrap_or_else(|| last_range.clone());
+            while next < length {
+                let cur_range =
+                    window_frame_ctx.calculate_range(&order_bys, &prev, length, next)?;
+                // Exit if the range is non-causal and extends all the way:
+                if cur_range.end == length
+                    && !is_end_bound_safe(
+                        window_frame_ctx,
+                        &order_bys,
+                        most_recent_row_order_bys,
+                        self.order_by(),
+                        next,
+                        &mut row_ahead,
+                    )?
+                {
+                    break;
+                }
+                prev = cur_range.clone();
+                ranges.push(cur_range);
+                next += 1;
             }
+        }
+
+        if ranges.is_empty() {
+            let field = self.field()?;
+            let out_type = field.data_type();
+            return Ok(new_empty_array(out_type));
+        }
+
+        // The kernels slide from `last_range` to the new frames, so both must be well formed
+        if filter_mask.is_none()
+            && frames_are_well_formed(std::slice::from_ref(&*last_range), 0..length)
+            && frames_are_well_formed(&ranges, 0..length)
+            && let Some(out) =
+                accumulator.evaluate_window_frames(&values, last_range, &ranges)?
+        {
+            *last_range = ranges[ranges.len() - 1].clone();
+            return Ok(out);
+        }
+
+        let mut row_wise_results: Vec<ScalarValue> = Vec::with_capacity(ranges.len());
+        for cur_range in ranges {
             let value = self.get_aggregate_result_inside_range(
                 last_range,
                 &cur_range,
@@ -372,16 +575,8 @@ pub trait AggregateWindowExpr: WindowExpr {
             // Update last range
             *last_range = cur_range;
             row_wise_results.push(value);
-            idx += 1;
         }
-
-        if row_wise_results.is_empty() {
-            let field = self.field()?;
-            let out_type = field.data_type();
-            Ok(new_empty_array(out_type))
-        } else {
-            ScalarValue::iter_to_array(row_wise_results)
-        }
+        ScalarValue::iter_to_array(row_wise_results)
     }
 }
 
@@ -390,6 +585,17 @@ pub(crate) fn filter_array(array: &ArrayRef, mask: &BooleanArray) -> Result<Arra
     arrow_filter(array.as_ref(), mask)
         .map(|a| a as ArrayRef)
         .map_err(|e| arrow_datafusion_err!(e))
+}
+
+/// Whether every frame starts no later than it ends and lies inside `bounds`. A frame that starts
+/// after it ends (a negative `RANGE` offset produces one, which the planner should reject) is left
+/// to the row-by-row protocol, so that it behaves exactly as it did before frames were evaluated in bulk.
+/// The previous frame of a partition (`last_range`), from which the kernels slide, must be well formed too:
+/// after an inverted frame the next, well-formed frames are still computed from it.
+fn frames_are_well_formed(frames: &[Range<usize>], bounds: Range<usize>) -> bool {
+    frames
+        .iter()
+        .all(|f| bounds.start <= f.start && f.start <= f.end && f.end <= bounds.end)
 }
 
 /// Filters a list of arrays with the provided boolean mask.
@@ -709,7 +915,9 @@ pub type PartitionBatches = IndexMap<PartitionKey, PartitionBatchState, RandomSt
 mod tests {
     use std::sync::Arc;
 
-    use crate::window::window_expr::{WindowFn, WindowState, is_row_ahead};
+    use crate::window::window_expr::{
+        WindowFn, WindowState, frames_are_well_formed, is_row_ahead,
+    };
 
     use arrow::array::{ArrayRef, Float64Array};
     use arrow::compute::SortOptions;
@@ -767,6 +975,96 @@ mod tests {
             err.contains("called more than once"),
             "expected second-call error, got: {err}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn frames_are_well_formed_rejects_inverted_and_out_of_bounds_frames() {
+        // built from variables: clippy rejects a literal reversed or one-element range
+        let frame = |start: usize, end: usize| start..end;
+        assert!(frames_are_well_formed(&[0..0, 0..2, 1..3, 3..3], 0..3));
+        assert!(frames_are_well_formed(&[], 0..0));
+        // starts after it ends
+        assert!(!frames_are_well_formed(&[frame(0, 2), frame(2, 1)], 0..3));
+        // ends after the data, starts before the partition
+        assert!(!frames_are_well_formed(&[frame(0, 4)], 0..3));
+        assert!(!frames_are_well_formed(&[frame(2, 4)], 3..6));
+    }
+
+    /// The guard must only turn away frames that cannot occur in a valid query: the frames of every
+    /// frame the planner accepts (start no later than end), for all three units and both sort
+    /// directions, are well formed, so the bulk path is never disabled by it.
+    #[test]
+    fn frames_of_valid_window_frames_are_well_formed() -> Result<()> {
+        use arrow::array::Int64Array;
+        use datafusion_expr::window_state::WindowFrameContext;
+        use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+
+        let keys: ArrayRef = Arc::new(Int64Array::from(vec![1, 1, 2, 4, 4, 4, 7, 9]));
+        let n = keys.len();
+        for units in [
+            WindowFrameUnits::Rows,
+            WindowFrameUnits::Range,
+            WindowFrameUnits::Groups,
+        ] {
+            let offset = |k: u64| match units {
+                WindowFrameUnits::Range => ScalarValue::Int64(Some(k as i64)),
+                _ => ScalarValue::UInt64(Some(k)),
+            };
+            let unbounded = match units {
+                WindowFrameUnits::Range => ScalarValue::Int64(None),
+                _ => ScalarValue::UInt64(None),
+            };
+            // (position on the number line, bound): UNBOUNDED PRECEDING is -inf, UNBOUNDED FOLLOWING +inf
+            let mut line: Vec<(i128, WindowFrameBound)> = vec![
+                (i128::MIN, WindowFrameBound::Preceding(unbounded.clone())),
+                (0, WindowFrameBound::CurrentRow),
+                (i128::MAX, WindowFrameBound::Following(unbounded)),
+            ];
+            for k in [0u64, 1, 2, 3, 20] {
+                line.push((-(k as i128), WindowFrameBound::Preceding(offset(k))));
+                line.push((k as i128, WindowFrameBound::Following(offset(k))));
+            }
+            for (start_pos, start) in &line {
+                for (end_pos, end) in &line {
+                    // the planner rejects UNBOUNDED FOLLOWING as a start, UNBOUNDED PRECEDING as an end
+                    // and a start after the end
+                    if *start_pos == i128::MAX
+                        || *end_pos == i128::MIN
+                        || start_pos > end_pos
+                    {
+                        continue;
+                    }
+                    for descending in [false, true] {
+                        let options = SortOptions {
+                            descending,
+                            nulls_first: false,
+                        };
+                        let keys = if descending {
+                            arrow::compute::take(
+                                &keys,
+                                &arrow::array::UInt64Array::from_iter_values(
+                                    (0..n as u64).rev(),
+                                ),
+                                None,
+                            )?
+                        } else {
+                            Arc::clone(&keys)
+                        };
+                        let frame =
+                            WindowFrame::new_bounds(units, start.clone(), end.clone());
+                        let mut ctx =
+                            WindowFrameContext::new(Arc::new(frame), vec![options]);
+                        let mut ranges = Vec::new();
+                        ctx.calculate_ranges(&[keys], &(0..0), n, 0, false, &mut ranges)?;
+                        assert!(
+                            frames_are_well_formed(&ranges, 0..n),
+                            "{units:?} {start:?} .. {end:?} descending={descending}: {ranges:?}"
+                        );
+                    }
+                }
+            }
+        }
         Ok(())
     }
 

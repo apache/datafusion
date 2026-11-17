@@ -673,6 +673,42 @@ impl Accumulator for AvgAccumulator {
     fn supports_retract_batch(&self) -> bool {
         true
     }
+
+    fn evaluate_window_frames(
+        &mut self,
+        values: &[ArrayRef],
+        last_range: &std::ops::Range<usize>,
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        let arr = values[0].as_primitive::<Float64Type>();
+        let mut sum = self.sum.unwrap_or(0.0);
+        let (out, added) =
+            datafusion_functions_aggregate_common::window_kernels::avg_frames(
+                arr,
+                &mut sum,
+                &mut self.count,
+                last_range,
+                frames,
+            );
+        if added || self.sum.is_some() {
+            self.sum = Some(sum);
+        }
+        Ok(Some(out))
+    }
+
+    fn evaluate_window_segments(
+        &mut self,
+        values: &[ArrayRef],
+        segments: &[std::ops::Range<usize>],
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        let arr = values[0].as_primitive::<Float64Type>();
+        Ok(Some(
+            datafusion_functions_aggregate_common::window_kernels::avg_frames_segments(
+                arr, segments, frames,
+            ),
+        ))
+    }
 }
 
 /// An accumulator to compute the average for decimals.

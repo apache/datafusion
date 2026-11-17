@@ -1,0 +1,1017 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Window functions evaluated over many partitions of different sizes, in input
+# batches of different sizes, checked against self-join oracles.
+#
+# Partition `k` of `wb` holds the `k + 1` consecutive rows `id` of its triangular-number
+# block, so the partition sizes run from 1 to 35 (the last one is cut short).
+# `id` is unique, `ts` is unique with gaps, `tie` has peer groups of two rows.
+# Every window query orders by something `wb` is not already sorted by, so the plan
+# sorts and runs `BoundedWindowAggExec` in `Sorted` mode.
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE VIEW wb AS
+SELECT
+  id,
+  CAST(floor((sqrt(8.0 * id + 1) - 1) / 2) AS BIGINT) AS k,
+  id / 2 AS tie,
+  id * 2 AS ts,
+  (id * 7919) % 2000 - 1000 AS v,
+  CASE WHEN id % 5 = 0 THEN NULL ELSE CAST((id * 31) % 97 AS DOUBLE) / 4.0 END AS f
+FROM (SELECT value AS id FROM generate_series(0, 599)) AS ids;
+
+query IIIIII
+SELECT count(*), count(DISTINCT k), min(v), max(v), count(f), max(k) FROM wb;
+----
+600 35 -1000 999 480 34
+
+query TT
+EXPLAIN SELECT sum(v) OVER (PARTITION BY k ORDER BY id ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) FROM wb;
+----
+logical_plan
+01)Projection: sum(wb.v) PARTITION BY [wb.k] ORDER BY [wb.id ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING
+02)--WindowAggr: windowExpr=[[sum(wb.v) PARTITION BY [wb.k] ORDER BY [wb.id ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING]]
+03)----SubqueryAlias: wb
+04)------Projection: ids.id, CAST(floor((sqrt(Float64(8) * CAST(ids.id AS Float64) + Float64(1)) - Float64(1)) / Float64(2)) AS Int64) AS k, ids.id * Int64(7919) % Int64(2000) - Int64(1000) AS v
+05)--------SubqueryAlias: ids
+06)----------Projection: generate_series().value AS id
+07)------------TableScan: generate_series() projection=[value]
+physical_plan
+01)ProjectionExec: expr=[sum(wb.v) PARTITION BY [wb.k] ORDER BY [wb.id ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING@3 as sum(wb.v) PARTITION BY [wb.k] ORDER BY [wb.id ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING]
+02)--BoundedWindowAggExec: wdw=[sum(wb.v) PARTITION BY [wb.k] ORDER BY [wb.id ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING: Field { "sum(wb.v) PARTITION BY [wb.k] ORDER BY [wb.id ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING": nullable Int64 }, frame: ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
+03)----SortExec: expr=[k@1 ASC NULLS LAST, id@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------ProjectionExec: expr=[value@0 as id, CAST(floor((sqrt(8 * CAST(value@0 AS Float64) + 1) - 1) / 2) AS Int64) as k, value@0 * 7919 % 2000 - 1000 as v]
+05)--------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=599, batch_size=8192]
+
+###########
+# Oracles
+#
+# An oracle does not depend on the batch size, so it is computed once, as a table (`<name>_o`);
+# the window side (`<name>_w`) is evaluated again at every batch size.
+###########
+
+# ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING
+
+statement ok
+CREATE VIEW rows_moving_w AS
+SELECT id,
+  sum(v) OVER w AS s, count(v) OVER w AS c, min(v) OVER w AS mn, max(v) OVER w AS mx,
+  avg(v) OVER w AS av, sum(f) OVER w AS sf, avg(f) OVER w AS af, count(f) OVER w AS cf
+FROM wb
+WINDOW w AS (PARTITION BY k ORDER BY id ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING);
+
+statement ok
+CREATE TABLE rows_moving_o AS
+SELECT a.id,
+  sum(b.v) AS s, count(b.v) AS c, min(b.v) AS mn, max(b.v) AS mx,
+  avg(b.v) AS av, sum(b.f) AS sf, avg(b.f) AS af, count(b.f) AS cf
+FROM wb a LEFT JOIN wb b ON a.k = b.k AND b.id BETWEEN a.id - 2 AND a.id + 1
+GROUP BY a.id;
+
+# ROWS BETWEEN 1 FOLLOWING AND 3 FOLLOWING: empty at the end of a partition
+
+statement ok
+CREATE VIEW rows_following_w AS
+SELECT id, sum(v) OVER w AS s, count(v) OVER w AS c, min(v) OVER w AS mn, max(f) OVER w AS mxf
+FROM wb
+WINDOW w AS (PARTITION BY k ORDER BY id ROWS BETWEEN 1 FOLLOWING AND 3 FOLLOWING);
+
+statement ok
+CREATE TABLE rows_following_o AS
+SELECT a.id, sum(b.v) AS s, count(b.v) AS c, min(b.v) AS mn, max(b.f) AS mxf
+FROM wb a LEFT JOIN wb b ON a.k = b.k AND b.id BETWEEN a.id + 1 AND a.id + 3
+GROUP BY a.id;
+
+# ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING: empty at the start of a partition
+
+statement ok
+CREATE VIEW rows_preceding_w AS
+SELECT id, sum(v) OVER w AS s, count(v) OVER w AS c, max(v) OVER w AS mx, sum(f) OVER w AS sf
+FROM wb
+WINDOW w AS (PARTITION BY k ORDER BY id ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING);
+
+statement ok
+CREATE TABLE rows_preceding_o AS
+SELECT a.id, sum(b.v) AS s, count(b.v) AS c, max(b.v) AS mx, sum(b.f) AS sf
+FROM wb a LEFT JOIN wb b ON a.k = b.k AND b.id BETWEEN a.id - 3 AND a.id - 1
+GROUP BY a.id;
+
+# ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+
+statement ok
+CREATE VIEW rows_running_w AS
+SELECT id, sum(v) OVER w AS s, count(v) OVER w AS c, max(v) OVER w AS mx, avg(f) OVER w AS af
+FROM wb
+WINDOW w AS (PARTITION BY k ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW);
+
+statement ok
+CREATE TABLE rows_running_o AS
+SELECT a.id, sum(b.v) AS s, count(b.v) AS c, max(b.v) AS mx, avg(b.f) AS af
+FROM wb a JOIN wb b ON a.k = b.k AND b.id <= a.id
+GROUP BY a.id;
+
+# RANGE with offsets, ascending and descending, and with peers
+
+statement ok
+CREATE VIEW range_offset_w AS
+SELECT id, sum(v) OVER w AS s, count(v) OVER w AS c, min(v) OVER w AS mn, max(v) OVER w AS mx, avg(f) OVER w AS af
+FROM wb
+WINDOW w AS (PARTITION BY k ORDER BY ts RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING);
+
+statement ok
+CREATE TABLE range_offset_o AS
+SELECT a.id, sum(b.v) AS s, count(b.v) AS c, min(b.v) AS mn, max(b.v) AS mx, avg(b.f) AS af
+FROM wb a JOIN wb b ON a.k = b.k AND b.ts BETWEEN a.ts - 5 AND a.ts + 3
+GROUP BY a.id;
+
+statement ok
+CREATE VIEW range_desc_w AS
+SELECT id, sum(v) OVER w AS s, count(v) OVER w AS c, min(v) OVER w AS mn, max(v) OVER w AS mx
+FROM wb
+WINDOW w AS (PARTITION BY k ORDER BY ts DESC RANGE BETWEEN 5 PRECEDING AND 3 FOLLOWING);
+
+statement ok
+CREATE TABLE range_desc_o AS
+SELECT a.id, sum(b.v) AS s, count(b.v) AS c, min(b.v) AS mn, max(b.v) AS mx
+FROM wb a JOIN wb b ON a.k = b.k AND b.ts BETWEEN a.ts - 3 AND a.ts + 5
+GROUP BY a.id;
+
+statement ok
+CREATE VIEW range_peers_w AS
+SELECT id, sum(v) OVER w AS s, count(v) OVER w AS c, max(f) OVER w AS mxf
+FROM wb
+WINDOW w AS (PARTITION BY k ORDER BY tie RANGE BETWEEN 1 PRECEDING AND CURRENT ROW);
+
+statement ok
+CREATE TABLE range_peers_o AS
+SELECT a.id, sum(b.v) AS s, count(b.v) AS c, max(b.f) AS mxf
+FROM wb a JOIN wb b ON a.k = b.k AND b.tie BETWEEN a.tie - 1 AND a.tie
+GROUP BY a.id;
+
+# The default frame: everything up to and including the peers
+
+statement ok
+CREATE VIEW default_frame_w AS
+SELECT id, sum(v) OVER w AS s, count(*) OVER w AS c, min(v) OVER w AS mn, avg(f) OVER w AS af
+FROM wb
+WINDOW w AS (PARTITION BY k ORDER BY tie);
+
+statement ok
+CREATE TABLE default_frame_o AS
+SELECT a.id, sum(b.v) AS s, count(*) AS c, min(b.v) AS mn, avg(b.f) AS af
+FROM wb a JOIN wb b ON a.k = b.k AND b.tie <= a.tie
+GROUP BY a.id;
+
+# Ranking functions
+
+statement ok
+CREATE VIEW ranks_w AS
+SELECT id,
+  rank() OVER w AS r, dense_rank() OVER w AS dr, percent_rank() OVER w AS pr, cume_dist() OVER w AS cd,
+  row_number() OVER (PARTITION BY k ORDER BY id) AS rn
+FROM wb
+WINDOW w AS (PARTITION BY k ORDER BY tie);
+
+statement ok
+CREATE TABLE ranks_o AS
+SELECT a.id,
+  1 + count(*) FILTER (WHERE b.tie < a.tie) AS r,
+  1 + count(DISTINCT b.tie) FILTER (WHERE b.tie < a.tie) AS dr,
+  CASE WHEN count(*) = 1 THEN 0.0
+       ELSE CAST(count(*) FILTER (WHERE b.tie < a.tie) AS DOUBLE) / (count(*) - 1) END AS pr,
+  CAST(count(*) FILTER (WHERE b.tie <= a.tie) AS DOUBLE) / count(*) AS cd,
+  count(*) FILTER (WHERE b.id <= a.id) AS rn
+FROM wb a JOIN wb b ON a.k = b.k
+GROUP BY a.id;
+
+# lag and lead, with offsets and defaults
+
+statement ok
+CREATE VIEW lag_lead_w AS
+SELECT id,
+  lag(v) OVER w AS l1, lag(v, 2, -1) OVER w AS l2, lead(v) OVER w AS d1, lead(v, 3, 0) OVER w AS d3,
+  lag(f) OVER w AS lf
+FROM wb
+WINDOW w AS (PARTITION BY k ORDER BY id);
+
+statement ok
+CREATE TABLE lag_lead_o AS
+SELECT a.id,
+  p1.v AS l1, COALESCE(p2.v, -1) AS l2, n1.v AS d1, COALESCE(n3.v, 0) AS d3, p1.f AS lf
+FROM wb a
+LEFT JOIN wb p1 ON p1.k = a.k AND p1.id = a.id - 1
+LEFT JOIN wb p2 ON p2.k = a.k AND p2.id = a.id - 2
+LEFT JOIN wb n1 ON n1.k = a.k AND n1.id = a.id + 1
+LEFT JOIN wb n3 ON n3.k = a.k AND n3.id = a.id + 3;
+
+# lag and lead over text and dictionary-encoded columns: a default for the rows that have no source row, NULL for a source row that is NULL
+
+statement ok
+CREATE VIEW wbs AS
+SELECT id, k,
+  CASE WHEN id % 4 = 0 THEN NULL ELSE 's' || CAST((id * 13) % 17 AS VARCHAR) END AS s,
+  arrow_cast(CASE WHEN id % 3 = 0 THEN NULL ELSE 'd' || CAST((id * 5) % 11 AS VARCHAR) END, 'Dictionary(Int32, Utf8)') AS ds
+FROM wb;
+
+statement ok
+CREATE VIEW lag_lead_str_w AS
+SELECT id,
+  lag(s, 1, 'none') OVER w AS l1, lag(s, 2) OVER w AS l2, lead(s, 1, 'none') OVER w AS d1, lead(s, 3, 'none') OVER w AS d3,
+  lag(ds, 1, 'none') OVER w AS dl1, lead(ds, 2, 'none') OVER w AS dd2
+FROM wbs
+WINDOW w AS (PARTITION BY k ORDER BY id);
+
+statement ok
+CREATE TABLE lag_lead_str_o AS
+SELECT a.id,
+  CASE WHEN p1.id IS NULL THEN 'none' ELSE p1.s END AS l1,
+  p2.s AS l2,
+  CASE WHEN n1.id IS NULL THEN 'none' ELSE n1.s END AS d1,
+  CASE WHEN n3.id IS NULL THEN 'none' ELSE n3.s END AS d3,
+  CASE WHEN p1.id IS NULL THEN 'none' ELSE p1.ds END AS dl1,
+  CASE WHEN n2.id IS NULL THEN 'none' ELSE n2.ds END AS dd2
+FROM wbs a
+LEFT JOIN wbs p1 ON p1.k = a.k AND p1.id = a.id - 1
+LEFT JOIN wbs p2 ON p2.k = a.k AND p2.id = a.id - 2
+LEFT JOIN wbs n1 ON n1.k = a.k AND n1.id = a.id + 1
+LEFT JOIN wbs n2 ON n2.k = a.k AND n2.id = a.id + 2
+LEFT JOIN wbs n3 ON n3.k = a.k AND n3.id = a.id + 3;
+
+query T
+SELECT arrow_typeof(dl1) FROM lag_lead_str_w LIMIT 1;
+----
+Dictionary(Int32, Utf8)
+
+# first_value and last_value over a moving frame, first_value over the default frame
+
+statement ok
+CREATE VIEW first_last_w AS
+SELECT id,
+  first_value(v) OVER w AS fv, last_value(v) OVER w AS lv,
+  first_value(v) OVER (PARTITION BY k ORDER BY id) AS fp
+FROM wb
+WINDOW w AS (PARTITION BY k ORDER BY id ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING);
+
+statement ok
+CREATE TABLE first_last_o AS
+SELECT a.id, COALESCE(p.v, a.v) AS fv, COALESCE(n.v, a.v) AS lv, fr.v AS fp
+FROM wb a
+LEFT JOIN wb p ON p.k = a.k AND p.id = a.id - 1
+LEFT JOIN wb n ON n.k = a.k AND n.id = a.id + 1
+JOIN (SELECT k, min(id) AS first_id FROM wb GROUP BY k) m ON m.k = a.k
+JOIN wb fr ON fr.id = m.first_id;
+
+# FILTER
+
+statement ok
+CREATE VIEW filter_w AS
+SELECT id,
+  sum(v) FILTER (WHERE v > 0) OVER w AS s, count(*) FILTER (WHERE f IS NOT NULL) OVER w AS c
+FROM wb
+WINDOW w AS (PARTITION BY k ORDER BY id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW);
+
+statement ok
+CREATE TABLE filter_o AS
+SELECT a.id, sum(b.v) FILTER (WHERE b.v > 0) AS s, count(*) FILTER (WHERE b.f IS NOT NULL) AS c
+FROM wb a JOIN wb b ON a.k = b.k AND b.id BETWEEN a.id - 2 AND a.id
+GROUP BY a.id;
+
+# GROUPS frames: the same as ROWS frames over a unique key, and over peers
+
+statement ok
+CREATE VIEW groups_w AS
+SELECT id,
+  sum(v) OVER (PARTITION BY k ORDER BY id GROUPS BETWEEN 2 PRECEDING AND 1 FOLLOWING) AS gs,
+  max(v) OVER (PARTITION BY k ORDER BY id GROUPS BETWEEN 1 FOLLOWING AND 3 FOLLOWING) AS gm,
+  sum(v) OVER (PARTITION BY k ORDER BY tie GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW) AS gt
+FROM wb;
+
+statement ok
+CREATE TABLE groups_o AS
+SELECT a.id,
+  sum(b.v) FILTER (WHERE b.id BETWEEN a.id - 2 AND a.id + 1) AS gs,
+  max(b.v) FILTER (WHERE b.id BETWEEN a.id + 1 AND a.id + 3) AS gm,
+  sum(b.v) FILTER (WHERE b.tie BETWEEN a.tie - 1 AND a.tie) AS gt
+FROM wb a JOIN wb b ON a.k = b.k
+GROUP BY a.id;
+
+# Several expressions of different kinds in one operator
+
+statement ok
+CREATE VIEW mixed_w AS
+SELECT id,
+  sum(v) OVER w AS s,
+  row_number() OVER w AS rn,
+  lag(v) OVER w AS l1,
+  count(f) OVER (PARTITION BY k ORDER BY id GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS cg,
+  max(v) OVER (PARTITION BY k ORDER BY id ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING) AS mx
+FROM wb
+WINDOW w AS (PARTITION BY k ORDER BY id ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING);
+
+statement ok
+CREATE TABLE mixed_o AS
+SELECT a.id,
+  sum(b.v) FILTER (WHERE b.id BETWEEN a.id - 2 AND a.id + 1) AS s,
+  count(*) FILTER (WHERE b.id <= a.id) AS rn,
+  max(b.v) FILTER (WHERE b.id = a.id - 1) AS l1,
+  count(b.f) FILTER (WHERE b.id BETWEEN a.id - 1 AND a.id + 1) AS cg,
+  max(b.v) FILTER (WHERE b.id BETWEEN a.id AND a.id + 2) AS mx
+FROM wb a JOIN wb b ON a.k = b.k
+GROUP BY a.id;
+
+# A string partition key sorts differently from the number it spells
+
+statement ok
+CREATE VIEW string_key_w AS
+SELECT id, sum(v) OVER w AS s, row_number() OVER w AS rn
+FROM (SELECT *, CAST(k AS VARCHAR) AS sk FROM wb) AS t
+WINDOW w AS (PARTITION BY sk ORDER BY id ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING);
+
+statement ok
+CREATE TABLE string_key_o AS
+SELECT a.id, sum(b.v) FILTER (WHERE b.id BETWEEN a.id - 2 AND a.id + 1) AS s,
+  count(*) FILTER (WHERE b.id <= a.id) AS rn
+FROM wb a JOIN wb b ON a.k = b.k
+GROUP BY a.id;
+
+# A NULL partition key is one partition, which gathers rows of several `k`
+
+statement ok
+CREATE VIEW null_key_w AS
+SELECT id, sum(v) OVER w AS s, count(v) OVER w AS c
+FROM (SELECT *, CASE WHEN id % 13 = 0 THEN NULL ELSE k END AS kn FROM wb) AS t
+WINDOW w AS (PARTITION BY kn ORDER BY id RANGE BETWEEN 30 PRECEDING AND 30 FOLLOWING);
+
+statement ok
+CREATE TABLE null_key_o AS
+SELECT a.id, sum(b.v) AS s, count(b.v) AS c
+FROM (SELECT *, CASE WHEN id % 13 = 0 THEN NULL ELSE k END AS kn FROM wb) AS a
+JOIN (SELECT *, CASE WHEN id % 13 = 0 THEN NULL ELSE k END AS kn FROM wb) AS b
+  ON a.kn IS NOT DISTINCT FROM b.kn AND b.id BETWEEN a.id - 30 AND a.id + 30
+GROUP BY a.id;
+
+# RANGE offsets over keys of other types: the key is a column of `wk`. Unsigned keys are
+# compared with the oracle after a cast to BIGINT, which cannot underflow.
+
+statement ok
+CREATE VIEW wk AS
+SELECT id, k, v, f,
+  arrow_cast((id * 5) % 17, 'UInt8') AS u8,
+  arrow_cast((id * 3) % 19, 'UInt64') AS u64,
+  arrow_cast((id * 7) % 23 - 11, 'Int16') AS i16,
+  arrow_cast((id * 5) % 29, 'Timestamp(Second, None)') AS ts_s,
+  arrow_cast(((id * 11) % 31) * 1000000000, 'Timestamp(Nanosecond, Some("UTC"))') AS ts_ns,
+  CASE WHEN id % 6 = 0 THEN NULL ELSE (id * 5) % 17 END AS nk
+FROM wb;
+
+query TTTTT
+SELECT arrow_typeof(u8), arrow_typeof(u64), arrow_typeof(i16), arrow_typeof(ts_s), arrow_typeof(ts_ns) FROM wk LIMIT 1;
+----
+UInt8 UInt64 Int16 Timestamp(s) Timestamp(ns, "UTC")
+
+statement ok
+CREATE VIEW range_unsigned_w AS
+SELECT id,
+  sum(v) OVER w1 AS s1, max(v) OVER w1 AS m1,
+  sum(v) OVER w2 AS s2, max(v) OVER w2 AS m2
+FROM wk
+WINDOW w1 AS (PARTITION BY k ORDER BY u8 RANGE BETWEEN 3 PRECEDING AND 2 FOLLOWING),
+       w2 AS (PARTITION BY k ORDER BY u64 DESC RANGE BETWEEN 2 PRECEDING AND 4 FOLLOWING);
+
+statement ok
+CREATE TABLE range_unsigned_o AS
+SELECT a.id,
+  sum(b.v) FILTER (WHERE CAST(b.u8 AS BIGINT) BETWEEN CAST(a.u8 AS BIGINT) - 3 AND CAST(a.u8 AS BIGINT) + 2) AS s1,
+  max(b.v) FILTER (WHERE CAST(b.u8 AS BIGINT) BETWEEN CAST(a.u8 AS BIGINT) - 3 AND CAST(a.u8 AS BIGINT) + 2) AS m1,
+  sum(b.v) FILTER (WHERE CAST(b.u64 AS BIGINT) BETWEEN CAST(a.u64 AS BIGINT) - 4 AND CAST(a.u64 AS BIGINT) + 2) AS s2,
+  max(b.v) FILTER (WHERE CAST(b.u64 AS BIGINT) BETWEEN CAST(a.u64 AS BIGINT) - 4 AND CAST(a.u64 AS BIGINT) + 2) AS m2
+FROM wk a JOIN wk b ON a.k = b.k
+GROUP BY a.id;
+
+statement ok
+CREATE VIEW range_signed_w AS
+SELECT id,
+  sum(v) OVER w1 AS s1, count(f) OVER w1 AS c1,
+  sum(v) OVER w2 AS s2, count(f) OVER w2 AS c2
+FROM wk
+WINDOW w1 AS (PARTITION BY k ORDER BY i16 RANGE BETWEEN 4 PRECEDING AND CURRENT ROW),
+       w2 AS (PARTITION BY k ORDER BY i16 DESC RANGE BETWEEN UNBOUNDED PRECEDING AND 3 FOLLOWING);
+
+statement ok
+CREATE TABLE range_signed_o AS
+SELECT a.id,
+  sum(b.v) FILTER (WHERE b.i16 BETWEEN a.i16 - 4 AND a.i16) AS s1,
+  count(b.f) FILTER (WHERE b.i16 BETWEEN a.i16 - 4 AND a.i16) AS c1,
+  sum(b.v) FILTER (WHERE b.i16 >= a.i16 - 3) AS s2,
+  count(b.f) FILTER (WHERE b.i16 >= a.i16 - 3) AS c2
+FROM wk a JOIN wk b ON a.k = b.k
+GROUP BY a.id;
+
+statement ok
+CREATE VIEW range_timestamp_w AS
+SELECT id,
+  sum(v) OVER w1 AS s1, count(f) OVER w1 AS c1,
+  sum(v) OVER w2 AS s2, count(f) OVER w2 AS c2
+FROM wk
+WINDOW w1 AS (PARTITION BY k ORDER BY ts_s RANGE BETWEEN INTERVAL '3 seconds' PRECEDING AND INTERVAL '2 seconds' FOLLOWING),
+       w2 AS (PARTITION BY k ORDER BY ts_ns DESC RANGE BETWEEN INTERVAL '2 seconds' PRECEDING AND INTERVAL '5 seconds' FOLLOWING);
+
+statement ok
+CREATE TABLE range_timestamp_o AS
+SELECT a.id,
+  sum(b.v) FILTER (WHERE b.ts_s BETWEEN a.ts_s - INTERVAL '3 seconds' AND a.ts_s + INTERVAL '2 seconds') AS s1,
+  count(b.f) FILTER (WHERE b.ts_s BETWEEN a.ts_s - INTERVAL '3 seconds' AND a.ts_s + INTERVAL '2 seconds') AS c1,
+  sum(b.v) FILTER (WHERE b.ts_ns BETWEEN a.ts_ns - INTERVAL '5 seconds' AND a.ts_ns + INTERVAL '2 seconds') AS s2,
+  count(b.f) FILTER (WHERE b.ts_ns BETWEEN a.ts_ns - INTERVAL '5 seconds' AND a.ts_ns + INTERVAL '2 seconds') AS c2
+FROM wk a JOIN wk b ON a.k = b.k
+GROUP BY a.id;
+
+# A NULL key has the other NULL keys as its peers and no other row in its frame. Each of the four
+# combinations of direction and NULL placement is a window of its own, in a query of its own:
+# two windows whose orderings are the reverse of each other (`ASC NULLS FIRST` and `DESC NULLS LAST`)
+# are planned as one sort and one window evaluated backwards, so only one of them would run as written.
+
+statement ok
+CREATE VIEW range_nullable_w AS
+SELECT a.id, a.s AS s1, a.c AS c1, b.s AS s2, b.c AS c2, d.s AS s3, d.c AS c3, e.s AS s4, e.c AS c4
+FROM (SELECT id, sum(v) OVER w AS s, count(f) OVER w AS c FROM wk
+      WINDOW w AS (PARTITION BY k ORDER BY nk ASC NULLS FIRST RANGE BETWEEN 3 PRECEDING AND 2 FOLLOWING)) AS a
+JOIN (SELECT id, sum(v) OVER w AS s, count(f) OVER w AS c FROM wk
+      WINDOW w AS (PARTITION BY k ORDER BY nk ASC NULLS LAST RANGE BETWEEN 2 PRECEDING AND 4 FOLLOWING)) AS b ON a.id = b.id
+JOIN (SELECT id, sum(v) OVER w AS s, count(f) OVER w AS c FROM wk
+      WINDOW w AS (PARTITION BY k ORDER BY nk DESC NULLS FIRST RANGE BETWEEN 3 PRECEDING AND 2 FOLLOWING)) AS d ON a.id = d.id
+JOIN (SELECT id, sum(v) OVER w AS s, count(f) OVER w AS c FROM wk
+      WINDOW w AS (PARTITION BY k ORDER BY nk DESC NULLS LAST RANGE BETWEEN 2 PRECEDING AND 4 FOLLOWING)) AS e ON a.id = e.id;
+
+statement ok
+CREATE TABLE range_nullable_o AS
+SELECT a.id,
+  sum(b.v) FILTER (WHERE (a.nk IS NULL AND b.nk IS NULL) OR b.nk BETWEEN a.nk - 3 AND a.nk + 2) AS s1,
+  count(b.f) FILTER (WHERE (a.nk IS NULL AND b.nk IS NULL) OR b.nk BETWEEN a.nk - 3 AND a.nk + 2) AS c1,
+  sum(b.v) FILTER (WHERE (a.nk IS NULL AND b.nk IS NULL) OR b.nk BETWEEN a.nk - 2 AND a.nk + 4) AS s2,
+  count(b.f) FILTER (WHERE (a.nk IS NULL AND b.nk IS NULL) OR b.nk BETWEEN a.nk - 2 AND a.nk + 4) AS c2,
+  sum(b.v) FILTER (WHERE (a.nk IS NULL AND b.nk IS NULL) OR b.nk BETWEEN a.nk - 2 AND a.nk + 3) AS s3,
+  count(b.f) FILTER (WHERE (a.nk IS NULL AND b.nk IS NULL) OR b.nk BETWEEN a.nk - 2 AND a.nk + 3) AS c3,
+  sum(b.v) FILTER (WHERE (a.nk IS NULL AND b.nk IS NULL) OR b.nk BETWEEN a.nk - 4 AND a.nk + 2) AS s4,
+  count(b.f) FILTER (WHERE (a.nk IS NULL AND b.nk IS NULL) OR b.nk BETWEEN a.nk - 4 AND a.nk + 2) AS c4
+FROM wk a JOIN wk b ON a.k = b.k
+GROUP BY a.id;
+
+# Float sums are not associative: a frame that is added and retracted in another order than the per-row
+# code would differ in the last bits. The oracle is the same function with a FILTER that every row passes:
+# a window function with a FILTER adds and retracts one row at a time, but takes its frames from the same
+# code as the one under test, which the other families check. The results are compared as
+# text, which prints every bit that matters (-0, NaN and the infinities included).
+
+statement ok
+CREATE VIEW wg AS
+SELECT id, k, ts, (id * 53) % 211 AS gk,
+  CASE WHEN id % 17 = 5 THEN NULL
+       ELSE CAST((id * 37) % 101 AS DOUBLE) / 3.0 * pow(10.0, CAST(id % 9 AS DOUBLE) - 4.0) END AS g,
+  CASE WHEN k % 7 = 3 AND id % 5 = 1 THEN CAST('NaN' AS DOUBLE)
+       WHEN k % 7 = 3 AND id % 5 = 2 THEN CAST('-Infinity' AS DOUBLE)
+       WHEN k % 7 = 3 AND id % 5 = 3 THEN CAST('-0.0' AS DOUBLE)
+       WHEN k % 7 = 5 AND id % 3 = 0 THEN CAST('Infinity' AS DOUBLE)
+       ELSE CAST((id * 31) % 97 AS DOUBLE) / 4.0 - 12.0 END AS gs
+FROM wb;
+
+query IIII
+SELECT count(*), count(g), count(*) FILTER (WHERE isnan(gs)), count(*) FILTER (WHERE gs = CAST('-Infinity' AS DOUBLE) OR gs = CAST('Infinity' AS DOUBLE)) FROM wg;
+----
+600 565 18 52
+
+statement ok
+CREATE VIEW float_bits_w AS
+SELECT id, CAST(make_array(
+  sum(g) OVER wm, avg(g) OVER wm, min(g) OVER wm, max(g) OVER wm,
+  sum(g) OVER wr, avg(g) OVER wr, min(g) OVER wr, max(g) OVER wr,
+  sum(g) OVER wq, avg(g) OVER wq, min(g) OVER wq, max(g) OVER wq,
+  sum(gs) OVER wm, min(gs) OVER wm, max(gs) OVER wm, sum(gs) OVER wr, min(gs) OVER wr, max(gs) OVER wr,
+  sum(gs) OVER wq, min(gs) OVER wq, max(gs) OVER wq,
+  sum(g) OVER wj, avg(g) OVER wj, min(g) OVER wj, max(g) OVER wj, sum(gs) OVER wj, min(gs) OVER wj, max(gs) OVER wj) AS VARCHAR) AS r
+FROM wg
+WINDOW wm AS (PARTITION BY k ORDER BY id ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING),
+       wr AS (PARTITION BY k ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+       wq AS (PARTITION BY k ORDER BY ts RANGE BETWEEN 6 PRECEDING AND 4 FOLLOWING),
+       wj AS (PARTITION BY k ORDER BY gk RANGE BETWEEN 15 PRECEDING AND 5 FOLLOWING);
+
+statement ok
+CREATE TABLE float_bits_o AS
+SELECT id, CAST(make_array(
+  sum(g) FILTER (WHERE id >= 0) OVER wm, avg(g) FILTER (WHERE id >= 0) OVER wm, min(g) FILTER (WHERE id >= 0) OVER wm, max(g) FILTER (WHERE id >= 0) OVER wm,
+  sum(g) FILTER (WHERE id >= 0) OVER wr, avg(g) FILTER (WHERE id >= 0) OVER wr, min(g) FILTER (WHERE id >= 0) OVER wr, max(g) FILTER (WHERE id >= 0) OVER wr,
+  sum(g) FILTER (WHERE id >= 0) OVER wq, avg(g) FILTER (WHERE id >= 0) OVER wq, min(g) FILTER (WHERE id >= 0) OVER wq, max(g) FILTER (WHERE id >= 0) OVER wq,
+  sum(gs) FILTER (WHERE id >= 0) OVER wm, min(gs) FILTER (WHERE id >= 0) OVER wm, max(gs) FILTER (WHERE id >= 0) OVER wm,
+  sum(gs) FILTER (WHERE id >= 0) OVER wr, min(gs) FILTER (WHERE id >= 0) OVER wr, max(gs) FILTER (WHERE id >= 0) OVER wr,
+  sum(gs) FILTER (WHERE id >= 0) OVER wq, min(gs) FILTER (WHERE id >= 0) OVER wq, max(gs) FILTER (WHERE id >= 0) OVER wq,
+  sum(g) FILTER (WHERE id >= 0) OVER wj, avg(g) FILTER (WHERE id >= 0) OVER wj, min(g) FILTER (WHERE id >= 0) OVER wj, max(g) FILTER (WHERE id >= 0) OVER wj,
+  sum(gs) FILTER (WHERE id >= 0) OVER wj, min(gs) FILTER (WHERE id >= 0) OVER wj, max(gs) FILTER (WHERE id >= 0) OVER wj) AS VARCHAR) AS r
+FROM wg
+WINDOW wm AS (PARTITION BY k ORDER BY id ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING),
+       wr AS (PARTITION BY k ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+       wq AS (PARTITION BY k ORDER BY ts RANGE BETWEEN 6 PRECEDING AND 4 FOLLOWING),
+       wj AS (PARTITION BY k ORDER BY gk RANGE BETWEEN 15 PRECEDING AND 5 FOLLOWING);
+
+# SUM, AVG, MIN, MAX and COUNT over the other types the aggregates have a typed kernel for
+
+statement ok
+CREATE VIEW wt AS
+SELECT id, k,
+  CASE WHEN id % 9 = 4 THEN NULL ELSE CAST(CAST((id * 7919) % 100000 - 50000 AS DOUBLE) / 8.0 AS DECIMAL(12, 2)) END AS d,
+  CASE WHEN id % 11 = 5 THEN NULL ELSE arrow_cast(arrow_cast(18000 + (id * 13) % 400, 'Int32'), 'Date32') END AS dt,
+  CASE WHEN id % 7 = 2 THEN NULL ELSE arrow_cast(1700000000000 + (id * 977) % 100000, 'Timestamp(Millisecond, None)') END AS tm,
+  CASE WHEN id % 13 = 6 THEN NULL ELSE arrow_cast((id * 5) % 200 - 100, 'Int8') END AS i8,
+  CASE WHEN id % 6 = 1 THEN NULL ELSE arrow_cast((id * 91) % 60000, 'UInt16') END AS u16,
+  CASE WHEN id % 8 = 3 THEN NULL ELSE arrow_cast(CAST((id * 37) % 101 AS DOUBLE) / 3.0, 'Float32') END AS f32
+FROM wb;
+
+query TTTTTT
+SELECT arrow_typeof(d), arrow_typeof(dt), arrow_typeof(tm), arrow_typeof(i8), arrow_typeof(u16), arrow_typeof(f32) FROM wt LIMIT 1;
+----
+Decimal128(12, 2) Date32 Timestamp(ms) Int8 UInt16 Float32
+
+statement ok
+CREATE VIEW typed_moving_w AS
+SELECT id, CAST(make_array(
+  CAST(sum(d) OVER wm AS VARCHAR), CAST(avg(d) OVER wm AS VARCHAR), CAST(min(d) OVER wm AS VARCHAR), CAST(max(d) OVER wm AS VARCHAR), CAST(count(d) OVER wm AS VARCHAR),
+  CAST(sum(i8) OVER wm AS VARCHAR), CAST(avg(i8) OVER wm AS VARCHAR), CAST(min(i8) OVER wm AS VARCHAR), CAST(max(i8) OVER wm AS VARCHAR),
+  CAST(sum(u16) OVER wm AS VARCHAR), CAST(min(u16) OVER wm AS VARCHAR), CAST(max(u16) OVER wm AS VARCHAR),
+  CAST(min(dt) OVER wm AS VARCHAR), CAST(max(dt) OVER wm AS VARCHAR),
+  CAST(min(tm) OVER wm AS VARCHAR), CAST(max(tm) OVER wm AS VARCHAR),
+  CAST(min(f32) OVER wm AS VARCHAR), CAST(max(f32) OVER wm AS VARCHAR)) AS VARCHAR) AS r
+FROM wt
+WINDOW wm AS (PARTITION BY k ORDER BY id ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING);
+
+statement ok
+CREATE TABLE typed_moving_o AS
+SELECT a.id, CAST(make_array(
+  CAST(sum(b.d) AS VARCHAR), CAST(avg(b.d) AS VARCHAR), CAST(min(b.d) AS VARCHAR), CAST(max(b.d) AS VARCHAR), CAST(count(b.d) AS VARCHAR),
+  CAST(sum(b.i8) AS VARCHAR), CAST(avg(b.i8) AS VARCHAR), CAST(min(b.i8) AS VARCHAR), CAST(max(b.i8) AS VARCHAR),
+  CAST(sum(b.u16) AS VARCHAR), CAST(min(b.u16) AS VARCHAR), CAST(max(b.u16) AS VARCHAR),
+  CAST(min(b.dt) AS VARCHAR), CAST(max(b.dt) AS VARCHAR),
+  CAST(min(b.tm) AS VARCHAR), CAST(max(b.tm) AS VARCHAR),
+  CAST(min(b.f32) AS VARCHAR), CAST(max(b.f32) AS VARCHAR)) AS VARCHAR) AS r
+FROM wt a JOIN wt b ON a.k = b.k AND b.id BETWEEN a.id - 2 AND a.id + 1
+GROUP BY a.id;
+
+statement ok
+CREATE VIEW typed_running_w AS
+SELECT id, CAST(make_array(
+  CAST(sum(d) OVER wr AS VARCHAR), CAST(min(d) OVER wr AS VARCHAR), CAST(max(d) OVER wr AS VARCHAR),
+  CAST(sum(i8) OVER wr AS VARCHAR), CAST(min(i8) OVER wr AS VARCHAR), CAST(max(i8) OVER wr AS VARCHAR),
+  CAST(avg(u16) OVER wr AS VARCHAR), CAST(max(u16) OVER wr AS VARCHAR),
+  CAST(min(dt) OVER wr AS VARCHAR), CAST(max(dt) OVER wr AS VARCHAR),
+  CAST(min(tm) OVER wr AS VARCHAR), CAST(max(tm) OVER wr AS VARCHAR),
+  CAST(min(f32) OVER wr AS VARCHAR), CAST(max(f32) OVER wr AS VARCHAR)) AS VARCHAR) AS r
+FROM wt
+WINDOW wr AS (PARTITION BY k ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW);
+
+statement ok
+CREATE TABLE typed_running_o AS
+SELECT a.id, CAST(make_array(
+  CAST(sum(b.d) AS VARCHAR), CAST(min(b.d) AS VARCHAR), CAST(max(b.d) AS VARCHAR),
+  CAST(sum(b.i8) AS VARCHAR), CAST(min(b.i8) AS VARCHAR), CAST(max(b.i8) AS VARCHAR),
+  CAST(avg(b.u16) AS VARCHAR), CAST(max(b.u16) AS VARCHAR),
+  CAST(min(b.dt) AS VARCHAR), CAST(max(b.dt) AS VARCHAR),
+  CAST(min(b.tm) AS VARCHAR), CAST(max(b.tm) AS VARCHAR),
+  CAST(min(b.f32) AS VARCHAR), CAST(max(b.f32) AS VARCHAR)) AS VARCHAR) AS r
+FROM wt a JOIN wt b ON a.k = b.k AND b.id <= a.id
+GROUP BY a.id;
+
+# first_value, last_value and nth_value over moving, running and RANGE frames, with IGNORE NULLS (and nth_value once without)
+
+statement ok
+CREATE VIEW wn AS
+SELECT id, k, ts, CASE WHEN id % 4 IN (0, 1) THEN NULL ELSE v END AS nv
+FROM wb;
+
+statement ok
+CREATE VIEW ignore_nulls_w AS
+SELECT id, CAST(make_array(
+  first_value(nv) IGNORE NULLS OVER wm, last_value(nv) IGNORE NULLS OVER wm, nth_value(nv, 2) IGNORE NULLS OVER wm, nth_value(nv, 2) OVER wm,
+  first_value(nv) IGNORE NULLS OVER wr, last_value(nv) IGNORE NULLS OVER wr, nth_value(nv, 2) IGNORE NULLS OVER wr,
+  last_value(nv) IGNORE NULLS OVER wq, nth_value(nv, 3) IGNORE NULLS OVER wq) AS VARCHAR) AS r
+FROM wn
+WINDOW wm AS (PARTITION BY k ORDER BY id ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING),
+       wr AS (PARTITION BY k ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+       wq AS (PARTITION BY k ORDER BY ts RANGE BETWEEN 6 PRECEDING AND 4 FOLLOWING);
+
+statement ok
+CREATE TABLE ignore_nulls_o AS
+SELECT a.id, CAST(make_array(
+  first_value(b.nv ORDER BY b.id) FILTER (WHERE b.nv IS NOT NULL AND b.id BETWEEN a.id - 2 AND a.id + 1),
+  last_value(b.nv ORDER BY b.id) FILTER (WHERE b.nv IS NOT NULL AND b.id BETWEEN a.id - 2 AND a.id + 1),
+  nth_value(b.nv, 2 ORDER BY b.id) FILTER (WHERE b.nv IS NOT NULL AND b.id BETWEEN a.id - 2 AND a.id + 1),
+  nth_value(b.nv, 2 ORDER BY b.id) FILTER (WHERE b.id BETWEEN a.id - 2 AND a.id + 1),
+  first_value(b.nv ORDER BY b.id) FILTER (WHERE b.nv IS NOT NULL AND b.id <= a.id),
+  last_value(b.nv ORDER BY b.id) FILTER (WHERE b.nv IS NOT NULL AND b.id <= a.id),
+  nth_value(b.nv, 2 ORDER BY b.id) FILTER (WHERE b.nv IS NOT NULL AND b.id <= a.id),
+  last_value(b.nv ORDER BY b.id) FILTER (WHERE b.nv IS NOT NULL AND b.ts BETWEEN a.ts - 6 AND a.ts + 4),
+  nth_value(b.nv, 3 ORDER BY b.id) FILTER (WHERE b.nv IS NOT NULL AND b.ts BETWEEN a.ts - 6 AND a.ts + 4)) AS VARCHAR) AS r
+FROM wn a JOIN wn b ON a.k = b.k
+GROUP BY a.id;
+
+# Keys at the ends of their type, and bounds whose search target does not fit in it: key + offset overflows,
+# or a timestamp lies beyond the dates that interval arithmetic supports. Row by row, such a bound is the edge
+# of the partition, which is not always what an exact search gives: a NULL key can fall into the frame, and a
+# timestamp beyond the supported dates gets the whole partition on one side. The values below are what the
+# row-by-row code returns, and a window evaluated for many rows at once has to return exactly those.
+# Each table repeats the same seven rows in five partitions. Each ordering is a window of its own, in a query of
+# its own. A frame with UNBOUNDED FOLLOWING makes the operator a WindowAggExec, so those frames have a query of
+# their own too; all the others run in BoundedWindowAggExec.
+# The timestamp keys: `ks2` is far from the ends of the supported dates; `ks`, `ks3`, `kms` and `kus` lie beyond
+# them, in seconds, milliseconds and microseconds (`ks3`, `kms` and `kus` by a few percent only, which a test for
+# "beyond" that is a little too wide lets through); `kns` is next to the largest nanosecond key.
+
+statement ok
+CREATE VIEW ov_int8 AS
+SELECT q.p, t.id, arrow_cast(t.k, 'Int8') AS k, t.v
+FROM (VALUES (1, '-128', 1), (2, '-100', 2), (3, '0', 3), (4, '100', 4), (5, '127', 5), (6, NULL, 6), (7, NULL, 7)) AS t(id, k, v)
+CROSS JOIN (SELECT value AS p FROM generate_series(1, 5)) AS q;
+
+statement ok
+CREATE VIEW ov_int8_w AS
+SELECT a.p, a.id, CAST(make_array(a.w0, a.w1, a.w2, b.w0, c.w0, c.w1, c.w2, d.w0, e.w0, e.w1, e.w2, f.w0, g.w0, g.w1, g.w2, h.w0) AS VARCHAR) AS r
+FROM (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS FIRST RANGE BETWEEN 100 PRECEDING AND 100 FOLLOWING) AS w0, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS FIRST RANGE BETWEEN 100 FOLLOWING AND 120 FOLLOWING) AS w1, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND 100 PRECEDING) AS w2 FROM ov_int8) AS a
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS FIRST RANGE BETWEEN 100 FOLLOWING AND UNBOUNDED FOLLOWING) AS w0 FROM ov_int8) AS b ON a.p = b.p AND a.id = b.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS LAST RANGE BETWEEN 100 PRECEDING AND 100 FOLLOWING) AS w0, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS LAST RANGE BETWEEN 100 FOLLOWING AND 120 FOLLOWING) AS w1, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND 100 PRECEDING) AS w2 FROM ov_int8) AS c ON a.p = c.p AND a.id = c.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS LAST RANGE BETWEEN 100 FOLLOWING AND UNBOUNDED FOLLOWING) AS w0 FROM ov_int8) AS d ON a.p = d.p AND a.id = d.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS FIRST RANGE BETWEEN 100 PRECEDING AND 100 FOLLOWING) AS w0, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS FIRST RANGE BETWEEN 100 FOLLOWING AND 120 FOLLOWING) AS w1, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND 100 PRECEDING) AS w2 FROM ov_int8) AS e ON a.p = e.p AND a.id = e.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS FIRST RANGE BETWEEN 100 FOLLOWING AND UNBOUNDED FOLLOWING) AS w0 FROM ov_int8) AS f ON a.p = f.p AND a.id = f.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS LAST RANGE BETWEEN 100 PRECEDING AND 100 FOLLOWING) AS w0, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS LAST RANGE BETWEEN 100 FOLLOWING AND 120 FOLLOWING) AS w1, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND 100 PRECEDING) AS w2 FROM ov_int8) AS g ON a.p = g.p AND a.id = g.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS LAST RANGE BETWEEN 100 FOLLOWING AND UNBOUNDED FOLLOWING) AS w0 FROM ov_int8) AS h ON a.p = h.p AND a.id = h.id;
+
+statement ok
+CREATE VIEW ov_int64 AS
+SELECT q.p, t.id, arrow_cast(t.k, 'Int64') AS k, t.v
+FROM (VALUES (1, '-9223372036854775808', 1), (2, '-3', 2), (3, '0', 3), (4, '3', 4), (5, '9223372036854775807', 5), (6, NULL, 6), (7, NULL, 7)) AS t(id, k, v)
+CROSS JOIN (SELECT value AS p FROM generate_series(1, 5)) AS q;
+
+statement ok
+CREATE VIEW ov_int64_w AS
+SELECT a.p, a.id, CAST(make_array(a.w0, a.w1, b.w0, c.w0, c.w1, d.w0, e.w0, e.w1, f.w0, g.w0, g.w1, h.w0) AS VARCHAR) AS r
+FROM (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS FIRST RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING) AS w0, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS FIRST RANGE BETWEEN 5 FOLLOWING AND 7 FOLLOWING) AS w1 FROM ov_int64) AS a
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS FIRST RANGE BETWEEN 5 FOLLOWING AND UNBOUNDED FOLLOWING) AS w0 FROM ov_int64) AS b ON a.p = b.p AND a.id = b.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS LAST RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING) AS w0, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS LAST RANGE BETWEEN 5 FOLLOWING AND 7 FOLLOWING) AS w1 FROM ov_int64) AS c ON a.p = c.p AND a.id = c.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS LAST RANGE BETWEEN 5 FOLLOWING AND UNBOUNDED FOLLOWING) AS w0 FROM ov_int64) AS d ON a.p = d.p AND a.id = d.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS FIRST RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING) AS w0, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS FIRST RANGE BETWEEN 5 FOLLOWING AND 7 FOLLOWING) AS w1 FROM ov_int64) AS e ON a.p = e.p AND a.id = e.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS FIRST RANGE BETWEEN 5 FOLLOWING AND UNBOUNDED FOLLOWING) AS w0 FROM ov_int64) AS f ON a.p = f.p AND a.id = f.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS LAST RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING) AS w0, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS LAST RANGE BETWEEN 5 FOLLOWING AND 7 FOLLOWING) AS w1 FROM ov_int64) AS g ON a.p = g.p AND a.id = g.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS LAST RANGE BETWEEN 5 FOLLOWING AND UNBOUNDED FOLLOWING) AS w0 FROM ov_int64) AS h ON a.p = h.p AND a.id = h.id;
+
+statement ok
+CREATE VIEW ov_uint64 AS
+SELECT q.p, t.id, arrow_cast(t.k, 'UInt64') AS k, t.v
+FROM (VALUES (1, '0', 1), (2, '3', 2), (3, '9223372036854775808', 3), (4, '18446744073709551612', 4), (5, '18446744073709551615', 5), (6, NULL, 6), (7, NULL, 7)) AS t(id, k, v)
+CROSS JOIN (SELECT value AS p FROM generate_series(1, 5)) AS q;
+
+statement ok
+CREATE VIEW ov_uint64_w AS
+SELECT a.p, a.id, CAST(make_array(a.w0, a.w1, b.w0, b.w1, c.w0, c.w1, d.w0, d.w1) AS VARCHAR) AS r
+FROM (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS FIRST RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING) AS w0, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND 5 PRECEDING) AS w1 FROM ov_uint64) AS a
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS LAST RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING) AS w0, sum(v) OVER (PARTITION BY p ORDER BY k ASC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND 5 PRECEDING) AS w1 FROM ov_uint64) AS b ON a.p = b.p AND a.id = b.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS FIRST RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING) AS w0, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND 5 PRECEDING) AS w1 FROM ov_uint64) AS c ON a.p = c.p AND a.id = c.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS LAST RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING) AS w0, sum(v) OVER (PARTITION BY p ORDER BY k DESC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND 5 PRECEDING) AS w1 FROM ov_uint64) AS d ON a.p = d.p AND a.id = d.id;
+
+statement ok
+CREATE VIEW ov_timestamp AS
+SELECT q.p, t.id, t.id AS v,
+  arrow_cast(10000000000000 + (t.id - 1) * 10, 'Timestamp(Second, None)') AS ks,
+  arrow_cast(1000000000000 + (t.id - 1) * 10, 'Timestamp(Second, None)') AS ks2,
+  arrow_cast(8500000000000 + (t.id - 1) * 10, 'Timestamp(Second, None)') AS ks3,
+  arrow_cast(8500000000000000 + (t.id - 1) * 10000, 'Timestamp(Millisecond, None)') AS kms,
+  arrow_cast(8500000000000000000 + (t.id - 1) * 10000000, 'Timestamp(Microsecond, None)') AS kus,
+  arrow_cast(9223372036854775000 + (t.id - 1) * 100, 'Timestamp(Nanosecond, None)') AS kns
+FROM (SELECT value AS id FROM generate_series(1, 7)) AS t
+CROSS JOIN (SELECT value AS p FROM generate_series(1, 5)) AS q;
+
+statement ok
+CREATE VIEW ov_timestamp_w AS
+SELECT a.p, a.id, CAST(make_array(a.w0, a.w1, a.w2, b.w0, c.w0, c.w1, c.w2, d.w0, e.w0, e.w1, e.w2, f.w0, g.w0, g.w1, g.w2, h.w0, i.w0, i.w1, i.w2, j.w0, k.w0, k.w1, k.w2, l.w0) AS VARCHAR) AS r
+FROM (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY ks ASC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND CURRENT ROW) AS w0, sum(v) OVER (PARTITION BY p ORDER BY ks ASC RANGE BETWEEN CURRENT ROW AND INTERVAL '5' SECOND FOLLOWING) AS w1, sum(v) OVER (PARTITION BY p ORDER BY ks ASC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND INTERVAL '5' SECOND FOLLOWING) AS w2 FROM ov_timestamp) AS a
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY ks DESC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND INTERVAL '5' SECOND FOLLOWING) AS w0 FROM ov_timestamp) AS b ON a.p = b.p AND a.id = b.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY ks2 ASC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND CURRENT ROW) AS w0, sum(v) OVER (PARTITION BY p ORDER BY ks2 ASC RANGE BETWEEN CURRENT ROW AND INTERVAL '5' SECOND FOLLOWING) AS w1, sum(v) OVER (PARTITION BY p ORDER BY ks2 ASC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND INTERVAL '5' SECOND FOLLOWING) AS w2 FROM ov_timestamp) AS c ON a.p = c.p AND a.id = c.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY ks2 DESC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND INTERVAL '5' SECOND FOLLOWING) AS w0 FROM ov_timestamp) AS d ON a.p = d.p AND a.id = d.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY ks3 ASC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND CURRENT ROW) AS w0, sum(v) OVER (PARTITION BY p ORDER BY ks3 ASC RANGE BETWEEN CURRENT ROW AND INTERVAL '5' SECOND FOLLOWING) AS w1, sum(v) OVER (PARTITION BY p ORDER BY ks3 ASC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND INTERVAL '5' SECOND FOLLOWING) AS w2 FROM ov_timestamp) AS e ON a.p = e.p AND a.id = e.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY ks3 DESC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND INTERVAL '5' SECOND FOLLOWING) AS w0 FROM ov_timestamp) AS f ON a.p = f.p AND a.id = f.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY kms ASC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND CURRENT ROW) AS w0, sum(v) OVER (PARTITION BY p ORDER BY kms ASC RANGE BETWEEN CURRENT ROW AND INTERVAL '5' SECOND FOLLOWING) AS w1, sum(v) OVER (PARTITION BY p ORDER BY kms ASC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND INTERVAL '5' SECOND FOLLOWING) AS w2 FROM ov_timestamp) AS g ON a.p = g.p AND a.id = g.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY kms DESC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND INTERVAL '5' SECOND FOLLOWING) AS w0 FROM ov_timestamp) AS h ON a.p = h.p AND a.id = h.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY kus ASC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND CURRENT ROW) AS w0, sum(v) OVER (PARTITION BY p ORDER BY kus ASC RANGE BETWEEN CURRENT ROW AND INTERVAL '5' SECOND FOLLOWING) AS w1, sum(v) OVER (PARTITION BY p ORDER BY kus ASC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND INTERVAL '5' SECOND FOLLOWING) AS w2 FROM ov_timestamp) AS i ON a.p = i.p AND a.id = i.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY kus DESC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND INTERVAL '5' SECOND FOLLOWING) AS w0 FROM ov_timestamp) AS j ON a.p = j.p AND a.id = j.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY kns ASC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND CURRENT ROW) AS w0, sum(v) OVER (PARTITION BY p ORDER BY kns ASC RANGE BETWEEN CURRENT ROW AND INTERVAL '5' SECOND FOLLOWING) AS w1, sum(v) OVER (PARTITION BY p ORDER BY kns ASC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND INTERVAL '5' SECOND FOLLOWING) AS w2 FROM ov_timestamp) AS k ON a.p = k.p AND a.id = k.id
+JOIN (SELECT p, id, sum(v) OVER (PARTITION BY p ORDER BY kns DESC RANGE BETWEEN INTERVAL '5' SECOND PRECEDING AND INTERVAL '5' SECOND FOLLOWING) AS w0 FROM ov_timestamp) AS l ON a.p = l.p AND a.id = l.id;
+
+statement ok
+CREATE VIEW ov_int8_x AS
+SELECT * FROM (VALUES
+  (1, '[16, , 13, 12, 3, , , 25, 3, , 25, , 16, , 12, ]'),
+  (2, '[19, 3, 13, 12, 6, 3, , 25, 6, , 25, , 19, , 12, ]'),
+  (3, '[9, 4, 16, 9, 9, 4, 3, 22, 9, 2, 22, 3, 9, 2, 9, 16]'),
+  (4, '[12, , 19, , 25, , 6, , 25, 3, 13, 6, 12, 3, , 19]'),
+  (5, '[9, , 19, , 22, , 6, , 22, , 13, 6, 9, , , 19]'),
+  (6, '[13, 13, 13, 28, 13, , 28, , 13, 13, 13, 28, 13, , 28, ]'),
+  (7, '[13, 13, 13, 28, 13, , 28, , 13, 13, 13, 28, 13, , 28, ]')
+) AS t(id, r);
+
+statement ok
+CREATE VIEW ov_int64_x AS
+SELECT * FROM (VALUES
+  (1, '[14, , 14, 1, , 27, 1, , , 14, , ]'),
+  (2, '[5, 4, 9, 5, 4, 22, 5, , 1, 5, , 14]'),
+  (3, '[9, , 5, 9, , 18, 9, , 1, 9, , 14]'),
+  (4, '[7, , 5, 7, , 18, 7, 2, 3, 7, 2, 16]'),
+  (5, '[5, , , 18, , , 18, , 10, 5, , 23]'),
+  (6, '[13, 13, 28, 13, , , 13, 13, 28, 13, , ]'),
+  (7, '[13, 13, 28, 13, , , 13, 13, 28, 13, , ]')
+) AS t(id, r);
+
+statement ok
+CREATE VIEW ov_uint64_x AS
+SELECT * FROM (VALUES
+  (1, '[3, 14, 3, 1, 3, 25, 3, 12]'),
+  (2, '[3, 14, 3, 1, 3, 25, 3, 12]'),
+  (3, '[3, 16, 3, 3, 3, 22, 3, 9]'),
+  (4, '[9, 19, 22, 6, 22, 13, 9, ]'),
+  (5, '[9, 19, 22, 6, 22, 13, 9, ]'),
+  (6, '[13, 13, 13, 28, 13, 13, 13, 28]'),
+  (7, '[13, 13, 13, 28, 13, 13, 13, 28]')
+) AS t(id, r);
+
+statement ok
+CREATE VIEW ov_timestamp_x AS
+SELECT * FROM (VALUES
+  (1, '[1, 28, 28, 28, 1, 1, 1, 1, 1, 28, 28, 28, 1, 28, 28, 28, 1, 28, 28, 28, 1, 28, 28, 28]'),
+  (2, '[3, 27, 28, 28, 2, 2, 2, 2, 3, 27, 28, 28, 3, 27, 28, 28, 3, 27, 28, 28, 3, 27, 28, 28]'),
+  (3, '[6, 25, 28, 28, 3, 3, 3, 3, 6, 25, 28, 28, 6, 25, 28, 28, 6, 25, 28, 28, 6, 25, 28, 28]'),
+  (4, '[10, 22, 28, 28, 4, 4, 4, 4, 10, 22, 28, 28, 10, 22, 28, 28, 10, 22, 28, 28, 10, 22, 28, 28]'),
+  (5, '[15, 18, 28, 28, 5, 5, 5, 5, 15, 18, 28, 28, 15, 18, 28, 28, 15, 18, 28, 28, 15, 18, 28, 28]'),
+  (6, '[21, 13, 28, 28, 6, 6, 6, 6, 21, 13, 28, 28, 21, 13, 28, 28, 21, 13, 28, 28, 21, 13, 28, 28]'),
+  (7, '[28, 7, 28, 28, 7, 7, 7, 7, 28, 7, 28, 28, 28, 7, 28, 28, 28, 7, 28, 28, 28, 7, 28, 28]')
+) AS t(id, r);
+
+# Every family: how many rows it compared and how many differ from the oracle
+
+statement ok
+CREATE VIEW checks AS
+SELECT name, count(*) AS n, count(*) FILTER (WHERE bad) AS mismatches FROM (
+  SELECT 'rows_moving' AS name, (w.s IS DISTINCT FROM o.s OR w.c IS DISTINCT FROM o.c OR w.mn IS DISTINCT FROM o.mn OR w.mx IS DISTINCT FROM o.mx OR w.av IS DISTINCT FROM o.av OR w.sf IS DISTINCT FROM o.sf OR w.af IS DISTINCT FROM o.af OR w.cf IS DISTINCT FROM o.cf) AS bad
+  FROM rows_moving_w w JOIN rows_moving_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'rows_following', (w.s IS DISTINCT FROM o.s OR w.c IS DISTINCT FROM o.c OR w.mn IS DISTINCT FROM o.mn OR w.mxf IS DISTINCT FROM o.mxf)
+  FROM rows_following_w w JOIN rows_following_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'rows_preceding', (w.s IS DISTINCT FROM o.s OR w.c IS DISTINCT FROM o.c OR w.mx IS DISTINCT FROM o.mx OR w.sf IS DISTINCT FROM o.sf)
+  FROM rows_preceding_w w JOIN rows_preceding_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'rows_running', (w.s IS DISTINCT FROM o.s OR w.c IS DISTINCT FROM o.c OR w.mx IS DISTINCT FROM o.mx OR w.af IS DISTINCT FROM o.af)
+  FROM rows_running_w w JOIN rows_running_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'range_offset', (w.s IS DISTINCT FROM o.s OR w.c IS DISTINCT FROM o.c OR w.mn IS DISTINCT FROM o.mn OR w.mx IS DISTINCT FROM o.mx OR w.af IS DISTINCT FROM o.af)
+  FROM range_offset_w w JOIN range_offset_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'range_desc', (w.s IS DISTINCT FROM o.s OR w.c IS DISTINCT FROM o.c OR w.mn IS DISTINCT FROM o.mn OR w.mx IS DISTINCT FROM o.mx)
+  FROM range_desc_w w JOIN range_desc_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'range_peers', (w.s IS DISTINCT FROM o.s OR w.c IS DISTINCT FROM o.c OR w.mxf IS DISTINCT FROM o.mxf)
+  FROM range_peers_w w JOIN range_peers_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'default_frame', (w.s IS DISTINCT FROM o.s OR w.c IS DISTINCT FROM o.c OR w.mn IS DISTINCT FROM o.mn OR w.af IS DISTINCT FROM o.af)
+  FROM default_frame_w w JOIN default_frame_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'ranks', (w.r IS DISTINCT FROM o.r OR w.dr IS DISTINCT FROM o.dr OR w.pr IS DISTINCT FROM o.pr OR w.cd IS DISTINCT FROM o.cd OR w.rn IS DISTINCT FROM o.rn)
+  FROM ranks_w w JOIN ranks_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'lag_lead', (w.l1 IS DISTINCT FROM o.l1 OR w.l2 IS DISTINCT FROM o.l2 OR w.d1 IS DISTINCT FROM o.d1 OR w.d3 IS DISTINCT FROM o.d3 OR w.lf IS DISTINCT FROM o.lf)
+  FROM lag_lead_w w JOIN lag_lead_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'lag_lead_str', (w.l1 IS DISTINCT FROM o.l1 OR w.l2 IS DISTINCT FROM o.l2 OR w.d1 IS DISTINCT FROM o.d1 OR w.d3 IS DISTINCT FROM o.d3 OR w.dl1 IS DISTINCT FROM o.dl1 OR w.dd2 IS DISTINCT FROM o.dd2)
+  FROM lag_lead_str_w w JOIN lag_lead_str_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'first_last', (w.fv IS DISTINCT FROM o.fv OR w.lv IS DISTINCT FROM o.lv OR w.fp IS DISTINCT FROM o.fp)
+  FROM first_last_w w JOIN first_last_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'filter', (w.s IS DISTINCT FROM o.s OR w.c IS DISTINCT FROM o.c)
+  FROM filter_w w JOIN filter_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'groups', (w.gs IS DISTINCT FROM o.gs OR w.gm IS DISTINCT FROM o.gm OR w.gt IS DISTINCT FROM o.gt)
+  FROM groups_w w JOIN groups_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'mixed', (w.s IS DISTINCT FROM o.s OR w.rn IS DISTINCT FROM o.rn OR w.l1 IS DISTINCT FROM o.l1 OR w.cg IS DISTINCT FROM o.cg OR w.mx IS DISTINCT FROM o.mx)
+  FROM mixed_w w JOIN mixed_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'string_key', (w.s IS DISTINCT FROM o.s OR w.rn IS DISTINCT FROM o.rn)
+  FROM string_key_w w JOIN string_key_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'null_key', (w.s IS DISTINCT FROM o.s OR w.c IS DISTINCT FROM o.c)
+  FROM null_key_w w JOIN null_key_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'range_unsigned', (w.s1 IS DISTINCT FROM o.s1 OR w.m1 IS DISTINCT FROM o.m1 OR w.s2 IS DISTINCT FROM o.s2 OR w.m2 IS DISTINCT FROM o.m2)
+  FROM range_unsigned_w w JOIN range_unsigned_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'range_signed', (w.s1 IS DISTINCT FROM o.s1 OR w.c1 IS DISTINCT FROM o.c1 OR w.s2 IS DISTINCT FROM o.s2 OR w.c2 IS DISTINCT FROM o.c2)
+  FROM range_signed_w w JOIN range_signed_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'range_timestamp', (w.s1 IS DISTINCT FROM o.s1 OR w.c1 IS DISTINCT FROM o.c1 OR w.s2 IS DISTINCT FROM o.s2 OR w.c2 IS DISTINCT FROM o.c2)
+  FROM range_timestamp_w w JOIN range_timestamp_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'range_nullable', (w.s1 IS DISTINCT FROM o.s1 OR w.c1 IS DISTINCT FROM o.c1 OR w.s2 IS DISTINCT FROM o.s2 OR w.c2 IS DISTINCT FROM o.c2 OR w.s3 IS DISTINCT FROM o.s3 OR w.c3 IS DISTINCT FROM o.c3 OR w.s4 IS DISTINCT FROM o.s4 OR w.c4 IS DISTINCT FROM o.c4)
+  FROM range_nullable_w w JOIN range_nullable_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'float_bits', (w.r IS DISTINCT FROM o.r)
+  FROM float_bits_w w JOIN float_bits_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'typed_moving', (w.r IS DISTINCT FROM o.r)
+  FROM typed_moving_w w JOIN typed_moving_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'typed_running', (w.r IS DISTINCT FROM o.r)
+  FROM typed_running_w w JOIN typed_running_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'ignore_nulls', (w.r IS DISTINCT FROM o.r)
+  FROM ignore_nulls_w w JOIN ignore_nulls_o o ON w.id = o.id
+  UNION ALL
+  SELECT 'range_overflow_int8', (w.r IS DISTINCT FROM x.r)
+  FROM ov_int8_w w JOIN ov_int8_x x ON w.id = x.id
+  UNION ALL
+  SELECT 'range_overflow_int64', (w.r IS DISTINCT FROM x.r)
+  FROM ov_int64_w w JOIN ov_int64_x x ON w.id = x.id
+  UNION ALL
+  SELECT 'range_overflow_uint64', (w.r IS DISTINCT FROM x.r)
+  FROM ov_uint64_w w JOIN ov_uint64_x x ON w.id = x.id
+  UNION ALL
+  SELECT 'range_overflow_timestamp', (w.r IS DISTINCT FROM x.r)
+  FROM ov_timestamp_w w JOIN ov_timestamp_x x ON w.id = x.id
+) AS compared
+GROUP BY name;
+
+###########
+# Each family compares every row, and none differs, whatever the batch size
+###########
+
+query IIIT
+SELECT count(*), sum(n), sum(mismatches), string_agg(name, ',' ORDER BY name) FILTER (WHERE mismatches > 0) FROM checks;
+----
+29 15140 0 NULL
+
+# One row per batch: no run of complete partitions, every partition streams through
+
+statement ok
+set datafusion.execution.batch_size = 1;
+
+query IIIT
+SELECT count(*), sum(n), sum(mismatches), string_agg(name, ',' ORDER BY name) FILTER (WHERE mismatches > 0) FROM checks;
+----
+29 15140 0 NULL
+
+# Batches that end inside partitions of every size
+
+statement ok
+set datafusion.execution.batch_size = 7;
+
+query IIIT
+SELECT count(*), sum(n), sum(mismatches), string_agg(name, ',' ORDER BY name) FILTER (WHERE mismatches > 0) FROM checks;
+----
+29 15140 0 NULL
+
+# A run of complete partitions in the first batch, with no open partition before it
+
+statement ok
+set datafusion.execution.batch_size = 50;
+
+query IIIT
+SELECT count(*), sum(n), sum(mismatches), string_agg(name, ',' ORDER BY name) FILTER (WHERE mismatches > 0) FROM checks;
+----
+29 15140 0 NULL
+
+# Batches that start inside a partition and hold four or more complete partitions after it:
+# the first rows complete the open partition, the run after them is evaluated in one call
+
+statement ok
+set datafusion.execution.batch_size = 70;
+
+query IIIT
+SELECT count(*), sum(n), sum(mismatches), string_agg(name, ',' ORDER BY name) FILTER (WHERE mismatches > 0) FROM checks;
+----
+29 15140 0 NULL
+
+statement ok
+set datafusion.execution.batch_size = 100;
+
+query IIIT
+SELECT count(*), sum(n), sum(mismatches), string_agg(name, ',' ORDER BY name) FILTER (WHERE mismatches > 0) FROM checks;
+----
+29 15140 0 NULL
+
+# One batch for the whole table, and one batch less one row
+
+statement ok
+set datafusion.execution.batch_size = 599;
+
+query IIIT
+SELECT count(*), sum(n), sum(mismatches), string_agg(name, ',' ORDER BY name) FILTER (WHERE mismatches > 0) FROM checks;
+----
+29 15140 0 NULL
+
+statement ok
+set datafusion.execution.batch_size = 8192;
+
+###########
+# Columns the window expressions do not read pass through unchanged
+###########
+
+# `wide` interleaves columns of several types between the ones the windows read
+
+statement ok
+CREATE VIEW wide AS
+SELECT
+  CAST(id AS VARCHAR) AS p1,
+  id,
+  CAST(id AS DECIMAL(12, 2)) / 8 AS p2,
+  k,
+  make_array(id, id + 1) AS p3,
+  tie,
+  CASE WHEN id % 7 = 0 THEN NULL ELSE named_struct('a', id, 'b', CAST(k AS VARCHAR)) END AS p4,
+  ts,
+  id % 3 = 0 AS p5,
+  v,
+  arrow_cast(id, 'Timestamp(Nanosecond, None)') AS p6,
+  f,
+  CASE WHEN id % 4 = 0 THEN NULL ELSE CAST(id AS VARCHAR) || '-' || CAST(k AS VARCHAR) END AS p7
+FROM wb;
+
+# The window functions read some of the columns; `wide_w` reads six of thirteen
+
+statement ok
+CREATE VIEW wide_w AS
+SELECT *,
+  sum(v) OVER (PARTITION BY k ORDER BY id ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) AS s,
+  avg(f) OVER (PARTITION BY k ORDER BY id RANGE BETWEEN 4 PRECEDING AND 2 FOLLOWING) AS af,
+  rank() OVER (PARTITION BY k ORDER BY tie) AS r,
+  lag(v) OVER (PARTITION BY k ORDER BY id) AS l1,
+  sum(v) FILTER (WHERE f IS NOT NULL) OVER (PARTITION BY k ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS fs
+FROM wide;
+
+# The same functions over the table that has nothing else
+
+statement ok
+CREATE VIEW narrow_w AS
+SELECT id,
+  sum(v) OVER (PARTITION BY k ORDER BY id ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) AS s,
+  avg(f) OVER (PARTITION BY k ORDER BY id RANGE BETWEEN 4 PRECEDING AND 2 FOLLOWING) AS af,
+  rank() OVER (PARTITION BY k ORDER BY tie) AS r,
+  lag(v) OVER (PARTITION BY k ORDER BY id) AS l1,
+  sum(v) FILTER (WHERE f IS NOT NULL) OVER (PARTITION BY k ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS fs
+FROM wb;
+
+statement ok
+CREATE VIEW wide_checks AS
+SELECT count(*) AS n,
+  count(*) FILTER (WHERE x.s IS DISTINCT FROM y.s OR x.af IS DISTINCT FROM y.af OR x.r IS DISTINCT FROM y.r
+                     OR x.l1 IS DISTINCT FROM y.l1 OR x.fs IS DISTINCT FROM y.fs) AS window_mismatches,
+  count(*) FILTER (WHERE x.p1 IS DISTINCT FROM z.p1 OR x.p2 IS DISTINCT FROM z.p2 OR CAST(x.p3 AS VARCHAR) IS DISTINCT FROM CAST(z.p3 AS VARCHAR)
+                     OR (x.p4 IS NULL) IS DISTINCT FROM (z.p4 IS NULL) OR x.p4['a'] IS DISTINCT FROM z.p4['a'] OR x.p4['b'] IS DISTINCT FROM z.p4['b'] OR x.p5 IS DISTINCT FROM z.p5 OR x.p6 IS DISTINCT FROM z.p6
+                     OR x.p7 IS DISTINCT FROM z.p7 OR x.k IS DISTINCT FROM z.k OR x.tie IS DISTINCT FROM z.tie
+                     OR x.ts IS DISTINCT FROM z.ts OR x.v IS DISTINCT FROM z.v OR x.f IS DISTINCT FROM z.f) AS passthrough_mismatches
+FROM wide_w x JOIN narrow_w y ON x.id = y.id JOIN wide z ON x.id = z.id;
+
+query III
+SELECT * FROM wide_checks;
+----
+600 0 0
+
+statement ok
+set datafusion.execution.batch_size = 7;
+
+query III
+SELECT * FROM wide_checks;
+----
+600 0 0
+
+statement ok
+set datafusion.execution.batch_size = 1;
+
+query III
+SELECT * FROM wide_checks;
+----
+600 0 0
+
+statement ok
+set datafusion.execution.batch_size = 8192;
+
+# A window function that reads no column at all: the operator buffers batches without columns
+
+query IIB
+SELECT id, row_number() OVER () AS rn, p5 FROM wide WHERE id < 5 ORDER BY id;
+----
+0 1 true
+1 2 false
+2 3 false
+3 4 true
+4 5 false
+
+statement ok
+set datafusion.execution.target_partitions = 4;

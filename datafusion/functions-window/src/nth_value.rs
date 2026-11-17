@@ -511,6 +511,15 @@ impl PartitionEvaluator for NthValueEvaluator {
         }
     }
 
+    fn evaluate_segments(
+        &mut self,
+        values: &[ArrayRef],
+        _segments: &[Range<usize>],
+        frames: &[Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        self.evaluate_ranges(values, frames).map(Some)
+    }
+
     fn supports_bounded_execution(&self) -> bool {
         true
     }

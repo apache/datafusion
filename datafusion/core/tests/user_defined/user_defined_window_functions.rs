@@ -13,7 +13,7 @@ use arrow::datatypes::{DataType, Field, Metadata, Schema};
 use arrow_schema::FieldRef;
 use datafusion::common::test_util::batches_to_string;
 use datafusion::common::{Result, ScalarValue};
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::exec_datafusion_err;
 use datafusion_expr::ptr_eq::PtrEq;
 use datafusion_expr::{
@@ -369,6 +369,32 @@ async fn test_udwf_bounded_window_returns_null() {
     assert_eq!(test_state.evaluate_all_called(), 0);
 }
 
+/// The evaluator of a function that uses the window frame is created for each partition, also when
+/// many partitions end inside one input batch: its own state starts again in every partition.
+#[tokio::test]
+async fn test_stateful_udwf_evaluator_per_partition() -> Result<()> {
+    let config = SessionConfig::new().with_target_partitions(1);
+    let ctx = SessionContext::new_with_config(config);
+    // sixteen partitions of three rows in one input batch
+    let x = Int64Array::from_iter_values((0..48).map(|i| i / 3));
+    let y = Int64Array::from_iter_values((0..48).map(|i| i % 3));
+    let batch = RecordBatch::try_from_iter(vec![
+        ("x", Arc::new(x) as ArrayRef),
+        ("y", Arc::new(y) as ArrayRef),
+    ])?;
+    ctx.register_batch("t", batch)?;
+    ctx.register_udwf(WindowUDF::from(CallCounter::new()));
+
+    let sql = "SELECT x, y, call_counter(y) OVER \
+         (PARTITION BY x ORDER BY y ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS n \
+         FROM t ORDER BY x, y";
+    let actual = execute(&ctx, sql).await?;
+    let batch = arrow::compute::concat_batches(&actual[0].schema(), &actual)?;
+    let n: &Int64Array = batch.column(2).as_primitive();
+    assert_eq!(n.values().to_vec(), [1, 2, 3].repeat(16));
+    Ok(())
+}
+
 async fn execute(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
 }
@@ -621,6 +647,69 @@ impl PartitionEvaluator for OddCounter {
 
     fn include_rank(&self) -> bool {
         self.test_state.include_rank
+    }
+}
+
+/// A window function that returns how many times `evaluate` was called on its evaluator so far
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct CallCounter {
+    signature: Signature,
+}
+
+impl CallCounter {
+    fn new() -> Self {
+        Self {
+            signature: Signature::exact(vec![DataType::Int64], Volatility::Immutable),
+        }
+    }
+}
+
+impl WindowUDFImpl for CallCounter {
+    fn name(&self) -> &str {
+        "call_counter"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn partition_evaluator(
+        &self,
+        _: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
+        Ok(Box::new(CallCountEvaluator { calls: 0 }))
+    }
+
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Field::new(field_args.name(), DataType::Int64, false).into())
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
+    }
+}
+
+#[derive(Debug)]
+struct CallCountEvaluator {
+    calls: i64,
+}
+
+impl PartitionEvaluator for CallCountEvaluator {
+    fn evaluate(
+        &mut self,
+        _values: &[ArrayRef],
+        _range: &Range<usize>,
+    ) -> Result<ScalarValue> {
+        self.calls += 1;
+        Ok(ScalarValue::Int64(Some(self.calls)))
+    }
+
+    fn supports_bounded_execution(&self) -> bool {
+        true
+    }
+
+    fn uses_window_frame(&self) -> bool {
+        true
     }
 }
 

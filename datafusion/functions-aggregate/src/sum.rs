@@ -502,6 +502,46 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
     fn size(&self) -> usize {
         size_of_val(self)
     }
+
+    fn evaluate_window_frames(
+        &mut self,
+        values: &[ArrayRef],
+        last_range: &std::ops::Range<usize>,
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        let arr = values[0].as_primitive::<T>();
+        let mut sum = self.sum.unwrap_or_else(|| T::Native::usize_as(0));
+        let mut count = self.sum.is_some() as u64;
+        let out = datafusion_functions_aggregate_common::window_kernels::sum_frames::<T>(
+            arr,
+            &mut sum,
+            &mut count,
+            last_range,
+            frames,
+            false,
+            &self.data_type,
+        );
+        self.sum = (count > 0).then_some(sum);
+        Ok(Some(out))
+    }
+
+    fn evaluate_window_segments(
+        &mut self,
+        values: &[ArrayRef],
+        segments: &[std::ops::Range<usize>],
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        let arr = values[0].as_primitive::<T>();
+        Ok(Some(
+            datafusion_functions_aggregate_common::window_kernels::sum_frames_segments::<T>(
+                arr,
+                segments,
+                frames,
+                false,
+                &self.data_type,
+            ),
+        ))
+    }
 }
 
 /// This accumulator incrementally computes sums over a sliding window
@@ -574,6 +614,44 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
 
     fn supports_retract_batch(&self) -> bool {
         true
+    }
+
+    fn evaluate_window_frames(
+        &mut self,
+        values: &[ArrayRef],
+        last_range: &std::ops::Range<usize>,
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        let arr = values[0].as_primitive::<T>();
+        Ok(Some(
+            datafusion_functions_aggregate_common::window_kernels::sum_frames::<T>(
+                arr,
+                &mut self.sum,
+                &mut self.count,
+                last_range,
+                frames,
+                true,
+                &self.data_type,
+            ),
+        ))
+    }
+
+    fn evaluate_window_segments(
+        &mut self,
+        values: &[ArrayRef],
+        segments: &[std::ops::Range<usize>],
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        let arr = values[0].as_primitive::<T>();
+        Ok(Some(
+            datafusion_functions_aggregate_common::window_kernels::sum_frames_segments::<T>(
+                arr,
+                segments,
+                frames,
+                true,
+                &self.data_type,
+            ),
+        ))
     }
 }
 

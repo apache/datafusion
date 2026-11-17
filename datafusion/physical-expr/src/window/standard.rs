@@ -5,10 +5,14 @@
 //! Physical exec for standard window function expressions.
 
 use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 use super::{StandardWindowFunctionExpr, WindowExpr};
-use crate::window::window_expr::{WindowEvalContext, WindowFn, get_orderby_values};
+use crate::window::window_expr::{
+    CompletePartitions, WindowEvalContext, WindowFn,
+    evaluate_complete_partitions_stateful, get_orderby_values,
+};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{EquivalenceProperties, PhysicalExpr};
 
@@ -72,6 +76,45 @@ impl StandardWindowExpr {
     }
 }
 
+impl StandardWindowExpr {
+    /// [`WindowExpr::evaluate_complete_partitions`] in one pass over all partitions,
+    /// for the functions that provide one. `None` when this function, frame or column type has none, or
+    /// when a `RANGE` key or its search target lies outside the range in which the per-row code is exact.
+    fn evaluate_segments(
+        &self,
+        batch: &RecordBatch,
+        partitions: &[Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        if batch.num_rows() == 0 {
+            return Ok(None);
+        }
+        let mut evaluator = self.expr.create_evaluator()?;
+        let mut values = self.evaluate_args(batch)?;
+        let out = if evaluator.uses_window_frame() {
+            let order_bys = get_orderby_values(self.order_by_columns(batch)?);
+            let sort_options = self.order_by.iter().map(|o| o.options).collect();
+            let mut window_frame_ctx =
+                WindowFrameContext::new(Arc::clone(&self.window_frame), sort_options);
+            let mut frames = Vec::with_capacity(batch.num_rows());
+            if !window_frame_ctx.calculate_ranges_segmented(
+                &order_bys,
+                partitions,
+                &mut frames,
+            )? {
+                return Ok(None);
+            }
+            values.extend(order_bys);
+            evaluator.evaluate_segments(&values, partitions, &frames)?
+        } else {
+            if evaluator.include_rank() {
+                values.extend(get_orderby_values(self.order_by_columns(batch)?));
+            }
+            evaluator.evaluate_segments(&values, partitions, &[])?
+        };
+        Ok(out)
+    }
+}
+
 impl WindowExpr for StandardWindowExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -113,16 +156,14 @@ impl WindowExpr for StandardWindowExpr {
 
             let mut window_frame_ctx =
                 WindowFrameContext::new(Arc::clone(&self.window_frame), sort_options);
-            // We iterate on each row to calculate its window frame range
-            for idx in 0..num_rows {
-                let range = window_frame_ctx.calculate_range(
-                    order_bys_ref,
-                    ranges.last().unwrap_or(&(0..0)),
-                    num_rows,
-                    idx,
-                )?;
-                ranges.push(range);
-            }
+            window_frame_ctx.calculate_ranges(
+                order_bys_ref,
+                &(0..0),
+                num_rows,
+                0,
+                false,
+                &mut ranges,
+            )?;
             evaluator.evaluate_ranges(&values, &ranges)
         } else if evaluator.include_rank() {
             let columns = self.order_by_columns(batch)?;
@@ -132,6 +173,16 @@ impl WindowExpr for StandardWindowExpr {
             let values = self.evaluate_args(batch)?;
             evaluator.evaluate_all(&values, num_rows)
         }
+    }
+
+    fn evaluate_complete_partitions(
+        &self,
+        block: &CompletePartitions<'_>,
+    ) -> Result<ArrayRef> {
+        if let Some(out) = self.evaluate_segments(block.batch(), block.ranges())? {
+            return Ok(out);
+        }
+        evaluate_complete_partitions_stateful(self, block)
     }
 
     /// Evaluate the window function against the batch. This function facilitates
@@ -201,44 +252,62 @@ impl WindowExpr for StandardWindowExpr {
             } else {
                 evaluator.is_causal()
             };
-            for idx in state.last_calculated_index..num_rows {
-                let frame_range = if uses_window_frame {
-                    state
-                        .window_frame_ctx
-                        .get_or_insert_with(|| {
-                            WindowFrameContext::new(
-                                Arc::clone(&self.window_frame),
-                                sort_options.clone(),
-                            )
-                        })
-                        .calculate_range(
-                            order_bys_ref,
-                            // Start search from the last range
-                            &state.window_frame_range,
-                            num_rows,
-                            idx,
+            if uses_window_frame {
+                let stop_at_length = !is_causal && !partition_batch_state.is_end;
+                state
+                    .window_frame_ctx
+                    .get_or_insert_with(|| {
+                        WindowFrameContext::new(
+                            Arc::clone(&self.window_frame),
+                            sort_options.clone(),
                         )
-                } else {
-                    evaluator.get_range(idx, num_rows)
-                }?;
-
-                // Exit if the range is non-causal and extends all the way:
-                if frame_range.end == num_rows
-                    && !is_causal
-                    && !partition_batch_state.is_end
-                {
-                    break;
+                    })
+                    .calculate_ranges(
+                        order_bys_ref,
+                        // Start search from the last range
+                        &state.window_frame_range,
+                        num_rows,
+                        state.last_calculated_index,
+                        stop_at_length,
+                        &mut frame_ranges,
+                    )?;
+                if let Some(last) = frame_ranges.last() {
+                    state.window_frame_range = last.clone();
                 }
-                // Update last range
-                state.window_frame_range = frame_range;
-                if uses_window_frame {
-                    frame_ranges.push(state.window_frame_range.clone());
-                } else {
+            }
+            let mut bulk_out: Option<ArrayRef> = None;
+            if !uses_window_frame && is_causal && num_rows > state.last_calculated_index {
+                bulk_out = evaluator.evaluate_rows(
+                    &values,
+                    state.last_calculated_index,
+                    num_rows,
+                )?;
+                if bulk_out.is_some() {
+                    // The range the row-by-row loop would have left behind (it drives state
+                    // pruning).
+                    state.window_frame_range =
+                        evaluator.get_range(num_rows - 1, num_rows)?;
+                }
+            }
+            if !uses_window_frame && bulk_out.is_none() {
+                for idx in state.last_calculated_index..num_rows {
+                    let frame_range = evaluator.get_range(idx, num_rows)?;
+                    // Exit if the range is non-causal and extends all the way:
+                    if frame_range.end == num_rows
+                        && !is_causal
+                        && !partition_batch_state.is_end
+                    {
+                        break;
+                    }
+                    // Update last range
+                    state.window_frame_range = frame_range;
                     row_wise_results
                         .push(evaluator.evaluate(&values, &state.window_frame_range)?);
                 }
             }
-            let out_col = if !frame_ranges.is_empty() {
+            let out_col = if let Some(out) = bulk_out {
+                out
+            } else if !frame_ranges.is_empty() {
                 evaluator.evaluate_ranges(&values, &frame_ranges)?
             } else if row_wise_results.is_empty() {
                 new_empty_array(out_type)

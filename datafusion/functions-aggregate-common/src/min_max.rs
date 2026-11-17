@@ -439,6 +439,93 @@ fn min_max_scalar_same_variant(
     Ok(result)
 }
 
+/// Running MIN/MAX over frames for the primitive types the typed kernel supports.
+fn running_extreme_dispatch<const MAX: bool>(
+    state: &mut ScalarValue,
+    values: &ArrayRef,
+    last: &std::ops::Range<usize>,
+    frames: &[std::ops::Range<usize>],
+) -> Result<Option<ArrayRef>> {
+    use arrow::array::{Array, AsArray};
+    use arrow::datatypes::*;
+    macro_rules! go {
+        ($T:ty) => {{
+            let arr = values.as_primitive::<$T>();
+            let sv = state.to_array()?;
+            let st = sv.as_primitive::<$T>();
+            let mut cur = st.is_valid(0).then(|| st.value(0));
+            let out = crate::window_kernels::running_extreme_frames::<$T, MAX>(
+                arr,
+                &mut cur,
+                last,
+                frames,
+                values.data_type(),
+            );
+            *state = ScalarValue::new_primitive::<$T>(cur, values.data_type())?;
+            Ok(Some(out))
+        }};
+    }
+    match values.data_type() {
+        DataType::Int8 => go!(Int8Type),
+        DataType::Int16 => go!(Int16Type),
+        DataType::Int32 => go!(Int32Type),
+        DataType::Int64 => go!(Int64Type),
+        DataType::UInt8 => go!(UInt8Type),
+        DataType::UInt16 => go!(UInt16Type),
+        DataType::UInt32 => go!(UInt32Type),
+        DataType::UInt64 => go!(UInt64Type),
+        DataType::Date32 => go!(Date32Type),
+        DataType::Date64 => go!(Date64Type),
+        DataType::Timestamp(TimeUnit::Second, _) => go!(TimestampSecondType),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => go!(TimestampMillisecondType),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => go!(TimestampMicrosecondType),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => go!(TimestampNanosecondType),
+        DataType::Decimal128(_, _) => go!(Decimal128Type),
+        _ => Ok(None),
+    }
+}
+
+/// Running MIN/MAX over the frames of several complete partitions.
+fn running_extreme_segments_dispatch<const MAX: bool>(
+    values: &ArrayRef,
+    segments: &[std::ops::Range<usize>],
+    frames: &[std::ops::Range<usize>],
+) -> Result<Option<ArrayRef>> {
+    use arrow::array::AsArray;
+    use arrow::datatypes::*;
+    macro_rules! go {
+        ($T:ty) => {{
+            let arr = values.as_primitive::<$T>();
+            Ok(Some(
+                crate::window_kernels::running_extreme_frames_segments::<$T, MAX>(
+                    arr,
+                    segments,
+                    frames,
+                    values.data_type(),
+                ),
+            ))
+        }};
+    }
+    match values.data_type() {
+        DataType::Int8 => go!(Int8Type),
+        DataType::Int16 => go!(Int16Type),
+        DataType::Int32 => go!(Int32Type),
+        DataType::Int64 => go!(Int64Type),
+        DataType::UInt8 => go!(UInt8Type),
+        DataType::UInt16 => go!(UInt16Type),
+        DataType::UInt32 => go!(UInt32Type),
+        DataType::UInt64 => go!(UInt64Type),
+        DataType::Date32 => go!(Date32Type),
+        DataType::Date64 => go!(Date64Type),
+        DataType::Timestamp(TimeUnit::Second, _) => go!(TimestampSecondType),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => go!(TimestampMillisecondType),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => go!(TimestampMicrosecondType),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => go!(TimestampNanosecondType),
+        DataType::Decimal128(_, _) => go!(Decimal128Type),
+        _ => Ok(None),
+    }
+}
+
 /// An accumulator to compute the maximum value
 #[derive(Debug, Clone)]
 pub struct MaxAccumulator {
@@ -477,6 +564,24 @@ impl Accumulator for MaxAccumulator {
 
     fn size(&self) -> usize {
         size_of_val(self) - size_of_val(&self.max) + self.max.size()
+    }
+
+    fn evaluate_window_frames(
+        &mut self,
+        values: &[ArrayRef],
+        last_range: &std::ops::Range<usize>,
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        running_extreme_dispatch::<true>(&mut self.max, &values[0], last_range, frames)
+    }
+
+    fn evaluate_window_segments(
+        &mut self,
+        values: &[ArrayRef],
+        segments: &[std::ops::Range<usize>],
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        running_extreme_segments_dispatch::<true>(&values[0], segments, frames)
     }
 }
 
@@ -519,6 +624,24 @@ impl Accumulator for MinAccumulator {
 
     fn size(&self) -> usize {
         size_of_val(self) - size_of_val(&self.min) + self.min.size()
+    }
+
+    fn evaluate_window_frames(
+        &mut self,
+        values: &[ArrayRef],
+        last_range: &std::ops::Range<usize>,
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        running_extreme_dispatch::<false>(&mut self.min, &values[0], last_range, frames)
+    }
+
+    fn evaluate_window_segments(
+        &mut self,
+        values: &[ArrayRef],
+        segments: &[std::ops::Range<usize>],
+        frames: &[std::ops::Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        running_extreme_segments_dispatch::<false>(&values[0], segments, frames)
     }
 }
 

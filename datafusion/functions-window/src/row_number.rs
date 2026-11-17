@@ -143,6 +143,33 @@ impl PartitionEvaluator for NumRowsEvaluator {
         Ok(ScalarValue::UInt64(Some(self.n_rows as u64)))
     }
 
+    fn evaluate_rows(
+        &mut self,
+        _values: &[ArrayRef],
+        start: usize,
+        end: usize,
+    ) -> Result<Option<ArrayRef>> {
+        let first = self.n_rows as u64 + 1;
+        self.n_rows += end - start;
+        Ok(Some(Arc::new(UInt64Array::from_iter_values(
+            first..first + (end - start) as u64,
+        ))))
+    }
+
+    fn evaluate_segments(
+        &mut self,
+        _values: &[ArrayRef],
+        segments: &[Range<usize>],
+        _frames: &[Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        let n = segments.last().map_or(0, |s| s.end);
+        let mut out: Vec<u64> = Vec::with_capacity(n);
+        for seg in segments {
+            out.extend(1..=(seg.end - seg.start) as u64);
+        }
+        Ok(Some(Arc::new(UInt64Array::from(out))))
+    }
+
     fn supports_bounded_execution(&self) -> bool {
         true
     }

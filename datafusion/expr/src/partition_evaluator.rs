@@ -214,6 +214,48 @@ pub trait PartitionEvaluator: Debug + Send + std::any::Any {
         ScalarValue::iter_to_array(results)
     }
 
+    /// Evaluates the rows `start..end` of the buffered partition in one call, returning one
+    /// result per row, in the same state-updating order as calling [`Self::evaluate`] for each
+    /// row. Only used for causal functions that do not use the window frame; `None` (the
+    /// default) makes the caller call [`Self::evaluate`] row by row. The caller calls
+    /// [`Self::get_range`] once afterwards, for the last row, not before every row, so a function
+    /// whose `get_range` reads state that `evaluate` updates must not implement this.
+    fn evaluate_rows(
+        &mut self,
+        _values: &[ArrayRef],
+        _start: usize,
+        _end: usize,
+    ) -> Result<Option<ArrayRef>> {
+        Ok(None)
+    }
+
+    /// The results of a run of complete partitions in one call.
+    ///
+    /// This evaluator is fresh. `segments` are consecutive row ranges that cover `values`, each one
+    /// a complete, independent partition (`values` are the arguments of the function and, for
+    /// functions that [`Self::include_rank`] or [use the window frame](Self::uses_window_frame),
+    /// the ORDER BY columns). For a function that uses the window frame, `frames` holds the frame
+    /// of every row as absolute indices into `values`, inside the row's own segment; for the other
+    /// functions it is empty. Returning `Ok(Some(array))` means `array` holds one result per row,
+    /// equal to what a fresh evaluator gives for that partition when it is evaluated alone, row by
+    /// row. The state of the evaluator afterwards is unspecified. `None` (the default) makes the
+    /// caller evaluate one partition at a time, with one evaluator per partition.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    fn evaluate_segments(
+        &mut self,
+        _values: &[ArrayRef],
+        _segments: &[Range<usize>],
+        _frames: &[Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        Ok(None)
+    }
+
     /// [`PartitionEvaluator::evaluate_all_with_rank`] is called for window
     /// functions that only need the rank of a row within its window
     /// frame.
