@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::SubstraitConsumerContext;
+use crate::logical_plan::consumer::type_resolution::ResolvedNames;
 
 use super::aggregate_function::validate_aggregation_phase;
 use crate::logical_plan::consumer::{
@@ -103,7 +104,7 @@ pub async fn from_window_function(
             AggregationInvocation::Distinct => true,
         };
 
-    Ok(Expr::from(expr::WindowFunction {
+    let consumed = Expr::from(expr::WindowFunction {
         fun,
         params: WindowFunctionParams {
             args,
@@ -120,7 +121,13 @@ pub async fn from_window_function(
             null_treatment: None,
             distinct,
         },
-    }))
+    });
+    Ok(ResolvedNames::resolve_expression(
+        consumed,
+        window,
+        input_schema,
+        context,
+    ))
 }
 
 fn from_substrait_bound(

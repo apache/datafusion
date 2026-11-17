@@ -7,28 +7,39 @@
 //! Type shapes describe only nesting and field-name variables. Leaf types,
 //! nullability and coercion remain the responsibility of the existing consumer.
 //! References share their producer's shape, so constraints cross projections and
-//! relation boundaries without inspecting or rebuilding DataFusion plans.
+//! relation boundaries. Expressions whose names remain unknown use their actual
+//! DataFusion types during conversion, including function-specific coercion.
+
+mod fallback;
+
+pub(super) use fallback::resolve_set_inputs;
 
 use super::{
     SubstraitConsumer, SubstraitConsumerContext, name_to_op, substrait_fun_name,
     substrait_to_df_name,
 };
 use crate::variation_const::DICTIONARY_MAP_TYPE_VARIATION_REF;
+use datafusion::common::DFSchema;
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::core::coalesce::CoalesceFunc;
 use datafusion::functions::core::named_struct::NamedStructFunc;
 use datafusion::functions_window::lead_lag::WindowShift;
+use datafusion::logical_expr::Expr;
 use datafusion::logical_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, Operator, TypeSignature,
 };
+use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::sync::{Arc, Weak};
 use substrait::proto::expression::field_reference::RootType;
 use substrait::proto::expression::literal::LiteralType;
 use substrait::proto::expression::nested::NestedType;
 use substrait::proto::expression::reference_segment::ReferenceType;
+use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::{Cast, Literal, RexType};
 use substrait::proto::function_argument::ArgType;
+use substrait::proto::join_rel::JoinType;
 use substrait::proto::rel::RelType;
 use substrait::proto::rel_common::EmitKind;
 use substrait::proto::r#type::Kind;
@@ -36,6 +47,11 @@ use substrait::proto::{Expression, FunctionArgument, Rel, RelCommon, Type};
 
 type ShapeId = usize;
 type NameId = usize;
+type ExpressionId = (TypeId, usize);
+
+fn expression_id<T: 'static>(value: &T) -> ExpressionId {
+    (TypeId::of::<T>(), std::ptr::from_ref(value).addr())
+}
 
 #[derive(Clone)]
 enum Shape {
@@ -83,6 +99,7 @@ pub(super) struct ResolvedNames {
     // A custom consumer may save a context beyond this conversion. Such a
     // context must not apply node identities to a later protobuf allocation.
     scope: Weak<()>,
+    resolved_expressions: HashSet<ExpressionId>,
 }
 
 impl ResolvedNames {
@@ -124,19 +141,20 @@ impl ResolvedNames {
                     _ => None,
                 },
                 Err(_)
-                    if matches!(
-                        name_to_op(name),
-                        Some(
-                            Operator::Eq
-                                | Operator::NotEq
-                                | Operator::Lt
-                                | Operator::LtEq
-                                | Operator::Gt
-                                | Operator::GtEq
-                                | Operator::IsDistinctFrom
-                                | Operator::IsNotDistinctFrom
-                        )
-                    ) =>
+                    if name == "between"
+                        || matches!(
+                            name_to_op(name),
+                            Some(
+                                Operator::Eq
+                                    | Operator::NotEq
+                                    | Operator::Lt
+                                    | Operator::LtEq
+                                    | Operator::Gt
+                                    | Operator::GtEq
+                                    | Operator::IsDistinctFrom
+                                    | Operator::IsNotDistinctFrom
+                            )
+                        ) =>
                 {
                     Some(FunctionRule::CommonArguments)
                 }
@@ -150,6 +168,24 @@ impl ResolvedNames {
         let scope = Arc::new(());
         let resolved = inference.finish(Arc::downgrade(&scope));
         (context.with_extension(Arc::new(resolved)), scope)
+    }
+
+    pub(super) fn resolve_expression<T: 'static>(
+        mut expr: Expr,
+        proto: &T,
+        schema: &DFSchema,
+        context: &SubstraitConsumerContext,
+    ) -> Expr {
+        let prepared = context.get_extension::<Self>();
+        if prepared.as_ref().is_none_or(|prepared| {
+            !prepared.is_active()
+                || !prepared
+                    .resolved_expressions
+                    .contains(&expression_id(proto))
+        }) {
+            fallback::resolve_expression(&mut expr, schema);
+        }
+        expr
     }
 
     pub(super) fn is_active(&self) -> bool {
@@ -180,6 +216,8 @@ struct Inference {
     annotations: Vec<(NodeId, ShapeId)>,
     functions: HashMap<u32, FunctionRule>,
     window_shifts: HashSet<u32>,
+    outer_inputs: Vec<Vec<ShapeId>>,
+    expressions: Vec<(ExpressionId, Range<usize>)>,
 }
 
 impl Inference {
@@ -396,25 +434,47 @@ impl Inference {
     }
 
     fn expression(&mut self, expr: &Expression, input: &[ShapeId]) -> ShapeId {
+        let start = self.annotations.len();
+        let shape = self.expression_shape(expr, input);
+        let id = match expr.rex_type.as_ref() {
+            Some(RexType::ScalarFunction(function)) => Some(expression_id(function)),
+            Some(RexType::WindowFunction(function)) => Some(expression_id(function)),
+            Some(RexType::IfThen(case)) => Some(expression_id(case.as_ref())),
+            Some(RexType::SingularOrList(list)) => Some(expression_id(list.as_ref())),
+            Some(RexType::Nested(nested)) => Some(expression_id(nested)),
+            _ => None,
+        };
+        if let Some(id) = id {
+            self.expressions.push((id, start..self.annotations.len()));
+        }
+        shape
+    }
+
+    fn expression_shape(&mut self, expr: &Expression, input: &[ShapeId]) -> ShapeId {
         match expr.rex_type.as_ref() {
             Some(RexType::Literal(literal)) => {
                 let shape = self.literal(literal);
                 self.annotations.push((NodeId::literal(literal), shape));
                 shape
             }
-            Some(RexType::Selection(selection))
-                if matches!(
-                    selection.root_type,
-                    None | Some(RootType::RootReference(_))
-                ) =>
-            {
+            Some(RexType::Selection(selection)) => {
                 use substrait::proto::expression::field_reference::ReferenceType::DirectReference;
+                let input = match &selection.root_type {
+                    None | Some(RootType::RootReference(_)) => Some(input),
+                    Some(RootType::OuterReference(reference)) => self
+                        .outer_inputs
+                        .len()
+                        .checked_sub(reference.steps_out as usize)
+                        .and_then(|index| self.outer_inputs.get(index))
+                        .map(Vec::as_slice),
+                    _ => None,
+                };
                 if let Some(DirectReference(reference)) = &selection.reference_type
                     && let Some(ReferenceType::StructField(field)) =
                         &reference.reference_type
                     && field.child.is_none()
                     && let Ok(index) = usize::try_from(field.field)
-                    && let Some(shape) = input.get(index)
+                    && let Some(shape) = input.and_then(|input| input.get(index))
                 {
                     return *shape;
                 }
@@ -515,6 +575,47 @@ impl Inference {
                 }
                 output
             }
+            Some(RexType::Subquery(query)) => {
+                let output = match &query.subquery_type {
+                    Some(SubqueryType::Scalar(query)) => self
+                        .subquery_input(query.input.as_deref(), input)
+                        .and_then(|output| output.first().copied()),
+                    Some(SubqueryType::InPredicate(query)) => {
+                        let needles = query
+                            .needles
+                            .iter()
+                            .map(|expr| self.expression(expr, input))
+                            .collect::<Vec<_>>();
+                        if let Some(haystack) =
+                            self.subquery_input(query.haystack.as_deref(), input)
+                        {
+                            for (needle, value) in needles.into_iter().zip(haystack) {
+                                self.equate(needle, value);
+                            }
+                        }
+                        None
+                    }
+                    Some(SubqueryType::SetPredicate(query)) => {
+                        self.subquery_input(query.tuples.as_deref(), input);
+                        None
+                    }
+                    Some(SubqueryType::SetComparison(query)) => {
+                        let left = query
+                            .left
+                            .as_deref()
+                            .map(|expr| self.expression(expr, input));
+                        let right = self
+                            .subquery_input(query.right.as_deref(), input)
+                            .and_then(|output| output.first().copied());
+                        if let (Some(left), Some(right)) = (left, right) {
+                            self.equate(left, right);
+                        }
+                        None
+                    }
+                    None => None,
+                };
+                output.unwrap_or_else(|| self.shape(Shape::Leaf))
+            }
             Some(RexType::Nested(nested)) => match &nested.nested_type {
                 Some(NestedType::List(list)) => {
                     let elements = list
@@ -545,6 +646,17 @@ impl Inference {
         self.rel(rel?)
     }
 
+    fn subquery_input(
+        &mut self,
+        rel: Option<&Rel>,
+        outer: &[ShapeId],
+    ) -> Option<Vec<ShapeId>> {
+        self.outer_inputs.push(outer.to_vec());
+        let output = self.input(rel);
+        self.outer_inputs.pop();
+        output
+    }
+
     #[expect(deprecated)]
     fn rel(&mut self, rel: &Rel) -> Option<Vec<ShapeId>> {
         let (output, common) = match rel.rel_type.as_ref() {
@@ -572,6 +684,39 @@ impl Inference {
                         .collect();
                 }
                 (output, read.common.as_ref())
+            }
+            Some(RelType::Join(join)) => {
+                let left = self.input(join.left.as_deref())?;
+                let right = self.input(join.right.as_deref())?;
+                let mut combined = left.iter().chain(&right).copied().collect::<Vec<_>>();
+                if let Some(condition) = &join.expression {
+                    self.expression(condition, &combined);
+                }
+                let output = match join.r#type() {
+                    JoinType::Inner
+                    | JoinType::Left
+                    | JoinType::Right
+                    | JoinType::Outer => combined,
+                    JoinType::LeftSemi | JoinType::LeftAnti => left,
+                    JoinType::RightSemi | JoinType::RightAnti => right,
+                    JoinType::LeftMark => {
+                        combined = left;
+                        combined.push(self.shape(Shape::Leaf));
+                        combined
+                    }
+                    JoinType::RightMark => {
+                        combined = right;
+                        combined.push(self.shape(Shape::Leaf));
+                        combined
+                    }
+                    _ => return None,
+                };
+                (output, join.common.as_ref())
+            }
+            Some(RelType::Cross(cross)) => {
+                let mut output = self.input(cross.left.as_deref())?;
+                output.extend(self.input(cross.right.as_deref())?);
+                (output, cross.common.as_ref())
             }
             Some(RelType::Project(project)) => {
                 let input = self.input(project.input.as_deref())?;
@@ -625,6 +770,19 @@ impl Inference {
             }
             Some(RelType::Aggregate(aggregate)) => {
                 let input = self.input(aggregate.input.as_deref())?;
+                for measure in &aggregate.measures {
+                    if let Some(filter) = &measure.filter {
+                        self.expression(filter, &input);
+                    }
+                    if let Some(function) = &measure.measure {
+                        self.arguments(&function.arguments, &input);
+                        for sort in &function.sorts {
+                            if let Some(expr) = &sort.expr {
+                                self.expression(expr, &input);
+                            }
+                        }
+                    }
+                }
                 let groups = aggregate
                     .grouping_expressions
                     .iter()
@@ -674,12 +832,18 @@ impl Inference {
         }
     }
 
-    fn collect_names(&mut self, shape: ShapeId, names: &mut Vec<String>) {
+    fn collect_names(
+        &mut self,
+        shape: ShapeId,
+        names: &mut Vec<String>,
+        complete: &mut bool,
+    ) {
         match self.shapes[shape].clone() {
             Shape::Struct(fields) => {
                 for (index, (name, child)) in fields.into_iter().enumerate() {
                     let root = self.root(name);
                     let name = &self.names[root];
+                    *complete &= !name.conflicting && name.value.is_some();
                     names.push(
                         if name.conflicting {
                             None
@@ -688,30 +852,42 @@ impl Inference {
                         }
                         .unwrap_or_else(|| format!("c{index}")),
                     );
-                    self.collect_names(child, names);
+                    self.collect_names(child, names, complete);
                 }
             }
-            Shape::List(element) => self.collect_names(element, names),
+            Shape::List(element) => self.collect_names(element, names, complete),
             Shape::Map(key, value) => {
-                self.collect_names(key, names);
-                self.collect_names(value, names);
+                self.collect_names(key, names, complete);
+                self.collect_names(value, names, complete);
             }
             Shape::Leaf => {}
         }
     }
 
     fn finish(mut self, scope: Weak<()>) -> ResolvedNames {
-        let annotations = std::mem::take(&mut self.annotations);
+        let mut unresolved = vec![0];
+        let mut names = HashMap::new();
+        for (node, shape) in std::mem::take(&mut self.annotations) {
+            let mut field_names = vec![];
+            let mut complete = true;
+            self.collect_names(shape, &mut field_names, &mut complete);
+            unresolved
+                .push(unresolved.last().copied().unwrap_or(0) + usize::from(!complete));
+            if !field_names.is_empty() {
+                names.insert(node, field_names);
+            }
+        }
+        let resolved_expressions = self
+            .expressions
+            .into_iter()
+            .filter_map(|(node, range)| {
+                (unresolved[range.start] == unresolved[range.end]).then_some(node)
+            })
+            .collect();
         ResolvedNames {
-            names: annotations
-                .into_iter()
-                .filter_map(|(node, shape)| {
-                    let mut names = vec![];
-                    self.collect_names(shape, &mut names);
-                    (!names.is_empty()).then_some((node, names))
-                })
-                .collect(),
+            names,
             scope,
+            resolved_expressions,
         }
     }
 }

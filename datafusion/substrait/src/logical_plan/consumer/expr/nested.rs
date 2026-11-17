@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::logical_plan::consumer::type_resolution::ResolvedNames;
 use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::{DFSchema, not_impl_err, substrait_err};
 use datafusion::execution::FunctionRegistry;
@@ -25,7 +26,7 @@ pub async fn from_nested(
         return substrait_err!("Nested expression requires a nested_type");
     };
 
-    match nested_type {
+    let consumed = match nested_type {
         NestedType::List(list) => {
             if list.values.is_empty() {
                 return substrait_err!(
@@ -56,7 +57,13 @@ pub async fn from_nested(
         NestedType::Map(_) => {
             not_impl_err!("Nested map expressions are not yet supported")
         }
-    }
+    }?;
+    Ok(ResolvedNames::resolve_expression(
+        consumed,
+        nested,
+        input_schema,
+        context,
+    ))
 }
 
 #[cfg(test)]

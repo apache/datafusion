@@ -2,16 +2,22 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::test_util::batches_to_sort_string;
-use datafusion::common::{Result, assert_batches_sorted_eq};
+use datafusion::common::{DFSchema, Result, assert_batches_sorted_eq};
 use datafusion::functions::core::expr_fn::coalesce;
-use datafusion::logical_expr::{ColumnarValue, LogicalPlan, Volatility, create_udf};
+use datafusion::logical_expr::{
+    ColumnarValue, Expr, ExprSchemable, LogicalPlan, Volatility, create_udf, when,
+};
 use datafusion::prelude::{DataFrame, SessionContext, col, lit};
 use datafusion::scalar::ScalarValue;
 use datafusion_substrait::logical_plan::{
-    consumer::from_substrait_plan, producer::to_substrait_plan,
+    consumer::{
+        DefaultSubstraitConsumer, SubstraitConsumerContext, from_substrait_plan,
+        from_substrait_rex,
+    },
+    producer::{DefaultSubstraitProducer, SubstraitProducer, to_substrait_plan},
 };
 use std::sync::Arc;
 use substrait::proto::expression::nested::{List, NestedType};
@@ -244,6 +250,221 @@ async fn consume_substrait_nested_list_with_struct_literal() -> Result<()> {
             "+-------------------+"
         ],
         &rows
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_case_above_inner_join() -> Result<()> {
+    let ctx = context().await?;
+    let plan = ctx
+        .sql(
+            "SELECT CASE WHEN l.flag THEN l.s ELSE named_struct('a', 42) END AS r
+         FROM struct_rows l JOIN struct_rows r ON l.flag = r.flag",
+        )
+        .await?
+        .into_optimized_plan()?;
+    assert!(plan.display_indent().to_string().contains("Inner Join:"));
+    let rows = consume_plan(&ctx, &plan).await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------+",
+            "| r       |",
+            "+---------+",
+            "| {a: 42} |",
+            "| {a: 7}  |",
+            "+---------+"
+        ],
+        &rows
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_union_names_literal_next_to_join() -> Result<()> {
+    roundtrip(
+        "SELECT l.s AS r FROM struct_rows l JOIN struct_rows r ON l.flag = r.flag
+         UNION ALL SELECT named_struct('a', 42) AS r FROM struct_rows",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_case_above_outer_join_preserves_both_inputs() -> Result<()> {
+    roundtrip(
+        "SELECT CASE WHEN l.flag THEN l.s ELSE named_struct('a', 42) END AS a,
+                CASE WHEN r.flag THEN r.t ELSE named_struct('b', 43) END AS b
+         FROM struct_rows l FULL JOIN struct_rows r ON l.flag = r.flag",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_case_above_right_semi_join() -> Result<()> {
+    roundtrip(
+        "SELECT CASE WHEN r.flag THEN r.t ELSE named_struct('b', 42) END AS r
+         FROM struct_rows l RIGHT SEMI JOIN struct_rows r ON l.flag = r.flag",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_case_above_cross_join() -> Result<()> {
+    roundtrip(
+        "SELECT CASE WHEN l.flag THEN r.t ELSE named_struct('b', 42) END AS r
+         FROM struct_rows l CROSS JOIN struct_rows r",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_case_uses_aggregate_result_names() -> Result<()> {
+    roundtrip(
+        "SELECT CASE WHEN flag THEN first_value(s) ELSE named_struct('a', 42) END AS r
+         FROM struct_rows GROUP BY flag",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_union_uses_aggregate_result_names() -> Result<()> {
+    roundtrip(
+        "SELECT named_struct('a', 42) AS r FROM struct_rows
+         UNION ALL SELECT first_value(s) AS r FROM struct_rows",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_case_inside_aggregate_argument() -> Result<()> {
+    roundtrip(
+        "SELECT first_value(CASE WHEN flag THEN s ELSE named_struct('a', 42) END) AS r
+         FROM struct_rows GROUP BY flag",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_case_uses_computed_struct_names() -> Result<()> {
+    roundtrip(
+        "SELECT CASE WHEN flag THEN get_field(nested, 'items')
+                ELSE [named_struct('code', 42)] END AS r FROM struct_rows",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_custom_function_matches_literal_to_argument() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE reversed_fields AS SELECT named_struct('c1', 1, 'c0', 2, 'a', 3) AS s")
+        .await?
+        .collect()
+        .await?;
+    let named = DataType::Struct(
+        vec![
+            Field::new("c1", DataType::Int64, true),
+            Field::new("c0", DataType::Int64, true),
+            Field::new("a", DataType::Int64, true),
+        ]
+        .into(),
+    );
+    ctx.register_udf(create_udf(
+        "same_structs",
+        vec![named.clone(), named.clone()],
+        named,
+        Volatility::Immutable,
+        Arc::new(|args| Ok(args[1].clone())),
+    ));
+    let plan = ctx.sql(
+        "SELECT same_structs(s, named_struct('c1', 42, 'c0', 99, 'a', 7)) AS r FROM reversed_fields",
+    ).await?.into_optimized_plan()?;
+    let rows = consume_plan(&ctx, &plan).await?;
+    assert_batches_sorted_eq!(
+        [
+            "+------------------------+",
+            "| r                      |",
+            "+------------------------+",
+            "| {c1: 42, c0: 99, a: 7} |",
+            "+------------------------+"
+        ],
+        &rows
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn consume_case_inside_correlated_subquery() -> Result<()> {
+    let ctx = context().await?;
+    let query = ctx.sql(
+        "SELECT (SELECT first_value(CASE WHEN r.flag THEN r.s ELSE named_struct('a', 42) END)
+                 FROM struct_rows r WHERE r.flag = l.flag) AS r FROM struct_rows l",
+    ).await?;
+    // Keep the correlated scope instead of decorrelating it to a join.
+    let rows = consume_plan(&ctx, query.logical_plan()).await?;
+    assert_batches_sorted_eq!(
+        [
+            "+---------+",
+            "| r       |",
+            "+---------+",
+            "| {a: 42} |",
+            "| {a: 7}  |",
+            "+---------+"
+        ],
+        &rows
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn consume_struct_between_bounds() -> Result<()> {
+    let ctx = context().await?;
+    let query = ctx.sql(
+        "SELECT s BETWEEN named_struct('a', 1) AND named_struct('a', 9) AS r FROM struct_rows",
+    ).await?;
+    // Keep BETWEEN instead of rewriting it to two comparisons.
+    let rows = consume_plan(&ctx, query.logical_plan()).await?;
+    assert_batches_sorted_eq!(
+        [
+            "+------+", "| r    |", "+------+", "| true |", "| true |", "+------+"
+        ],
+        &rows
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn consume_expression_names_list_literal_from_list_view_column() -> Result<()> {
+    let ctx = SessionContext::new();
+    let named = DataType::Struct(vec![Field::new("a", DataType::Int64, true)].into());
+    let anonymous =
+        DataType::Struct(vec![Field::new("c0", DataType::Int64, true)].into());
+    let schema = Arc::new(DFSchema::try_from(Schema::new(vec![Field::new(
+        "s",
+        DataType::ListView(Arc::new(Field::new_list_field(named.clone(), true))),
+        true,
+    )]))?);
+    let empty = ScalarValue::List(ScalarValue::new_list_nullable(&[], &anonymous));
+    let expr = when(lit(true), col("s")).otherwise(lit(empty))?;
+    let state = ctx.state();
+    let mut producer = DefaultSubstraitProducer::new(&state);
+    let proto = producer.handle_expr(&expr, &schema)?;
+    let extensions = producer.get_extensions();
+    let consumer = DefaultSubstraitConsumer::new(&extensions, &state);
+    let consumed = from_substrait_rex(
+        &consumer,
+        &proto,
+        &schema,
+        &SubstraitConsumerContext::default(),
+    )
+    .await?;
+    let Expr::Case(case) = consumed else {
+        panic!("expected CASE");
+    };
+    // Standalone expression conversion has no relation prepass. The literal
+    // retains its List representation while taking the ListView element's names.
+    assert_eq!(
+        case.else_expr.unwrap().get_type(schema.as_ref())?,
+        DataType::new_list(named, true)
     );
     Ok(())
 }
