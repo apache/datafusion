@@ -4,6 +4,40 @@
 
 # Test push down filter
 
+# Regression test for https://github.com/apache/datafusion/issues/26545
+# Pushing the filter below COUNT(*) would return one row containing zero.
+query I
+SELECT c FROM (
+  SELECT 'all' AS k, COUNT(*) AS c FROM (VALUES (1)) AS t(a)
+) AS s WHERE k = 'none';
+----
+
+# The empty grouping set in ROLLUP also produces a grand total on empty input.
+query II
+SELECT a, c FROM (
+  SELECT a, 'all' AS k, COUNT(*) AS c FROM (VALUES (1)) AS t(a)
+  GROUP BY ROLLUP(a)
+) AS s WHERE k = 'none';
+----
+
+# A HAVING predicate without column references must not filter the
+# aggregate's input either.
+query I
+SELECT COUNT(*) FROM (VALUES (1)) AS t(a)
+HAVING (SELECT max(b) FROM (VALUES (5)) AS u(b)) > 100;
+----
+
+# The filter reaches each UNION ALL branch; the 'one' branch must not
+# leave a row with a count of zero.
+query I
+SELECT c FROM (
+  SELECT 'one' AS k, COUNT(*) AS c FROM (VALUES (1), (2)) AS t(a) WHERE a = 1
+  UNION ALL
+  SELECT 'all' AS k, COUNT(*) AS c FROM (VALUES (1), (2)) AS t(a)
+) AS s WHERE k = 'all';
+----
+2
+
 # Regression test for https://github.com/apache/datafusion/issues/17188
 query I
 COPY (select i as k, i as v from generate_series(1, 10000000) as t(i))
@@ -133,7 +167,7 @@ physical_plan
 01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_dyn_test.id)]
 02)--CoalescePartitionsExec
 03)----AggregateExec: mode=Partial, gby=[], aggr=[max(agg_dyn_test.id)]
-04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-04/j5fUeSDQo22oPyPU.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 > 1 AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1, required_guarantees=[]
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-01/j5fUeSDQo22oPyPU.parquet, WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-02/j5fUeSDQo22oPyPU.parquet], [WORKSPACE_ROOT/datafusion/core/tests/data/test_statistics_per_partition/date=2025-03-03/j5fUeSDQo22oPyPU.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 > 1 AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1, required_guarantees=[]
 
 query I
 select max(id) from agg_dyn_test where id > 1;

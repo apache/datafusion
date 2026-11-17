@@ -14,6 +14,7 @@ use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{AggregateMetrics, EmitTo};
 
 use crate::PhysicalExpr;
+use crate::aggregates::aggregate_argument::AggregateArgument;
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
@@ -191,6 +192,10 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
             .map(|(((agg_expr, arguments), filter), submetrics)| {
                 let accumulator =
                     create_group_accumulator(agg_expr, Arc::clone(submetrics))?;
+                let arguments = arguments
+                    .into_iter()
+                    .map(|expr| AggregateArgument::try_new(expr, input_schema))
+                    .collect::<Result<_>>()?;
                 Ok(AggregateAccumulator::new(
                     Arc::clone(agg_expr),
                     arguments,

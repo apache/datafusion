@@ -23,9 +23,10 @@ use datafusion_common::{
     internal_err, not_impl_err, plan_err,
 };
 
+use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::SetQuantifier;
-use datafusion_expr::expr::{Exists, InList, InSubquery, SetComparison, WildcardOptions};
+use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::utils::{
     disjunction, find_window_exprs, window_function_not_allowed_err,
 };
@@ -804,16 +805,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan_all_op(&left_expr, &right_expr, &compare_op)
                 }
             },
-            #[expect(deprecated)]
-            SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
-                qualifier: None,
-                options: Box::new(WildcardOptions::default()),
-            }),
-            #[expect(deprecated)]
-            SQLExpr::QualifiedWildcard(object_name, _token) => Ok(Expr::Wildcard {
-                qualifier: Some(self.object_name_to_table_reference(object_name)?),
-                options: Box::new(WildcardOptions::default()),
-            }),
             SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
             SQLExpr::JsonAccess { value, path } => {
                 self.parse_json_access(schema, planner_context, value, &path)

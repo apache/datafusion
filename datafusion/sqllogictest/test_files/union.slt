@@ -267,6 +267,54 @@ UNION ALL
 2 0 0
 4 0 0
 
+# Test UNION ALL, INTERSECT and EXCEPT with duplicate aliases on the right side.
+# Aliases outside the first SELECT are discarded, so they don't need to be unique.
+query II rowsort
+SELECT 0 AS a, 0 AS b UNION ALL SELECT 1 AS x, 2 AS x
+----
+0 0
+1 2
+
+query II rowsort
+SELECT 0 AS a, 0 AS b UNION ALL SELECT id AS x, id AS x FROM t1 WHERE id = 1
+----
+0 0
+1 1
+
+# count(*) is planned as count(1) AS "count(*)", so repeating it repeats the alias.
+query II rowsort
+SELECT 0 AS a, 0 AS b UNION ALL SELECT count(*), count(*) FROM t1
+----
+0 0
+3 3
+
+query II
+SELECT 1 AS a, 2 AS b INTERSECT SELECT 1 AS x, 2 AS x
+----
+1 2
+
+query II
+SELECT 1 AS a, 2 AS b EXCEPT SELECT 3 AS x, 4 AS x
+----
+1 2
+
+# The right side takes the first SELECT's names.
+query TT
+EXPLAIN SELECT 0 AS a, 0 AS b UNION ALL SELECT 1 AS x, 2 AS x
+----
+logical_plan
+01)Union
+02)--Projection: Int64(0) AS a, Int64(0) AS b
+03)----EmptyRelation: rows=1
+04)--Projection: Int64(1) AS a, Int64(2) AS b
+05)----EmptyRelation: rows=1
+physical_plan
+01)UnionExec
+02)--ProjectionExec: expr=[0 as a, 0 as b]
+03)----PlaceholderRowExec
+04)--ProjectionExec: expr=[1 as a, 2 as b]
+05)----PlaceholderRowExec
+
 # Plan is unnested
 query TT
 EXPLAIN SELECT name FROM t1 UNION ALL (SELECT name from t2 UNION ALL SELECT name || '_new' from t2)
@@ -1144,6 +1192,16 @@ UNION ALL
 (SELECT b FROM (VALUES (2)) s(b) LIMIT 1);
 ----
 2
+
+# Coercing same-named columns from different join inputs must retain their qualifiers.
+query II rowsort
+SELECT 1::BIGINT AS a, 2::BIGINT AS b
+UNION ALL
+SELECT x.a, y.a
+FROM (VALUES (3::INT)) AS x(a) CROSS JOIN (VALUES (4::INT)) AS y(a);
+----
+1 2
+3 4
 
 # Config reset
 statement ok

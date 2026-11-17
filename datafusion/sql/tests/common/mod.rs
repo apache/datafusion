@@ -109,6 +109,7 @@ impl ContextProvider for MockContextProvider {
                 Field::new("t_date32", DataType::Date32, false),
                 Field::new("t_date64", DataType::Date64, false),
             ])),
+            "t" => Ok(Schema::new(vec![Field::new("x", DataType::Float64, true)])),
             "j1" => Ok(Schema::new(vec![
                 Field::new("j1_id", DataType::Int32, false),
                 Field::new("j1_string", DataType::Utf8, false),
