@@ -496,6 +496,17 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">57.0.0</span></code> has not been released yet. The information provided
 in this section pertains to features and changes that have already been merged
 to the main branch and are awaiting release in this version.</p>
+<section id="range-partitioning-accepts-equal-split-points">
+<h3>Range partitioning accepts equal split points<a class="headerlink" href="#range-partitioning-accepts-equal-split-points" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_common::validate_range_split_points</span></code> and the logical and physical
+<code class="docutils literal notranslate"><span class="pre">RangePartitioning</span></code> constructors now accept equal adjacent split points.
+Previously, split points had to be strictly ordered; they must now be
+non-decreasing according to the supplied sort options. Equal adjacent split
+points describe empty partitions. Keys equal to a repeated split point go to the
+partition after its last occurrence.</p>
+<p>Callers that relied on duplicate rejection must additionally reject adjacent
+points that compare equal under those sort options.</p>
+</section>
 <section id="substrait-consumers-use-explicit-scope-context">
 <h3>Substrait consumers use explicit scope context<a class="headerlink" href="#substrait-consumers-use-explicit-scope-context" title="Link to this heading">#</a></h3>
 <p>Add a final <code class="docutils literal notranslate"><span class="pre">&amp;SubstraitConsumerContext</span></code> argument to custom relation and expression
@@ -636,6 +647,7 @@ For counting rows, use <code class="docutils literal notranslate"><span class="p
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-57-0-0">DataFusion 57.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#range-partitioning-accepts-equal-split-points">Range partitioning accepts equal split points</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#substrait-consumers-use-explicit-scope-context">Substrait consumers use explicit scope context</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-results-of-set-monotonic-aggregate-udfs">NULL results of set-monotonic aggregate UDFs</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupclusteringmode-full-no-longer-implies-sorted-input"><code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> no longer implies sorted input</a></li>
