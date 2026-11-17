@@ -981,7 +981,12 @@ fn validate_map_compatibility<'a>(
     }
     let (source_key, source_value) = validate_map_entries_field(source_entries)?;
     let (target_key, target_value) = validate_map_entries_field(target_entries)?;
-    validate_map_key_compatibility(source_key, target_key, target_sorted)?;
+    validate_map_key_compatibility(
+        source_key,
+        target_key,
+        target_sorted,
+        cast_extension,
+    )?;
     validate_field_compatibility(source_value, target_value, cast_extension)?;
     Ok((target_key, target_value))
 }
@@ -990,23 +995,52 @@ fn validate_map_key_compatibility(
     source_key: &Field,
     target_key: &Field,
     sorted: bool,
+    cast_extension: Option<&dyn CastExtension>,
 ) -> Result<()> {
     if sorted && source_key.data_type() != target_key.data_type() {
         return _plan_err!("Cannot evolve key type of a sorted Map");
     }
-    validate_map_key_data_type(source_key.data_type(), target_key.data_type())
+    validate_map_key_field(source_key, target_key, sorted, cast_extension)
 }
 
-fn validate_map_key_data_type(
-    source_type: &DataType,
-    target_type: &DataType,
+fn validate_map_key_field(
+    source_field: &Field,
+    target_field: &Field,
+    sorted: bool,
+    cast_extension: Option<&dyn CastExtension>,
 ) -> Result<()> {
-    if source_type == target_type {
+    if let Some(cast_extension) = cast_extension
+        && cast_extension.can_cast_fields(source_field, target_field)?
+    {
+        if !is_injective_cast_fields(source_field, target_field, Some(cast_extension))? {
+            return _plan_err!(
+                "Cannot safely evolve Map key type from {} to {}",
+                source_field.data_type(),
+                target_field.data_type()
+            );
+        }
+        if sorted
+            && (!cast_extension.is_order_preserving_fields(source_field, target_field)?
+                || !cast_extension.preserves_nulls_fields(source_field, target_field)?)
+        {
+            return _plan_err!(
+                "Cannot evolve a sorted Map key using a cast extension that does not preserve ordering and nulls"
+            );
+        }
+        return Ok(());
+    }
+
+    let source_type = source_field.data_type();
+    let target_type = target_field.data_type();
+    if source_type == target_type && !matches!(source_type, Struct(_)) {
         return Ok(());
     }
 
     match (source_type, target_type) {
         (Struct(source_fields), Struct(target_fields)) => {
+            if source_fields.is_empty() && target_fields.is_empty() {
+                return Ok(());
+            }
             if !has_one_of_more_common_fields(source_fields, target_fields) {
                 return _plan_err!(
                     "Cannot cast Map key Struct because there is no field name overlap"
@@ -1036,9 +1070,11 @@ fn validate_map_key_data_type(
                         source_field.name()
                     );
                 }
-                validate_map_key_data_type(
-                    source_field.data_type(),
-                    target_field.data_type(),
+                validate_map_key_field(
+                    source_field,
+                    target_field,
+                    sorted,
+                    cast_extension,
                 )?;
             }
             for target_field in target_fields {
@@ -1098,6 +1134,28 @@ pub fn is_injective_cast(source_type: &DataType, target_type: &DataType) -> bool
                 DataType::LargeBinary | DataType::BinaryView
             )
     )
+}
+
+/// Returns whether the cast selected for `source_field` and `target_field` is
+/// known to preserve value identity.
+///
+/// If `cast_extension` handles the fields, its injectivity declaration takes
+/// precedence because [`cast_column_fields`] also selects the extension before
+/// Arrow's built-in cast. Otherwise, identical data types and casts recognized
+/// by [`is_injective_cast`] are injective.
+pub fn is_injective_cast_fields(
+    source_field: &Field,
+    target_field: &Field,
+    cast_extension: Option<&dyn CastExtension>,
+) -> Result<bool> {
+    if let Some(cast_extension) = cast_extension
+        && cast_extension.can_cast_fields(source_field, target_field)?
+    {
+        return cast_extension.is_injective_fields(source_field, target_field);
+    }
+
+    Ok(source_field.data_type() == target_field.data_type()
+        || is_injective_cast(source_field.data_type(), target_field.data_type()))
 }
 
 fn validate_map_entries_field(entries: &Field) -> Result<(&FieldRef, &FieldRef)> {
@@ -1390,6 +1448,42 @@ pub trait CastExtension: std::fmt::Debug + Send + Sync {
     fn can_cast_fields(&self, source_field: &Field, target_field: &Field)
     -> Result<bool>;
 
+    /// Returns whether this extension's cast preserves value identity.
+    ///
+    /// This method is called only when [`Self::can_cast_fields`] returns `true`.
+    /// The conservative default prevents callers from relying on injectivity
+    /// unless the implementation explicitly guarantees it.
+    fn is_injective_fields(
+        &self,
+        _source_field: &Field,
+        _target_field: &Field,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Returns whether this extension's cast preserves value ordering.
+    ///
+    /// This method is called only when [`Self::can_cast_fields`] returns `true`.
+    fn is_order_preserving_fields(
+        &self,
+        _source_field: &Field,
+        _target_field: &Field,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Returns whether this extension maps null inputs to null outputs without
+    /// introducing nulls for non-null inputs.
+    ///
+    /// This method is called only when [`Self::can_cast_fields`] returns `true`.
+    fn preserves_nulls_fields(
+        &self,
+        _source_field: &Field,
+        _target_field: &Field,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
     /// Casts `array` between the supplied fields.
     fn cast_array_fields(
         &self,
@@ -1529,6 +1623,62 @@ mod tests {
             Ok(Arc::new(StringArray::from_iter(array.iter().map(
                 |value| value.map(|value| if value == 0 { "false" } else { "true" }),
             ))))
+        }
+    }
+
+    #[derive(Debug)]
+    struct Int8ToInt16Cast {
+        injective: bool,
+        order_preserving: bool,
+        preserves_nulls: bool,
+    }
+
+    impl CastExtension for Int8ToInt16Cast {
+        fn can_cast_fields(
+            &self,
+            source_field: &Field,
+            target_field: &Field,
+        ) -> Result<bool> {
+            Ok(source_field.data_type() == &DataType::Int8
+                && target_field.data_type() == &DataType::Int16)
+        }
+
+        fn is_injective_fields(
+            &self,
+            _source_field: &Field,
+            _target_field: &Field,
+        ) -> Result<bool> {
+            Ok(self.injective)
+        }
+
+        fn is_order_preserving_fields(
+            &self,
+            _source_field: &Field,
+            _target_field: &Field,
+        ) -> Result<bool> {
+            Ok(self.order_preserving)
+        }
+
+        fn preserves_nulls_fields(
+            &self,
+            _source_field: &Field,
+            _target_field: &Field,
+        ) -> Result<bool> {
+            Ok(self.preserves_nulls)
+        }
+
+        fn cast_array_fields(
+            &self,
+            array: &ArrayRef,
+            _source_field: &Field,
+            target_field: &Field,
+            cast_options: &CastOptions,
+        ) -> Result<ArrayRef> {
+            Ok(cast_with_options(
+                array,
+                target_field.data_type(),
+                cast_options,
+            )?)
         }
     }
 
@@ -2847,6 +2997,63 @@ mod tests {
         ] {
             assert!(!is_injective_cast(&source_type, &target_type));
         }
+    }
+
+    #[test]
+    fn test_is_injective_cast_fields_uses_extension_properties() {
+        let source = non_null_field("key", DataType::Int8);
+        let target = non_null_field("key", DataType::Int16);
+        assert!(is_injective_cast(source.data_type(), target.data_type()));
+
+        let non_injective = Int8ToInt16Cast {
+            injective: false,
+            order_preserving: true,
+            preserves_nulls: true,
+        };
+        assert!(
+            !is_injective_cast_fields(&source, &target, Some(&non_injective)).unwrap()
+        );
+
+        let injective = Int8ToInt16Cast {
+            injective: true,
+            order_preserving: true,
+            preserves_nulls: true,
+        };
+        assert!(is_injective_cast_fields(&source, &target, Some(&injective)).unwrap());
+        assert!(is_injective_cast_fields(&source, &target, None).unwrap());
+    }
+
+    #[test]
+    fn test_map_key_cast_uses_extension_properties() {
+        let source = map_type(DataType::Int8, DataType::Utf8);
+        let target = map_type(DataType::Int16, DataType::Utf8);
+        let non_injective = Int8ToInt16Cast {
+            injective: false,
+            order_preserving: true,
+            preserves_nulls: true,
+        };
+
+        let error = validate_data_type_compatibility_with_extension(
+            "map_col",
+            &source,
+            &target,
+            Some(&non_injective),
+        )
+        .unwrap_err();
+        assert_contains!(error.to_string(), "Cannot safely evolve Map key type");
+
+        let injective = Int8ToInt16Cast {
+            injective: true,
+            order_preserving: true,
+            preserves_nulls: true,
+        };
+        validate_data_type_compatibility_with_extension(
+            "map_col",
+            &source,
+            &target,
+            Some(&injective),
+        )
+        .unwrap();
     }
 
     #[test]
