@@ -331,7 +331,7 @@ where
 
                 self.map
                     .find(hash, |header| {
-                        if header.hash != hash {
+                        if header.hash != hash || header.view as u32 != len {
                             return false;
                         }
 
@@ -1077,6 +1077,21 @@ mod tests {
         test_map.insert(&input);
         test_map.insert(&input); // put it in twice
         let expected_output: ArrayRef = Arc::new(StringViewArray::from(input));
+        assert_eq!(&test_map.into_array(), &expected_output);
+    }
+
+    /// A long value whose hash collides with an inline value sharing its
+    /// 4-byte prefix must not read the inline bytes as a buffer reference.
+    /// Hashes only collide with the `force_hash_collisions` feature.
+    #[test]
+    fn test_long_value_colliding_with_inline_value() {
+        let mut test_map = TestMap::new();
+        test_map.insert(&[Some("bcdeXXXXYYYY")]);
+        test_map.insert(&[Some("bcdefghijklmnop1234567")]);
+        let expected_output: ArrayRef = Arc::new(StringViewArray::from(vec![
+            "bcdeXXXXYYYY",
+            "bcdefghijklmnop1234567",
+        ]));
         assert_eq!(&test_map.into_array(), &expected_output);
     }
 }
