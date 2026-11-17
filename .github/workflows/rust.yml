@@ -129,7 +129,7 @@ jobs:
     name: cargo check datafusion-common features
     needs: linux-build-lib
     if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
-    runs-on: ubuntu-latest
+    runs-on: &xlarge-runner ${{ github.event_name == 'merge_group' && vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a,cpu=4,image=ubuntu24-full-x64,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
     steps:
@@ -348,7 +348,7 @@ jobs:
     name: cargo check datafusion-functions features
     needs: linux-build-lib
     if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
-    runs-on: ubuntu-latest
+    runs-on: *xlarge-runner
     container:
       image: amd64/rust
     steps:
@@ -853,7 +853,7 @@ jobs:
     name: check example README is up-to-date
     needs: linux-build-lib
     if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
-    runs-on: ubuntu-latest
+    runs-on: *xlarge-runner
     container:
       image: amd64/rust
 
@@ -896,7 +896,7 @@ jobs:
   msrv:
     name: Verify MSRV (Min Supported Rust Version)
     if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
-    runs-on: ubuntu-latest
+    runs-on: *xlarge-runner
     container:
       image: amd64/rust
     steps:
