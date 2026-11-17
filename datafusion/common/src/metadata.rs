@@ -350,6 +350,25 @@ impl FieldMetadata {
         }
     }
 
+    /// Removes extension type information for a cast to a plain storage type.
+    /// Ordinary field metadata is preserved.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    pub fn without_extension_type(mut self) -> Self {
+        if self.inner.contains_key(EXTENSION_TYPE_NAME_KEY)
+            || self.inner.contains_key(EXTENSION_TYPE_METADATA_KEY)
+        {
+            self.inner.remove(EXTENSION_TYPE_NAME_KEY);
+            self.inner.remove(EXTENSION_TYPE_METADATA_KEY);
+        }
+        self
+    }
+
     /// Create a new metadata instance from a map of string keys to string values.
     pub fn new(inner: BTreeMap<String, String>) -> Self {
         Self {

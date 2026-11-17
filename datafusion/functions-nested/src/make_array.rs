@@ -13,16 +13,17 @@ use arrow::array::{
     NullArray, OffsetSizeTrait, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, FieldRef};
 use arrow::datatypes::{DataType::Null, Field};
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{Result, plan_err};
+use datafusion_common::{Result, internal_err, plan_err};
 use datafusion_expr::binary::{
     try_type_union_resolution_with_struct, type_union_resolution,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
@@ -93,8 +94,25 @@ impl ScalarUDFImpl for MakeArray {
         Ok(DataType::new_list(element_type, true))
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Argument storage types have already been coerced to a common type.
+        let element_type = args
+            .arg_fields
+            .first()
+            .map_or(Null, |f| f.data_type().clone());
+        let metadata =
+            coerced_fields_metadata(args.arg_fields.iter().map(|f| f.as_ref()))?;
+        let element = metadata.add_to_field(Field::new_list_field(element_type, true));
+        Ok(Field::new(self.name(), DataType::List(Arc::new(element)), true).into())
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(make_array_inner)(&args.args)
+        let DataType::List(field) = args.return_type() else {
+            return internal_err!("incorrect make_array return type");
+        };
+        make_scalar_function(|arrays| {
+            array_array_with_field::<i32>(arrays, Arc::clone(field))
+        })(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -184,6 +202,14 @@ pub fn array_array<O: OffsetSizeTrait>(
     data_type: DataType,
     field_name: &str,
 ) -> Result<ArrayRef> {
+    array_array_with_field::<O>(args, Arc::new(Field::new(field_name, data_type, true)))
+}
+
+fn array_array_with_field<O: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    field: FieldRef,
+) -> Result<ArrayRef> {
+    let data_type = field.data_type();
     if args.is_empty() {
         // If input is empty, combined output is an empty array with `Null` data type
         let array = new_null_array(&Null, 0);
@@ -196,7 +222,7 @@ pub fn array_array<O: OffsetSizeTrait>(
     let mut total_len = 0;
     for arg in args {
         let arg_data = if arg.as_any().is::<NullArray>() {
-            ArrayData::new_empty(&data_type)
+            ArrayData::new_empty(data_type)
         } else {
             arg.to_data()
         };
@@ -228,7 +254,7 @@ pub fn array_array<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new(field_name, data_type, true)),
+        field,
         OffsetBuffer::new(offsets.into()),
         arrow::array::make_array(data),
         None,
@@ -236,8 +262,23 @@ pub fn array_array<O: OffsetSizeTrait>(
 }
 
 pub fn coerce_types_inner(arg_types: &[DataType], name: &str) -> Result<Vec<DataType>> {
-    if let Ok(unified) = try_type_union_resolution_with_struct(arg_types) {
-        return Ok(unified);
+    if let Ok(unified) = try_type_union_resolution_with_struct(arg_types)
+        && let Some(DataType::Struct(fields)) = unified.first()
+    {
+        // Every array element must have exactly the same type, including child
+        // metadata and nullability. Use the first input's metadata, as list
+        // coercion does, and allow nulls if any input child allows them.
+        let fields = fields
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                let nullable = unified.iter().any(|data_type| {
+                    matches!(data_type, DataType::Struct(fields) if fields[index].is_nullable())
+                });
+                Arc::new(field.as_ref().clone().with_nullable(nullable))
+            })
+            .collect::<Vec<_>>();
+        return Ok(vec![DataType::Struct(fields.into()); arg_types.len()]);
     }
 
     if let Some(unified) = type_union_resolution(arg_types) {

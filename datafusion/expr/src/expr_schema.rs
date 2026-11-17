@@ -21,7 +21,6 @@ use crate::{
 use arrow::compute::can_cast_types;
 use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
-use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
@@ -90,10 +89,9 @@ fn cast_output_field(
 
     let metadata = if is_type_only {
         // Type-only cast: propagate source metadata, stripping extension type keys
-        let mut meta = source_field.metadata().clone();
-        meta.remove(EXTENSION_TYPE_NAME_KEY);
-        meta.remove(EXTENSION_TYPE_METADATA_KEY);
-        meta
+        FieldMetadata::new_from_field(source_field)
+            .without_extension_type()
+            .to_metadata()
     } else {
         // Explicit target field: use target metadata exactly
         target_field.metadata().clone()

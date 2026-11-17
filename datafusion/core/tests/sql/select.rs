@@ -581,6 +581,287 @@ async fn test_recursive_cte_batch_schema_stable_with_order_by_limit() -> Result<
     Ok(())
 }
 
+fn constructor_metadata_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+    let metadata = HashMap::from([
+        ("ARROW:extension:name".to_string(), "example.id".to_string()),
+        ("origin".to_string(), "input".to_string()),
+    ]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true).with_metadata(metadata.clone()),
+        Field::new("b", DataType::Int32, true).with_metadata(metadata),
+    ]));
+    ctx.register_batch(
+        "t",
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), None])),
+                Arc::new(Int32Array::from(vec![Some(2), Some(3)])),
+            ],
+        )?,
+    )?;
+    Ok(ctx)
+}
+
+#[tokio::test]
+async fn test_named_struct_constructor_field_metadata() -> Result<()> {
+    use arrow::array::StructArray;
+
+    let ctx = constructor_metadata_context()?;
+    let df = ctx
+        .sql("SELECT named_struct('left', a, 'right', b) AS s FROM t")
+        .await?;
+    let metadata = HashMap::from([
+        ("ARROW:extension:name".to_string(), "example.id".to_string()),
+        ("origin".to_string(), "input".to_string()),
+    ]);
+    let expected = DataType::Struct(
+        vec![
+            Field::new("left", DataType::Int32, true).with_metadata(metadata.clone()),
+            Field::new("right", DataType::Int32, true).with_metadata(metadata),
+        ]
+        .into(),
+    );
+    assert_eq!(df.schema().field(0).data_type(), &expected);
+    let batches = df.collect().await?;
+    let values = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .unwrap();
+    assert_eq!(values.data_type(), &expected);
+    assert_eq!(
+        values.column(0).as_ref(),
+        &Int32Array::from(vec![Some(1), None])
+    );
+    assert_eq!(
+        values.column(1).as_ref(),
+        &Int32Array::from(vec![Some(2), Some(3)])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_array_constructor_field_metadata() -> Result<()> {
+    use arrow::array::ListArray;
+
+    let ctx = constructor_metadata_context()?;
+    let metadata = HashMap::from([
+        ("ARROW:extension:name".to_string(), "example.id".to_string()),
+        ("origin".to_string(), "input".to_string()),
+    ]);
+    let expected = DataType::List(Arc::new(
+        Field::new_list_field(DataType::Int32, true).with_metadata(metadata),
+    ));
+    for (sql, expected_values) in [
+        (
+            "SELECT make_array(a, b) AS xs FROM t",
+            vec![Some(1), Some(2), None, Some(3)],
+        ),
+        (
+            "SELECT make_array(NULL, a) AS xs FROM t",
+            vec![None, Some(1), None, None],
+        ),
+    ] {
+        let df = ctx.sql(sql).await?;
+        assert_eq!(df.schema().field(0).data_type(), &expected, "{sql}");
+        let batches = df.collect().await?;
+        let values = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(values.data_type(), &expected, "{sql}");
+        assert_eq!(values.value_offsets(), &[0, 2, 4]);
+        assert_eq!(
+            values.values().as_ref(),
+            &Int32Array::from(expected_values),
+            "{sql}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_array_metadata_after_storage_coercion() -> Result<()> {
+    use arrow::array::{Int64Array, ListArray};
+
+    let ctx = constructor_metadata_context()?;
+    let expected = DataType::List(Arc::new(
+        Field::new_list_field(DataType::Int64, true)
+            .with_metadata(HashMap::from([("origin".to_string(), "input".to_string())])),
+    ));
+    for (sql, expected_values) in [
+        (
+            "SELECT make_array(a, CAST(2 AS BIGINT)) AS xs FROM t",
+            vec![Some(1), Some(2), None, Some(2)],
+        ),
+        (
+            "SELECT make_array(CAST(2 AS BIGINT), a) AS xs FROM t",
+            vec![Some(2), Some(1), Some(2), None],
+        ),
+    ] {
+        let df = ctx.sql(sql).await?;
+        assert_eq!(df.schema().field(0).data_type(), &expected, "{sql}");
+        let batches = df.collect().await?;
+        let values = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(values.data_type(), &expected, "{sql}");
+        assert_eq!(values.value_offsets(), &[0, 2, 4]);
+        assert_eq!(values.values().as_ref(), &Int64Array::from(expected_values));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_scalar_constructor_field_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+    let metadata = HashMap::from([
+        ("ARROW:extension:name".to_string(), "example.id".to_string()),
+        ("ARROW:extension:metadata".to_string(), "{}".to_string()),
+        ("origin".to_string(), "input".to_string()),
+    ]);
+    let value = ScalarAndMetadata::new(
+        ScalarValue::Int32(Some(7)),
+        Some(metadata.clone().into()),
+    );
+    for (sql, expected) in [
+        (
+            "SELECT make_array($1) AS v",
+            DataType::List(Arc::new(
+                Field::new_list_field(DataType::Int32, true)
+                    .with_metadata(metadata.clone()),
+            )),
+        ),
+        (
+            "SELECT make_array($1, CAST(8 AS BIGINT)) AS v",
+            DataType::List(Arc::new(
+                Field::new_list_field(DataType::Int64, true).with_metadata(
+                    HashMap::from([("origin".to_string(), "input".to_string())]),
+                ),
+            )),
+        ),
+        (
+            "SELECT named_struct('value', $1) AS v",
+            DataType::Struct(
+                vec![
+                    Field::new("value", DataType::Int32, true)
+                        .with_metadata(metadata.clone()),
+                ]
+                .into(),
+            ),
+        ),
+    ] {
+        let df = ctx
+            .sql(sql)
+            .await?
+            .with_param_values(ParamValues::List(vec![value.clone()]))?;
+        assert_eq!(df.schema().field(0).data_type(), &expected, "{sql}");
+        let batches = df.collect().await?;
+        assert_eq!(batches[0].column(0).data_type(), &expected, "{sql}");
+        assert_eq!(batches[0].num_rows(), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_array_nested_field_metadata() -> Result<()> {
+    use arrow::array::{ListArray, StructArray};
+
+    let ctx = SessionContext::new();
+    let mut columns: Vec<ArrayRef> = Vec::new();
+    for (origin, nullable, values) in [
+        ("a", false, vec![Some(1), Some(2)]),
+        ("b", true, vec![Some(3), None]),
+    ] {
+        let field = Field::new("v", DataType::Int32, nullable)
+            .with_metadata(HashMap::from([("origin".to_string(), origin.to_string())]));
+        columns.push(Arc::new(StructArray::new(
+            vec![field].into(),
+            vec![Arc::new(Int32Array::from(values))],
+            None,
+        )));
+    }
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", columns[0].data_type().clone(), false),
+        Field::new("b", columns[1].data_type().clone(), false),
+    ]));
+    ctx.register_batch("t", RecordBatch::try_new(schema, columns)?)?;
+
+    for (args, origin, expected_values) in [
+        ("a, b", "a", vec![Some(1), Some(3), Some(2), None]),
+        ("b, a", "b", vec![Some(3), Some(1), None, Some(2)]),
+        (
+            "named_struct('v', a['v']), named_struct('v', b['v'])",
+            "a",
+            vec![Some(1), Some(3), Some(2), None],
+        ),
+    ] {
+        let expected = DataType::List(Arc::new(Field::new_list_field(
+            DataType::Struct(
+                vec![Field::new("v", DataType::Int32, true).with_metadata(
+                    HashMap::from([("origin".to_string(), origin.to_string())]),
+                )]
+                .into(),
+            ),
+            true,
+        )));
+        let df = ctx
+            .sql(&format!("SELECT make_array({args}) AS xs FROM t"))
+            .await?;
+        assert_eq!(df.schema().field(0).data_type(), &expected, "{args}");
+        let batches = df.collect().await?;
+        let values = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(values.data_type(), &expected, "{args}");
+        assert_eq!(values.value_offsets(), &[0, 2, 4]);
+        let items = values
+            .values()
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(
+            items.column(0).as_ref(),
+            &Int32Array::from(expected_values),
+            "{args}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_array_constructor_field_metadata_conflict() -> Result<()> {
+    let ctx = SessionContext::new();
+    let fields = ["example.first", "example.second"]
+        .into_iter()
+        .enumerate()
+        .map(|(i, name)| {
+            Field::new(format!("c{i}"), DataType::Int32, true).with_metadata(
+                HashMap::from([("ARROW:extension:name".to_string(), name.to_string())]),
+            )
+        })
+        .collect::<Vec<_>>();
+    ctx.register_batch("t", RecordBatch::new_empty(Arc::new(Schema::new(fields))))?;
+    let err = ctx
+        .sql("SELECT make_array(c0, c1) FROM t")
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("Cannot merge field metadata"),
+        "{err}"
+    );
+    assert!(err.to_string().contains("example.first"), "{err}");
+    assert!(err.to_string().contains("example.second"), "{err}");
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_conditional_functions_field_metadata() -> Result<()> {
     let ctx = SessionContext::new();

@@ -15,7 +15,7 @@ use crate::utils::{NamePreserver, merge_into_schema};
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::metadata::merge_metadata_for_union;
+use datafusion_common::metadata::{FieldMetadata, merge_metadata_for_union};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -1492,7 +1492,10 @@ fn coerce_scalar_function_argument(
     if value.data_type() != *data_type
         && let Ok(value) = value.cast_to(data_type)
     {
-        return Ok(Expr::Literal(value, metadata));
+        return Ok(Expr::Literal(
+            value,
+            metadata.map(FieldMetadata::without_extension_type),
+        ));
     }
 
     // A failed value cast remains an expression cast so execution produces the

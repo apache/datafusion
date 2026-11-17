@@ -12,9 +12,10 @@ use arrow::compute::{CastOptions, can_cast_types};
 use arrow::datatypes::{DataType, DataType::*, Field, FieldRef, Metadata, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::display::{ArrayFormatterFactory, DurationFormat, FormatOptions};
-use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
+use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
@@ -324,16 +325,16 @@ impl CastExpr {
         // Type-only cast: pass through the source metadata and nullability,
         // stripping extension type keys (the cast is to a plain storage type).
         source_result.map(|source_field| {
-            let mut metadata = source_field.metadata().clone();
-            metadata.remove(EXTENSION_TYPE_NAME_KEY);
-            metadata.remove(EXTENSION_TYPE_METADATA_KEY);
-
             Arc::new(
                 source_field
                     .as_ref()
                     .clone()
                     .with_data_type(self.cast_type().clone())
-                    .with_metadata(metadata),
+                    .with_metadata(
+                        FieldMetadata::new_from_field(&source_field)
+                            .without_extension_type()
+                            .to_metadata(),
+                    ),
             )
         })
     }
@@ -916,6 +917,7 @@ mod tests {
         },
         datatypes::*,
     };
+    use arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY;
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::{
         as_boolean_array, as_int64_array, as_string_array, as_struct_array,
