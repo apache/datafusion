@@ -8130,3 +8130,93 @@ DROP TABLE per_partition_constant;
 # restore that value rather than resetting.
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+# https://github.com/apache/datafusion/issues/27267
+# The window result's non-NULL values can already be ordered while its NULLs
+# still need to move to satisfy the outer ORDER BY.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE window_null_order(ts INT, rising INT, falling INT, trailing INT) AS
+VALUES (1, NULL, NULL, 5), (2, 3, 5, 3), (3, 5, 3, NULL);
+
+query II
+SELECT ts, m FROM (
+  SELECT ts, MAX(rising) OVER (ORDER BY ts) AS m
+  FROM (SELECT * FROM window_null_order ORDER BY ts)
+)
+ORDER BY m ASC NULLS LAST;
+----
+2 3
+3 5
+1 NULL
+
+query II
+SELECT ts, m FROM (
+  SELECT ts, MIN(falling) OVER (ORDER BY ts) AS m
+  FROM (SELECT * FROM window_null_order ORDER BY ts)
+)
+ORDER BY m DESC NULLS LAST;
+----
+2 5
+3 3
+1 NULL
+
+query II
+SELECT ts, m FROM (
+  SELECT ts,
+    MAX(trailing) OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS m
+  FROM (SELECT * FROM window_null_order ORDER BY ts)
+)
+ORDER BY m DESC NULLS FIRST;
+----
+3 NULL
+1 5
+2 3
+
+statement ok
+CREATE TABLE window_nonnull_order(ts INT NOT NULL, x INT NOT NULL) AS
+VALUES (1, 1), (2, 3), (3, 5);
+
+query II
+SELECT ts, m FROM (
+  SELECT ts, MAX(x) FILTER (WHERE x > 1) OVER (ORDER BY ts) AS m
+  FROM window_nonnull_order
+)
+ORDER BY m ASC NULLS LAST;
+----
+2 3
+3 5
+1 NULL
+
+query II
+SELECT ts, m FROM (
+  SELECT ts, MAX(x) OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS m
+  FROM window_nonnull_order
+)
+ORDER BY m ASC NULLS LAST;
+----
+2 1
+3 3
+1 NULL
+
+query II
+SELECT ts, m FROM (
+  SELECT ts, MAX(x) OVER (ORDER BY ts DESC ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING) AS m
+  FROM window_nonnull_order
+)
+ORDER BY m DESC NULLS FIRST;
+----
+1 NULL
+3 3
+2 1
+
+statement ok
+DROP TABLE window_nonnull_order;
+
+statement ok
+DROP TABLE window_null_order;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;

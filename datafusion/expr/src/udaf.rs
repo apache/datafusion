@@ -1736,6 +1736,8 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
 /// values always increase (or stay the same) as new values are seen. On
 /// the other hand, `MIN` is monotonically decreasing as its value always
 /// decreases or stays the same as new values are seen.
+/// A set-monotonic aggregate that can return NULL does so only while its
+/// input contains no row with all arguments non-NULL.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SetMonotonicity {
     /// Aggregate value increases or stays the same as the input set grows.

@@ -20,11 +20,27 @@ use crate::{EquivalenceProperties, PhysicalExpr};
 
 use arrow::array::ArrayRef;
 use arrow::array::BooleanArray;
-use arrow::datatypes::FieldRef;
+use arrow::datatypes::{FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
 use datafusion_expr::{Accumulator, WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
+/// Checks whether a set-monotonic aggregate has a non-NULL result in every frame.
+pub fn result_never_null(expr: &dyn AggregateWindowExpr, schema: &Schema) -> bool {
+    let frame = expr.get_window_frame();
+    matches!(
+        frame.start_bound,
+        WindowFrameBound::Preceding(_) | WindowFrameBound::CurrentRow
+    ) && matches!(
+        frame.end_bound,
+        WindowFrameBound::CurrentRow | WindowFrameBound::Following(_)
+    ) && expr.filter_expr().is_none()
+        && expr
+            .expressions()
+            .iter()
+            .all(|arg| matches!(arg.nullable(schema), Ok(false)))
+}
 
 /// Reverses an aggregate-backed window expression.
 ///
@@ -121,6 +137,15 @@ impl PlainAggregateWindowExpr {
             .get_aggregate_expr()
             .get_result_ordering(window_expr_index)
         {
+            if result_never_null(self, eq_properties.schema()) {
+                let mut nulls_last = expr.clone();
+                nulls_last.options.nulls_first = false;
+                add_new_ordering_expr_with_partition_by(
+                    eq_properties,
+                    nulls_last,
+                    &self.partition_by,
+                )?;
+            }
             add_new_ordering_expr_with_partition_by(
                 eq_properties,
                 expr,

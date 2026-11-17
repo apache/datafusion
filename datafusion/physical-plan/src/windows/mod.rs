@@ -31,7 +31,7 @@ use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::window::{
-    SlidingAggregateWindowExpr, StandardWindowFunctionExpr,
+    SlidingAggregateWindowExpr, StandardWindowFunctionExpr, result_never_null,
 };
 use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
 use datafusion_physical_expr_common::sort_expr::{
@@ -462,8 +462,7 @@ pub(crate) fn window_equivalence_properties(
                     window_eq_properties.add_orderings(new_lexs);
                 }
             } else {
-                // The window frame is ever expanding, so set monotonicity comes
-                // into play.
+                // The expanding frame can only have NULL results at the start.
                 plain_expr.add_equal_orderings(
                     &mut window_eq_properties,
                     window_expr_indices[i],
@@ -481,22 +480,27 @@ pub(crate) fn window_equivalence_properties(
                 // monotonicity, we can utilize it to introduce new orderings.
                 let frame = sliding_expr.get_window_frame();
                 if frame.end_bound.is_unbounded() {
+                    // Once a shrinking frame holds no non-NULL inputs, it stays NULL.
                     let increasing = set_monotonicity.eq(&SetMonotonicity::Increasing);
                     let window_col = Column::new(expr.name(), i + input_schema_len);
-                    if no_partitioning {
-                        // Reverse set-monotonic cases with no partitioning:
-                        window_eq_properties.add_ordering([PhysicalSortExpr::new(
-                            Arc::new(window_col),
-                            SortOptions::new(increasing, true),
-                        )]);
-                    } else {
-                        // Reverse set-monotonic cases for all orderings:
-                        for mut lex in all_satisfied_lexs.into_iter() {
-                            lex.push(PhysicalSortExpr::new(
-                                Arc::new(window_col.clone()),
-                                SortOptions::new(increasing, true),
-                            ));
-                            window_eq_properties.add_ordering(lex);
+                    let nulls_first_options: &[bool] =
+                        if result_never_null(sliding_expr, input.schema().as_ref()) {
+                            &[false, true]
+                        } else {
+                            &[false]
+                        };
+                    for &nulls_first in nulls_first_options {
+                        let sort = PhysicalSortExpr::new(
+                            Arc::new(window_col.clone()),
+                            SortOptions::new(increasing, nulls_first),
+                        );
+                        if no_partitioning {
+                            window_eq_properties.add_ordering([sort]);
+                        } else {
+                            for mut lex in all_satisfied_lexs.iter().cloned() {
+                                lex.push(sort.clone());
+                                window_eq_properties.add_ordering(lex);
+                            }
                         }
                     }
                 }
