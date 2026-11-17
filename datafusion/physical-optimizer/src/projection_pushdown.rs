@@ -15,12 +15,13 @@ use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeIterator, TreeNodeRecursion,
 };
 use datafusion_common::{JoinSide, JoinType, Result, internal_datafusion_err};
 use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
 use datafusion_physical_expr::projection::ProjectionExpr;
+use datafusion_physical_expr::{conjunction, split_conjunction};
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -194,7 +195,6 @@ fn try_push_down_projection(
     join_filter: JoinFilter,
     alias_generator: &AliasGenerator,
 ) -> Result<Transformed<(Arc<dyn ExecutionPlan>, JoinFilter)>> {
-    let expr = Arc::clone(join_filter.expression());
     let original_plan_schema = plan.schema();
     let mut rewriter = JoinFilterRewriter::new(
         join_side,
@@ -202,7 +202,14 @@ fn try_push_down_projection(
         join_filter.column_indices().to_vec(),
         alias_generator,
     );
-    let new_expr = rewriter.rewrite(expr)?;
+    // The conjuncts of the filter carry no evaluation order: the logical optimizer splits the
+    // filter into conjuncts, reorders them and may push single-side ones below the join. Each
+    // one is rewritten on its own, so only an `AND` nested below them short-circuits.
+    let new_expr = split_conjunction(join_filter.expression())
+        .into_iter()
+        .map(Arc::clone)
+        .map_until_stop_and_collect(|conjunct| rewriter.rewrite(conjunct))?
+        .update_data(conjunction);
 
     if new_expr.transformed {
         let new_join_side =
@@ -302,6 +309,13 @@ fn minimize_join_filter(
 /// this is never the case, no subexpressions of the filter can be pushed down. If there is a
 /// subexpression that can be computed using only one side of the join, the entire subexpression is
 /// pushed down to the join side.
+///
+/// The rewriter does not descend into an expression that [short-circuits], because a projection
+/// below the join evaluates what it holds for every row of that side. For example, the cast in
+/// `CASE WHEN r.v > 100 THEN CAST(l.s AS INT) ELSE 0 END > 1` stays in the filter, where it is
+/// only evaluated for the rows with `r.v > 100`.
+///
+/// [short-circuits]: PhysicalExpr::short_circuits
 struct JoinFilterRewriter<'a> {
     join_side: JoinSide,
     join_side_schema: &'a Schema,
@@ -363,6 +377,9 @@ impl<'a> JoinFilterRewriter<'a> {
         let depends_on_other_side =
             self.depends_on_join_side(&expr, self.join_side.negate())?;
         if depends_on_other_side || is_volatile(&expr) {
+            if expr.short_circuits() {
+                return Ok(Transformed::no(expr));
+            }
             return expr.map_children(|expr| self.rewrite(expr));
         }
 
@@ -739,7 +756,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn does_not_push_down_short_circuiting_expressions() -> Result<()> {
+    async fn pushes_down_all_top_level_conjuncts() -> Result<()> {
         let (left_schema, right_schema) = create_simple_schemas();
         let optimized_plan = run_test(
             left_schema,
