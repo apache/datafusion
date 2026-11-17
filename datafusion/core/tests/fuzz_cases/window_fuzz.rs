@@ -180,7 +180,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
             // Window function
             WindowFunctionDefinition::AggregateUDF(count_udaf()),
             // its name
-            "COUNT",
+            "count",
             // window function argument
             vec![col("x", &schema)?],
             // Expected causality, for None cases causality will be determined from window frame boundaries

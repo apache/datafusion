@@ -2797,10 +2797,7 @@ impl Projection {
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
-        #[expect(deprecated)]
-        if !expr.iter().any(|e| matches!(e, Expr::Wildcard { .. }))
-            && expr.len() != schema.fields().len()
-        {
+        if expr.len() != schema.fields().len() {
             return plan_err!(
                 "Projection has mismatch between number of expressions ({}) and number of fields in schema ({})",
                 expr.len(),
@@ -4606,40 +4603,13 @@ fn calc_func_dependencies_for_project(
     }
 
     let input_schema = input.schema();
-    let input_index = |expr: &Expr| {
-        passthrough_field_index(expr, input_schema).unwrap_or(COMPUTED_EXPR_INDEX)
-    };
 
     // Map each projection output position to its input column index.
-    // A projection expression can produce multiple output columns, such as `*`.
     let proj_indices = exprs
         .iter()
-        .map(|expr| match expr {
-            #[expect(deprecated)]
-            Expr::Wildcard { qualifier, options } => {
-                let wildcard_fields = exprlist_to_fields(
-                    vec![&Expr::Wildcard {
-                        qualifier: qualifier.clone(),
-                        options: options.clone(),
-                    }],
-                    input,
-                )?;
-                Ok::<_, DataFusionError>(
-                    wildcard_fields
-                        .into_iter()
-                        .map(|(qualifier, f)| {
-                            input_schema
-                                .index_of_column_by_name(qualifier.as_ref(), f.name())
-                                .unwrap_or(COMPUTED_EXPR_INDEX)
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            }
-            _ => Ok(vec![input_index(expr)]),
+        .map(|expr| {
+            passthrough_field_index(expr, input_schema).unwrap_or(COMPUTED_EXPR_INDEX)
         })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
         .collect::<Vec<_>>();
 
     Ok(input_func_dependencies
@@ -5772,34 +5742,6 @@ mod tests {
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].source_indices, vec![1]);
         assert_eq!(deps[0].target_indices, vec![0, 1, 2, 3, 4, 5]);
-
-        Ok(())
-    }
-
-    #[test]
-    fn projection_with_wildcard_expr_before_pk_preserves_pk() -> Result<()> {
-        let constraints =
-            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
-        let source = Arc::new(
-            LogicalTableSource::new(Arc::new(employee_schema()))
-                .with_constraints(constraints),
-        );
-        let input = LogicalPlanBuilder::scan("employee_csv", source, None)?.build()?;
-        #[expect(deprecated)]
-        let projection = Projection::try_new(
-            vec![
-                Expr::Wildcard {
-                    qualifier: None,
-                    options: Box::new(crate::expr::WildcardOptions::default()),
-                },
-                col("employee_csv.id"),
-            ],
-            Arc::new(input),
-        )?;
-
-        let deps = projection.schema.functional_dependencies();
-        assert_eq!(deps.len(), 1);
-        assert_eq!(deps[0].source_indices, vec![1]);
 
         Ok(())
     }
