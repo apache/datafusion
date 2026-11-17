@@ -90,7 +90,15 @@ pub trait GroupValues: Send {
     /// When the function returns, `groups` has been cleared and contains one
     /// entry per input row: `Some(group_id)` if the value is already stored
     /// and `None` otherwise. Stored values and group ids are unchanged.
-    fn find(&mut self, cols: &[ArrayRef], groups: &mut Vec<Option<usize>>) -> Result<()>;
+    ///
+    /// The default implementation returns a not-implemented error.
+    fn find(
+        &mut self,
+        _cols: &[ArrayRef],
+        _groups: &mut Vec<Option<usize>>,
+    ) -> Result<()> {
+        not_impl_err!("GroupValues::find is not implemented")
+    }
 
     /// Returns the number of bytes of memory used by this [`GroupValues`].
     ///

@@ -139,6 +139,9 @@ where
                     let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
+                        // SAFETY: every group index in `map` is in bounds of `values`:
+                        // entries are inserted with their value, and `emit` and
+                        // `clear_shrink` update both together.
                         |&(g, h)| unsafe {
                             hash == h && self.values.get_unchecked(g).is_eq(key)
                         },
@@ -172,6 +175,9 @@ where
                     let key = key.normalize_key();
                     let hash = key.hash(&self.random_state);
                     self.map
+                        // SAFETY: every group index in `map` is in bounds of `values`:
+                        // entries are inserted with their value, and `emit` and
+                        // `clear_shrink` update both together.
                         .find(hash, |&(g, h)| unsafe {
                             hash == h && self.values.get_unchecked(g).is_eq(key)
                         })

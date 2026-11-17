@@ -178,6 +178,12 @@ impl GroupValues for GroupValuesRows {
     }
 
     fn find(&mut self, cols: &[ArrayRef], groups: &mut Vec<Option<usize>>) -> Result<()> {
+        groups.clear();
+        let Some(group_values) = self.group_values.as_ref() else {
+            groups.resize(cols[0].len(), None);
+            return Ok(());
+        };
+
         // Same normalization as `intern`, so lookups agree with stored keys.
         let normalized_cols: Vec<ArrayRef> = cols
             .iter()
@@ -194,12 +200,6 @@ impl GroupValues for GroupValuesRows {
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
         create_hashes(cols, &self.random_state, batch_hashes)?;
-
-        groups.clear();
-        let Some(group_values) = self.group_values.as_ref() else {
-            groups.resize(n_rows, None);
-            return Ok(());
-        };
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self.map.find(target_hash, |(exist_hash, group_idx)| {
