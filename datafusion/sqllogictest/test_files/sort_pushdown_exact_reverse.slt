@@ -1,0 +1,546 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Tests for `datafusion.execution.parquet.enable_exact_reverse_scan`.
+#
+# With the option on, a scan whose requested ordering is the reverse of the
+# declared file ordering reads each file back to front, rows within each row
+# group included, so the scan is exactly ordered and the `SortExec` above it
+# is removed. With it off, only the row group order is reversed and the sort
+# is kept (see sort_pushdown.slt).
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;
+
+statement ok
+SET datafusion.execution.parquet.enable_exact_reverse_scan = true;
+
+# Small row groups so every file has several of them.
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 2;
+
+statement ok
+CREATE TABLE src(id INT, category VARCHAR) AS VALUES
+(1, 'a'), (2, 'b'), (3, 'a'), (4, 'b'), (5, 'a'),
+(6, 'b'), (7, 'a'), (8, 'b'), (9, 'a'), (10, 'b');
+
+query I
+COPY (SELECT * FROM src ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown_exact_reverse/single/data.parquet';
+----
+10
+
+statement ok
+CREATE EXTERNAL TABLE single_file(id INT, category VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/single/'
+WITH ORDER (id ASC);
+
+# Test 1: DESC LIMIT on an ASC file: no SortExec, the limit is pushed into
+# the scan, and the scan declares the reversed ordering.
+query TT
+EXPLAIN SELECT * FROM single_file ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: single_file.id DESC NULLS FIRST, fetch=3
+02)--TableScan: single_file projection=[id, category]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/single/data.parquet]]}, projection=[id, category], limit=3, output_ordering=[id@0 DESC], file_type=parquet, reverse_row_groups=true, reverse_rows=true
+
+query IT
+SELECT * FROM single_file ORDER BY id DESC LIMIT 3;
+----
+10 b
+9 a
+8 b
+
+# Test 2: the full reversed scan, across all five row groups.
+query IT
+SELECT * FROM single_file ORDER BY id DESC;
+----
+10 b
+9 a
+8 b
+7 a
+6 b
+5 a
+4 b
+3 a
+2 b
+1 a
+
+# Test 3: a pushed-down filter drops rows before they are reversed.
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+query TT
+EXPLAIN SELECT * FROM single_file WHERE category = 'a' ORDER BY id DESC LIMIT 4;
+----
+logical_plan
+01)Sort: single_file.id DESC NULLS FIRST, fetch=4
+02)--Filter: single_file.category = Utf8View("a")
+03)----TableScan: single_file projection=[id, category], partial_filters=[single_file.category = Utf8View("a")]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/single/data.parquet]]}, projection=[id, category], limit=4, output_ordering=[id@0 DESC], file_type=parquet, predicate=category@1 = a, reverse_row_groups=true, reverse_rows=true, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= a AND a <= category_max@1, required_guarantees=[category in (a)]
+
+query IT
+SELECT * FROM single_file WHERE category = 'a' ORDER BY id DESC LIMIT 4;
+----
+9 a
+7 a
+5 a
+3 a
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = false;
+
+# Test 4: several non-overlapping files in one group are read in reverse
+# file order.
+query I
+COPY (SELECT * FROM src WHERE id <= 5 ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown_exact_reverse/multi/a.parquet';
+----
+5
+
+query I
+COPY (SELECT * FROM src WHERE id > 5 ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown_exact_reverse/multi/b.parquet';
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE multi_file(id INT, category VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/multi/'
+WITH ORDER (id ASC);
+
+query TT
+EXPLAIN SELECT * FROM multi_file ORDER BY id DESC LIMIT 7;
+----
+logical_plan
+01)Sort: multi_file.id DESC NULLS FIRST, fetch=7
+02)--TableScan: multi_file projection=[id, category]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/multi/b.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/multi/a.parquet]]}, projection=[id, category], limit=7, output_ordering=[id@0 DESC], file_type=parquet, reverse_row_groups=true, reverse_rows=true
+
+query IT
+SELECT * FROM multi_file ORDER BY id DESC LIMIT 7;
+----
+10 b
+9 a
+8 b
+7 a
+6 b
+5 a
+4 b
+
+# Test 5: overlapping files cannot be read back to front as one ordered
+# stream, so the pushdown falls back to `Inexact` and the sort stays.
+query I
+COPY (SELECT * FROM src WHERE id % 2 = 1 ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown_exact_reverse/overlap/odd.parquet';
+----
+5
+
+query I
+COPY (SELECT * FROM src WHERE id % 2 = 0 ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown_exact_reverse/overlap/even.parquet';
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE overlapping(id INT, category VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/overlap/'
+WITH ORDER (id ASC);
+
+query TT
+EXPLAIN SELECT * FROM overlapping ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: overlapping.id DESC NULLS FIRST, fetch=3
+02)--TableScan: overlapping projection=[id, category]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/overlap/odd.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/overlap/even.parquet]]}, projection=[id, category], file_type=parquet, predicate=DynamicFilter [ empty ], sort_order_for_reorder=[id@0 DESC], reverse_row_groups=true, dynamic_rg_pruning=eligible
+
+query IT
+SELECT * FROM overlapping ORDER BY id DESC LIMIT 3;
+----
+10 b
+9 a
+8 b
+
+# Test 6: a multi-column ordering reversed serves a prefix of its reverse
+# and the full reverse.
+statement ok
+CREATE TABLE pairs(a INT, b INT) AS VALUES
+(1, 3), (1, 2), (1, 1), (2, 3), (2, 2), (2, 1), (3, 2), (3, 1);
+
+query I
+COPY (SELECT * FROM pairs ORDER BY a ASC, b DESC)
+TO 'test_files/scratch/sort_pushdown_exact_reverse/pairs/data.parquet';
+----
+8
+
+statement ok
+CREATE EXTERNAL TABLE pairs_file(a INT, b INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/pairs/'
+WITH ORDER (a ASC, b DESC);
+
+query TT
+EXPLAIN SELECT * FROM pairs_file ORDER BY a DESC, b ASC;
+----
+logical_plan
+01)Sort: pairs_file.a DESC NULLS FIRST, pairs_file.b ASC NULLS LAST
+02)--TableScan: pairs_file projection=[a, b]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/pairs/data.parquet]]}, projection=[a, b], output_ordering=[a@0 DESC, b@1 ASC NULLS LAST], file_type=parquet, reverse_row_groups=true, reverse_rows=true
+
+query II
+SELECT * FROM pairs_file ORDER BY a DESC, b ASC;
+----
+3 1
+3 2
+2 1
+2 2
+2 3
+1 1
+1 2
+1 3
+
+query II
+SELECT * FROM pairs_file ORDER BY a DESC LIMIT 4;
+----
+3 1
+3 2
+2 1
+2 2
+
+# Test 7: NULLs written last under ASC NULLS LAST come out first when read
+# back to front, which is what DESC NULLS FIRST asks for.
+statement ok
+CREATE TABLE with_nulls(id INT) AS VALUES (1), (2), (3), (NULL), (NULL);
+
+query I
+COPY (SELECT * FROM with_nulls ORDER BY id ASC NULLS LAST)
+TO 'test_files/scratch/sort_pushdown_exact_reverse/nulls/data.parquet';
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE nulls_file(id INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/nulls/'
+WITH ORDER (id ASC NULLS LAST);
+
+query TT
+EXPLAIN SELECT * FROM nulls_file ORDER BY id DESC NULLS FIRST LIMIT 3;
+----
+logical_plan
+01)Sort: nulls_file.id DESC NULLS FIRST, fetch=3
+02)--TableScan: nulls_file projection=[id]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/nulls/data.parquet]]}, projection=[id], limit=3, output_ordering=[id@0 DESC], file_type=parquet, reverse_row_groups=true, reverse_rows=true
+
+query I
+SELECT * FROM nulls_file ORDER BY id DESC NULLS FIRST LIMIT 3;
+----
+NULL
+NULL
+3
+
+# Test 8: on a NOT NULL column, `DESC NULLS LAST` is not literally the
+# reverse of `ASC NULLS LAST`, but is equivalent to it, so the scan is still
+# reversed exactly.
+statement ok
+CREATE EXTERNAL TABLE multi_file_not_null(id INT NOT NULL, category VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/multi/'
+WITH ORDER (id ASC NULLS LAST);
+
+query TT
+EXPLAIN SELECT * FROM multi_file_not_null ORDER BY id DESC NULLS LAST LIMIT 7;
+----
+logical_plan
+01)Sort: multi_file_not_null.id DESC NULLS LAST, fetch=7
+02)--TableScan: multi_file_not_null projection=[id, category]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/multi/b.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/multi/a.parquet]]}, projection=[id, category], limit=7, output_ordering=[id@0 DESC], file_type=parquet, reverse_row_groups=true, reverse_rows=true
+
+query IT
+SELECT * FROM multi_file_not_null ORDER BY id DESC NULLS LAST LIMIT 7;
+----
+10 b
+9 a
+8 b
+7 a
+6 b
+5 a
+4 b
+
+# Test 9: two partitions, one file each. Each partition reads its file back
+# to front and the merge above combines them.
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+statement ok
+CREATE EXTERNAL TABLE multi_file_two_partitions(id INT, category VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/multi/'
+WITH ORDER (id ASC);
+
+query TT
+EXPLAIN SELECT * FROM multi_file_two_partitions ORDER BY id DESC LIMIT 7;
+----
+logical_plan
+01)Sort: multi_file_two_partitions.id DESC NULLS FIRST, fetch=7
+02)--TableScan: multi_file_two_partitions projection=[id, category]
+physical_plan
+01)SortPreservingMergeExec: [id@0 DESC], fetch=7
+02)--BufferExec: capacity=1073741824
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/multi/a.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/multi/b.parquet]]}, projection=[id, category], limit=7, output_ordering=[id@0 DESC], file_type=parquet, reverse_row_groups=true, reverse_rows=true
+
+query IT
+SELECT * FROM multi_file_two_partitions ORDER BY id DESC LIMIT 7;
+----
+10 b
+9 a
+8 b
+7 a
+6 b
+5 a
+4 b
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+# Test 10: with the option off, the reverse scan stays `Inexact`. The parquet
+# read options are captured when the table is created, so the table is
+# created again after the option changes.
+statement ok
+SET datafusion.execution.parquet.enable_exact_reverse_scan = false;
+
+statement ok
+CREATE EXTERNAL TABLE single_file_inexact(id INT, category VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/single/'
+WITH ORDER (id ASC);
+
+query TT
+EXPLAIN SELECT * FROM single_file_inexact ORDER BY id DESC LIMIT 3;
+----
+logical_plan
+01)Sort: single_file_inexact.id DESC NULLS FIRST, fetch=3
+02)--TableScan: single_file_inexact projection=[id, category]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/single/data.parquet]]}, projection=[id, category], file_type=parquet, predicate=DynamicFilter [ empty ], sort_order_for_reorder=[id@0 DESC], reverse_row_groups=true, dynamic_rg_pruning=eligible
+
+query IT
+SELECT * FROM single_file_inexact ORDER BY id DESC LIMIT 3;
+----
+10 b
+9 a
+8 b
+
+statement ok
+SET datafusion.execution.parquet.enable_exact_reverse_scan = true;
+
+# Tests 11-13 use a scan that ends up holding a limit, with filters pushed
+# into the parquet reader and four rows per row group.
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 4;
+
+query I
+COPY (
+  SELECT value AS id, CASE WHEN value % 2 = 0 THEN 'a' ELSE 'b' END AS category
+  FROM generate_series(1, 40) ORDER BY id
+)
+TO 'test_files/scratch/sort_pushdown_exact_reverse/limited/data.parquet';
+----
+40
+
+query I
+COPY (SELECT * FROM (VALUES (1), (2), (39)) v(id))
+TO 'test_files/scratch/sort_pushdown_exact_reverse/probe/data.parquet';
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE limited(id BIGINT, category VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/limited/'
+WITH ORDER (id ASC);
+
+statement ok
+CREATE EXTERNAL TABLE probe(id BIGINT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/probe/';
+
+# Test 11: the reversed scan holds `LIMIT 5`, so a join's dynamic filter
+# must not be pushed below it: the filter would run before the limit and
+# let rows outside the top 5 through.
+query I
+SELECT p.id FROM probe p
+JOIN (SELECT * FROM limited ORDER BY id DESC LIMIT 5) x ON p.id = x.id
+ORDER BY 1;
+----
+39
+
+# Test 12: the same for the dynamic filter of a `TopK` above the limit.
+query I
+SELECT id FROM (SELECT * FROM limited ORDER BY id DESC LIMIT 5)
+ORDER BY category DESC, id LIMIT 1;
+----
+37
+
+# Test 13: a scan that already holds a limit is not reversed for a sort
+# above it, since reading it back to front would keep the other end of the
+# file.
+query I
+SELECT id FROM (SELECT * FROM limited ORDER BY id ASC LIMIT 5) ORDER BY id DESC;
+----
+5
+4
+3
+2
+1
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 2;
+
+# Test 14: a filter that fixes the leading column makes the reverse of
+# `(a ASC, b ASC)` satisfy `b DESC`, so the scan is reversed exactly. The
+# filter has to be pushed into the scan for the scan to see it.
+query I
+COPY (
+  SELECT a, b FROM generate_series(0, 2) t1(a), generate_series(1, 20) t2(b)
+  ORDER BY a, b
+)
+TO 'test_files/scratch/sort_pushdown_exact_reverse/ab/data.parquet';
+----
+60
+
+statement ok
+CREATE EXTERNAL TABLE ab(a BIGINT, b BIGINT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/ab/'
+WITH ORDER (a ASC, b ASC);
+
+query TT
+EXPLAIN SELECT * FROM ab WHERE a = 1 ORDER BY b DESC LIMIT 3;
+----
+logical_plan
+01)Sort: ab.b DESC NULLS FIRST, fetch=3
+02)--Filter: ab.a = Int64(1)
+03)----TableScan: ab projection=[a, b], partial_filters=[ab.a = Int64(1)]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/ab/data.parquet]]}, projection=[a, b], limit=3, output_ordering=[a@0 DESC, b@1 DESC], file_type=parquet, predicate=a@0 = 1, reverse_row_groups=true, reverse_rows=true, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= 1 AND 1 <= a_max@1, required_guarantees=[a in (1)]
+
+query II
+SELECT * FROM ab WHERE a = 1 ORDER BY b DESC LIMIT 3;
+----
+1 20
+1 19
+1 18
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
+
+# Test 15: a monotonic function of the declared column is served by the
+# reversed scan too.
+query I
+COPY (
+  SELECT to_timestamp_seconds(value * 21600) AS ts FROM generate_series(0, 11)
+  ORDER BY ts
+)
+TO 'test_files/scratch/sort_pushdown_exact_reverse/days/data.parquet';
+----
+12
+
+statement ok
+CREATE EXTERNAL TABLE days(ts TIMESTAMP)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/days/'
+WITH ORDER (ts ASC);
+
+query TT
+EXPLAIN SELECT ts FROM days ORDER BY date_trunc('day', ts) DESC LIMIT 4;
+----
+logical_plan
+01)Sort: date_trunc(Utf8("day"), days.ts) DESC NULLS FIRST, fetch=4
+02)--TableScan: days projection=[ts]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown_exact_reverse/days/data.parquet]]}, projection=[ts], limit=4, output_ordering=[ts@0 DESC], file_type=parquet, reverse_row_groups=true, reverse_rows=true
+
+query P rowsort
+SELECT ts FROM days ORDER BY date_trunc('day', ts) DESC LIMIT 4;
+----
+1970-01-03T00:00:00
+1970-01-03T06:00:00
+1970-01-03T12:00:00
+1970-01-03T18:00:00
+
+# Test 16: #27194, with the option off (the default). A subquery's
+# `ORDER BY ... LIMIT` over a sorted file leaves the scan holding the limit;
+# neither a reversing sort pushdown nor a pushed-down filter may change which
+# rows that limit keeps.
+statement ok
+SET datafusion.execution.parquet.enable_exact_reverse_scan = false;
+
+query I
+COPY (SELECT value AS s, value * 10 AS x FROM generate_series(1, 12) ORDER BY s)
+TO 'test_files/scratch/sort_pushdown_exact_reverse/issue_27194/t.parquet'
+STORED AS PARQUET OPTIONS ('format.max_row_group_size' '3');
+----
+12
+
+query I
+COPY (SELECT value AS k FROM generate_series(7, 8))
+TO 'test_files/scratch/sort_pushdown_exact_reverse/issue_27194/b.parquet'
+STORED AS PARQUET;
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE issue_27194_t STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/issue_27194/t.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE issue_27194_b STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown_exact_reverse/issue_27194/b.parquet';
+
+query I
+SELECT s FROM (SELECT * FROM issue_27194_t ORDER BY s LIMIT 3) ORDER BY s DESC;
+----
+3
+2
+1
+
+query I
+SELECT s FROM (SELECT * FROM issue_27194_t ORDER BY s LIMIT 3) ORDER BY x DESC LIMIT 1;
+----
+3
+
+query I
+SELECT i.s FROM issue_27194_b JOIN (SELECT s FROM issue_27194_t ORDER BY s LIMIT 3) i
+ON issue_27194_b.k = i.s;
+----
+
+# Cleanup
+statement ok
+RESET datafusion.execution.parquet.enable_exact_reverse_scan;
+
+statement ok
+RESET datafusion.execution.parquet.max_row_group_size;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
+
+statement ok
+RESET datafusion.optimizer.enable_sort_pushdown;
+
+# The test harness runs files with 4 target partitions.
+statement ok
+SET datafusion.execution.target_partitions = 4;

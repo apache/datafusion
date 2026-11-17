@@ -405,7 +405,6 @@ mod tests {
     use crate::PartitionedFile;
     use crate::file_groups::FileGroup;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::stats::Precision;
     use datafusion_physical_plan::ColumnStatistics;
 
     fn test_schema() -> SchemaRef {
@@ -519,6 +518,58 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("statistics not found for partition"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn min_max_statistics_null_partition_value() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("d", DataType::Date32, true),
+        ]));
+        let sort_order =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("d", 1)))].into();
+        let file = |path: &str, d: Option<i32>| {
+            let mut pf = PartitionedFile::new(path, 1);
+            pf.partition_values = vec![ScalarValue::Date32(d)];
+            pf.with_statistics(Arc::new(
+                Statistics::new_unknown(&test_schema())
+                    .with_num_rows(Precision::Exact(1)),
+            ))
+        };
+        let files = [file("d=1/f.parquet", Some(1)), file("null/f.parquet", None)];
+
+        let stats =
+            MinMaxStatistics::new_from_files(&sort_order, &schema, None, files.iter())?;
+
+        let sorted = stats.min_values_sorted();
+        assert_eq!(sorted.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [1, 0]);
+        assert!(!stats.is_sorted());
+
+        Ok(())
+    }
+
+    #[test]
+    fn min_max_statistics_null_partition_value_unknown_num_rows() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("d", DataType::Date32, true),
+        ]));
+        let sort_order =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("d", 1)))].into();
+        let mut pf = PartitionedFile::new("null/f.parquet", 1);
+        pf.partition_values = vec![ScalarValue::Date32(None)];
+        let files =
+            [pf.with_statistics(Arc::new(Statistics::new_unknown(&test_schema())))];
+
+        let Err(err) =
+            MinMaxStatistics::new_from_files(&sort_order, &schema, None, files.iter())
+        else {
+            panic!("expected missing statistics error")
+        };
+        assert!(
+            err.to_string().contains("statistics not found"),
             "unexpected error: {err:?}"
         );
     }
