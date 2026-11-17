@@ -6,6 +6,7 @@ mod expr;
 mod plan;
 mod rel;
 mod substrait_consumer;
+mod type_resolution;
 mod types;
 mod utils;
 
