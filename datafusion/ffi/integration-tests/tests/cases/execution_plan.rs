@@ -12,8 +12,13 @@ mod tests {
         ExecutionPlanPrivateData, FFI_ExecutionPlan, ForeignExecutionPlan,
         tests::EmptyExec,
     };
-    use datafusion_ffi::tests::utils::{get_byte_metrics_exec, get_module};
+    use datafusion_ffi::physical_expr::ForeignPhysicalExpr;
+    use datafusion_ffi::tests::ForeignLibraryModule;
+    use datafusion_ffi::tests::utils::{
+        get_byte_metrics_exec, get_module, get_module_copy,
+    };
     use datafusion_physical_expr_common::metrics::{MetricCategory, MetricValue};
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::execution_plan::InvariantLevel;
     use datafusion_physical_plan::{
         ChildrenPropertiesMode, ExecutionPlan, Partitioning, ReplaceChildrenOptions,
@@ -159,6 +164,41 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["(20)", "(40)"]
         );
+
+        Ok(())
+    }
+
+    /// `ForeignPhysicalExpr` equality may only look inside an expression
+    /// created by the same library image. Expressions from two separately
+    /// loaded copies of the cdylib must compare unequal even when they are
+    /// structurally identical, while two from the same copy compare equal.
+    #[test]
+    fn test_ffi_physical_expr_eq_across_library_images() -> Result<(), DataFusionError> {
+        fn range_sort_expr(
+            module: &ForeignLibraryModule,
+        ) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+            let plan = (module.create_exec_with_statistics)();
+            let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
+            let Partitioning::Range(range) = plan.properties().output_partitioning()
+            else {
+                panic!("expected range partitioning");
+            };
+            Ok(Arc::clone(&range.ordering().first().expr))
+        }
+
+        let library_b = get_module_copy("physical_expr_eq_library_b")?;
+        let library_c = get_module_copy("physical_expr_eq_library_c")?;
+
+        let b_1 = range_sort_expr(&library_b)?;
+        let b_2 = range_sort_expr(&library_b)?;
+        let c = range_sort_expr(&library_c)?;
+        assert!(b_1.downcast_ref::<ForeignPhysicalExpr>().is_some());
+        assert!(c.downcast_ref::<ForeignPhysicalExpr>().is_some());
+        assert_eq!(b_1.to_string(), c.to_string());
+
+        assert_eq!(&b_1, &b_2);
+        assert_ne!(&b_1, &c);
+        assert_ne!(&c, &b_1);
 
         Ok(())
     }
