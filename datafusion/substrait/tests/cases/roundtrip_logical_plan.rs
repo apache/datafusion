@@ -22,7 +22,7 @@ use std::mem::size_of_val;
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit,
 };
-use datafusion::common::tree_node::Transformed;
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{DFSchema, DFSchemaRef, Spans, not_impl_err, plan_err};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
@@ -1523,6 +1523,28 @@ async fn roundtrip_union_join_duplicate_column_names() -> Result<()> {
 #[tokio::test]
 async fn roundtrip_union_all() -> Result<()> {
     roundtrip("SELECT a, e FROM data UNION ALL SELECT a, e FROM data").await
+}
+
+#[tokio::test]
+async fn consume_nary_union_as_single_union() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT a, e FROM data UNION ALL SELECT a, e FROM data UNION ALL SELECT a, e FROM data")
+        .await?
+        .into_optimized_plan()?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    // Skip optimization: OptimizeUnions would hide a chain of nested 2-input unions.
+    let consumed = from_substrait_plan(&ctx.state(), &proto).await?;
+
+    let mut union_widths = vec![];
+    consumed.apply(|node| {
+        if let LogicalPlan::Union(union) = node {
+            union_widths.push(union.inputs.len());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert_eq!(union_widths, vec![3]);
+    Ok(())
 }
 
 #[tokio::test]
