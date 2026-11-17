@@ -5,6 +5,7 @@
 use crate::{
     datatype::DataTypeExt,
     error::{_plan_err, Result},
+    format::DEFAULT_CAST_OPTIONS,
 };
 use arrow::{
     array::{
@@ -23,6 +24,38 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
+
+/// Options for DataFusion casts that combine Arrow's cast behavior with an
+/// optional field-aware cast extension.
+#[derive(Debug, Clone)]
+pub struct DFCastOptions<'a> {
+    /// Options passed to Arrow casts and cast extensions.
+    pub arrow_options: CastOptions<'a>,
+    /// The top-level extension or extension registry used to resolve casts.
+    pub cast_extension: Option<&'a dyn CastExtension>,
+}
+
+impl<'a> DFCastOptions<'a> {
+    /// Creates cast options without a cast extension.
+    pub fn new(arrow_options: CastOptions<'a>) -> Self {
+        Self {
+            arrow_options,
+            cast_extension: None,
+        }
+    }
+
+    /// Sets the top-level cast extension or extension registry.
+    pub fn with_cast_extension(mut self, cast_extension: &'a dyn CastExtension) -> Self {
+        self.cast_extension = Some(cast_extension);
+        self
+    }
+}
+
+impl Default for DFCastOptions<'static> {
+    fn default() -> Self {
+        Self::new(DEFAULT_CAST_OPTIONS.clone())
+    }
+}
 
 /// Cast a struct column to match target struct fields, handling nested structs recursively.
 ///
@@ -54,8 +87,7 @@ use std::{
 fn cast_struct_column(
     source_col: &ArrayRef,
     target_fields: &[Arc<Field>],
-    cast_extension: Option<&dyn CastExtension>,
-    cast_options: &CastOptions,
+    options: &DFCastOptions<'_>,
 ) -> Result<ArrayRef> {
     if source_col.data_type() == &DataType::Null {
         return Ok(new_null_array(
@@ -72,7 +104,7 @@ fn cast_struct_column(
             source_fields,
             target_fields,
             Some(&mut mapped_source_fields),
-            cast_extension,
+            options,
         )?;
 
         if !source_col.is_empty() && source_col.null_count() == source_col.len() {
@@ -100,8 +132,7 @@ fn cast_struct_column(
                         source_child_col,
                         source_fields[*source_child_col_idx].as_ref(),
                         target_child_field.as_ref(),
-                        cast_extension,
-                        cast_options,
+                        options,
                     )
                     .map_err(|e| {
                         e.context(format!(
@@ -148,15 +179,14 @@ fn cast_union_column(
     source_mode: &UnionMode,
     target_fields: &UnionFields,
     target_mode: &UnionMode,
-    cast_extension: Option<&dyn CastExtension>,
-    cast_options: &CastOptions,
+    options: &DFCastOptions<'_>,
 ) -> Result<ArrayRef> {
     validate_union_schema_compatibility(
         source_fields,
         source_mode,
         target_fields,
         target_mode,
-        cast_extension,
+        options,
     )?;
 
     let source_union = source_col
@@ -183,8 +213,7 @@ fn cast_union_column(
                 source_child,
                 source_field.as_ref(),
                 target_field.as_ref(),
-                cast_extension,
-                cast_options,
+                options,
             )
             .map_err(|e| {
                 e.context(format!(
@@ -262,58 +291,46 @@ pub fn cast_column(
     target_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
+    let options = DFCastOptions::new(cast_options.clone());
     cast_column_fields(
         source_col,
         &source_col.data_type().clone().into_nullable_field(),
         &target_type.clone().into_nullable_field(),
-        None,
-        cast_options,
+        &options,
     )
 }
 
 /// Casts an array between fields, allowing custom casts that depend on field metadata.
 ///
 /// Unlike [`cast_column`], this function preserves source and target [`Field`] metadata
-/// and recursively passes it through nested container types.
+/// and recursively passes it through nested container types. It also passes the same
+/// [`DFCastOptions`] through extension dispatch and every recursive child cast.
 pub fn cast_column_fields(
     source_col: &ArrayRef,
     source_field: &Field,
     target_field: &Field,
-    cast_extension: Option<&dyn CastExtension>,
-    cast_options: &CastOptions,
+    options: &DFCastOptions<'_>,
 ) -> Result<ArrayRef> {
-    if let Some(cast_extension) = cast_extension
-        && cast_extension.can_cast_fields(source_field, target_field)?
+    if let Some(cast_extension) = options.cast_extension
+        && cast_extension.can_cast_fields(source_field, target_field, options)?
     {
         return cast_extension.cast_array_fields(
             source_col,
             source_field,
             target_field,
-            cast_options,
+            options,
         );
     }
 
     match (source_field.data_type(), target_field.data_type()) {
         (_, Struct(target_fields)) => {
-            cast_struct_column(source_col, target_fields, cast_extension, cast_options)
+            cast_struct_column(source_col, target_fields, options)
         }
         (DataType::List(source_inner), DataType::List(target_inner)) => {
-            cast_list_column::<i32>(
-                source_col,
-                source_inner,
-                target_inner,
-                cast_extension,
-                cast_options,
-            )
+            cast_list_column::<i32>(source_col, source_inner, target_inner, options)
         }
         (DataType::LargeList(source_inner), DataType::LargeList(target_inner)) => {
-            cast_list_column::<i64>(
-                source_col,
-                source_inner,
-                target_inner,
-                cast_extension,
-                cast_options,
-            )
+            cast_list_column::<i64>(source_col, source_inner, target_inner, options)
         }
         (
             DataType::FixedSizeList(source_inner, source_list_size),
@@ -323,30 +340,19 @@ pub fn cast_column_fields(
             source_inner,
             target_inner,
             *target_list_size,
-            cast_extension,
-            cast_options,
+            options,
         ),
         (DataType::ListView(source_inner), DataType::ListView(target_inner)) => {
-            cast_list_view_column::<i32>(
-                source_col,
-                source_inner,
-                target_inner,
-                cast_extension,
-                cast_options,
-            )
+            cast_list_view_column::<i32>(source_col, source_inner, target_inner, options)
         }
         (
             DataType::LargeListView(source_inner),
             DataType::LargeListView(target_inner),
-        ) => cast_list_view_column::<i64>(
-            source_col,
-            source_inner,
-            target_inner,
-            cast_extension,
-            cast_options,
-        ),
+        ) => {
+            cast_list_view_column::<i64>(source_col, source_inner, target_inner, options)
+        }
         (DataType::Map(_, _), DataType::Map(target_entries, target_sorted)) => {
-            if cast_extension.is_some()
+            if options.cast_extension.is_some()
                 || requires_nested_struct_cast(
                     source_field.data_type(),
                     target_field.data_type(),
@@ -356,14 +362,13 @@ pub fn cast_column_fields(
                     source_col.as_map(),
                     target_entries,
                     *target_sorted,
-                    cast_extension,
-                    cast_options,
+                    options,
                 )
             } else {
                 Ok(cast_with_options(
                     source_col,
                     target_field.data_type(),
-                    cast_options,
+                    &options.arrow_options,
                 )?)
             }
         }
@@ -376,8 +381,7 @@ pub fn cast_column_fields(
             source_value_type,
             target_key_type,
             target_value_type,
-            cast_extension,
-            cast_options,
+            options,
         ),
         (
             DataType::Union(source_fields, source_mode),
@@ -388,13 +392,12 @@ pub fn cast_column_fields(
             source_mode,
             target_fields,
             target_mode,
-            cast_extension,
-            cast_options,
+            options,
         ),
         _ => Ok(cast_with_options(
             source_col,
             target_field.data_type(),
-            cast_options,
+            &options.arrow_options,
         )?),
     }
 }
@@ -403,8 +406,7 @@ fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
     source_col: &ArrayRef,
     source_inner_field: &FieldRef,
     target_inner_field: &FieldRef,
-    cast_extension: Option<&dyn CastExtension>,
-    cast_options: &CastOptions,
+    options: &DFCastOptions<'_>,
 ) -> Result<ArrayRef> {
     let source_list = source_col.as_list::<O>();
     let offsets = source_list.value_offsets();
@@ -424,8 +426,7 @@ fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
         source_list.values(),
         source_inner_field.as_ref(),
         target_inner_field.as_ref(),
-        cast_extension,
-        cast_options,
+        options,
     )?;
 
     let result = GenericListArray::<O>::new(
@@ -441,8 +442,7 @@ fn cast_list_view_column<O: arrow::array::OffsetSizeTrait>(
     source_col: &ArrayRef,
     source_inner_field: &FieldRef,
     target_inner_field: &FieldRef,
-    cast_extension: Option<&dyn CastExtension>,
-    cast_options: &CastOptions,
+    options: &DFCastOptions<'_>,
 ) -> Result<ArrayRef> {
     let source_list = source_col.as_list_view::<O>();
     let compacted_values = compact_list_view_values(source_list)?;
@@ -459,8 +459,7 @@ fn cast_list_view_column<O: arrow::array::OffsetSizeTrait>(
         values,
         source_inner_field.as_ref(),
         target_inner_field.as_ref(),
-        cast_extension,
-        cast_options,
+        options,
     )?;
 
     let result = GenericListViewArray::<O>::try_new(
@@ -577,8 +576,7 @@ fn cast_fixed_size_list_column(
     source_inner_field: &FieldRef,
     target_inner_field: &FieldRef,
     target_list_size: i32,
-    cast_extension: Option<&dyn CastExtension>,
-    cast_options: &CastOptions,
+    options: &DFCastOptions<'_>,
 ) -> Result<ArrayRef> {
     let source_list = source_col.as_fixed_size_list();
 
@@ -587,16 +585,14 @@ fn cast_fixed_size_list_column(
         source_values,
         source_inner_field.as_ref(),
         target_inner_field.as_ref(),
-        cast_extension,
-        cast_options,
+        options,
     ) {
         Ok(cast_values) => cast_values,
         Err(error) => match cast_fixed_size_list_values_with_parent_nulls(
             source_values,
             source_inner_field,
             target_inner_field,
-            cast_extension,
-            cast_options,
+            options,
             source_list.nulls(),
             target_list_size,
         ) {
@@ -617,8 +613,7 @@ fn cast_fixed_size_list_values_with_parent_nulls(
     source_values: &ArrayRef,
     source_field: &FieldRef,
     target_field: &FieldRef,
-    cast_extension: Option<&dyn CastExtension>,
-    cast_options: &CastOptions,
+    options: &DFCastOptions<'_>,
     parent_nulls: Option<&NullBuffer>,
     list_size: i32,
 ) -> Option<Result<ArrayRef>> {
@@ -633,8 +628,7 @@ fn cast_fixed_size_list_values_with_parent_nulls(
             &values,
             source_field.as_ref(),
             target_field.as_ref(),
-            cast_extension,
-            cast_options,
+            options,
         )
     }))
 }
@@ -682,8 +676,7 @@ fn cast_map_column(
     source_map: &MapArray,
     target_entries: &FieldRef,
     target_sorted: bool,
-    cast_extension: Option<&dyn CastExtension>,
-    cast_options: &CastOptions,
+    options: &DFCastOptions<'_>,
 ) -> Result<ArrayRef> {
     let DataType::Map(source_entries, source_sorted) = source_map.data_type() else {
         unreachable!("MapArray data type must be Map")
@@ -694,7 +687,7 @@ fn cast_map_column(
         target_entries,
         target_sorted,
         None,
-        cast_extension,
+        options,
     )?;
     let (source_key, source_value) = validate_map_entries_field(source_entries)?;
 
@@ -714,16 +707,14 @@ fn cast_map_column(
         source_map.keys(),
         source_key.as_ref(),
         target_key.as_ref(),
-        cast_extension,
-        cast_options,
+        options,
     )
     .map_err(|error| error.context("While casting Map keys"))?;
     let cast_values = cast_column_fields(
         source_map.values(),
         source_value.as_ref(),
         target_value.as_ref(),
-        cast_extension,
-        cast_options,
+        options,
     )
     .map_err(|error| error.context("While casting Map values"))?;
     let Struct(target_fields) = target_entries.data_type() else {
@@ -759,8 +750,7 @@ fn cast_dictionary_column(
     source_value_type: &DataType,
     target_key_type: &DataType,
     target_value_type: &DataType,
-    cast_extension: Option<&dyn CastExtension>,
-    cast_options: &CastOptions,
+    options: &DFCastOptions<'_>,
 ) -> Result<ArrayRef> {
     // Dispatch on source key type to access keys/values, then recursively
     // cast values. Rebuild with the source key type first.
@@ -774,8 +764,7 @@ fn cast_dictionary_column(
                 source_dict.values(),
                 &source_value_type.clone().into_nullable_field(),
                 &target_value_type.clone().into_nullable_field(),
-                cast_extension,
-                cast_options,
+                options,
             )?;
             Ok(Arc::new(DictionaryArray::<$t>::new(
                 source_dict.keys().clone(),
@@ -796,7 +785,11 @@ fn cast_dictionary_column(
             Box::new(target_key_type.clone()),
             Box::new(target_value_type.clone()),
         );
-        Ok(cast_with_options(&result, &target_dict_type, cast_options)?)
+        Ok(cast_with_options(
+            &result,
+            &target_dict_type,
+            &options.arrow_options,
+        )?)
     } else {
         Ok(result)
     }
@@ -844,16 +837,20 @@ pub fn validate_struct_compatibility(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
 ) -> Result<()> {
-    validate_struct_compatibility_with_extension(source_fields, target_fields, None)
+    validate_struct_compatibility_with_options(
+        source_fields,
+        target_fields,
+        &DFCastOptions::default(),
+    )
 }
 
-/// Validates struct compatibility using an optional custom field cast implementation.
-pub fn validate_struct_compatibility_with_extension(
+/// Validates struct compatibility using the supplied DataFusion cast options.
+pub fn validate_struct_compatibility_with_options(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
-    cast_extension: Option<&dyn CastExtension>,
+    options: &DFCastOptions<'_>,
 ) -> Result<()> {
-    map_struct_fields(source_fields, target_fields, None, cast_extension)
+    map_struct_fields(source_fields, target_fields, None, options)
 }
 
 /// Performs the mapping of struct fields, checking compatibility and handling missing or extra fields.
@@ -871,7 +868,7 @@ fn map_struct_fields(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
     mut mapped_source_fields: Option<&mut Vec<Option<usize>>>,
-    cast_extension: Option<&dyn CastExtension>,
+    options: &DFCastOptions<'_>,
 ) -> Result<()> {
     if !source_fields.is_empty() {
         let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
@@ -894,7 +891,7 @@ fn map_struct_fields(
         let source_field_idx = if let Some((source_field_idx, source_field)) =
             source_field_opt
         {
-            validate_field_compatibility(source_field, target_field, cast_extension)?;
+            validate_field_compatibility(source_field, target_field, options)?;
 
             Some(source_field_idx)
         } else {
@@ -923,7 +920,7 @@ fn map_struct_fields(
 fn validate_field_compatibility(
     source_field: &Field,
     target_field: &Field,
-    cast_extension: Option<&dyn CastExtension>,
+    options: &DFCastOptions<'_>,
 ) -> Result<()> {
     if source_field.data_type() == &DataType::Null {
         // Validate that target allows nulls before returning early.
@@ -948,17 +945,17 @@ fn validate_field_compatibility(
         );
     }
 
-    if let Some(cast_extension) = cast_extension
-        && cast_extension.can_cast_fields(source_field, target_field)?
+    if let Some(cast_extension) = options.cast_extension
+        && cast_extension.can_cast_fields(source_field, target_field, options)?
     {
         return Ok(());
     }
 
-    validate_data_type_compatibility_with_extension(
+    validate_data_type_compatibility_with_options(
         target_field.name(),
         source_field.data_type(),
         target_field.data_type(),
-        cast_extension,
+        options,
     )
 }
 
@@ -968,7 +965,7 @@ fn validate_map_compatibility<'a>(
     target_entries: &'a Field,
     target_sorted: bool,
     field_name: Option<&str>,
-    cast_extension: Option<&dyn CastExtension>,
+    options: &DFCastOptions<'_>,
 ) -> Result<(&'a FieldRef, &'a FieldRef)> {
     if source_sorted != target_sorted {
         if let Some(field_name) = field_name {
@@ -981,13 +978,8 @@ fn validate_map_compatibility<'a>(
     }
     let (source_key, source_value) = validate_map_entries_field(source_entries)?;
     let (target_key, target_value) = validate_map_entries_field(target_entries)?;
-    validate_map_key_compatibility(
-        source_key,
-        target_key,
-        target_sorted,
-        cast_extension,
-    )?;
-    validate_field_compatibility(source_value, target_value, cast_extension)?;
+    validate_map_key_compatibility(source_key, target_key, target_sorted, options)?;
+    validate_field_compatibility(source_value, target_value, options)?;
     Ok((target_key, target_value))
 }
 
@@ -995,24 +987,24 @@ fn validate_map_key_compatibility(
     source_key: &Field,
     target_key: &Field,
     sorted: bool,
-    cast_extension: Option<&dyn CastExtension>,
+    options: &DFCastOptions<'_>,
 ) -> Result<()> {
     if sorted && source_key.data_type() != target_key.data_type() {
         return _plan_err!("Cannot evolve key type of a sorted Map");
     }
-    validate_map_key_field(source_key, target_key, sorted, cast_extension)
+    validate_map_key_field(source_key, target_key, sorted, options)
 }
 
 fn validate_map_key_field(
     source_field: &Field,
     target_field: &Field,
     sorted: bool,
-    cast_extension: Option<&dyn CastExtension>,
+    options: &DFCastOptions<'_>,
 ) -> Result<()> {
-    if let Some(cast_extension) = cast_extension
-        && cast_extension.can_cast_fields(source_field, target_field)?
+    if let Some(cast_extension) = options.cast_extension
+        && cast_extension.can_cast_fields(source_field, target_field, options)?
     {
-        if !is_injective_cast_fields(source_field, target_field, Some(cast_extension))? {
+        if !is_injective_cast_fields(source_field, target_field, options)? {
             return _plan_err!(
                 "Cannot safely evolve Map key type from {} to {}",
                 source_field.data_type(),
@@ -1020,8 +1012,15 @@ fn validate_map_key_field(
             );
         }
         if sorted
-            && (!cast_extension.is_order_preserving_fields(source_field, target_field)?
-                || !cast_extension.preserves_nulls_fields(source_field, target_field)?)
+            && (!cast_extension.is_order_preserving_fields(
+                source_field,
+                target_field,
+                options,
+            )? || !cast_extension.preserves_nulls_fields(
+                source_field,
+                target_field,
+                options,
+            )?)
         {
             return _plan_err!(
                 "Cannot evolve a sorted Map key using a cast extension that does not preserve ordering and nulls"
@@ -1070,12 +1069,7 @@ fn validate_map_key_field(
                         source_field.name()
                     );
                 }
-                validate_map_key_field(
-                    source_field,
-                    target_field,
-                    sorted,
-                    cast_extension,
-                )?;
+                validate_map_key_field(source_field, target_field, sorted, options)?;
             }
             for target_field in target_fields {
                 if !source_names.contains(target_field.name().as_str())
@@ -1139,19 +1133,19 @@ pub fn is_injective_cast(source_type: &DataType, target_type: &DataType) -> bool
 /// Returns whether the cast selected for `source_field` and `target_field` is
 /// known to preserve value identity.
 ///
-/// If `cast_extension` handles the fields, its injectivity declaration takes
+/// If the configured cast extension handles the fields, its injectivity declaration takes
 /// precedence because [`cast_column_fields`] also selects the extension before
 /// Arrow's built-in cast. Otherwise, identical data types and casts recognized
 /// by [`is_injective_cast`] are injective.
 pub fn is_injective_cast_fields(
     source_field: &Field,
     target_field: &Field,
-    cast_extension: Option<&dyn CastExtension>,
+    options: &DFCastOptions<'_>,
 ) -> Result<bool> {
-    if let Some(cast_extension) = cast_extension
-        && cast_extension.can_cast_fields(source_field, target_field)?
+    if let Some(cast_extension) = options.cast_extension
+        && cast_extension.can_cast_fields(source_field, target_field, options)?
     {
-        return cast_extension.is_injective_fields(source_field, target_field);
+        return cast_extension.is_injective_fields(source_field, target_field, options);
     }
 
     Ok(source_field.data_type() == target_field.data_type()
@@ -1198,7 +1192,7 @@ fn validate_union_schema_compatibility(
     source_mode: &UnionMode,
     target_fields: &UnionFields,
     target_mode: &UnionMode,
-    cast_extension: Option<&dyn CastExtension>,
+    options: &DFCastOptions<'_>,
 ) -> Result<()> {
     if source_mode != target_mode {
         return _plan_err!(
@@ -1226,13 +1220,14 @@ fn validate_union_schema_compatibility(
             );
         };
 
-        if cast_extension.is_some() {
-            validate_field_compatibility(source_field, target_field, cast_extension)
-                .map_err(|error| {
+        if options.cast_extension.is_some() {
+            validate_field_compatibility(source_field, target_field, options).map_err(
+                |error| {
                     error.context(format!(
                         "Cannot adapt Union child with type ID {target_type_id}"
                     ))
-                })?;
+                },
+            )?;
         } else if !target_field.contains(source_field) {
             return _plan_err!(
                 "Cannot adapt Union child with type ID {target_type_id}:                  source field {source_field} is not contained by target field {target_field}"
@@ -1248,43 +1243,43 @@ pub fn validate_data_type_compatibility(
     source_type: &DataType,
     target_type: &DataType,
 ) -> Result<()> {
-    validate_data_type_compatibility_with_extension(
+    validate_data_type_compatibility_with_options(
         field_name,
         source_type,
         target_type,
-        None,
+        &DFCastOptions::default(),
     )
 }
 
-/// Validates type compatibility using an optional custom field cast implementation.
-pub fn validate_data_type_compatibility_with_extension(
+/// Validates type compatibility using the supplied DataFusion cast options.
+pub fn validate_data_type_compatibility_with_options(
     field_name: &str,
     source_type: &DataType,
     target_type: &DataType,
-    cast_extension: Option<&dyn CastExtension>,
+    options: &DFCastOptions<'_>,
 ) -> Result<()> {
     match (source_type, target_type) {
         (Struct(source_nested), Struct(target_nested)) => {
-            validate_struct_compatibility_with_extension(
+            validate_struct_compatibility_with_options(
                 source_nested,
                 target_nested,
-                cast_extension,
+                options,
             )?;
         }
         (
             DataType::FixedSizeList(s, source_list_size),
             DataType::FixedSizeList(t, target_list_size),
         ) if source_list_size == target_list_size => {
-            validate_field_compatibility(s, t, cast_extension)?;
+            validate_field_compatibility(s, t, options)?;
         }
         (DataType::List(s), DataType::List(t))
         | (DataType::LargeList(s), DataType::LargeList(t))
         | (DataType::ListView(s), DataType::ListView(t))
         | (DataType::LargeListView(s), DataType::LargeListView(t)) => {
-            validate_field_compatibility(s, t, cast_extension)?;
+            validate_field_compatibility(s, t, options)?;
         }
         (DataType::Map(s, source_sorted), DataType::Map(t, target_sorted)) => {
-            if cast_extension.is_some()
+            if options.cast_extension.is_some()
                 || requires_nested_struct_cast(source_type, target_type)
             {
                 validate_map_compatibility(
@@ -1293,7 +1288,7 @@ pub fn validate_data_type_compatibility_with_extension(
                     t,
                     *target_sorted,
                     Some(field_name),
-                    cast_extension,
+                    options,
                 )?;
             } else if !can_cast_types(source_type, target_type) {
                 return _plan_err!(
@@ -1313,11 +1308,8 @@ pub fn validate_data_type_compatibility_with_extension(
                     field_name
                 );
             }
-            validate_data_type_compatibility_with_extension(
-                field_name,
-                s_val,
-                t_val,
-                cast_extension,
+            validate_data_type_compatibility_with_options(
+                field_name, s_val, t_val, options,
             )?;
         }
         (
@@ -1329,7 +1321,7 @@ pub fn validate_data_type_compatibility_with_extension(
                 source_mode,
                 target_fields,
                 target_mode,
-                cast_extension,
+                options,
             )?;
         }
         _ => {
@@ -1440,13 +1432,22 @@ pub fn has_one_of_more_common_fields(
 ///
 /// Implementations should return `true` from [`Self::can_cast_fields`] only for
 /// conversions they can perform in [`Self::cast_array_fields`].
+///
+/// When a registry dispatches to an independently registered extension, `self`
+/// is the selected extension while [`DFCastOptions::cast_extension`] remains the
+/// top-level registry. Recursive casts should pass the same options back to
+/// [`cast_column_fields`].
 pub trait CastExtension: std::fmt::Debug + Send + Sync {
     /// Returns whether this extension can cast between the supplied fields.
     ///
     /// Implementations may match only [`Field::data_type`] when the conversion
     /// does not depend on metadata.
-    fn can_cast_fields(&self, source_field: &Field, target_field: &Field)
-    -> Result<bool>;
+    fn can_cast_fields(
+        &self,
+        source_field: &Field,
+        target_field: &Field,
+        options: &DFCastOptions<'_>,
+    ) -> Result<bool>;
 
     /// Returns whether this extension's cast preserves value identity.
     ///
@@ -1457,6 +1458,7 @@ pub trait CastExtension: std::fmt::Debug + Send + Sync {
         &self,
         _source_field: &Field,
         _target_field: &Field,
+        _options: &DFCastOptions<'_>,
     ) -> Result<bool> {
         Ok(false)
     }
@@ -1468,6 +1470,7 @@ pub trait CastExtension: std::fmt::Debug + Send + Sync {
         &self,
         _source_field: &Field,
         _target_field: &Field,
+        _options: &DFCastOptions<'_>,
     ) -> Result<bool> {
         Ok(false)
     }
@@ -1480,6 +1483,7 @@ pub trait CastExtension: std::fmt::Debug + Send + Sync {
         &self,
         _source_field: &Field,
         _target_field: &Field,
+        _options: &DFCastOptions<'_>,
     ) -> Result<bool> {
         Ok(false)
     }
@@ -1490,14 +1494,14 @@ pub trait CastExtension: std::fmt::Debug + Send + Sync {
         array: &ArrayRef,
         source_field: &Field,
         target_field: &Field,
-        cast_options: &CastOptions,
+        options: &DFCastOptions<'_>,
     ) -> Result<ArrayRef>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{assert_contains, error::_internal_err, format::DEFAULT_CAST_OPTIONS};
+    use crate::{assert_contains, error::_internal_err};
     use arrow::{
         array::{
             BinaryArray, FixedSizeListArray, Int8Array, Int32Array, Int32Builder,
@@ -1560,6 +1564,7 @@ mod tests {
             &self,
             source_field: &Field,
             target_field: &Field,
+            _options: &DFCastOptions<'_>,
         ) -> Result<bool> {
             Ok(source_field
                 .metadata()
@@ -1576,9 +1581,9 @@ mod tests {
             array: &ArrayRef,
             source_field: &Field,
             target_field: &Field,
-            _cast_options: &CastOptions,
+            options: &DFCastOptions<'_>,
         ) -> Result<ArrayRef> {
-            if !self.can_cast_fields(source_field, target_field)? {
+            if !self.can_cast_fields(source_field, target_field, options)? {
                 return _internal_err!("Bool8ToStringCast cannot cast supplied fields");
             }
             let array = array
@@ -1599,6 +1604,7 @@ mod tests {
             &self,
             source_field: &Field,
             target_field: &Field,
+            _options: &DFCastOptions<'_>,
         ) -> Result<bool> {
             Ok(source_field.data_type() == &DataType::Int8
                 && target_field.data_type() == &DataType::Utf8)
@@ -1609,9 +1615,9 @@ mod tests {
             array: &ArrayRef,
             source_field: &Field,
             target_field: &Field,
-            _cast_options: &CastOptions,
+            options: &DFCastOptions<'_>,
         ) -> Result<ArrayRef> {
-            if !self.can_cast_fields(source_field, target_field)? {
+            if !self.can_cast_fields(source_field, target_field, options)? {
                 return _internal_err!(
                     "BareInt8ToStringCast cannot cast supplied fields"
                 );
@@ -1638,6 +1644,7 @@ mod tests {
             &self,
             source_field: &Field,
             target_field: &Field,
+            _options: &DFCastOptions<'_>,
         ) -> Result<bool> {
             Ok(source_field.data_type() == &DataType::Int8
                 && target_field.data_type() == &DataType::Int16)
@@ -1647,6 +1654,7 @@ mod tests {
             &self,
             _source_field: &Field,
             _target_field: &Field,
+            _options: &DFCastOptions<'_>,
         ) -> Result<bool> {
             Ok(self.injective)
         }
@@ -1655,6 +1663,7 @@ mod tests {
             &self,
             _source_field: &Field,
             _target_field: &Field,
+            _options: &DFCastOptions<'_>,
         ) -> Result<bool> {
             Ok(self.order_preserving)
         }
@@ -1663,6 +1672,7 @@ mod tests {
             &self,
             _source_field: &Field,
             _target_field: &Field,
+            _options: &DFCastOptions<'_>,
         ) -> Result<bool> {
             Ok(self.preserves_nulls)
         }
@@ -1672,12 +1682,12 @@ mod tests {
             array: &ArrayRef,
             _source_field: &Field,
             target_field: &Field,
-            cast_options: &CastOptions,
+            options: &DFCastOptions<'_>,
         ) -> Result<ArrayRef> {
             Ok(cast_with_options(
                 array,
                 target_field.data_type(),
-                cast_options,
+                &options.arrow_options,
             )?)
         }
     }
@@ -1703,14 +1713,12 @@ mod tests {
         assert!(source_field.metadata().is_empty());
         assert!(target_field.metadata().is_empty());
 
-        let result = cast_column_fields(
-            &int8_values(),
-            &source_field,
-            &target_field,
-            Some(&BareInt8ToStringCast),
-            &DEFAULT_CAST_OPTIONS,
-        )
-        .unwrap();
+        let options = DFCastOptions::new(DEFAULT_CAST_OPTIONS.clone())
+            .with_cast_extension(&BareInt8ToStringCast);
+
+        let result =
+            cast_column_fields(&int8_values(), &source_field, &target_field, &options)
+                .unwrap();
 
         assert_boolean_strings(&result);
     }
@@ -1724,21 +1732,16 @@ mod tests {
         source_field: Field,
         target_field: Field,
     ) -> ArrayRef {
-        validate_data_type_compatibility_with_extension(
+        let options = DFCastOptions::new(DEFAULT_CAST_OPTIONS.clone())
+            .with_cast_extension(&Bool8ToStringCast);
+        validate_data_type_compatibility_with_options(
             source_field.name(),
             source_field.data_type(),
             target_field.data_type(),
-            Some(&Bool8ToStringCast),
+            &options,
         )
         .unwrap();
-        cast_column_fields(
-            &source,
-            &source_field,
-            &target_field,
-            Some(&Bool8ToStringCast),
-            &DEFAULT_CAST_OPTIONS,
-        )
-        .unwrap()
+        cast_column_fields(&source, &source_field, &target_field, &options).unwrap()
     }
 
     fn assert_boolean_strings(values: &ArrayRef) {
@@ -3010,8 +3013,10 @@ mod tests {
             order_preserving: true,
             preserves_nulls: true,
         };
+        let non_injective_options =
+            DFCastOptions::default().with_cast_extension(&non_injective);
         assert!(
-            !is_injective_cast_fields(&source, &target, Some(&non_injective)).unwrap()
+            !is_injective_cast_fields(&source, &target, &non_injective_options).unwrap()
         );
 
         let injective = Int8ToInt16Cast {
@@ -3019,8 +3024,12 @@ mod tests {
             order_preserving: true,
             preserves_nulls: true,
         };
-        assert!(is_injective_cast_fields(&source, &target, Some(&injective)).unwrap());
-        assert!(is_injective_cast_fields(&source, &target, None).unwrap());
+        let injective_options = DFCastOptions::default().with_cast_extension(&injective);
+        assert!(is_injective_cast_fields(&source, &target, &injective_options).unwrap());
+        assert!(
+            is_injective_cast_fields(&source, &target, &DFCastOptions::default())
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3032,12 +3041,14 @@ mod tests {
             order_preserving: true,
             preserves_nulls: true,
         };
+        let non_injective_options =
+            DFCastOptions::default().with_cast_extension(&non_injective);
 
-        let error = validate_data_type_compatibility_with_extension(
+        let error = validate_data_type_compatibility_with_options(
             "map_col",
             &source,
             &target,
-            Some(&non_injective),
+            &non_injective_options,
         )
         .unwrap_err();
         assert_contains!(error.to_string(), "Cannot safely evolve Map key type");
@@ -3047,11 +3058,12 @@ mod tests {
             order_preserving: true,
             preserves_nulls: true,
         };
-        validate_data_type_compatibility_with_extension(
+        let injective_options = DFCastOptions::default().with_cast_extension(&injective);
+        validate_data_type_compatibility_with_options(
             "map_col",
             &source,
             &target,
-            Some(&injective),
+            &injective_options,
         )
         .unwrap();
     }
