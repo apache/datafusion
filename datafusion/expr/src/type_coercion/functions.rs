@@ -149,7 +149,7 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
                     .with_metadata(
                         FieldMetadata::new_from_field(current_field)
                             .without_extension_type()
-                            .to_metadata(),
+                            .into_inner(),
                     ),
             )
         })

@@ -91,7 +91,7 @@ fn cast_output_field(
         // Type-only cast: propagate source metadata, stripping extension type keys
         FieldMetadata::new_from_field(source_field)
             .without_extension_type()
-            .to_metadata()
+            .into_inner()
     } else {
         // Explicit target field: use target metadata exactly
         target_field.metadata().clone()

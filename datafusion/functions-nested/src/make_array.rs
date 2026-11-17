@@ -18,9 +18,7 @@ use arrow::datatypes::{DataType::Null, Field};
 use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, internal_err, plan_err};
-use datafusion_expr::binary::{
-    try_type_union_resolution_with_struct, type_union_resolution,
-};
+use datafusion_expr::binary::{try_common_struct_type, type_union_resolution};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, Volatility,
@@ -83,15 +81,8 @@ impl ScalarUDFImpl for MakeArray {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let element_type = if arg_types.is_empty() {
-            Null
-        } else {
-            // At this point, all the type in array should be coerced to the same one.
-            arg_types[0].to_owned()
-        };
-
-        Ok(DataType::new_list(element_type, true))
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -262,27 +253,11 @@ fn array_array_with_field<O: OffsetSizeTrait>(
 }
 
 pub fn coerce_types_inner(arg_types: &[DataType], name: &str) -> Result<Vec<DataType>> {
-    if let Ok(unified) = try_type_union_resolution_with_struct(arg_types)
-        && let Some(DataType::Struct(fields)) = unified.first()
-    {
-        // Every array element must have exactly the same type, including child
-        // metadata and nullability. Use the first input's metadata, as list
-        // coercion does, and allow nulls if any input child allows them.
-        let fields = fields
-            .iter()
-            .enumerate()
-            .map(|(index, field)| {
-                let nullable = unified.iter().any(|data_type| {
-                    matches!(data_type, DataType::Struct(fields) if fields[index].is_nullable())
-                });
-                Arc::new(field.as_ref().clone().with_nullable(nullable))
-            })
-            .collect::<Vec<_>>();
-        return Ok(vec![DataType::Struct(fields.into()); arg_types.len()]);
-    }
-
-    if let Some(unified) = type_union_resolution(arg_types) {
-        Ok(vec![unified; arg_types.len()])
+    let common_type = try_common_struct_type(arg_types)
+        .ok()
+        .or_else(|| type_union_resolution(arg_types));
+    if let Some(common_type) = common_type {
+        Ok(vec![common_type; arg_types.len()])
     } else {
         plan_err!(
             "Failed to unify argument types of {}: [{}]",

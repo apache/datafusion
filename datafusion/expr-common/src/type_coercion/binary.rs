@@ -21,10 +21,9 @@ use arrow::datatypes::{
     TimeUnit,
 };
 use datafusion_common::{
-    Diagnostic, Result, Span, Spans, exec_err, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err,
+    Diagnostic, Result, Span, Spans, exec_err, not_impl_err, plan_datafusion_err,
+    plan_err,
 };
-use itertools::Itertools;
 
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`
@@ -887,73 +886,97 @@ pub fn try_type_union_resolution(data_types: &[DataType]) -> Result<Vec<DataType
 pub fn try_type_union_resolution_with_struct(
     data_types: &[DataType],
 ) -> Result<Vec<DataType>> {
-    let mut keys_string: Option<String> = None;
+    let (_, struct_types) = coerce_struct_types(data_types)?;
+    let mut final_struct_types = Vec::with_capacity(data_types.len());
     for data_type in data_types {
         if let DataType::Struct(fields) = data_type {
-            let keys = fields.iter().map(|f| f.name()).join(",");
-            if let Some(ref k) = keys_string {
-                if *k != keys {
-                    return exec_err!(
-                        "Expect same keys for struct type but got mismatched pair {} and {}",
-                        *k,
-                        keys
-                    );
-                }
-            } else {
-                keys_string = Some(keys);
-            }
-        } else {
-            return exec_err!("Expect to get struct but got {data_type}");
+            let fields = fields
+                .iter()
+                .zip(&struct_types)
+                .map(|(field, data_type)| {
+                    Arc::new(field.as_ref().clone().with_data_type(data_type.clone()))
+                })
+                .collect::<Vec<_>>();
+            final_struct_types.push(DataType::Struct(fields.into()));
         }
     }
+    Ok(final_struct_types)
+}
 
-    let mut struct_types: Vec<DataType> = if let DataType::Struct(fields) = &data_types[0]
-    {
-        fields.iter().map(|f| f.data_type().to_owned()).collect()
-    } else {
-        return internal_err!(
-            "Struct type is checked is the previous function, so this should be unreachable"
-        );
+/// Resolve one exact struct type for inputs with the same ordered field names.
+/// Child metadata comes from the first input; a child is nullable if it is
+/// nullable in any input.
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub fn try_common_struct_type(data_types: &[DataType]) -> Result<DataType> {
+    let (fields, struct_types) = coerce_struct_types(data_types)?;
+    let fields = fields
+        .iter()
+        .zip(struct_types)
+        .enumerate()
+        .map(|(index, (field, data_type))| {
+            let nullable = data_types.iter().any(|data_type| {
+                matches!(data_type, DataType::Struct(fields) if fields[index].is_nullable())
+            });
+            Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(data_type)
+                    .with_nullable(nullable),
+            )
+        })
+        .collect::<Vec<_>>();
+    Ok(DataType::Struct(fields.into()))
+}
+
+fn coerce_struct_types(data_types: &[DataType]) -> Result<(&Fields, Vec<DataType>)> {
+    let Some(first_type) = data_types.first() else {
+        return exec_err!("Expected at least one struct type");
     };
+    let DataType::Struct(fields) = first_type else {
+        return exec_err!("Expect to get struct but got {first_type}");
+    };
+    let mut struct_types: Vec<DataType> =
+        fields.iter().map(|f| f.data_type().to_owned()).collect();
 
     for data_type in data_types.iter().skip(1) {
-        if let DataType::Struct(fields) = data_type {
-            // The order of field is verified above
-            for (lhs_type, rhs_type) in struct_types
-                .iter_mut()
-                .zip(fields.iter().map(|f| f.data_type()))
-            {
-                if let Some(coerced_type) =
-                    type_union_resolution_coercion(lhs_type, rhs_type)
-                {
-                    *lhs_type = coerced_type;
-                } else {
-                    return exec_err!(
-                        "Fail to find the coerced type for {} and {}",
-                        lhs_type,
-                        rhs_type
-                    );
-                }
-            }
-        } else {
+        let DataType::Struct(other_fields) = data_type else {
             return exec_err!("Expect to get struct but got {data_type}");
+        };
+        if !fields
+            .iter()
+            .map(|f| f.name())
+            .eq(other_fields.iter().map(|f| f.name()))
+        {
+            return exec_err!(
+                "Expect same keys for struct type but got mismatched pair {:?} and {:?}",
+                fields.iter().map(|f| f.name()).collect::<Vec<_>>(),
+                other_fields.iter().map(|f| f.name()).collect::<Vec<_>>()
+            );
+        }
+        for (lhs_type, rhs_type) in struct_types
+            .iter_mut()
+            .zip(other_fields.iter().map(|f| f.data_type()))
+        {
+            let Some(common_type) = type_union_resolution_coercion(lhs_type, rhs_type)
+            else {
+                return exec_err!(
+                    "Fail to find the coerced type for {} and {}",
+                    lhs_type,
+                    rhs_type
+                );
+            };
+            *lhs_type = common_type;
         }
     }
 
-    let mut final_struct_types = Vec::with_capacity(data_types.len());
-    for s in data_types {
-        let mut new_fields = Vec::with_capacity(struct_types.len());
-        if let DataType::Struct(fields) = s {
-            for (i, f) in fields.iter().enumerate() {
-                let field = Arc::unwrap_or_clone(Arc::clone(f))
-                    .with_data_type(struct_types[i].to_owned());
-                new_fields.push(Arc::new(field));
-            }
-        }
-        final_struct_types.push(DataType::Struct(new_fields.into()))
-    }
-
-    Ok(final_struct_types)
+    Ok((fields, struct_types))
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for type unification

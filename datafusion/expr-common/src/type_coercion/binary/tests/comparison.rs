@@ -900,6 +900,59 @@ fn test_type_union_coercion_prefers_finer_timestamp_unit() {
 /// unifies with a concretely-typed Map in a VALUES list.
 /// See <https://github.com/apache/datafusion/issues/23474>.
 #[test]
+fn test_struct_type_union_field_contracts() -> Result<()> {
+    let struct_type =
+        |data_type, nullable, origin: &str| {
+            DataType::Struct(
+                vec![Field::new("value", data_type, nullable).with_metadata(
+                    HashMap::from([("origin".to_string(), origin.to_string())]),
+                )]
+                .into(),
+            )
+        };
+    let inputs = [
+        struct_type(DataType::Int32, false, "first"),
+        struct_type(DataType::Int64, true, "second"),
+    ];
+
+    assert_eq!(
+        try_type_union_resolution_with_struct(&inputs)?,
+        vec![
+            struct_type(DataType::Int64, false, "first"),
+            struct_type(DataType::Int64, true, "second"),
+        ],
+    );
+    assert_eq!(
+        try_common_struct_type(&inputs)?,
+        struct_type(DataType::Int64, true, "first"),
+    );
+    assert_eq!(
+        try_common_struct_type(&[inputs[1].clone(), inputs[0].clone()])?,
+        struct_type(DataType::Int64, true, "second"),
+    );
+    Ok(())
+}
+
+#[test]
+fn test_common_struct_type_requires_matching_field_names() {
+    let inputs = [["a,b", "c"], ["a", "b,c"]].map(|names| {
+        DataType::Struct(
+            names
+                .into_iter()
+                .map(|name| Field::new(name, DataType::Int32, false))
+                .collect::<Vec<_>>()
+                .into(),
+        )
+    });
+    assert!(
+        try_common_struct_type(&inputs)
+            .unwrap_err()
+            .to_string()
+            .contains("Expect same keys for struct type")
+    );
+}
+
+#[test]
 fn test_type_union_resolution_map() {
     fn map_type(value_type: DataType) -> DataType {
         DataType::Map(

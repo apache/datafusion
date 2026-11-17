@@ -333,7 +333,7 @@ impl CastExpr {
                     .with_metadata(
                         FieldMetadata::new_from_field(&source_field)
                             .without_extension_type()
-                            .to_metadata(),
+                            .into_inner(),
                     ),
             )
         })
