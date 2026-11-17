@@ -1403,6 +1403,10 @@ impl PhysicalExpr for CaseExpr {
         write!(f, "END")
     }
 
+    fn short_circuits(&self) -> bool {
+        true
+    }
+
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
