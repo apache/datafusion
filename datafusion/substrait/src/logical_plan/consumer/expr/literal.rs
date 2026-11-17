@@ -815,6 +815,7 @@ fn with_array_data_type(
 mod tests {
     use super::*;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
+    use datafusion::arrow::datatypes::Schema;
 
     #[test]
     fn interval_compound_different_precision() -> datafusion::common::Result<()> {
@@ -849,6 +850,96 @@ mod tests {
             }))
         );
 
+        Ok(())
+    }
+
+    /// `Struct{<names>: Int64, Utf8}`
+    fn struct_type(names: [&str; 2]) -> DataType {
+        DataType::Struct(Fields::from(vec![
+            Field::new(names[0], DataType::Int64, true),
+            Field::new(names[1], DataType::Utf8, true),
+        ]))
+    }
+
+    /// The type of `literal` once combined with a column `c` of type `column_type`.
+    fn renamed_type(
+        literal: ScalarValue,
+        column_type: &DataType,
+    ) -> datafusion::common::Result<DataType> {
+        let schema = DFSchema::try_from(Schema::new(vec![Field::new(
+            "c",
+            column_type.clone(),
+            true,
+        )]))?;
+        let mut column = Expr::Column("c".into());
+        let mut literal = Expr::Literal(literal, None);
+        name_struct_literals_like_first_struct_expr([&mut column, &mut literal], &schema);
+        literal.get_type(&schema)
+    }
+
+    #[test]
+    fn struct_literal_with_dictionary_values() -> datafusion::common::Result<()> {
+        let dictionary =
+            |values| DataType::Dictionary(Box::new(DataType::Int32), Box::new(values));
+        let literal = ScalarValue::List(ScalarValue::new_list_nullable(
+            &[],
+            &dictionary(struct_type(["c0", "c1"])),
+        ));
+        let column = DataType::new_list(dictionary(struct_type(["a", "b"])), true);
+        assert_eq!(renamed_type(literal, &column)?, column);
+        Ok(())
+    }
+
+    #[test]
+    fn struct_literal_next_to_dictionary_column() -> datafusion::common::Result<()> {
+        let literal = ScalarValue::try_from(&struct_type(["c0", "c1"]))?;
+        let column = DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(struct_type(["a", "b"])),
+        );
+        assert_eq!(renamed_type(literal, &column)?, struct_type(["a", "b"]));
+        Ok(())
+    }
+
+    #[test]
+    fn struct_literal_next_to_run_end_encoded_column() -> datafusion::common::Result<()> {
+        let literal = ScalarValue::try_from(&struct_type(["c0", "c1"]))?;
+        let column = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", struct_type(["a", "b"]), true)),
+        );
+        assert_eq!(renamed_type(literal, &column)?, struct_type(["a", "b"]));
+        Ok(())
+    }
+
+    #[test]
+    fn list_literal_next_to_large_list_column() -> datafusion::common::Result<()> {
+        let literal = ScalarValue::List(ScalarValue::new_list_nullable(
+            &[],
+            &struct_type(["c0", "c1"]),
+        ));
+        let column = DataType::new_large_list(struct_type(["a", "b"]), true);
+        assert_eq!(
+            renamed_type(literal, &column)?,
+            DataType::new_list(struct_type(["a", "b"]), true)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn list_literal_next_to_list_view_column() -> datafusion::common::Result<()> {
+        let literal = ScalarValue::List(ScalarValue::new_list_nullable(
+            &[],
+            &struct_type(["c0", "c1"]),
+        ));
+        let column = DataType::ListView(Arc::new(Field::new_list_field(
+            struct_type(["a", "b"]),
+            true,
+        )));
+        assert_eq!(
+            renamed_type(literal, &column)?,
+            DataType::new_list(struct_type(["a", "b"]), true)
+        );
         Ok(())
     }
 }
