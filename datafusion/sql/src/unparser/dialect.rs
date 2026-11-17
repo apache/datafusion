@@ -93,6 +93,12 @@ pub trait Dialect: Send + Sync {
         ArrayTypeStyle::Unsupported
     }
 
+    /// Whether the dialect allows an array whose elements are arrays.
+    /// BigQuery, for example, does not.
+    fn supports_nested_arrays(&self) -> bool {
+        true
+    }
+
     /// The character length extraction style to use: `CharacterLengthStyle`
     fn character_length_style(&self) -> CharacterLengthStyle {
         CharacterLengthStyle::CharacterLength
@@ -376,8 +382,7 @@ pub enum DistinctFromStyle {
 pub enum ArrayTypeStyle {
     /// `INT[]`, and `INT[3]` for a fixed-size list, as in PostgreSQL and DuckDB
     SquareBracket,
-    /// `ARRAY<INT>`, as in BigQuery. A fixed-size list and a list of lists are
-    /// not supported.
+    /// `ARRAY<INT>`, as in BigQuery. A fixed-size list is not supported.
     AngleBracket,
     /// The dialect has no array type, as in MySQL and SQLite
     Unsupported,
@@ -768,6 +773,10 @@ impl Dialect for SqliteDialect {
 pub struct BigQueryDialect {}
 
 impl Dialect for BigQueryDialect {
+    fn supports_nested_arrays(&self) -> bool {
+        false
+    }
+
     fn array_type_style(&self) -> ArrayTypeStyle {
         ArrayTypeStyle::AngleBracket
     }
@@ -943,6 +952,7 @@ pub struct CustomDialect {
     unnest_as_table_factor: bool,
     unnest_as_lateral_flatten: bool,
     array_type_style: ArrayTypeStyle,
+    supports_nested_arrays: bool,
 }
 
 impl Default for CustomDialect {
@@ -979,11 +989,16 @@ impl Default for CustomDialect {
             unnest_as_table_factor: false,
             unnest_as_lateral_flatten: false,
             array_type_style: ArrayTypeStyle::Unsupported,
+            supports_nested_arrays: true,
         }
     }
 }
 
 impl Dialect for CustomDialect {
+    fn supports_nested_arrays(&self) -> bool {
+        self.supports_nested_arrays
+    }
+
     fn array_type_style(&self) -> ArrayTypeStyle {
         self.array_type_style
     }
@@ -1166,6 +1181,7 @@ pub struct CustomDialectBuilder {
     unnest_as_table_factor: bool,
     unnest_as_lateral_flatten: bool,
     array_type_style: ArrayTypeStyle,
+    supports_nested_arrays: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -1208,6 +1224,7 @@ impl CustomDialectBuilder {
             unnest_as_table_factor: false,
             unnest_as_lateral_flatten: false,
             array_type_style: ArrayTypeStyle::Unsupported,
+            supports_nested_arrays: true,
         }
     }
 
@@ -1242,6 +1259,7 @@ impl CustomDialectBuilder {
             unnest_as_table_factor: self.unnest_as_table_factor,
             unnest_as_lateral_flatten: self.unnest_as_lateral_flatten,
             array_type_style: self.array_type_style,
+            supports_nested_arrays: self.supports_nested_arrays,
         }
     }
 
@@ -1381,6 +1399,12 @@ impl CustomDialectBuilder {
     /// Customize the syntax for Arrow list types in casts
     pub fn with_array_type_style(mut self, array_type_style: ArrayTypeStyle) -> Self {
         self.array_type_style = array_type_style;
+        self
+    }
+
+    /// Customize whether the dialect allows an array whose elements are arrays
+    pub fn with_supports_nested_arrays(mut self, supports_nested_arrays: bool) -> Self {
+        self.supports_nested_arrays = supports_nested_arrays;
         self
     }
 

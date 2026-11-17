@@ -1818,17 +1818,22 @@ impl Unparser<'_> {
         size: Option<i32>,
     ) -> Result<ast::DataType> {
         let elem = Box::new(self.arrow_dtype_to_ast_dtype(inner)?);
+        if !self.dialect.supports_nested_arrays()
+            && matches!(*elem, ast::DataType::Array(_))
+        {
+            return not_impl_err!(
+                "Unsupported DataType for this dialect: conversion: {data_type}"
+            );
+        }
         let elem_def = match (self.dialect.array_type_style(), size) {
             (ArrayTypeStyle::SquareBracket, size) => {
                 ast::ArrayElemTypeDef::SquareBracket(elem, size.map(|s| s as u64))
             }
-            // BigQuery, the only dialect with this style, rejects an array of arrays.
-            (ArrayTypeStyle::AngleBracket, None)
-                if !matches!(*elem, ast::DataType::Array(_)) =>
-            {
+            (ArrayTypeStyle::AngleBracket, None) => {
                 ast::ArrayElemTypeDef::AngleBracket(elem)
             }
-            (ArrayTypeStyle::AngleBracket, _) | (ArrayTypeStyle::Unsupported, _) => {
+            (ArrayTypeStyle::AngleBracket, Some(_))
+            | (ArrayTypeStyle::Unsupported, _) => {
                 return not_impl_err!(
                     "Unsupported DataType for this dialect: conversion: {data_type}"
                 );
@@ -1890,17 +1895,14 @@ impl Unparser<'_> {
             DataType::Utf8 => Ok(self.dialect.utf8_cast_dtype()),
             DataType::LargeUtf8 => Ok(self.dialect.large_utf8_cast_dtype()),
             DataType::Utf8View => Ok(self.dialect.utf8_cast_dtype()),
-            DataType::List(inner) | DataType::LargeList(inner) => {
+            DataType::List(inner)
+            | DataType::LargeList(inner)
+            | DataType::ListView(inner)
+            | DataType::LargeListView(inner) => {
                 self.array_to_ast_dtype(data_type, inner, None)
             }
             DataType::FixedSizeList(inner, size) => {
                 self.array_to_ast_dtype(data_type, inner, Some(*size))
-            }
-            DataType::ListView(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type}")
-            }
-            DataType::LargeListView(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
             DataType::Struct(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
@@ -3745,6 +3747,8 @@ mod tests {
         let list = DataType::List(Arc::clone(&utf8));
         let large_list = DataType::LargeList(Arc::clone(&utf8));
         let fixed_list = DataType::FixedSizeList(Arc::clone(&utf8), 3);
+        let list_view = DataType::ListView(Arc::clone(&utf8));
+        let large_list_view = DataType::LargeListView(Arc::clone(&utf8));
         let nested = DataType::List(Arc::new(Field::new_list_field(list.clone(), true)));
         let dict_nested = DataType::List(Arc::new(Field::new_list_field(
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(list.clone())),
@@ -3756,6 +3760,10 @@ mod tests {
         let none: &dyn Dialect = &MySqlDialect {};
         let duckdb = DuckDBDialect::new();
         let custom_default = CustomDialect::default();
+        let custom_no_nested = CustomDialectBuilder::new()
+            .with_array_type_style(ArrayTypeStyle::SquareBracket)
+            .with_supports_nested_arrays(false)
+            .build();
         let custom_angle = CustomDialectBuilder::new()
             .with_array_type_style(ArrayTypeStyle::AngleBracket)
             .build();
@@ -3763,6 +3771,8 @@ mod tests {
         let cases: Vec<(&dyn Dialect, &DataType, Option<&str>)> = vec![
             (square, &list, Some("VARCHAR[]")),
             (square, &large_list, Some("VARCHAR[]")),
+            (square, &list_view, Some("VARCHAR[]")),
+            (square, &large_list_view, Some("VARCHAR[]")),
             (square, &fixed_list, Some("VARCHAR[3]")),
             (square, &nested, Some("VARCHAR[][]")),
             (&PostgreSqlDialect {}, &list, Some("VARCHAR[]")),
@@ -3772,6 +3782,8 @@ mod tests {
             (angle, &dict_nested, None),
             (angle, &fixed_list, None),
             (&custom_angle, &list, Some("ARRAY<VARCHAR>")),
+            (&custom_angle, &nested, Some("ARRAY<ARRAY<VARCHAR>>")),
+            (&custom_no_nested, &nested, None),
             (none, &list, None),
             (&SqliteDialect {}, &list, None),
             (&SnowflakeDialect {}, &list, None),
