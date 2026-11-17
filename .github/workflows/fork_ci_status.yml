@@ -125,22 +125,10 @@ jobs:
             const missingPayload = (fork, sha, state) => {
               const disabled = typeof state === 'string' && state.startsWith('disabled');
               const active = state === 'active';
-              const advice = disabled
-                ? [
-                    '1. Enable workflows on your fork: open its **Actions** tab and confirm the prompt.',
-                    '2. Push again. A push that changes only documentation or Markdown does not start',
-                    '   the Rust workflow.',
-                  ]
-                : active
-                  ? [
-                      'A push that changes only documentation or Markdown does not start the Rust',
-                      'workflow, and a run can take a moment to appear. This check keeps looking for one.',
-                    ]
-                  : [
-                      'GitHub reports no Rust workflow on the fork, which usually means workflows are not',
-                      'enabled there. Enable them on the fork\'s **Actions** tab and push again. A push that',
-                      'changes only documentation or Markdown does not start the Rust workflow.',
-                    ];
+              const advice = [
+                ...(active ? [] : ['Open the **Actions** tab on your fork and enable workflows if prompted.']),
+                'On your fork, open **Actions → Rust → Run workflow** and select your PR branch.',
+              ];
               return {
                 status: 'completed',
                 conclusion: disabled ? 'action_required' : active ? 'skipped' : 'neutral',
@@ -160,7 +148,7 @@ jobs:
               };
             };
 
-            // The fork creates its run a few seconds after the push.
+            // A newly started fork run can take a few seconds to appear.
             async function findRun(fork, sha, attempts) {
               for (let attempt = 0; attempt < attempts; attempt++) {
                 try {
