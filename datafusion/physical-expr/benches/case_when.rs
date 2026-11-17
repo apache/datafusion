@@ -3,12 +3,12 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{Array, ArrayRef, Int32Array, Int32Builder, StringArray};
-use arrow::datatypes::{ArrowNativeTypeOp, Field, Schema};
+use arrow::datatypes::{ArrowNativeTypeOp, DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, case, col, lit};
+use datafusion_physical_expr::expressions::{BinaryExpr, case, cast, col, lit};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use itertools::Itertools;
 use rand::distr::Alphanumeric;
@@ -87,6 +87,88 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     benchmark_lookup_table_case_when(c, 8192);
     benchmark_divide_by_zero_protection(c, 8192);
+    benchmark_literal_when_selection(c, 8192);
+}
+
+fn benchmark_literal_when_selection(c: &mut Criterion, row_count: usize) {
+    let mut group = c.benchmark_group("literal_when_selection");
+    for (distribution, branches) in [
+        ("uniform", 1),
+        ("uniform", 4),
+        ("first_only", 4),
+        ("uniform", 16),
+        ("first_only", 16),
+        ("half_match_with_else", 1),
+    ] {
+        let first_only = distribution == "first_only";
+        let with_else = distribution == "half_match_with_else";
+        let partitions = if with_else { 2 } else { branches };
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "partition",
+                Arc::new(Int32Array::from_iter_values((0..row_count).map(|i| {
+                    if first_only {
+                        0
+                    } else {
+                        (i % partitions) as i32
+                    }
+                }))) as ArrayRef,
+            ),
+            (
+                "left_key",
+                Arc::new(StringArray::from_iter_values(
+                    (0..row_count).map(|i| format!("{i:032x}")),
+                )) as ArrayRef,
+            ),
+            (
+                "right_key",
+                Arc::new(StringArray::from_iter_values((0..row_count).map(|i| {
+                    let value = if i % 3 == 0 { i } else { i + 1 };
+                    format!("{value:032x}")
+                }))) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let schema = batch.schema();
+        let comparison: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            col("left_key", &schema).unwrap(),
+            Operator::Eq,
+            col("right_key", &schema).unwrap(),
+        ));
+        let comparison = cast(comparison, &schema, DataType::Int32).unwrap();
+        let branch_value = |branch: usize| -> Arc<dyn PhysicalExpr> {
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&comparison),
+                Operator::Plus,
+                lit((2 * branch) as i32),
+            ))
+        };
+        let expr = case(
+            Some(col("partition", &schema).unwrap()),
+            (0..branches)
+                .map(|i| (lit(i as i32), branch_value(i)))
+                .collect(),
+            with_else.then(|| branch_value(branches)),
+        )
+        .unwrap();
+        let expected = Int32Array::from_iter_values((0..row_count).map(|i| {
+            let branch = if first_only { 0 } else { i % partitions };
+            (2 * branch) as i32 + i32::from(i % 3 == 0)
+        }));
+        let result = expr
+            .evaluate(&batch)
+            .unwrap()
+            .into_array(row_count)
+            .unwrap();
+        assert_eq!(
+            result.as_any().downcast_ref::<Int32Array>().unwrap(),
+            &expected
+        );
+        group.bench_function(BenchmarkId::new(distribution, branches), |b| {
+            b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+        });
+    }
+    group.finish();
 }
 
 fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
