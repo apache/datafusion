@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use arrow::array::{BooleanBufferBuilder, UInt64Array};
 use arrow::buffer::BooleanBuffer;
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use futures::future::poll_fn;
 use parking_lot::Mutex;
 
@@ -158,7 +158,9 @@ impl HashJoinBuild {
                     keys_have_null,
                 },
                 PartitionMode::Auto => {
-                    unreachable!("PartitionMode::Auto must be resolved before execution")
+                    return internal_err!(
+                        "PartitionMode::Auto must be resolved before execution"
+                    );
                 }
             };
 

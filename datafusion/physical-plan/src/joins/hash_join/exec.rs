@@ -1892,7 +1892,8 @@ impl ExecutionPlan for HashJoinExec {
                 }
                 (None, PartitionMode::Auto) => {
                     return plan_err!(
-                        "PartitionMode::Auto must be resolved before execution"
+                        "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
+                        PartitionMode::Auto
                     );
                 }
             };
