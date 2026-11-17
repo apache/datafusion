@@ -701,6 +701,51 @@ NULL
 l_bar
 baz
 
+# CASE keeps an extension type carried by struct-backed branches, the shape
+# Parquet Variant uses (arrow.parquet.variant on Struct<metadata, value, ...>).
+# The logical field is observed through the planning error of an outer
+# coalesce, as above; the executed field is covered with the physical CASE.
+
+# both branches agree on the extension type
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  case when id > 1
+    then with_metadata(named_struct('metadata', name, 'value', l_name), 'ARROW:extension:name', 'a.type')
+    else with_metadata(named_struct('metadata', l_name, 'value', name), 'ARROW:extension:name', 'a.type')
+  end,
+  with_metadata(named_struct('metadata', l_name, 'value', name), 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+# a NULL branch does not block the extension type
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  case when id > 1
+    then with_metadata(named_struct('metadata', name, 'value', l_name), 'ARROW:extension:name', 'a.type')
+    else NULL
+  end,
+  with_metadata(named_struct('metadata', l_name, 'value', name), 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+# branches with conflicting extension types are a planning error
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select case when id > 1
+    then with_metadata(named_struct('metadata', name, 'value', l_name), 'ARROW:extension:name', 'a.type')
+    else with_metadata(named_struct('metadata', l_name, 'value', name), 'ARROW:extension:name', 'b.type')
+  end
+from table_with_metadata;
+
+# the struct values are unchanged
+query ?
+select case when id > 1
+    then with_metadata(named_struct('metadata', name, 'value', l_name), 'ARROW:extension:name', 'a.type')
+    else with_metadata(named_struct('metadata', l_name, 'value', name), 'ARROW:extension:name', 'a.type')
+  end
+from table_with_metadata;
+----
+{metadata: NULL, value: NULL}
+{metadata: l_bar, value: bar}
+{metadata: baz, value: l_baz}
+
 statement ok
 drop table table_with_metadata;
 

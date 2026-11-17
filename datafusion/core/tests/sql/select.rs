@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use super::*;
+use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
 use datafusion_common::{ParamValues, ScalarValue, metadata::ScalarAndMetadata};
 use insta::assert_snapshot;
 
@@ -371,6 +372,81 @@ async fn test_query_parameters_with_metadata() -> Result<()> {
     +----+-----+
     ");
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sql_case_field_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+    let metadata = HashMap::from([
+        ("structured_type".to_string(), "ARRAY(NUMBER)".to_string()),
+        (
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "example.case".to_string(),
+        ),
+    ]);
+    let other_metadata = HashMap::from([
+        ("structured_type".to_string(), "OBJECT".to_string()),
+        (
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "example.other".to_string(),
+        ),
+    ]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("flag", DataType::Boolean, false),
+        Field::new("a", DataType::Int32, false).with_metadata(metadata.clone()),
+        Field::new("b", DataType::Int32, false).with_metadata(metadata.clone()),
+        Field::new("c", DataType::Int32, false).with_metadata(other_metadata),
+    ]));
+    ctx.register_batch(
+        "t",
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(BooleanArray::from(vec![true, false])),
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(Int32Array::from(vec![3, 4])),
+                Arc::new(Int32Array::from(vec![5, 6])),
+            ],
+        )?,
+    )?;
+
+    for sql in [
+        "SELECT CASE WHEN flag THEN a ELSE b END AS value FROM t",
+        "SELECT CASE flag WHEN TRUE THEN a ELSE b END AS value FROM t",
+        "SELECT CASE WHEN flag THEN a ELSE NULL END AS value FROM t",
+        "SELECT CASE WHEN flag THEN NULL ELSE a END AS value FROM t",
+    ] {
+        let df = ctx.sql(sql).await?;
+        let optimized = ctx.state().optimize(df.logical_plan())?;
+        for field in [df.schema().field(0), optimized.schema().field(0)] {
+            assert_eq!(field.metadata(), &metadata);
+        }
+        if sql == "SELECT CASE WHEN flag THEN a ELSE b END AS value FROM t" {
+            let batches = df.collect().await?;
+            datafusion::assert_batches_eq!(
+                [
+                    "+-------+",
+                    "| value |",
+                    "+-------+",
+                    "| 1     |",
+                    "| 4     |",
+                    "+-------+"
+                ],
+                &batches
+            );
+        }
+    }
+
+    let conflicting = ctx
+        .sql("SELECT CASE WHEN flag THEN a ELSE c END AS value FROM t")
+        .await;
+    let error = match conflicting {
+        Ok(df) => ctx.state().optimize(df.logical_plan()).unwrap_err(),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("example.case"), "{error}");
+    assert!(error.to_string().contains("example.other"), "{error}");
     Ok(())
 }
 
