@@ -700,7 +700,7 @@ table alias and column alias.</p>
 items (implicit lateral references such as <code class="docutils literal notranslate"><span class="pre">FROM</span> <span class="pre">orders</span> <span class="pre">AS</span> <span class="pre">t,</span> <span class="pre">UNNEST(t.items)</span></code>
 are not currently supported).</p>
 <section id="unnest-outer">
-<h3><code class="docutils literal notranslate"><span class="pre">unnest_outer</span></code><a class="headerlink" href="#unnest-outer" title="Link to this heading">#</a></h3>
+<span id="unnest_outer"></span><h3><code class="docutils literal notranslate"><span class="pre">unnest_outer</span></code><a class="headerlink" href="#unnest-outer" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">unnest_outer(col)</span></code> is the outer-unnest peer to <code class="docutils literal notranslate"><span class="pre">UNNEST(col)</span></code>. The two differ
 only in how <code class="docutils literal notranslate"><span class="pre">NULL</span></code> and empty input lists are handled:</p>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -1314,8 +1314,8 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 <li><p><a class="reference internal" href="#pipe-aggregate">AGGREGATE</a></p></li>
 <li><p><a class="reference internal" href="#pipe-join">JOIN</a></p></li>
 </ul>
-<section id="where">
-<span id="pipe-where"></span><h3>WHERE<a class="headerlink" href="#where" title="Link to this heading">#</a></h3>
+<section id="pipe-where">
+<span id="where"></span><h3>WHERE<a class="headerlink" href="#pipe-where" title="Link to this heading">#</a></h3>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">10</span><span class="p">)</span>
 <span class="o">|&gt;</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-------+</span>
@@ -1327,8 +1327,8 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 </pre></div>
 </div>
 </section>
-<section id="order-by">
-<span id="pipe-order-by"></span><h3>ORDER BY<a class="headerlink" href="#order-by" title="Link to this heading">#</a></h3>
+<section id="pipe-order-by">
+<span id="order-by"></span><h3>ORDER BY<a class="headerlink" href="#pipe-order-by" title="Link to this heading">#</a></h3>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span>
 <span class="o">|&gt;</span><span class="w"> </span><span class="k">order</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="k">desc</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-------+</span>
@@ -1341,8 +1341,8 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 </pre></div>
 </div>
 </section>
-<section id="limit">
-<span id="pipe-limit"></span><h3>LIMIT<a class="headerlink" href="#limit" title="Link to this heading">#</a></h3>
+<section id="pipe-limit">
+<span id="limit"></span><h3>LIMIT<a class="headerlink" href="#pipe-limit" title="Link to this heading">#</a></h3>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span>
 <span class="o">|&gt;</span><span class="w"> </span><span class="k">order</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="k">desc</span>
 <span class="o">|&gt;</span><span class="w"> </span><span class="k">limit</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
@@ -1354,8 +1354,8 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 </pre></div>
 </div>
 </section>
-<section id="select">
-<span id="pipe-select"></span><h3>SELECT<a class="headerlink" href="#select" title="Link to this heading">#</a></h3>
+<section id="pipe-select">
+<span id="select"></span><h3>SELECT<a class="headerlink" href="#pipe-select" title="Link to this heading">#</a></h3>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span>
 <span class="o">|&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">---------------------------+</span>
@@ -1368,8 +1368,8 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 </pre></div>
 </div>
 </section>
-<section id="extend">
-<span id="pipe-extend"></span><h3>EXTEND<a class="headerlink" href="#extend" title="Link to this heading">#</a></h3>
+<section id="pipe-extend">
+<span id="extend"></span><h3>EXTEND<a class="headerlink" href="#pipe-extend" title="Link to this heading">#</a></h3>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span>
 <span class="o">|&gt;</span><span class="w"> </span><span class="n">extend</span><span class="w"> </span><span class="o">-</span><span class="n">value</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">minus_value</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-------+-------------+</span>
@@ -1382,8 +1382,8 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 </pre></div>
 </div>
 </section>
-<section id="as">
-<span id="pipe-as"></span><h3>AS<a class="headerlink" href="#as" title="Link to this heading">#</a></h3>
+<section id="pipe-as">
+<span id="as"></span><h3>AS<a class="headerlink" href="#pipe-as" title="Link to this heading">#</a></h3>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span>
 <span class="o">|&gt;</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">my_range</span>
 <span class="o">|&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">my_range</span><span class="p">.</span><span class="n">value</span><span class="p">;</span>
@@ -1397,8 +1397,8 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 </pre></div>
 </div>
 </section>
-<section id="union">
-<span id="pipe-union"></span><h3>UNION<a class="headerlink" href="#union" title="Link to this heading">#</a></h3>
+<section id="pipe-union">
+<span id="union"></span><h3>UNION<a class="headerlink" href="#pipe-union" title="Link to this heading">#</a></h3>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span>
 <span class="o">|&gt;</span><span class="w"> </span><span class="k">union</span><span class="w"> </span><span class="k">all</span><span class="w"> </span><span class="p">(</span>
 <span class="w">  </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">6</span><span class="p">)</span>
@@ -1416,8 +1416,8 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 </pre></div>
 </div>
 </section>
-<section id="intersect">
-<span id="pipe-intersect"></span><h3>INTERSECT<a class="headerlink" href="#intersect" title="Link to this heading">#</a></h3>
+<section id="pipe-intersect">
+<span id="intersect"></span><h3>INTERSECT<a class="headerlink" href="#pipe-intersect" title="Link to this heading">#</a></h3>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">100</span><span class="p">)</span>
 <span class="o">|&gt;</span><span class="w"> </span><span class="k">INTERSECT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="p">(</span>
 <span class="w">  </span><span class="k">select</span><span class="w"> </span><span class="mi">3</span>
@@ -1430,8 +1430,8 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 </pre></div>
 </div>
 </section>
-<section id="except">
-<span id="pipe-except"></span><h3>EXCEPT<a class="headerlink" href="#except" title="Link to this heading">#</a></h3>
+<section id="pipe-except">
+<span id="except"></span><h3>EXCEPT<a class="headerlink" href="#pipe-except" title="Link to this heading">#</a></h3>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">10</span><span class="p">)</span>
 <span class="o">|&gt;</span><span class="w"> </span><span class="k">EXCEPT</span><span class="w"> </span><span class="k">DISTINCT</span><span class="w"> </span><span class="p">(</span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span><span class="mi">10</span><span class="p">));</span>
 <span class="o">+</span><span class="c1">-------+</span>
@@ -1446,8 +1446,8 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 </pre></div>
 </div>
 </section>
-<section id="aggregate">
-<span id="pipe-aggregate"></span><h3>AGGREGATE<a class="headerlink" href="#aggregate" title="Link to this heading">#</a></h3>
+<section id="pipe-aggregate">
+<span id="aggregate"></span><h3>AGGREGATE<a class="headerlink" href="#pipe-aggregate" title="Link to this heading">#</a></h3>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span>
 <span class="o">|&gt;</span><span class="w"> </span><span class="k">aggregate</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">value</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">total</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-------+</span>
@@ -1458,8 +1458,8 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 </pre></div>
 </div>
 </section>
-<section id="join">
-<span id="pipe-join"></span><h3>JOIN<a class="headerlink" href="#join" title="Link to this heading">#</a></h3>
+<section id="pipe-join">
+<span id="join"></span><h3>JOIN<a class="headerlink" href="#pipe-join" title="Link to this heading">#</a></h3>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="p">(</span>
 <span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;apples&#39;</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">item</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">sales</span>
 <span class="w">  </span><span class="k">UNION</span><span class="w"> </span><span class="k">ALL</span>
@@ -1573,17 +1573,17 @@ order, so the returned rows are not guaranteed to be deterministic.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#order-by-clause">ORDER BY clause</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#limit-and-offset-clauses">LIMIT and OFFSET clauses</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pipe-operators">Pipe operators</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#where">WHERE</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#order-by">ORDER BY</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#limit">LIMIT</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#select">SELECT</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#extend">EXTEND</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#as">AS</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#union">UNION</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#intersect">INTERSECT</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#except">EXCEPT</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregate">AGGREGATE</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#join">JOIN</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pipe-where">WHERE</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pipe-order-by">ORDER BY</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pipe-limit">LIMIT</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pipe-select">SELECT</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pipe-extend">EXTEND</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pipe-as">AS</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pipe-union">UNION</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pipe-intersect">INTERSECT</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pipe-except">EXCEPT</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pipe-aggregate">AGGREGATE</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pipe-join">JOIN</a></li>
 </ul>
 </li>
 </ul>

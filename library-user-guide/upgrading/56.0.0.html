@@ -492,7 +492,7 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-56-0-0">
-<h2>DataFusion 56.0.0<a class="headerlink" href="#datafusion-56-0-0" title="Link to this heading">#</a></h2>
+<span id="datafusion-5600"></span><h2>DataFusion 56.0.0<a class="headerlink" href="#datafusion-56-0-0" title="Link to this heading">#</a></h2>
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">56.0.0</span></code> has not been released yet. The information provided
 in this section pertains to features and changes that have already been merged
 to the main branch and are awaiting release in this version.</p>
@@ -511,7 +511,7 @@ subtraction use the timezone-aware operand’s timezone. Applications that set t
 option need to review queries that mix timezone-aware and timezone-naive timestamps.</p>
 </section>
 <section id="get-coerce-type-for-list-and-get-coerce-type-for-case-when-are-deprecated">
-<h3><code class="docutils literal notranslate"><span class="pre">get_coerce_type_for_list</span></code> and <code class="docutils literal notranslate"><span class="pre">get_coerce_type_for_case_when</span></code> are deprecated<a class="headerlink" href="#get-coerce-type-for-list-and-get-coerce-type-for-case-when-are-deprecated" title="Link to this heading">#</a></h3>
+<span id="get_coerce_type_for_list-and-get_coerce_type_for_case_when-are-deprecated"></span><h3><code class="docutils literal notranslate"><span class="pre">get_coerce_type_for_list</span></code> and <code class="docutils literal notranslate"><span class="pre">get_coerce_type_for_case_when</span></code> are deprecated<a class="headerlink" href="#get-coerce-type-for-list-and-get-coerce-type-for-case-when-are-deprecated" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">IN</span></code> and <code class="docutils literal notranslate"><span class="pre">CASE</span> <span class="pre">expr</span> <span class="pre">WHEN</span></code> are defined in terms of <code class="docutils literal notranslate"><span class="pre">=</span></code>, and <code class="docutils literal notranslate"><span class="pre">=</span></code> now reads a
 timezone-naive timestamp in <code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code> when it is compared
 against a timezone-aware one. These two functions have nowhere to take that
@@ -536,7 +536,7 @@ against a dictionary-encoded type coerces to the dictionary type rather than to
 its value type, which is what <code class="docutils literal notranslate"><span class="pre">=</span></code> has always done.</p>
 </section>
 <section id="msrv-updated-to-1-95-0">
-<h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.95.0<a class="headerlink" href="#msrv-updated-to-1-95-0" title="Link to this heading">#</a></h3>
+<span id="msrv-updated-to-1950"></span><h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.95.0<a class="headerlink" href="#msrv-updated-to-1-95-0" title="Link to this heading">#</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.95.0/"><code class="docutils literal notranslate"><span class="pre">1.95.0</span></code></a>.</p>
 </section>
 <section id="aggregate-group-clustering-apis">
@@ -558,7 +558,7 @@ determine when groups can be emitted during aggregation.</p>
 <code class="docutils literal notranslate"><span class="pre">ordering_mode=PartiallySorted(indices)</span></code>.</p>
 </section>
 <section id="upgrade-arrow-parquet-to-60-and-object-store-to-0-14">
-<h3>Upgrade arrow/parquet to 60 and object_store to 0.14<a class="headerlink" href="#upgrade-arrow-parquet-to-60-and-object-store-to-0-14" title="Link to this heading">#</a></h3>
+<span id="upgrade-arrowparquet-to-60-and-object_store-to-014"></span><h3>Upgrade arrow/parquet to 60 and object_store to 0.14<a class="headerlink" href="#upgrade-arrow-parquet-to-60-and-object-store-to-0-14" title="Link to this heading">#</a></h3>
 <p>DataFusion 56.0.0 uses <code class="docutils literal notranslate"><span class="pre">arrow</span></code> and <code class="docutils literal notranslate"><span class="pre">parquet</span></code> 60, and <code class="docutils literal notranslate"><span class="pre">object_store</span></code> 0.14.
 This may require updates to your Cargo.toml if you have direct dependencies on
 these crates.</p>
@@ -589,7 +589,7 @@ change. Use <code class="docutils literal notranslate"><span class="pre">FieldMe
 </section>
 </section>
 <section id="csvsource-newlines-in-values-is-deprecated">
-<h3><code class="docutils literal notranslate"><span class="pre">CsvSource::newlines_in_values</span></code> is deprecated<a class="headerlink" href="#csvsource-newlines-in-values-is-deprecated" title="Link to this heading">#</a></h3>
+<span id="csvsourcenewlines_in_values-is-deprecated"></span><h3><code class="docutils literal notranslate"><span class="pre">CsvSource::newlines_in_values</span></code> is deprecated<a class="headerlink" href="#csvsource-newlines-in-values-is-deprecated" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">CsvSource::newlines_in_values()</span></code> is deprecated starting in 56.0.0 but remains
 callable with unchanged behavior. There is no replacement getter, and
 <code class="docutils literal notranslate"><span class="pre">CsvSource</span></code> does not expose a <code class="docutils literal notranslate"><span class="pre">csv_options()</span></code> method.</p>
@@ -601,7 +601,7 @@ to obtain the same boolean value: <code class="docutils literal notranslate"><sp
 are unchanged.</p>
 </section>
 <section id="parquetaccessplan-into-overall-row-selection-is-deprecated">
-<h3><code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan::into_overall_row_selection</span></code> is deprecated<a class="headerlink" href="#parquetaccessplan-into-overall-row-selection-is-deprecated" title="Link to this heading">#</a></h3>
+<span id="parquetaccessplaninto_overall_row_selection-is-deprecated"></span><h3><code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan::into_overall_row_selection</span></code> is deprecated<a class="headerlink" href="#parquetaccessplan-into-overall-row-selection-is-deprecated" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan::into_overall_row_selection</span></code> is deprecated starting in 56.0.0.
 DataFusion now keeps selections local to each row group during Parquet scanning.
 The method remains available with its existing conversion and selection-length
@@ -619,7 +619,7 @@ synchronous reader still requires <code class="docutils literal notranslate"><sp
 <code class="docutils literal notranslate"><span class="pre">with_row_selection</span></code>.</p>
 </section>
 <section id="rowgroupaccessplanfilter-prune-by-range-takes-a-rowgrouprangeassignment">
-<h3><code class="docutils literal notranslate"><span class="pre">RowGroupAccessPlanFilter::prune_by_range</span></code> takes a <code class="docutils literal notranslate"><span class="pre">RowGroupRangeAssignment</span></code><a class="headerlink" href="#rowgroupaccessplanfilter-prune-by-range-takes-a-rowgrouprangeassignment" title="Link to this heading">#</a></h3>
+<span id="rowgroupaccessplanfilterprune_by_range-takes-a-rowgrouprangeassignment"></span><h3><code class="docutils literal notranslate"><span class="pre">RowGroupAccessPlanFilter::prune_by_range</span></code> takes a <code class="docutils literal notranslate"><span class="pre">RowGroupRangeAssignment</span></code><a class="headerlink" href="#rowgroupaccessplanfilter-prune-by-range-takes-a-rowgrouprangeassignment" title="Link to this heading">#</a></h3>
 <p>The new <code class="docutils literal notranslate"><span class="pre">datafusion.execution.parquet.row_group_range_assignment</span></code> option decides
 which byte range of a split Parquet file reads each row group. The default,
 <code class="docutils literal notranslate"><span class="pre">start_offset</span></code>, keeps the previous behavior. <code class="docutils literal notranslate"><span class="pre">midpoint</span></code> matches Apache Spark.</p>
@@ -720,7 +720,7 @@ option to that name instead:</p>
 </div>
 </section>
 <section id="timestamp-u-some-tz-timestamp-u-none-reads-the-naive-operand-in-tz">
-<h3><code class="docutils literal notranslate"><span class="pre">Timestamp(u,</span> <span class="pre">Some(tz))</span> <span class="pre">-</span> <span class="pre">Timestamp(u,</span> <span class="pre">None)</span></code> reads the naive operand in <code class="docutils literal notranslate"><span class="pre">tz</span></code><a class="headerlink" href="#timestamp-u-some-tz-timestamp-u-none-reads-the-naive-operand-in-tz" title="Link to this heading">#</a></h3>
+<span id="timestampu-sometz---timestampu-none-reads-the-naive-operand-in-tz"></span><h3><code class="docutils literal notranslate"><span class="pre">Timestamp(u,</span> <span class="pre">Some(tz))</span> <span class="pre">-</span> <span class="pre">Timestamp(u,</span> <span class="pre">None)</span></code> reads the naive operand in <code class="docutils literal notranslate"><span class="pre">tz</span></code><a class="headerlink" href="#timestamp-u-some-tz-timestamp-u-none-reads-the-naive-operand-in-tz" title="Link to this heading">#</a></h3>
 <p>Subtracting a timezone-naive timestamp from a timezone-aware one <em>at the same
 time unit</em> did not coerce at all in <code class="docutils literal notranslate"><span class="pre">55.0.0</span></code>: the naive operand was read as UTC,
 which differed both from <code class="docutils literal notranslate"><span class="pre">=</span></code> on the same pair of values and from every other
@@ -735,7 +735,7 @@ read in the aware operand’s time zone:</p>
 </div>
 </section>
 <section id="foreignsession-create-physical-plan-is-unsupported">
-<h3><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> is unsupported<a class="headerlink" href="#foreignsession-create-physical-plan-is-unsupported" title="Link to this heading">#</a></h3>
+<span id="foreignsessioncreate_physical_plan-is-unsupported"></span><h3><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> is unsupported<a class="headerlink" href="#foreignsession-create-physical-plan-is-unsupported" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> no longer forwards to the library that
 owns the session. It now returns a <code class="docutils literal notranslate"><span class="pre">NotImplemented</span></code> error because forwarding can
 re-enter an installed foreign planner, and the execution-plan handle returned by
@@ -768,7 +768,7 @@ also gains fields, affecting exhaustive struct literals. Older protobuf payloads
 remain readable, and effective split points remain available to older readers.</p>
 </section>
 <section id="groupcolumn-now-requires-values-preserving">
-<h3><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code><a class="headerlink" href="#groupcolumn-now-requires-values-preserving" title="Link to this heading">#</a></h3>
+<span id="groupcolumn-now-requires-values_preserving"></span><h3><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code><a class="headerlink" href="#groupcolumn-now-requires-values-preserving" title="Link to this heading">#</a></h3>
 <p>Custom implementations of the public <code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> trait must implement
 <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code>. This method returns selected rows without changing the stored
 values or their group indices. It preserves the requested order and supports
@@ -801,7 +801,7 @@ without a <code class="docutils literal notranslate"><span class="pre">constrain
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/24170">issue #24170</a> for details.</p>
 </section>
 <section id="castexpr-cast-options-now-returns-castoptions-by-value">
-<h3><code class="docutils literal notranslate"><span class="pre">CastExpr::cast_options</span></code> now returns <code class="docutils literal notranslate"><span class="pre">CastOptions</span></code> by value<a class="headerlink" href="#castexpr-cast-options-now-returns-castoptions-by-value" title="Link to this heading">#</a></h3>
+<span id="castexprcast_options-now-returns-castoptions-by-value"></span><h3><code class="docutils literal notranslate"><span class="pre">CastExpr::cast_options</span></code> now returns <code class="docutils literal notranslate"><span class="pre">CastOptions</span></code> by value<a class="headerlink" href="#castexpr-cast-options-now-returns-castoptions-by-value" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">CastExpr</span></code> now owns format strings decoded from protobuf, so <code class="docutils literal notranslate"><span class="pre">cast_options()</span></code>
 returns a borrowing <code class="docutils literal notranslate"><span class="pre">CastOptions&lt;'_&gt;</span></code> value instead of <code class="docutils literal notranslate"><span class="pre">&amp;CastOptions&lt;'static&gt;</span></code>.
 Code that only reads the options generally needs no change. To replace only the
@@ -811,7 +811,7 @@ when replacing both the child and an explicit target field. Neither method
 requires a <code class="docutils literal notranslate"><span class="pre">'static</span></code> borrow of the options.</p>
 </section>
 <section id="executionoptions-has-a-new-enable-nlj-coordinated-fallback-field">
-<h3><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback</span></code> field<a class="headerlink" href="#executionoptions-has-a-new-enable-nlj-coordinated-fallback-field" title="Link to this heading">#</a></h3>
+<span id="executionoptions-has-a-new-enable_nlj_coordinated_fallback-field"></span><h3><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback</span></code> field<a class="headerlink" href="#executionoptions-has-a-new-enable-nlj-coordinated-fallback-field" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> gained a public <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback:</span> <span class="pre">bool</span></code> field
 (default <code class="docutils literal notranslate"><span class="pre">true</span></code>). It controls whether the memory-limited <code class="docutils literal notranslate"><span class="pre">NestedLoopJoinExec</span></code>
 fallback shares per-chunk build-side state across probe partitions, which is what
@@ -857,7 +857,7 @@ the previous fail-fast behaviour for the affected join types.</p></li>
 </div>
 </section>
 <section id="executionoptions-time-zone-is-now-a-validated-configtimezone">
-<h3><code class="docutils literal notranslate"><span class="pre">ExecutionOptions::time_zone</span></code> is now a validated <code class="docutils literal notranslate"><span class="pre">ConfigTimeZone</span></code><a class="headerlink" href="#executionoptions-time-zone-is-now-a-validated-configtimezone" title="Link to this heading">#</a></h3>
+<span id="executionoptionstime_zone-is-now-a-validated-configtimezone"></span><h3><code class="docutils literal notranslate"><span class="pre">ExecutionOptions::time_zone</span></code> is now a validated <code class="docutils literal notranslate"><span class="pre">ConfigTimeZone</span></code><a class="headerlink" href="#executionoptions-time-zone-is-now-a-validated-configtimezone" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ExecutionOptions::time_zone</span></code> changed from <code class="docutils literal notranslate"><span class="pre">Option&lt;String&gt;</span></code> to
 <code class="docutils literal notranslate"><span class="pre">Option&lt;ConfigTimeZone&gt;</span></code>. The value is now checked when it is set, so
 <code class="docutils literal notranslate"><span class="pre">SET</span> <span class="pre">TIME</span> <span class="pre">ZONE</span> <span class="pre">=</span> <span class="pre">'Asia/Taipei2'</span></code> fails immediately instead of on a later query.
@@ -880,7 +880,7 @@ code changes, but invalid time zones are now rejected immediately.</p></li>
 </div>
 </section>
 <section id="parquetoptions-coerce-int96-tz-is-now-a-validated-configtimezone">
-<h3><code class="docutils literal notranslate"><span class="pre">ParquetOptions::coerce_int96_tz</span></code> is now a validated <code class="docutils literal notranslate"><span class="pre">ConfigTimeZone</span></code><a class="headerlink" href="#parquetoptions-coerce-int96-tz-is-now-a-validated-configtimezone" title="Link to this heading">#</a></h3>
+<span id="parquetoptionscoerce_int96_tz-is-now-a-validated-configtimezone"></span><h3><code class="docutils literal notranslate"><span class="pre">ParquetOptions::coerce_int96_tz</span></code> is now a validated <code class="docutils literal notranslate"><span class="pre">ConfigTimeZone</span></code><a class="headerlink" href="#parquetoptions-coerce-int96-tz-is-now-a-validated-configtimezone" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ParquetOptions::coerce_int96_tz</span></code> changed from <code class="docutils literal notranslate"><span class="pre">Option&lt;String&gt;</span></code> to
 <code class="docutils literal notranslate"><span class="pre">Option&lt;ConfigTimeZone&gt;</span></code>, the same type as <code class="docutils literal notranslate"><span class="pre">ExecutionOptions::time_zone</span></code>. An
 invalid time zone is now rejected by <code class="docutils literal notranslate"><span class="pre">SET</span></code>, by table options, and by protobuf
@@ -903,7 +903,7 @@ changes, but invalid time zones are now rejected immediately.</p></li>
 </div>
 </section>
 <section id="executionoptions-has-a-new-soft-max-bytes-per-output-file-field">
-<h3><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">soft_max_bytes_per_output_file</span></code> field<a class="headerlink" href="#executionoptions-has-a-new-soft-max-bytes-per-output-file-field" title="Link to this heading">#</a></h3>
+<span id="executionoptions-has-a-new-soft_max_bytes_per_output_file-field"></span><h3><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">soft_max_bytes_per_output_file</span></code> field<a class="headerlink" href="#executionoptions-has-a-new-soft-max-bytes-per-output-file-field" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> gained a public <code class="docutils literal notranslate"><span class="pre">soft_max_bytes_per_output_file:</span> <span class="pre">ConfigNonZeroUsize</span></code>
 field (default 4 GiB minus one byte, or 4,294,967,295 bytes). When writing
 multiple output files, DataFusion starts a new file once a writer reports that
@@ -933,7 +933,7 @@ to target 128 MiB output files in Rust:</p>
 </div>
 </section>
 <section id="new-field-enable-rle-to-dictionary-added-to-parquetoptions">
-<h3>New field <code class="docutils literal notranslate"><span class="pre">enable_rle_to_dictionary</span></code> added to <code class="docutils literal notranslate"><span class="pre">ParquetOptions</span></code><a class="headerlink" href="#new-field-enable-rle-to-dictionary-added-to-parquetoptions" title="Link to this heading">#</a></h3>
+<span id="new-field-enable_rle_to_dictionary-added-to-parquetoptions"></span><h3>New field <code class="docutils literal notranslate"><span class="pre">enable_rle_to_dictionary</span></code> added to <code class="docutils literal notranslate"><span class="pre">ParquetOptions</span></code><a class="headerlink" href="#new-field-enable-rle-to-dictionary-added-to-parquetoptions" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ParquetOptions</span></code> gained a new field <code class="docutils literal notranslate"><span class="pre">enable_rle_to_dictionary:</span> <span class="pre">bool</span></code> (default
 <code class="docutils literal notranslate"><span class="pre">false</span></code>). It controls whether top-level string and binary Parquet columns with
 dictionary pages are read as <code class="docutils literal notranslate"><span class="pre">Dictionary&lt;Int32,</span> <span class="pre">Utf8&gt;</span></code> / <code class="docutils literal notranslate"><span class="pre">Dictionary&lt;Int32,</span> <span class="pre">Binary&gt;</span></code> instead of their plain type.</p>
@@ -965,7 +965,7 @@ literal, or use <code class="docutils literal notranslate"><span class="pre">..D
 </div>
 </section>
 <section id="datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored">
-<h3><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored<a class="headerlink" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored" title="Link to this heading">#</a></h3>
+<span id="datafusionoptimizeruse_statistics_registry-is-deprecated-and-ignored"></span><h3><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored<a class="headerlink" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> config flag is deprecated and
 now ignored (setting it emits a deprecation warning). The pluggable
 <code class="docutils literal notranslate"><span class="pre">StatisticsRegistry</span></code> is always consulted during the single statistics walk:
@@ -987,7 +987,7 @@ removed in a future release.</p></li>
 </ul>
 </section>
 <section id="generated-protobuf-jsonwriteroptions-gained-a-compression-level-field">
-<h3>Generated protobuf <code class="docutils literal notranslate"><span class="pre">JsonWriterOptions</span></code> gained a <code class="docutils literal notranslate"><span class="pre">compression_level</span></code> field<a class="headerlink" href="#generated-protobuf-jsonwriteroptions-gained-a-compression-level-field" title="Link to this heading">#</a></h3>
+<span id="generated-protobuf-jsonwriteroptions-gained-a-compression_level-field"></span><h3>Generated protobuf <code class="docutils literal notranslate"><span class="pre">JsonWriterOptions</span></code> gained a <code class="docutils literal notranslate"><span class="pre">compression_level</span></code> field<a class="headerlink" href="#generated-protobuf-jsonwriteroptions-gained-a-compression-level-field" title="Link to this heading">#</a></h3>
 <p>The generated public protobuf <code class="docutils literal notranslate"><span class="pre">JsonWriterOptions</span></code> struct now carries an optional
 <code class="docutils literal notranslate"><span class="pre">compression_level</span></code> so JSON sink plans preserve explicitly configured
 compression levels across serialization.</p>
@@ -1099,7 +1099,7 @@ statistics walk uses the operator’s own estimate.</p></li>
 </ul>
 </section>
 <section id="statisticsregistry-compute-and-compute-base-are-deprecated">
-<h3><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::compute</span></code> and <code class="docutils literal notranslate"><span class="pre">compute_base</span></code> are deprecated<a class="headerlink" href="#statisticsregistry-compute-and-compute-base-are-deprecated" title="Link to this heading">#</a></h3>
+<span id="statisticsregistrycompute-and-compute_base-are-deprecated"></span><h3><code class="docutils literal notranslate"><span class="pre">StatisticsRegistry::compute</span></code> and <code class="docutils literal notranslate"><span class="pre">compute_base</span></code> are deprecated<a class="headerlink" href="#statisticsregistry-compute-and-compute-base-are-deprecated" title="Link to this heading">#</a></h3>
 <p>Use the walk instead:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">StatisticsContext</span><span class="p">::</span><span class="n">new_with_registry</span><span class="p">(</span><span class="n">registry</span><span class="p">)</span>
 <span class="w">    </span><span class="p">.</span><span class="n">compute_extended</span><span class="p">(</span><span class="n">plan</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">StatisticsArgs</span><span class="p">::</span><span class="n">new</span><span class="p">())</span><span class="o">?</span><span class="p">;</span><span class="w"> </span><span class="c1">// or .compute(...) for core Statistics</span>
@@ -1118,7 +1118,7 @@ statistics walk uses the operator’s own estimate.</p></li>
 <p>Change the expected type or wrap the expression in <code class="docutils literal notranslate"><span class="pre">CAST</span></code>. It’s recommended to avoid relying on decimal’s exact precision and scale.</p>
 </section>
 <section id="map-extract-element-at-return-an-empty-list-for-absent-keys">
-<h3><code class="docutils literal notranslate"><span class="pre">map_extract</span></code> / <code class="docutils literal notranslate"><span class="pre">element_at</span></code> return an empty list for absent keys<a class="headerlink" href="#map-extract-element-at-return-an-empty-list-for-absent-keys" title="Link to this heading">#</a></h3>
+<span id="map_extract--element_at-return-an-empty-list-for-absent-keys"></span><h3><code class="docutils literal notranslate"><span class="pre">map_extract</span></code> / <code class="docutils literal notranslate"><span class="pre">element_at</span></code> return an empty list for absent keys<a class="headerlink" href="#map-extract-element-at-return-an-empty-list-for-absent-keys" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">map_extract</span></code> (and its alias <code class="docutils literal notranslate"><span class="pre">element_at</span></code>) previously returned a single-element
 list containing <code class="docutils literal notranslate"><span class="pre">NULL</span></code> when the key was not present in the map. It now returns
 an empty list, matching the documented behavior and DuckDB. Two related cases
@@ -1144,7 +1144,7 @@ should treat an empty list as the absent-key case instead.</p>
 <a class="reference external" href="https://github.com/apache/datafusion/issues/24983">issue #24983</a> for details.</p>
 </section>
 <section id="date-bin-rejects-strides-that-are-not-positive">
-<h3><code class="docutils literal notranslate"><span class="pre">date_bin</span></code> rejects strides that are not positive<a class="headerlink" href="#date-bin-rejects-strides-that-are-not-positive" title="Link to this heading">#</a></h3>
+<span id="date_bin-rejects-strides-that-are-not-positive"></span><h3><code class="docutils literal notranslate"><span class="pre">date_bin</span></code> rejects strides that are not positive<a class="headerlink" href="#date-bin-rejects-strides-that-are-not-positive" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">date_bin</span></code> now returns an error when its stride is not greater than zero,
 matching <a class="reference external" href="https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-BIN">PostgreSQL</a> for fixed strides. PostgreSQL does not support month
 strides, and DataFusion applies the same rule to them. Negative strides were
@@ -1152,7 +1152,7 @@ previously accepted but did not produce well-defined bins; use the absolute
 value of the stride instead. See <a class="reference external" href="https://github.com/apache/datafusion/issues/25856">issue #25856</a> for details.</p>
 </section>
 <section id="log-base-value-widens-float-arguments-to-the-wider-type">
-<h3><code class="docutils literal notranslate"><span class="pre">log(base,</span> <span class="pre">value)</span></code> widens float arguments to the wider type<a class="headerlink" href="#log-base-value-widens-float-arguments-to-the-wider-type" title="Link to this heading">#</a></h3>
+<span id="logbase-value-widens-float-arguments-to-the-wider-type"></span><h3><code class="docutils literal notranslate"><span class="pre">log(base,</span> <span class="pre">value)</span></code> widens float arguments to the wider type<a class="headerlink" href="#log-base-value-widens-float-arguments-to-the-wider-type" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">log(base,</span> <span class="pre">value)</span></code> previously computed in the float type of <code class="docutils literal notranslate"><span class="pre">value</span></code>, so a
 wider <code class="docutils literal notranslate"><span class="pre">base</span></code> was narrowed and lost precision. Both arguments are now widened to
 the wider float type, and the result has that type. An integer or decimal
@@ -1168,7 +1168,7 @@ the wider float type, and the result has that type. An integer or decimal
 type. See <a class="reference external" href="https://github.com/apache/datafusion/issues/22581">issue #22581</a> for details.</p>
 </section>
 <section id="dataframe-from-columns-accepts-intoiterator">
-<h3><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code><a class="headerlink" href="#dataframe-from-columns-accepts-intoiterator" title="Link to this heading">#</a></h3>
+<span id="dataframefrom_columns-accepts-intoiterator"></span><h3><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code><a class="headerlink" href="#dataframe-from-columns-accepts-intoiterator" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> now accepts any <code class="docutils literal notranslate"><span class="pre">IntoIterator&lt;Item</span> <span class="pre">=</span> <span class="pre">(&amp;str,</span> <span class="pre">ArrayRef)&gt;</span></code>
 instead of specifically accepting a <code class="docutils literal notranslate"><span class="pre">Vec&lt;(&amp;str,</span> <span class="pre">ArrayRef)&gt;</span></code>.</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Existing Vec usage continues to work</span>
@@ -1245,7 +1245,7 @@ filter on <code class="docutils literal notranslate"><span class="pre">a&#64;0</
 </div>
 </section>
 <section id="default-datafusion-sql-parser-recursion-limit-raised-from-50-to-51">
-<h3>Default <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.recursion_limit</span></code> raised from 50 to 51<a class="headerlink" href="#default-datafusion-sql-parser-recursion-limit-raised-from-50-to-51" title="Link to this heading">#</a></h3>
+<span id="default-datafusionsql_parserrecursion_limit-raised-from-50-to-51"></span><h3>Default <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.recursion_limit</span></code> raised from 50 to 51<a class="headerlink" href="#default-datafusion-sql-parser-recursion-limit-raised-from-50-to-51" title="Link to this heading">#</a></h3>
 <p>DataFusion now uses <code class="docutils literal notranslate"><span class="pre">sqlparser</span></code> 0.63.0, which adds recursion guards to more
 parse functions (for example, data type and <code class="docutils literal notranslate"><span class="pre">INTERVAL</span></code> parsing). As a result,
 the same SQL statement consumes slightly more of the parser recursion budget
@@ -1260,7 +1260,7 @@ upgrading and should raise the limit accordingly.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/25278">PR #25278</a> for details.</p>
 </section>
 <section id="ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats">
-<h3><code class="docutils literal notranslate"><span class="pre">ensure_distribution</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">ensure_distribution_with_stats</span></code><a class="headerlink" href="#ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats" title="Link to this heading">#</a></h3>
+<span id="ensure_distribution-is-deprecated-in-favour-of-ensure_distribution_with_stats"></span><h3><code class="docutils literal notranslate"><span class="pre">ensure_distribution</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">ensure_distribution_with_stats</span></code><a class="headerlink" href="#ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_optimizer::enforce_distribution::ensure_distribution</span></code> now
 takes its <code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code> from the caller, so one context (and its
 memoization cache) can be shared across a whole bottom-up traversal. The old
@@ -1318,7 +1318,7 @@ new <code class="docutils literal notranslate"><span class="pre">StatisticsConte
 result can differ from the rule’s when providers are registered.</p>
 </section>
 <section id="executionplan-supports-limit-pushdown-is-deprecated-in-favour-of-limit-behavior">
-<h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::supports_limit_pushdown</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">limit_behavior</span></code><a class="headerlink" href="#executionplan-supports-limit-pushdown-is-deprecated-in-favour-of-limit-behavior" title="Link to this heading">#</a></h3>
+<span id="executionplansupports_limit_pushdown-is-deprecated-in-favour-of-limit_behavior"></span><h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::supports_limit_pushdown</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">limit_behavior</span></code><a class="headerlink" href="#executionplan-supports-limit-pushdown-is-deprecated-in-favour-of-limit-behavior" title="Link to this heading">#</a></h3>
 <p>Operators now declare what a <code class="docutils literal notranslate"><span class="pre">LIMIT</span></code> on their output means for their input with
 <code class="docutils literal notranslate"><span class="pre">ExecutionPlan::limit_behavior</span></code>, which returns a <code class="docutils literal notranslate"><span class="pre">LimitBehavior</span></code>:</p>
 <ul class="simple">
@@ -1401,7 +1401,7 @@ the target alias when one is present, otherwise the target table reference.
 <code class="docutils literal notranslate"><span class="pre">DmlStatement::table_name</span></code> remains the provider/catalog identity.</p>
 </section>
 <section id="mergeintoopnode-protobuf-literals-require-target-qualifier">
-<h3><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code><a class="headerlink" href="#mergeintoopnode-protobuf-literals-require-target-qualifier" title="Link to this heading">#</a></h3>
+<span id="mergeintoopnode-protobuf-literals-require-target_qualifier"></span><h3><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code><a class="headerlink" href="#mergeintoopnode-protobuf-literals-require-target-qualifier" title="Link to this heading">#</a></h3>
 <p>The generated <code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> type has a new optional field. Code constructing
 the generated type with a struct literal must provide it:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// DataFusion 55.0</span>
@@ -1491,7 +1491,7 @@ results. Upgrade all plan readers before sending them null-aware
 sort-merge join plans.</p>
 </section>
 <section id="functionaldependence-has-a-new-null-equality-field">
-<h3><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field<a class="headerlink" href="#functionaldependence-has-a-new-null-equality-field" title="Link to this heading">#</a></h3>
+<span id="functionaldependence-has-a-new-null_equality-field"></span><h3><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field<a class="headerlink" href="#functionaldependence-has-a-new-null-equality-field" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> now records the NULL semantics its dependency holds under.
 Build it with <code class="docutils literal notranslate"><span class="pre">FunctionalDependence::new(..)</span></code> and, when needed,
 <code class="docutils literal notranslate"><span class="pre">.with_null_equality(NullEquality::NullEqualsNull)</span></code> instead of a struct literal.</p>
@@ -1566,7 +1566,7 @@ reference, <code class="docutils literal notranslate"><span class="pre">datafusi
 </div>
 </section>
 <section id="aggregate-functional-dependencies-is-deprecated">
-<h3><code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies</span></code> is deprecated<a class="headerlink" href="#aggregate-functional-dependencies-is-deprecated" title="Link to this heading">#</a></h3>
+<span id="aggregate_functional_dependencies-is-deprecated"></span><h3><code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies</span></code> is deprecated<a class="headerlink" href="#aggregate-functional-dependencies-is-deprecated" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies</span></code> is deprecated; use
 <code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies_with_computed_inputs</span></code> instead. Its new
 <code class="docutils literal notranslate"><span class="pre">computed_input_indices:</span> <span class="pre">&amp;[Option&lt;Vec&lt;usize&gt;&gt;]</span></code> parameter lists, for each GROUP
@@ -1591,7 +1591,7 @@ computed expression as not determined.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/27112">issue #27112</a> for details.</p>
 </section>
 <section id="filesource-exact-filter-controls-scan-equivalence-properties">
-<h3><code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> controls scan equivalence properties<a class="headerlink" href="#filesource-exact-filter-controls-scan-equivalence-properties" title="Link to this heading">#</a></h3>
+<span id="filesourceexact_filter-controls-scan-equivalence-properties"></span><h3><code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> controls scan equivalence properties<a class="headerlink" href="#filesource-exact-filter-controls-scan-equivalence-properties" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> no longer derives equivalence properties (constant columns
 and equal columns) from <code class="docutils literal notranslate"><span class="pre">FileSource::filter</span></code>. It uses the new
 <code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> method instead. This method returns the part of the
@@ -1615,7 +1615,7 @@ conjuncts when <code class="docutils literal notranslate"><span class="pre">push
 </div>
 </section>
 <section id="tableprovider-scan-with-args-supports-skip-pushdown">
-<h3><code class="docutils literal notranslate"><span class="pre">TableProvider::scan_with_args</span></code> supports skip pushdown<a class="headerlink" href="#tableprovider-scan-with-args-supports-skip-pushdown" title="Link to this heading">#</a></h3>
+<span id="tableproviderscan_with_args-supports-skip-pushdown"></span><h3><code class="docutils literal notranslate"><span class="pre">TableProvider::scan_with_args</span></code> supports skip pushdown<a class="headerlink" href="#tableprovider-scan-with-args-supports-skip-pushdown" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">ScanArgs</span></code> struct now carries a new <code class="docutils literal notranslate"><span class="pre">skip</span></code> (number of rows to skip) field
 alongside <code class="docutils literal notranslate"><span class="pre">limit</span></code>. <code class="docutils literal notranslate"><span class="pre">TableProvider::scan_with_args()</span></code> by default forwards to <code class="docutils literal notranslate"><span class="pre">scan()</span></code>, so
 existing <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> implementations keep compiling and working
@@ -1773,7 +1773,7 @@ the API breaks.</p>
 </section>
 </section>
 <section id="logicalplan-describetable-is-replaced-by-logicalplan-show">
-<h3><code class="docutils literal notranslate"><span class="pre">LogicalPlan::DescribeTable</span></code> is replaced by <code class="docutils literal notranslate"><span class="pre">LogicalPlan::Show</span></code><a class="headerlink" href="#logicalplan-describetable-is-replaced-by-logicalplan-show" title="Link to this heading">#</a></h3>
+<span id="logicalplandescribetable-is-replaced-by-logicalplanshow"></span><h3><code class="docutils literal notranslate"><span class="pre">LogicalPlan::DescribeTable</span></code> is replaced by <code class="docutils literal notranslate"><span class="pre">LogicalPlan::Show</span></code><a class="headerlink" href="#logicalplan-describetable-is-replaced-by-logicalplan-show" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">TABLES</span></code>, <code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">COLUMNS</span></code>, <code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">CREATE</span> <span class="pre">TABLE</span></code>, <code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">FUNCTIONS</span></code>, <code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">&lt;variable&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">DESCRIBE</span></code> are now all
 planned as the new <code class="docutils literal notranslate"><span class="pre">LogicalPlan::Show</span></code> variant <code class="docutils literal notranslate"><span class="pre">LogicalPlan::DescribeTable</span></code> and the <code class="docutils literal notranslate"><span class="pre">DescribeTable</span></code> struct are
 removed.</p>
@@ -1873,7 +1873,7 @@ reordered should call <code class="docutils literal notranslate"><span class="pr
 also accounts for the output ordering.</p>
 </section>
 <section id="logicalplan-map-expressions-re-derives-a-projection-s-schema">
-<h3><code class="docutils literal notranslate"><span class="pre">LogicalPlan::map_expressions</span></code> re-derives a <code class="docutils literal notranslate"><span class="pre">Projection</span></code>’s schema<a class="headerlink" href="#logicalplan-map-expressions-re-derives-a-projection-s-schema" title="Link to this heading">#</a></h3>
+<span id="logicalplanmap_expressions-re-derives-a-projections-schema"></span><h3><code class="docutils literal notranslate"><span class="pre">LogicalPlan::map_expressions</span></code> re-derives a <code class="docutils literal notranslate"><span class="pre">Projection</span></code>’s schema<a class="headerlink" href="#logicalplan-map-expressions-re-derives-a-projection-s-schema" title="Link to this heading">#</a></h3>
 <p>When <code class="docutils literal notranslate"><span class="pre">LogicalPlan::map_expressions</span></code> rewrites any expression of a <code class="docutils literal notranslate"><span class="pre">Projection</span></code>,
 it now derives the output schema again from the new expressions instead of
 keeping the old one. See <a class="reference external" href="https://github.com/apache/datafusion/pull/24281">#24281</a>.</p>
@@ -1909,7 +1909,7 @@ whose requirements do not hold, such as a <code class="docutils literal notransl
 input, now fails to plan instead of possibly returning wrong results.</p>
 </section>
 <section id="aggregateudfimpl-is-nullable-is-deprecated">
-<h3><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_nullable</span></code> is deprecated<a class="headerlink" href="#aggregateudfimpl-is-nullable-is-deprecated" title="Link to this heading">#</a></h3>
+<span id="aggregateudfimplis_nullable-is-deprecated"></span><h3><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_nullable</span></code> is deprecated<a class="headerlink" href="#aggregateudfimpl-is-nullable-is-deprecated" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_nullable</span></code> is deprecated; set the nullability in the field
 returned by <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::return_field</span></code> instead. The compiler does not
 warn about existing overrides. Keep them, consistent with <code class="docutils literal notranslate"><span class="pre">return_field</span></code>,
@@ -1957,7 +1957,7 @@ the name <code class="docutils literal notranslate"><span class="pre">&quot;&quo
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/18235">issue #18235</a> for details.</p>
 </section>
 <section id="new-match-columns-by-header-field-on-csv-options">
-<h3>New <code class="docutils literal notranslate"><span class="pre">match_columns_by_header</span></code> field on CSV options<a class="headerlink" href="#new-match-columns-by-header-field-on-csv-options" title="Link to this heading">#</a></h3>
+<span id="new-match_columns_by_header-field-on-csv-options"></span><h3>New <code class="docutils literal notranslate"><span class="pre">match_columns_by_header</span></code> field on CSV options<a class="headerlink" href="#new-match-columns-by-header-field-on-csv-options" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_common::config::CsvOptions</span></code> and <code class="docutils literal notranslate"><span class="pre">datafusion::prelude::CsvReadOptions</span></code>
 have a new public field, <code class="docutils literal notranslate"><span class="pre">match_columns_by_header</span></code>, which maps CSV file columns
 to the table schema by header name instead of by position. The protobuf

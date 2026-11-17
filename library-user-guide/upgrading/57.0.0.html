@@ -492,7 +492,7 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-57-0-0">
-<h2>DataFusion 57.0.0<a class="headerlink" href="#datafusion-57-0-0" title="Link to this heading">#</a></h2>
+<span id="datafusion-5700"></span><h2>DataFusion 57.0.0<a class="headerlink" href="#datafusion-57-0-0" title="Link to this heading">#</a></h2>
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">57.0.0</span></code> has not been released yet. The information provided
 in this section pertains to features and changes that have already been merged
 to the main branch and are awaiting release in this version.</p>
@@ -520,7 +520,7 @@ parents and siblings unchanged. The values themselves are shared through <code c
 local to lexical scopes, so sibling lambdas may reuse names.</p>
 </section>
 <section id="groupclusteringmode-full-no-longer-implies-sorted-input">
-<h3><code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> no longer implies sorted input<a class="headerlink" href="#groupclusteringmode-full-no-longer-implies-sorted-input" title="Link to this heading">#</a></h3>
+<span id="groupclusteringmodefull-no-longer-implies-sorted-input"></span><h3><code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> no longer implies sorted input<a class="headerlink" href="#groupclusteringmode-full-no-longer-implies-sorted-input" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">AggregateExec</span></code> can now select <code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> when the input’s
 equivalence properties declare the complete <code class="docutils literal notranslate"><span class="pre">GROUP</span> <span class="pre">BY</span></code> tuple as grouped
 (contiguous within each partition), even if the input is not sorted.</p>
@@ -570,7 +570,7 @@ that aligns with the SQL specification.</p>
 </div>
 </section>
 <section id="deprecated-expr-wildcard-has-been-removed">
-<h3>Deprecated <code class="docutils literal notranslate"><span class="pre">Expr::Wildcard</span></code> has been removed<a class="headerlink" href="#deprecated-expr-wildcard-has-been-removed" title="Link to this heading">#</a></h3>
+<span id="deprecated-exprwildcard-has-been-removed"></span><h3>Deprecated <code class="docutils literal notranslate"><span class="pre">Expr::Wildcard</span></code> has been removed<a class="headerlink" href="#deprecated-expr-wildcard-has-been-removed" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">Expr::Wildcard</span></code> has been deprecated since version 46.0.0, and has been removed.
 For counting rows, use <code class="docutils literal notranslate"><span class="pre">count_all()</span></code> or <code class="docutils literal notranslate"><span class="pre">count_all_window()</span></code>.</p>
 <p>It has also been removed from the Protobuf and Substrait based serialization.</p>

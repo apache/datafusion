@@ -494,7 +494,7 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 <p><code class="docutils literal notranslate"><span class="pre">datafusion-cli</span></code> comes with build-in functions that are not included in the
 DataFusion SQL engine by default. These functions are:</p>
 <section id="parquet-metadata">
-<h2><code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code><a class="headerlink" href="#parquet-metadata" title="Link to this heading">#</a></h2>
+<span id="parquet_metadata"></span><h2><code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code><a class="headerlink" href="#parquet-metadata" title="Link to this heading">#</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">parquet_metadata</span></code> table function can be used to inspect detailed metadata
 about a parquet file such as statistics, sizes, and other information. This can
 be helpful to understand how parquet files are structured.</p>
@@ -623,7 +623,7 @@ the meaning of these fields.</p>
 </div>
 </section>
 <section id="parquet-file-metadata">
-<h2><code class="docutils literal notranslate"><span class="pre">parquet_file_metadata</span></code><a class="headerlink" href="#parquet-file-metadata" title="Link to this heading">#</a></h2>
+<span id="parquet_file_metadata"></span><h2><code class="docutils literal notranslate"><span class="pre">parquet_file_metadata</span></code><a class="headerlink" href="#parquet-file-metadata" title="Link to this heading">#</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">parquet_file_metadata</span></code> table function returns one row with the file level
 metadata stored in the footer of a parquet file, such as the writer and the
 key-value metadata.</p>
@@ -678,7 +678,7 @@ key-value metadata.</p>
 </div>
 </section>
 <section id="parquet-page-index">
-<h2><code class="docutils literal notranslate"><span class="pre">parquet_page_index</span></code><a class="headerlink" href="#parquet-page-index" title="Link to this heading">#</a></h2>
+<span id="parquet_page_index"></span><h2><code class="docutils literal notranslate"><span class="pre">parquet_page_index</span></code><a class="headerlink" href="#parquet-page-index" title="Link to this heading">#</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">parquet_page_index</span></code> table function returns one row for each data page in
 the <a class="reference external" href="https://github.com/apache/parquet-format/blob/master/PageIndex.md"><code class="docutils literal notranslate"><span class="pre">page</span> <span class="pre">index</span></code></a> of a parquet file, combining the page location from the
 offset index with the page statistics from the column index. Files written
@@ -750,7 +750,7 @@ without a page index return no rows.</p>
 </div>
 </section>
 <section id="metadata-cache">
-<h2><code class="docutils literal notranslate"><span class="pre">metadata_cache</span></code><a class="headerlink" href="#metadata-cache" title="Link to this heading">#</a></h2>
+<span id="metadata_cache"></span><h2><code class="docutils literal notranslate"><span class="pre">metadata_cache</span></code><a class="headerlink" href="#metadata-cache" title="Link to this heading">#</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">metadata_cache</span></code> function shows information about the default File Metadata Cache that is used by the
 <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html"><code class="docutils literal notranslate"><span class="pre">ListingTable</span></code></a> implementation in DataFusion. This cache is used to speed up
 reading metadata from files when scanning directories with many files.</p>
@@ -831,7 +831,7 @@ a table reference.</p>
 </div>
 </section>
 <section id="statistics-cache">
-<h2><code class="docutils literal notranslate"><span class="pre">statistics_cache</span></code><a class="headerlink" href="#statistics-cache" title="Link to this heading">#</a></h2>
+<span id="statistics_cache"></span><h2><code class="docutils literal notranslate"><span class="pre">statistics_cache</span></code><a class="headerlink" href="#statistics-cache" title="Link to this heading">#</a></h2>
 <p>Similarly to the <code class="docutils literal notranslate"><span class="pre">metadata_cache</span></code>, the <code class="docutils literal notranslate"><span class="pre">statistics_cache</span></code> function can be used to show information
 about the File Statistics Cache that is used by the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html"><code class="docutils literal notranslate"><span class="pre">ListingTable</span></code></a> implementation in DataFusion.
 For the statistics to be collected, the config <code class="docutils literal notranslate"><span class="pre">datafusion.execution.collect_statistics</span></code> must be
@@ -899,7 +899,7 @@ enabled.</p>
 </div>
 </section>
 <section id="list-files-cache">
-<h2><code class="docutils literal notranslate"><span class="pre">list_files_cache</span></code><a class="headerlink" href="#list-files-cache" title="Link to this heading">#</a></h2>
+<span id="list_files_cache"></span><h2><code class="docutils literal notranslate"><span class="pre">list_files_cache</span></code><a class="headerlink" href="#list-files-cache" title="Link to this heading">#</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">list_files_cache</span></code> function shows information about the <code class="docutils literal notranslate"><span class="pre">ListFilesCache</span></code> that is used by the <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html"><code class="docutils literal notranslate"><span class="pre">ListingTable</span></code></a> implementation in DataFusion. When creating a <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html"><code class="docutils literal notranslate"><span class="pre">ListingTable</span></code></a>, DataFusion lists the files in the table’s location and caches results in the <code class="docutils literal notranslate"><span class="pre">ListFilesCache</span></code>. Subsequent queries against the same table can reuse this cached information instead of re-listing the files. Cache entries are scoped to tables.</p>
 <p>You can inspect the cache by querying the <code class="docutils literal notranslate"><span class="pre">list_files_cache</span></code> function. For example,</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">set</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">runtime</span><span class="p">.</span><span class="n">list_files_cache_ttl</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ss">&quot;30s&quot;</span><span class="p">;</span>

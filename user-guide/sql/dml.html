@@ -579,7 +579,7 @@ results (maintaining the order) to a parquet file named
 <section id="insert">
 <h2>INSERT<a class="headerlink" href="#insert" title="Link to this heading">#</a></h2>
 <section id="id1">
-<h3>Examples<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
+<span id="examples-1"></span><h3>Examples<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
 <p>Insert values into a table.</p>
 <pre>
 INSERT INTO <i><b>table_name</i></b> { VALUES ( <i><b>expression</i></b> [, ...] ) [, ...] | <i><b>query</i></b> }
@@ -605,7 +605,7 @@ DELETE FROM <i><b>table_name</b></i> [ WHERE <i><b>condition</b></i> ]
 <p>DataFusion removes a row only if the condition is true for that row. SQL three-valued logic applies: if the condition evaluates to <code class="docutils literal notranslate"><span class="pre">NULL</span></code>, the row remains. For example, <code class="docutils literal notranslate"><span class="pre">WHERE</span> <span class="pre">value</span> <span class="pre">&gt;</span> <span class="pre">15</span></code> keeps a row with a <code class="docutils literal notranslate"><span class="pre">NULL</span></code> value, because <code class="docutils literal notranslate"><span class="pre">NULL</span> <span class="pre">&gt;</span> <span class="pre">15</span></code> is <code class="docutils literal notranslate"><span class="pre">NULL</span></code>.</p>
 <p>Not all tables support <code class="docutils literal notranslate"><span class="pre">DELETE</span></code>. See <a class="reference internal" href="#table-support-for-delete-and-update">Table support for DELETE and UPDATE</a>.</p>
 <section id="id2">
-<h3>Examples<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
+<span id="examples-2"></span><h3>Examples<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
 <p>Remove the rows that match a condition:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">DELETE</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">target_table</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-------+</span>
@@ -637,7 +637,7 @@ UPDATE <i><b>table_name</b></i> SET <i><b>column</b></i> = <i><b>expression</b><
 <p>Each assignment expression reads the row values from before the statement. <code class="docutils literal notranslate"><span class="pre">SET</span> <span class="pre">a</span> <span class="pre">=</span> <span class="pre">b,</span> <span class="pre">b</span> <span class="pre">=</span> <span class="pre">a</span></code> therefore exchanges the two values.</p>
 <p>Not all tables support <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code>. See <a class="reference internal" href="#table-support-for-delete-and-update">Table support for DELETE and UPDATE</a>.</p>
 <section id="id3">
-<h3>Examples<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<span id="examples-3"></span><h3>Examples<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
 <p>Set one column in the rows that match a condition:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="n">target_table</span><span class="w"> </span><span class="k">SET</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;Baz&#39;</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-------+</span>

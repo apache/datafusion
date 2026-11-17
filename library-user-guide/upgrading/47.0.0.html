@@ -492,7 +492,7 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-47-0-0">
-<h2>DataFusion 47.0.0<a class="headerlink" href="#datafusion-47-0-0" title="Link to this heading">#</a></h2>
+<span id="datafusion-4700"></span><h2>DataFusion 47.0.0<a class="headerlink" href="#datafusion-47-0-0" title="Link to this heading">#</a></h2>
 <p>This section calls out some of the major changes in the <code class="docutils literal notranslate"><span class="pre">47.0.0</span></code> release of DataFusion.</p>
 <p>Here are some example upgrade PRs that demonstrate changes required when upgrading from DataFusion 46.0.0:</p>
 <ul class="simple">
@@ -501,7 +501,7 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 <li><p><a class="reference external" href="https://github.com/lakehq/sail/pull/434">Sail Upgrade to <code class="docutils literal notranslate"><span class="pre">47.0.0</span></code></a></p></li>
 </ul>
 <section id="upgrades-to-arrow-rs-and-arrow-parquet-55-0-0-and-object-store-0-12-0">
-<h3>Upgrades to <code class="docutils literal notranslate"><span class="pre">arrow-rs</span></code> and <code class="docutils literal notranslate"><span class="pre">arrow-parquet</span></code> 55.0.0 and <code class="docutils literal notranslate"><span class="pre">object_store</span></code> 0.12.0<a class="headerlink" href="#upgrades-to-arrow-rs-and-arrow-parquet-55-0-0-and-object-store-0-12-0" title="Link to this heading">#</a></h3>
+<span id="upgrades-to-arrow-rs-and-arrow-parquet-5500-and-object_store-0120"></span><h3>Upgrades to <code class="docutils literal notranslate"><span class="pre">arrow-rs</span></code> and <code class="docutils literal notranslate"><span class="pre">arrow-parquet</span></code> 55.0.0 and <code class="docutils literal notranslate"><span class="pre">object_store</span></code> 0.12.0<a class="headerlink" href="#upgrades-to-arrow-rs-and-arrow-parquet-55-0-0-and-object-store-0-12-0" title="Link to this heading">#</a></h3>
 <p>Several APIs are changed in the underlying arrow and parquet libraries to use a
 <code class="docutils literal notranslate"><span class="pre">u64</span></code> instead of <code class="docutils literal notranslate"><span class="pre">usize</span></code> to better support WASM (See <a class="reference external" href="https://github.com/apache/arrow-rs/pull/7371">#7371</a> and [#6961])</p>
 <p>Additionally <code class="docutils literal notranslate"><span class="pre">ObjectStore::list</span></code> and <code class="docutils literal notranslate"><span class="pre">ObjectStore::list_with_offset</span></code> have been changed to return <code class="docutils literal notranslate"><span class="pre">static</span></code> lifetimes (See <a class="reference external" href="https://github.com/apache/arrow-rs/pull/6619">#6619</a>)</p>
@@ -536,7 +536,7 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 </div>
 </section>
 <section id="displayformattype-treerender">
-<h3><code class="docutils literal notranslate"><span class="pre">DisplayFormatType::TreeRender</span></code><a class="headerlink" href="#displayformattype-treerender" title="Link to this heading">#</a></h3>
+<span id="displayformattypetreerender"></span><h3><code class="docutils literal notranslate"><span class="pre">DisplayFormatType::TreeRender</span></code><a class="headerlink" href="#displayformattype-treerender" title="Link to this heading">#</a></h3>
 <p>DataFusion now supports <a class="reference external" href="https://datafusion.apache.org/user-guide/sql/explain.html#tree-format-default"><code class="docutils literal notranslate"><span class="pre">tree</span></code> style explain plans</a>. Implementations of
 <code class="docutils literal notranslate"><span class="pre">Executionplan</span></code> must also provide a description in the
 <code class="docutils literal notranslate"><span class="pre">DisplayFormatType::TreeRender</span></code> format. This can be the same as the existing
@@ -550,7 +550,7 @@ previously or were hard to use correctly such as the multiple different
 details.</p>
 </section>
 <section id="filescanconfig-filescanconfigbuilder">
-<h3><code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> –&gt; <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code><a class="headerlink" href="#filescanconfig-filescanconfigbuilder" title="Link to this heading">#</a></h3>
+<span id="filescanconfig----filescanconfigbuilder"></span><h3><code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> –&gt; <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code><a class="headerlink" href="#filescanconfig-filescanconfigbuilder" title="Link to this heading">#</a></h3>
 <p>Previously, <code class="docutils literal notranslate"><span class="pre">FileScanConfig::build()</span></code> directly created ExecutionPlans. In
 DataFusion 47.0.0 this has been changed to use <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code>. See
 <a class="reference external" href="https://github.com/apache/datafusion/pull/15352">#15352</a> for details.</p>

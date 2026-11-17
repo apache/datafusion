@@ -492,9 +492,9 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-49-0-0">
-<h2>DataFusion 49.0.0<a class="headerlink" href="#datafusion-49-0-0" title="Link to this heading">#</a></h2>
+<span id="datafusion-4900"></span><h2>DataFusion 49.0.0<a class="headerlink" href="#datafusion-49-0-0" title="Link to this heading">#</a></h2>
 <section id="msrv-updated-to-1-85-1">
-<h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.85.1<a class="headerlink" href="#msrv-updated-to-1-85-1" title="Link to this heading">#</a></h3>
+<span id="msrv-updated-to-1851"></span><h3><code class="docutils literal notranslate"><span class="pre">MSRV</span></code> updated to 1.85.1<a class="headerlink" href="#msrv-updated-to-1-85-1" title="Link to this heading">#</a></h3>
 <p>The Minimum Supported Rust Version (MSRV) has been updated to <a class="reference external" href="https://releases.rs/docs/1.85.1/"><code class="docutils literal notranslate"><span class="pre">1.85.1</span></code></a>. See
 <a class="reference external" href="https://github.com/apache/datafusion/pull/16728">#16728</a> for details.</p>
 </section>
@@ -542,7 +542,7 @@ is more efficient.</p>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/16317">#16317</a> for details.</p>
 </section>
 <section id="new-datafusion-execution-spill-compression-configuration-option">
-<h3>New <code class="docutils literal notranslate"><span class="pre">datafusion.execution.spill_compression</span></code> configuration option<a class="headerlink" href="#new-datafusion-execution-spill-compression-configuration-option" title="Link to this heading">#</a></h3>
+<span id="new-datafusionexecutionspill_compression-configuration-option"></span><h3>New <code class="docutils literal notranslate"><span class="pre">datafusion.execution.spill_compression</span></code> configuration option<a class="headerlink" href="#new-datafusion-execution-spill-compression-configuration-option" title="Link to this heading">#</a></h3>
 <p>DataFusion 49.0.0 adds support for compressing spill files when data is written to disk during spilling query execution. A new configuration option <code class="docutils literal notranslate"><span class="pre">datafusion.execution.spill_compression</span></code> controls the compression codec used.</p>
 <p><strong>Configuration:</strong></p>
 <ul class="simple">
@@ -566,7 +566,7 @@ is more efficient.</p>
 <p>For more details about this configuration option, including performance trade-offs between different compression codecs, see the <a class="reference internal" href="../../user-guide/configs.html"><span class="std std-doc">Configuration Settings</span></a> documentation.</p>
 </section>
 <section id="deprecated-map-varchar-to-utf8view-configuration-option">
-<h3>Deprecated <code class="docutils literal notranslate"><span class="pre">map_varchar_to_utf8view</span></code> configuration option<a class="headerlink" href="#deprecated-map-varchar-to-utf8view-configuration-option" title="Link to this heading">#</a></h3>
+<span id="deprecated-map_varchar_to_utf8view-configuration-option"></span><h3>Deprecated <code class="docutils literal notranslate"><span class="pre">map_varchar_to_utf8view</span></code> configuration option<a class="headerlink" href="#deprecated-map-varchar-to-utf8view-configuration-option" title="Link to this heading">#</a></h3>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/16290">issue #16290</a> for more information
 The old configuration</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>datafusion.sql_parser.map_varchar_to_utf8view
@@ -577,7 +577,7 @@ If you previously used this to control only <code class="docutils literal notran
 </section>
 <hr class="docutils" />
 <section id="new-map-string-types-to-utf8view-configuration-option">
-<h3>New <code class="docutils literal notranslate"><span class="pre">map_string_types_to_utf8view</span></code> configuration option<a class="headerlink" href="#new-map-string-types-to-utf8view-configuration-option" title="Link to this heading">#</a></h3>
+<span id="new-map_string_types_to_utf8view-configuration-option"></span><h3>New <code class="docutils literal notranslate"><span class="pre">map_string_types_to_utf8view</span></code> configuration option<a class="headerlink" href="#new-map-string-types-to-utf8view-configuration-option" title="Link to this heading">#</a></h3>
 <p>To unify <strong>all</strong> SQL string types (<code class="docutils literal notranslate"><span class="pre">CHAR</span></code>, <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code>, <code class="docutils literal notranslate"><span class="pre">TEXT</span></code>, <code class="docutils literal notranslate"><span class="pre">STRING</span></code>) to Arrow’s zero‑copy <code class="docutils literal notranslate"><span class="pre">Utf8View</span></code>, DataFusion 49.0.0 introduces:</p>
 <ul class="simple">
 <li><p><strong>Key</strong>: <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.map_string_types_to_utf8view</span></code></p></li>

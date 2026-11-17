@@ -492,9 +492,9 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-46-0-0">
-<h2>DataFusion 46.0.0<a class="headerlink" href="#datafusion-46-0-0" title="Link to this heading">#</a></h2>
+<span id="datafusion-4600"></span><h2>DataFusion 46.0.0<a class="headerlink" href="#datafusion-46-0-0" title="Link to this heading">#</a></h2>
 <section id="use-invoke-with-args-instead-of-invoke-and-invoke-batch">
-<h3>Use <code class="docutils literal notranslate"><span class="pre">invoke_with_args</span></code> instead of <code class="docutils literal notranslate"><span class="pre">invoke()</span></code> and <code class="docutils literal notranslate"><span class="pre">invoke_batch()</span></code><a class="headerlink" href="#use-invoke-with-args-instead-of-invoke-and-invoke-batch" title="Link to this heading">#</a></h3>
+<span id="use-invoke_with_args-instead-of-invoke-and-invoke_batch"></span><h3>Use <code class="docutils literal notranslate"><span class="pre">invoke_with_args</span></code> instead of <code class="docutils literal notranslate"><span class="pre">invoke()</span></code> and <code class="docutils literal notranslate"><span class="pre">invoke_batch()</span></code><a class="headerlink" href="#use-invoke-with-args-instead-of-invoke-and-invoke-batch" title="Link to this heading">#</a></h3>
 <p>DataFusion is moving to a consistent API for invoking ScalarUDFs,
 <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html#method.invoke_with_args"><code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl::invoke_with_args()</span></code></a>, and deprecating
 <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html#method.invoke"><code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl::invoke()</span></code></a>, <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html#method.invoke_batch"><code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl::invoke_batch()</span></code></a>, and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html#method.invoke_no_args"><code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl::invoke_no_args()</span></code></a></p>
@@ -574,7 +574,7 @@ traits <code class="docutils literal notranslate"><span class="pre">DataSource</
 </div>
 </section>
 <section id="id1">
-<h3>Cookbook: Changes to <code class="docutils literal notranslate"><span class="pre">ParquetExecBuilder</span></code><a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
+<span id="cookbook-changes-to-parquetexecbuilder-1"></span><h3>Cookbook: Changes to <code class="docutils literal notranslate"><span class="pre">ParquetExecBuilder</span></code><a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
 <p>Likewise code that builds <code class="docutils literal notranslate"><span class="pre">ParquetExec</span></code> using the <code class="docutils literal notranslate"><span class="pre">ParquetExecBuilder</span></code> such as
 the following must be changed:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">exec_plan_builder</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ParquetExecBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">(</span>
