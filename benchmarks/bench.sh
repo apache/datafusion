@@ -115,6 +115,7 @@ clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against partitioned (100 files) parquet
 clickbench_pushdown:    ClickBench queries against partitioned (100 files) parquet w/ filter_pushdown enabled
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
+clickbench_needle:      Point lookups of values stored in few row groups, against partitioned (100 files) parquet
 
 # Sort Pushdown Benchmarks
 sort_pushdown:          Sort pushdown baseline (no WITH ORDER) on TPC-H data (SF=1)
@@ -302,6 +303,9 @@ main() {
                 clickbench_extended)
                     data_clickbench_1
                     ;;
+                clickbench_needle)
+                    data_clickbench_partitioned # same data as clickbench_partitioned
+                    ;;
                 imdb)
                     data_imdb
                     ;;
@@ -488,6 +492,7 @@ main() {
                     run_clickbench_partitioned
                     run_clickbench_pushdown
                     run_clickbench_extended
+                    run_clickbench_needle
                     run_h2o "SMALL" "PARQUET" "groupby"
                     run_h2o "MEDIUM" "PARQUET" "groupby"
                     run_h2o "BIG" "PARQUET" "groupby"
@@ -560,6 +565,9 @@ main() {
                     ;;
                 clickbench_extended)
                     run_clickbench_extended
+                    ;;
+                clickbench_needle)
+                    run_clickbench_needle
                     ;;
                 imdb)
                     run_imdb
@@ -1172,6 +1180,14 @@ run_clickbench_extended() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (1 file) extended benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits.parquet" --queries-path "${SCRIPT_DIR}/queries/clickbench/extended" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the clickbench "needle" benchmark with the partitioned parquet dataset (100 files)
+run_clickbench_needle() {
+    RESULTS_FILE="${RESULTS_DIR}/clickbench_needle.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running clickbench (partitioned, 100 files) needle benchmark..."
+    debug_run $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/needle" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Downloads the csv.gz files IMDB datasets from Peter Boncz's homepage(one of the JOB paper authors)

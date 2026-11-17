@@ -49,7 +49,6 @@ chrono = { workspace = true }
 criterion = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
-rand = { workspace = true, features = ["small_rng"] }
 tempfile = { workspace = true }
 
 # Note: add additional linter rules in lib.rs.
@@ -84,8 +83,4 @@ harness = false
 
 [[bench]]
 name = "parquet_metadata_statistics"
-harness = false
-
-[[bench]]
-name = "parquet_dictionary_pruning"
 harness = false

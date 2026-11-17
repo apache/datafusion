@@ -546,6 +546,13 @@ Or run against the partitioned dataset:
 ./benchmarks/bench.sh run clickbench_partitioned
 ```
 
+The "needle" queries look up values stored in few row groups of the
+partitioned dataset. See [the query descriptions](queries/clickbench/README.md#needle-queries):
+
+```shell
+./benchmarks/bench.sh run clickbench_needle
+```
+
 [1]: https://github.com/ClickHouse/ClickBench
 [2]: https://github.com/ClickHouse/ClickBench/tree/main/datafusion
 

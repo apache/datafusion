@@ -14,6 +14,7 @@ ClickBench is focused on aggregation and filtering performance (though it has no
 
 - `queries/*.sql` - Actual ClickBench queries, downloaded from the [ClickBench repository](https://raw.githubusercontent.com/ClickHouse/ClickBench/main/datafusion/queries.sql) and split by the `update_queries.sh` script.
 - `extended/*.sql` - "Extended" DataFusion specific queries.
+- `needle/*.sql` - Point lookups of values stored in few row groups of the partitioned dataset.
 
 [clickbench repository]: https://github.com/ClickHouse/ClickBench/blob/main/datafusion/queries.sql
 
@@ -333,6 +334,41 @@ SELECT MAX(c) FROM (
     GROUP BY "RegionID"
 );
 ```
+
+## "Needle" Queries
+
+The "needle" queries are not part of the official ClickBench benchmark. They
+look up string values that are stored in few of the 325 row groups of the
+partitioned dataset (`hits_partitioned`), and run with `bench.sh run
+clickbench_needle`. The values were picked from that dataset's row group
+layout, so the row group counts below do not hold for the single file dataset.
+
+In every row group, the looked up values lie between the column's min and max
+statistics, and the dataset has no bloom filters, so statistics pruning keeps
+every row group. Fully dictionary-encoded column chunks hold the exact set of
+values in a row group. They are enabled with
+`DATAFUSION_EXECUTION_PARQUET_DICTIONARY_FILTER_ON_READ=true`:
+
+| Column             | Row groups with a fully dictionary-encoded chunk |
+| ------------------ | ------------------------------------------------ |
+| `MobilePhoneModel` | 325                                              |
+| `SearchPhrase`     | 182                                              |
+
+Each query selects the same columns:
+
+```sql
+SELECT "UserID", "EventTime", "URL", "Title" FROM hits WHERE <predicate>;
+```
+
+| Query | Predicate                                                                     | Row groups with a match |
+| ----- | ----------------------------------------------------------------------------- | ----------------------- |
+| Q0    | `"MobilePhoneModel" = 'ST23i'`                                                | 1                       |
+| Q1    | `"MobilePhoneModel" IN ('ST23i', 'MediaPad7Lite', 'MT27i', 'X2-00', 'SK17i')` | 5                       |
+| Q2    | `"SearchPhrase" = 'модулятор 3 воина мирные'`                                 | 1                       |
+| Q3    | `"SearchPhrase" = 'смотреть онлайн'`                                          | 302                     |
+
+Q3 is the control: dictionaries are read for most row groups, but few can be
+pruned.
 
 ## Data Notes
 
