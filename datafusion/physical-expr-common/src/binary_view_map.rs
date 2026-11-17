@@ -1179,7 +1179,7 @@ mod tests {
         assert_eq!(&test_map.into_array(), &expected_output);
     }
 
-    /// Hashes only collide with the `force_hash_collisions` feature.
+    #[cfg(feature = "force_hash_collisions")]
     #[test]
     fn test_find_long_value_colliding_with_inline_value() {
         let mut test_map = TestMap::new();
