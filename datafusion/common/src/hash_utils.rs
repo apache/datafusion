@@ -110,7 +110,7 @@ fn dictionary_nulls(array: &dyn AnyDictionaryArray) -> (bool, bool) {
 fn dictionary_overwrites_hash_buffer(array: &dyn Array) -> bool {
     array
         .as_any_dictionary_opt()
-        .is_some_and(|array| dictionary_nulls(array) == (false, false))
+        .is_some_and(|array| array.logical_null_count() == 0)
 }
 
 #[cfg(feature = "force_hash_collisions")]
@@ -170,9 +170,12 @@ where
     // Peek at the first array to determine buffer size without fully collecting
     let mut iter = arrays.into_iter().peekable();
 
-    // Get the required size from the first array
-    let required_size = match iter.peek() {
-        Some(arr) => arr.as_dyn_array().len(),
+    // Get the required size and initialization policy from the first array
+    let (required_size, reuse_buffer) = match iter.peek() {
+        Some(arr) => {
+            let array = arr.as_dyn_array();
+            (array.len(), dictionary_overwrites_hash_buffer(array))
+        }
         None => return _internal_err!("with_hashes requires at least one array"),
     };
 
@@ -180,11 +183,8 @@ where
         let mut buffer = cell.try_borrow_mut()
             .map_err(|_| _internal_datafusion_err!("with_hashes cannot be called reentrantly on the same thread"))?;
 
-        // A dictionary with non-null keys and values overwrites every output
-        // slot, so retain the initialized storage instead of zeroing it first.
-        let reuse_buffer = iter
-            .peek()
-            .is_some_and(|array| dictionary_overwrites_hash_buffer(array.as_dyn_array()));
+        // A dictionary with no logical nulls overwrites every output slot, so
+        // retain the initialized storage instead of zeroing it first.
         if !reuse_buffer {
             buffer.clear();
         }
@@ -585,6 +585,7 @@ fn scatter_non_null_dictionary<K: ArrowDictionaryKeyType, const MULTI_COL: bool>
         array.values().len(),
         "dictionary hashes must cover every dictionary value"
     );
+    // `create_hashes` hashes the prefix selected by the output buffer length.
     assert!(
         hashes.len() <= keys.len(),
         "dictionary scatter requires at least one key per hash slot"
@@ -594,15 +595,11 @@ fn scatter_non_null_dictionary<K: ArrowDictionaryKeyType, const MULTI_COL: bool>
     let (key_chunks, key_tail) = keys.as_chunks::<LANES>();
     let (hash_chunks, hash_tail) = hashes.as_chunks_mut::<LANES>();
     for (keys, hashes) in key_chunks.iter().zip(hash_chunks) {
-        let gathered: [u64; LANES] = std::array::from_fn(|lane| unsafe {
-            let key = keys[lane];
-            // SAFETY: Dictionary keys are in bounds for values, which has the
-            // same length as dict_hashes.
-            *dict_hashes.get_unchecked(key.as_usize())
-        });
+        let gathered: [u64; LANES] =
+            std::array::from_fn(|lane| dict_hashes[keys[lane].as_usize()]);
         if MULTI_COL {
             for (hash, dict_hash) in hashes.iter_mut().zip(gathered) {
-                update_dictionary_hash::<MULTI_COL>(hash, dict_hash);
+                *hash = combine_hashes(dict_hash, *hash);
             }
         } else {
             *hashes = gathered;
@@ -610,21 +607,13 @@ fn scatter_non_null_dictionary<K: ArrowDictionaryKeyType, const MULTI_COL: bool>
     }
 
     for (hash, key) in hash_tail.iter_mut().zip(key_tail) {
-        // SAFETY: Dictionary keys are in bounds for values, which has the
-        // same length as dict_hashes.
-        let dict_hash = unsafe { *dict_hashes.get_unchecked(key.as_usize()) };
-        update_dictionary_hash::<MULTI_COL>(hash, dict_hash);
+        let dict_hash = dict_hashes[key.as_usize()];
+        *hash = if MULTI_COL {
+            combine_hashes(dict_hash, *hash)
+        } else {
+            dict_hash
+        };
     }
-}
-
-#[cfg(not(feature = "force_hash_collisions"))]
-#[inline(always)]
-fn update_dictionary_hash<const MULTI_COL: bool>(hash: &mut u64, dict_hash: u64) {
-    *hash = if MULTI_COL {
-        combine_hashes(dict_hash, *hash)
-    } else {
-        dict_hash
-    };
 }
 
 /// Scatter precomputed dictionary value hashes to key positions.
@@ -1498,6 +1487,14 @@ mod tests {
     use arrow::buffer::{NullBuffer, ScalarBuffer};
 
     use super::*;
+
+    fn dirty_hash_buffer(len: usize) {
+        HASH_BUFFER.with(|cell| {
+            let mut buffer = cell.borrow_mut();
+            buffer.clear();
+            buffer.resize(len, u64::MAX);
+        });
+    }
 
     #[cfg(not(feature = "force_hash_collisions"))]
     #[derive(Default)]
@@ -2742,6 +2739,7 @@ mod tests {
             let strings = arrow::compute::cast(dictionary, &DataType::Utf8).unwrap();
             let mut expected = vec![0; dictionary.len()];
             create_hashes([strings], &random_state, &mut expected).unwrap();
+            dirty_hash_buffer(dictionary.len());
             with_hashes([dictionary], &random_state, |hashes| {
                 assert_eq!(hashes, expected);
                 Ok(())
@@ -2756,12 +2754,47 @@ mod tests {
     #[test]
     #[cfg(feature = "force_hash_collisions")]
     fn test_force_hash_collisions_clears_dictionary_buffer() {
-        let dictionary = DictionaryArray::<Int32Type>::try_new(
-            Int32Array::from(vec![0, 1, 0]),
-            Arc::new(StringArray::from(vec!["alpha", "beta"])),
-        )
+        let dictionary: ArrayRef = Arc::new(
+            DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![0, 1, 0]),
+                Arc::new(StringArray::from(vec!["alpha", "beta"])),
+            )
+            .unwrap(),
+        );
+        dirty_hash_buffer(dictionary.len());
+        with_hashes([dictionary], &RandomState::with_seed(0), |hashes| {
+            assert_eq!(hashes, [0; 3]);
+            Ok(())
+        })
         .unwrap();
-        assert!(!dictionary_overwrites_hash_buffer(&dictionary));
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn test_dictionary_with_unreferenced_null_reuses_buffer() {
+        let mut values = vec![Some("unused"); 65];
+        values[0] = None;
+        values[1] = Some("used");
+        let dictionary: ArrayRef = Arc::new(
+            DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![1]),
+                Arc::new(StringArray::from(values)),
+            )
+            .unwrap(),
+        );
+        assert!(dictionary_overwrites_hash_buffer(dictionary.as_ref()));
+
+        let random_state = RandomState::with_seed(0);
+        let decoded = arrow::compute::cast(&dictionary, &DataType::Utf8).unwrap();
+        let mut expected = vec![0; dictionary.len()];
+        create_hashes([decoded], &random_state, &mut expected).unwrap();
+
+        dirty_hash_buffer(dictionary.len());
+        with_hashes([dictionary], &random_state, |hashes| {
+            assert_eq!(hashes, expected);
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[cfg(not(feature = "force_hash_collisions"))]
