@@ -2,15 +2,14 @@
 # SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 # SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-# Tests for the TopKRepartition optimizer rule.
+# Tests for the TopKRepartition optimizer rule over a partitioned window.
 #
-# When a partitioned window function has ORDER BY + LIMIT, the optimizer
-# can push a TopK (Sort with fetch) below the hash repartition to reduce
-# the volume of data flowing through the shuffle.
-#
-# The optimization is correct when the hash partition key is a prefix of
-# the sort key, because all rows with the same partition key land in the
-# same output partition.
+# A fetch on the sort below a partitioned window would bound each hash
+# partition rather than what the window reads, so `LimitPushPastWindows`
+# leaves that sort alone (#27457). With no TopK above the shuffle,
+# TopKRepartition has nothing to copy below it and the flag makes no
+# difference to the plan. These tests pin that, so they fail if the fetch
+# comes back. `topk_repartition.rs` covers the rule itself.
 
 statement ok
 CREATE EXTERNAL TABLE employees (
@@ -77,7 +76,7 @@ a 2
 a 3
 
 ###
-### Plan shape: disabled should have TopK only above repartition
+### Plan shape: disabled, no TopK below the window
 ###
 
 statement ok
@@ -100,12 +99,12 @@ physical_plan
 02)--SortPreservingMergeExec: [depname@0 ASC NULLS LAST, empno@2 ASC NULLS LAST], fetch=3
 03)----ProjectionExec: expr=[depname@0 as depname, sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as running_total, empno@1 as empno]
 04)------BoundedWindowAggExec: wdw=[sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-05)--------SortExec: TopK(fetch=3), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------SortExec: expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
 06)----------RepartitionExec: partitioning=Hash([depname@0], 4), input_partitions=1
 07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno], file_type=csv, has_header=true
 
 ###
-### Plan shape: enabled should have TopK on BOTH sides of the repartition
+### Plan shape: enabled, still no TopK to copy below the repartition
 ###
 
 statement ok
@@ -128,10 +127,9 @@ physical_plan
 02)--SortPreservingMergeExec: [depname@0 ASC NULLS LAST, empno@2 ASC NULLS LAST], fetch=3
 03)----ProjectionExec: expr=[depname@0 as depname, sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as running_total, empno@1 as empno]
 04)------BoundedWindowAggExec: wdw=[sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(Int64(1)) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-05)--------SortExec: TopK(fetch=3), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true], sort_prefix=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST]
-06)----------RepartitionExec: partitioning=Hash([depname@0], 4), input_partitions=1, maintains_sort_order=true
-07)------------SortExec: TopK(fetch=3), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
-08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno], file_type=csv, has_header=true
+05)--------SortExec: expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------RepartitionExec: partitioning=Hash([depname@0], 4), input_partitions=1
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno], file_type=csv, has_header=true
 
 statement ok
 RESET datafusion.optimizer.enable_topk_repartition;

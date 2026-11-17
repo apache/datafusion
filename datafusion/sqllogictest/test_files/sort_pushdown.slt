@@ -161,10 +161,9 @@ SET datafusion.optimizer.enable_sort_pushdown = true;
 # It supports exact (group_id, value) ordering, but cannot apply a limit itself.
 #
 # The partitioned window requires redistributing this source's rows by group.
-# The outer LIMIT lets the optimizer insert a local TopK before redistribution,
-# exercising the standalone sort-pushdown path. Without the window, this query
-# uses the already-correct merge/sort path.
-# Removing the source-side sort must retain its per-partition limit.
+# The outer LIMIT does not reach the sort below the window: a fetch there bounds
+# each hash partition instead of what the window reads (#27457). With no fetch
+# to carry, nothing is left below the repartition either.
 query III
 SELECT group_id, value,
        SUM(value) OVER (
@@ -178,7 +177,7 @@ LIMIT 3;
 0 1 1
 0 2 3
 
-# The pushed-down sort must leave a LocalLimitExec below the repartition.
+# No fetch below the window, so no limit below the repartition.
 statement ok
 SET datafusion.explain.physical_plan_only = true;
 
@@ -196,10 +195,9 @@ physical_plan
 01)SortPreservingMergeExec: [group_id@0 ASC NULLS LAST, value@1 ASC NULLS LAST], fetch=3
 02)--ProjectionExec: expr=[group_id@0 as group_id, value@1 as value, sum(exact_sort_source.value) PARTITION BY [exact_sort_source.group_id] ORDER BY [exact_sort_source.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as running_sum]
 03)----BoundedWindowAggExec: wdw=[sum(exact_sort_source.value) PARTITION BY [exact_sort_source.group_id] ORDER BY [exact_sort_source.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(exact_sort_source.value) PARTITION BY [exact_sort_source.group_id] ORDER BY [exact_sort_source.value ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-04)------SortExec: TopK(fetch=3), expr=[group_id@0 ASC NULLS LAST, value@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------SortExec: expr=[group_id@0 ASC NULLS LAST, value@1 ASC NULLS LAST], preserve_partitioning=[true]
 05)--------RepartitionExec: partitioning=Hash([group_id@0], 4), input_partitions=4
-06)----------LocalLimitExec: fetch=3
-07)------------ExactSortSource
+06)----------ExactSortSource
 
 statement ok
 RESET datafusion.explain.physical_plan_only;
