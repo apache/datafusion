@@ -84,11 +84,13 @@ pub use join_type::{JoinConstraint, JoinSide, JoinType};
 pub use nested_struct::cast_column;
 pub use null_equality::NullEquality;
 pub use param_value::ParamValues;
+#[doc(hidden)]
+pub use partitioning::downsample_split_points;
 pub use partitioning::{SplitPoint, validate_range_split_points};
 pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::SchemaReference;
 pub use spans::{Location, Span, Spans};
-pub use stats::{ColumnStatistics, Statistics};
+pub use stats::{ColumnStatistics, DistributionStatistics, Statistics};
 pub use table_reference::{ResolvedTableReference, TableReference};
 pub use unnest::{NullHandling, RecursionUnnestOption, UnnestOptions};
 pub use utils::project_schema;

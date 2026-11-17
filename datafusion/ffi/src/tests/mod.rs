@@ -6,14 +6,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow::array::{RecordBatch, record_batch};
-use arrow_schema::{DataType, Field, Schema};
+use arrow_schema::{DataType, Field, Schema, SortOptions};
 use async_provider::create_async_table_provider;
 use async_trait::async_trait;
 use catalog::create_catalog_provider;
 use datafusion_catalog::MemTable;
 use datafusion_catalog::{Session, TableProvider};
-use datafusion_common::stats::Precision;
-use datafusion_common::{ColumnStatistics, Statistics};
+use datafusion_common::stats::{ColumnSortKey, Precision};
+use datafusion_common::{ColumnStatistics, DistributionStatistics, Statistics};
 use datafusion_common::{Result, ScalarValue, SplitPoint, exec_err};
 use datafusion_expr::{Expr, TableType, col, lit};
 use datafusion_physical_expr::expressions::Column;
@@ -216,6 +216,19 @@ pub fn make_test_statistics() -> Statistics {
                 byte_size: Precision::Exact(328),
             },
         ],
+        distribution_statistics: DistributionStatistics::new()
+            .try_with_key_quantiles(
+                vec![ColumnSortKey::new(0, SortOptions::default())],
+                Precision::Exact(
+                    [10, 20, 30, 40, 50]
+                        .into_iter()
+                        .map(|value| {
+                            SplitPoint::new(vec![ScalarValue::Int32(Some(value))])
+                        })
+                        .collect(),
+                ),
+            )
+            .expect("valid distribution statistics"),
     }
 }
 
@@ -224,13 +237,13 @@ pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
     let ordering =
         LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))])
             .expect("non-empty ordering");
-    let samples = [10, 20, 30, 40, 50]
+    let split_points = [20, 40]
         .into_iter()
         .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
         .collect();
     let partitioning = Partitioning::Range(
-        RangePartitioning::try_new_with_samples(ordering, samples, 3)
-            .expect("valid sampled range partitioning"),
+        RangePartitioning::try_new(ordering, split_points)
+            .expect("valid range partitioning"),
     );
     let plan = Arc::new(
         EmptyExec::new(schema)

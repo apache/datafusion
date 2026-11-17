@@ -497,6 +497,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
                 }],
+                ..Default::default()
             })),
             ordering: None,
             extensions: FileExtensions::new(),
@@ -662,6 +663,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Absent,
             }],
+            ..Default::default()
         });
 
         // Call with_statistics - should append partition column stats
@@ -712,6 +714,7 @@ mod tests {
             num_rows: Precision::Exact(2),
             total_byte_size: Precision::Exact(16),
             column_statistics: vec![],
+            ..Default::default()
         });
 
         let stats = pf.with_statistics(file_stats).statistics.unwrap();

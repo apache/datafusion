@@ -13,7 +13,8 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::streaming::StreamingTable;
-use datafusion::common::{ScalarValue, SplitPoint};
+use datafusion::common::stats::{ColumnSortKey, Precision};
+use datafusion::common::{ScalarValue, SplitPoint, Statistics};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -312,22 +313,35 @@ fn register_sampled_range_stream_table(ctx: &SessionContext, schema: Arc<Schema>
         &[(40, 1, 400), (50, 1, 500)],
     ];
 
+    let range_key_index = schema
+        .index_of("range_key")
+        .expect("range key should exist in stream schema");
     let output_partitioning = PhysicalPartitioning::Range(
-        PhysicalRangePartitioning::try_new_with_samples(
+        PhysicalRangePartitioning::try_new(
             [PhysicalSortExpr {
                 expr: physical_col("range_key", &schema)
                     .expect("range key should exist in stream schema"),
                 options: SortOptions::default(),
             }]
             .into(),
-            [10, 20, 30, 40, 50]
+            [20, 40]
                 .into_iter()
                 .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
                 .collect(),
-            PARTITIONS.len(),
         )
-        .expect("sampled range partitioning should be valid"),
+        .expect("range partitioning should be valid"),
     );
+    let statistics = Statistics::new_unknown(&schema)
+        .try_with_key_quantiles(
+            vec![ColumnSortKey::new(range_key_index, SortOptions::default())],
+            Precision::Exact(
+                [10, 20, 30, 40, 50]
+                    .into_iter()
+                    .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+                    .collect(),
+            ),
+        )
+        .expect("sampled distribution statistics should be valid");
     let partitions = PARTITIONS
         .into_iter()
         .map(|rows| range_stream_partition(Arc::clone(&schema), rows))
@@ -338,7 +352,8 @@ fn register_sampled_range_stream_table(ctx: &SessionContext, schema: Arc<Schema>
         Arc::new(
             StreamingTable::try_new(schema, partitions)
                 .expect("sampled range table should be valid")
-                .with_output_partitioning(output_partitioning),
+                .with_output_partitioning(output_partitioning)
+                .with_statistics(statistics),
         ),
     )
     .expect("sampled range table registration should succeed");

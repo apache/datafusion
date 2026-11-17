@@ -746,6 +746,7 @@ mod tests {
                     max_value: Precision::Exact(ScalarValue::Float64(Some(max))),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
         ))
     }

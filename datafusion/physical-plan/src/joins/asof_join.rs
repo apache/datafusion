@@ -567,6 +567,7 @@ impl ExecutionPlan for AsOfJoinExec {
             num_rows: left.num_rows,
             total_byte_size: Precision::Absent,
             column_statistics,
+            ..Default::default()
         }))
     }
     #[cfg(feature = "proto")]
@@ -2152,6 +2153,7 @@ mod tests {
             num_rows: Precision::Exact(7),
             total_byte_size: Precision::Exact(128),
             column_statistics: left_column_statistics.clone(),
+            ..Default::default()
         });
         let right_stats = Arc::new(Statistics::new_unknown(&exec.right.schema()));
         let stats = exec

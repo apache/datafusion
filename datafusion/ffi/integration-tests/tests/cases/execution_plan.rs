@@ -149,8 +149,6 @@ mod tests {
         };
 
         assert_eq!(range.partition_count(), 3);
-        assert_eq!(range.max_partition_count(), 6);
-        assert_eq!(range.samples().len(), 5);
         assert_eq!(
             range
                 .split_points()
@@ -158,6 +156,20 @@ mod tests {
                 .map(|point| point.to_string())
                 .collect::<Vec<_>>(),
             vec!["(20)", "(40)"]
+        );
+
+        let stats = datafusion_physical_plan::statistics::StatisticsContext::new()
+            .compute_arc(
+                &plan,
+                &datafusion_physical_plan::statistics::StatisticsArgs::new(),
+            )?;
+        let key = [datafusion_common::stats::ColumnSortKey::new(
+            0,
+            arrow::compute::SortOptions::default(),
+        )];
+        assert_eq!(
+            stats.distribution_statistics.max_partition_count(&key),
+            Some(6)
         );
 
         Ok(())

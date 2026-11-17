@@ -1621,6 +1621,7 @@ impl AggregateExec {
                     num_rows: Precision::Exact(output_rows),
                     column_statistics,
                     total_byte_size,
+                    ..Default::default()
                 })
             }
             None => {
@@ -1644,6 +1645,7 @@ impl AggregateExec {
                     num_rows,
                     column_statistics,
                     total_byte_size,
+                    ..Default::default()
                 })
             }
         }
@@ -8346,6 +8348,7 @@ mod tests {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            ..Default::default()
         };
         let agg = build_test_aggregate(
             &schema,
@@ -8363,6 +8366,7 @@ mod tests {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            ..Default::default()
         };
         let agg_zero = build_test_aggregate(
             &schema,
@@ -8533,6 +8537,7 @@ mod tests {
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
             ],
+            ..Default::default()
         }
     }
 
@@ -8921,6 +8926,7 @@ mod tests {
                     case.col_a_stats.clone(),
                     case.col_b_stats.clone(),
                 ],
+                ..Default::default()
             };
 
             let group_by = simple_group_by(&schema, &case.group_by_cols);
@@ -8958,6 +8964,7 @@ mod tests {
                 },
                 ColumnStatistics::new_unknown(),
             ],
+            ..Default::default()
         };
         let agg = build_test_aggregate(
             &schema,
@@ -8998,6 +9005,7 @@ mod tests {
                     ..ColumnStatistics::new_unknown()
                 },
             ],
+            ..Default::default()
         };
 
         // CUBE-like grouping set: (a, NULL), (NULL, b), (a, b) — 3 groups
@@ -9125,6 +9133,7 @@ mod tests {
                     ..ColumnStatistics::new_unknown()
                 },
             ],
+            ..Default::default()
         };
 
         // GROUP BY (a + b) — not a direct column reference

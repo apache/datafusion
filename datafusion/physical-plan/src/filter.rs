@@ -356,7 +356,7 @@ impl FilterExec {
     /// empty-column statistics.
     pub(crate) fn statistics_helper(
         schema: &SchemaRef,
-        input_stats: Statistics,
+        mut input_stats: Statistics,
         predicate: &Arc<dyn PhysicalExpr>,
         default_selectivity: u8,
     ) -> Result<Statistics> {
@@ -372,6 +372,8 @@ impl FilterExec {
             ));
         }
 
+        let input_distribution_statistics =
+            std::mem::take(&mut input_stats.distribution_statistics);
         let (eq_columns, is_infeasible) = collect_equality_columns(predicate);
 
         let input_num_rows = input_stats.num_rows;
@@ -466,10 +468,17 @@ impl FilterExec {
             set_all_null_column_statistics(column_stats, num_rows);
         }
 
+        let distribution_statistics = if num_rows == Precision::Exact(0) {
+            datafusion_common::DistributionStatistics::default()
+        } else {
+            input_distribution_statistics.clamp_to_column_statistics(&column_statistics)
+        };
+
         Ok(Statistics {
             num_rows,
             total_byte_size,
             column_statistics,
+            distribution_statistics,
         })
     }
 
@@ -1559,6 +1568,7 @@ fn null_check_statistics(
     if num_rows == Precision::Exact(0) {
         stats.total_byte_size = Precision::Exact(0);
         stats.column_statistics.fill(empty_column_statistics());
+        stats.distribution_statistics.clear();
         return stats;
     }
 
@@ -1589,6 +1599,9 @@ fn null_check_statistics(
     } else {
         column_stats.null_count = Precision::Exact(0);
     }
+    let column_statistics = &stats.column_statistics;
+    stats.distribution_statistics = std::mem::take(&mut stats.distribution_statistics)
+        .clamp_to_column_statistics(column_statistics);
     stats
 }
 
@@ -2100,6 +2113,7 @@ mod tests {
                     num_rows: Precision::Exact(100),
                     total_byte_size: Precision::Exact(800),
                     column_statistics: vec![column],
+                    ..Default::default()
                 },
                 schema.clone(),
             ));
@@ -2152,6 +2166,7 @@ mod tests {
                         distinct_count: Precision::Exact(100),
                         ..Default::default()
                     }],
+                    ..Default::default()
                 },
                 schema.clone(),
             ));
@@ -2192,6 +2207,7 @@ mod tests {
                     max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -2239,6 +2255,7 @@ mod tests {
                     ..Default::default()
                 }],
                 total_byte_size: Precision::Absent,
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -2299,6 +2316,7 @@ mod tests {
                     },
                 ],
                 total_byte_size: Precision::Absent,
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -2410,6 +2428,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                ..Default::default()
             },
             schema,
         ));
@@ -2524,6 +2543,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                ..Default::default()
             },
             schema,
         ));
@@ -2588,6 +2608,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                ..Default::default()
             },
             schema,
         ));
@@ -2669,6 +2690,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                ..Default::default()
             },
             schema,
         ));
@@ -2724,6 +2746,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                ..Default::default()
             },
             schema,
         ));
@@ -2818,6 +2841,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Absent,
             }],
+            ..Default::default()
         };
 
         assert_eq!(*filter_statistics, expected_filter_statistics);
@@ -2876,6 +2900,7 @@ mod tests {
                 num_rows: Precision::Inexact(1000),
                 total_byte_size: Precision::Inexact(4000),
                 column_statistics: vec![ColumnStatistics::default()],
+                ..Default::default()
             },
             schema,
         ));
@@ -3049,6 +3074,7 @@ mod tests {
                     ColumnStatistics::default(),
                     ColumnStatistics::default(),
                 ],
+                ..Default::default()
             },
             schema,
         ));
@@ -3119,6 +3145,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                ..Default::default()
             },
             schema,
         ));
@@ -3355,6 +3382,7 @@ mod tests {
                     ColumnStatistics::default(),
                     ColumnStatistics::default(),
                 ],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -3650,6 +3678,7 @@ mod tests {
                     num_rows: Precision::Inexact(100),
                     total_byte_size: Precision::Inexact(1000),
                     column_statistics: col_stats,
+                    ..Default::default()
                 },
                 schema.clone(),
             ));
@@ -3694,6 +3723,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
         let predicate = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
@@ -3729,6 +3759,7 @@ mod tests {
                 num_rows: Precision::Inexact(1000),
                 total_byte_size: Precision::Inexact(8000),
                 column_statistics: vec![ColumnStatistics::new_unknown(); 2],
+                ..Default::default()
             },
             schema,
         ));
@@ -3772,6 +3803,7 @@ mod tests {
                     byte_size: input_byte_size,
                     ..Default::default()
                 }],
+                ..Default::default()
             };
             let predicate = Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 0)),
@@ -3820,6 +3852,7 @@ mod tests {
                         byte_size: Precision::Exact(0),
                         ..Default::default()
                     }],
+                    ..Default::default()
                 },
                 Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("name", 0)),
@@ -3841,6 +3874,7 @@ mod tests {
                         byte_size: Precision::Exact(0),
                         ..Default::default()
                     }],
+                    ..Default::default()
                 },
                 Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("a", 0)),
@@ -3904,6 +3938,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -3973,6 +4008,7 @@ mod tests {
                     distinct_count: Precision::Inexact(80),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -4009,6 +4045,7 @@ mod tests {
                     distinct_count: Precision::Inexact(50),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -4043,6 +4080,7 @@ mod tests {
                     distinct_count: Precision::Inexact(100_000),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -4077,6 +4115,7 @@ mod tests {
                     distinct_count: Precision::Inexact(50),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -4111,6 +4150,7 @@ mod tests {
                     distinct_count: Precision::Inexact(80),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -4156,6 +4196,7 @@ mod tests {
                     distinct_count: Precision::Inexact(500),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -4462,6 +4503,7 @@ mod tests {
                     byte_size: Precision::Exact(1000),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -4508,6 +4550,7 @@ mod tests {
                     byte_size: Precision::Exact(1000),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -4551,6 +4594,7 @@ mod tests {
                     byte_size: Precision::Exact(1000),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -4616,6 +4660,7 @@ mod tests {
                             null_count,
                             ..Default::default()
                         }],
+                        ..Default::default()
                     },
                     schema.clone(),
                 ));
@@ -4665,6 +4710,7 @@ mod tests {
                         };
                         2
                     ],
+                    ..Default::default()
                 },
                 schema.clone(),
             ));
@@ -4731,6 +4777,7 @@ mod tests {
                         ..Default::default()
                     },
                 ],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -4785,6 +4832,7 @@ mod tests {
                 num_rows,
                 total_byte_size: Precision::Absent,
                 column_statistics: vec![column],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -4899,6 +4947,7 @@ mod tests {
                             ..Default::default()
                         })
                         .collect(),
+                    ..Default::default()
                 },
                 schema.clone(),
             ));
@@ -4949,6 +4998,7 @@ mod tests {
                             max_value: Exact(ScalarValue::Int32(Some(5))),
                             ..Default::default()
                         }],
+                        ..Default::default()
                     },
                     partition,
                 )?;
@@ -5016,6 +5066,7 @@ mod tests {
                 byte_size: Exact(400),
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let input: Arc<dyn ExecutionPlan> = Arc::new(
             StatisticsExec::new(stats.clone(), schema.clone())
@@ -5169,6 +5220,7 @@ mod tests {
                     byte_size: Precision::Exact(1000),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -5399,6 +5451,7 @@ mod tests {
                     distinct_count: Precision::Inexact(200),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -5442,6 +5495,7 @@ mod tests {
                     distinct_count: Precision::Inexact(200),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -5491,6 +5545,7 @@ mod tests {
                     distinct_count: Precision::Inexact(200),
                     ..Default::default()
                 }],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -5595,5 +5650,102 @@ mod tests {
             (result - 0.2).abs() < 1e-12,
             "expected default 0.2 when both columns lack NDV, got {result}"
         );
+    }
+
+    #[test]
+    fn test_filter_statistics_clamps_distribution_statistics() -> Result<()> {
+        use arrow_schema::SortOptions;
+        use datafusion_common::stats::ColumnSortKey;
+        use datafusion_common::{DistributionStatistics, SplitPoint};
+        use datafusion_physical_expr::expressions::{IsNotNullExpr, IsNullExpr};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let options = SortOptions::new(false, true);
+        let key = vec![ColumnSortKey::new(0, options)];
+        let split = |v: Option<i32>| SplitPoint::new(vec![ScalarValue::Int32(v)]);
+        let distribution_statistics = DistributionStatistics::new()
+            .try_with_key_quantiles(
+                key.clone(),
+                Precision::Exact(vec![
+                    split(None),
+                    split(Some(10)),
+                    split(Some(20)),
+                    split(Some(30)),
+                    split(Some(40)),
+                    split(Some(50)),
+                ]),
+            )?;
+        let base_stats = Statistics {
+            num_rows: Precision::Exact(70),
+            total_byte_size: Precision::Exact(280),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(10),
+                min_value: Precision::Exact(ScalarValue::Int32(Some(0))),
+                max_value: Precision::Exact(ScalarValue::Int32(Some(60))),
+                distinct_count: Precision::Exact(60),
+                ..Default::default()
+            }],
+            distribution_statistics,
+        };
+
+        let a = col("a", &schema)?;
+        let gt_15 = binary(Arc::clone(&a), Operator::Gt, lit(15i32), &schema)?;
+        let lt_45 = binary(Arc::clone(&a), Operator::Lt, lit(45i32), &schema)?;
+        let between = binary(gt_15, Operator::And, lt_45, &schema)?;
+        let is_not_null: Arc<dyn PhysicalExpr> =
+            Arc::new(IsNotNullExpr::new(Arc::clone(&a)));
+        let is_null: Arc<dyn PhysicalExpr> = Arc::new(IsNullExpr::new(Arc::clone(&a)));
+        let contradictory = binary(
+            binary(Arc::clone(&a), Operator::Eq, lit(1i32), &schema)?,
+            Operator::And,
+            binary(Arc::clone(&a), Operator::Eq, lit(2i32), &schema)?,
+            &schema,
+        )?;
+
+        for (predicate, expected_splits) in [
+            (
+                between,
+                Some(vec![split(Some(20)), split(Some(30)), split(Some(40))]),
+            ),
+            (
+                is_not_null,
+                Some(vec![
+                    split(Some(10)),
+                    split(Some(20)),
+                    split(Some(30)),
+                    split(Some(40)),
+                    split(Some(50)),
+                ]),
+            ),
+            (is_null, Some(vec![])),
+            (contradictory, None),
+        ] {
+            let filtered = FilterExec::statistics_helper(
+                &schema,
+                base_stats.clone(),
+                &predicate,
+                20,
+            )?;
+            match expected_splits {
+                Some(expected) => {
+                    assert_eq!(
+                        filtered.distribution_statistics.is_key_exact(&key),
+                        Some(false)
+                    );
+                    assert_eq!(
+                        filtered.distribution_statistics.max_partition_count(&key),
+                        Some(expected.len() + 1)
+                    );
+                    assert_eq!(
+                        filtered
+                            .distribution_statistics
+                            .derive_split_points(&key, expected.len() + 1),
+                        Some(expected)
+                    );
+                }
+                None => assert!(filtered.distribution_statistics.is_empty()),
+            }
+        }
+        Ok(())
     }
 }

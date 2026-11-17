@@ -1316,6 +1316,7 @@ mod tests {
                     num_rows,
                     total_byte_size: Precision::Absent,
                     column_statistics,
+                    ..Default::default()
                 },
                 cache,
             }
@@ -1861,6 +1862,7 @@ mod tests {
                                 .base
                                 .column_statistics
                                 .clone(),
+                            ..Default::default()
                         },
                     )))
                 } else {
@@ -2644,6 +2646,7 @@ mod tests {
                 ..ColumnStatistics::new_unknown()
             })
             .collect(),
+            ..Default::default()
         };
         let unchanged = null_counts(&stats);
         rescale_null_counts(&mut stats, Precision::Inexact(5000));
@@ -3029,6 +3032,7 @@ mod tests {
                         num_rows: Precision::Inexact(42),
                         total_byte_size: Precision::Absent,
                         column_statistics: vec![],
+                        ..Default::default()
                     },
                 )))
             } else {
@@ -3062,6 +3066,7 @@ mod tests {
                         num_rows: Precision::Inexact(100),
                         total_byte_size: Precision::Absent,
                         column_statistics: vec![],
+                        ..Default::default()
                     },
                 ))),
                 Some(200) => Ok(StatisticsResult::Computed(ExtendedStatistics::from(
@@ -3069,6 +3074,7 @@ mod tests {
                         num_rows: Precision::Inexact(50),
                         total_byte_size: Precision::Absent,
                         column_statistics: vec![],
+                        ..Default::default()
                     },
                 ))),
                 _ => Ok(StatisticsResult::Delegate),

@@ -208,6 +208,7 @@ impl ExecutionPlan for CustomExecutionPlan {
                     ..Default::default()
                 })
                 .collect(),
+            ..Default::default()
         }))
     }
 

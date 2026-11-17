@@ -461,6 +461,7 @@ async fn test_count_distinct_optimization() -> Result<()> {
                 },
                 ColumnStatistics::default(),
             ],
+            ..Default::default()
         };
 
         let config = FileScanConfigBuilder::new(
@@ -751,6 +752,7 @@ async fn test_sum_from_statistics() -> Result<()> {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
 
         let config = FileScanConfigBuilder::new(

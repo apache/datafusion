@@ -28,7 +28,7 @@ use std::fmt::{self, Display};
 /// partitions are lower-inclusive and upper-exclusive.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub struct SplitPoint {
-    values: Vec<ScalarValue>,
+    pub(crate) values: Vec<ScalarValue>,
 }
 
 impl SplitPoint {
@@ -55,8 +55,52 @@ impl Display for SplitPoint {
     }
 }
 
+/// Selects `partition_count - 1` evenly spaced split points from `samples` to
+/// form `partition_count` range partitions.
+///
+/// Returns `None` when `partition_count == 0` or
+/// `partition_count > samples.len() + 1`.
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub fn downsample_split_points(
+    samples: &[SplitPoint],
+    partition_count: usize,
+) -> Option<Vec<SplitPoint>> {
+    if partition_count == 0 || partition_count > samples.len() + 1 {
+        return None;
+    }
+    if partition_count == 1 {
+        return Some(vec![]);
+    }
+    if partition_count == samples.len() + 1 {
+        return Some(samples.to_vec());
+    }
+
+    let sample_count = samples.len();
+    Some(
+        (1..partition_count)
+            .map(|partition| {
+                // Use a wider intermediate so valid slice lengths cannot overflow
+                // when calculating the evenly spaced sample index.
+                let sample_index = ((partition as u128 * sample_count as u128)
+                    / partition_count as u128)
+                    as usize;
+                samples[sample_index].clone()
+            })
+            .collect(),
+    )
+}
+
 /// Validates that split points match the ordering width and are strictly
 /// ordered according to the provided sort options.
+// TODO: Relax strict (`<`) split-point ordering to non-strict (`<=`) so empty
+// interior partitions and skewed quantile cuts with duplicate boundary values
+// can be represented (see https://github.com/apache/datafusion/pull/26593).
 pub fn validate_range_split_points(
     split_points: &[SplitPoint],
     sort_options: &[SortOptions],

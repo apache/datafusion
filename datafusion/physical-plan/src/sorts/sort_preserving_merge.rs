@@ -980,6 +980,7 @@ mod tests {
                 num_rows: Precision::Exact(1_000),
                 total_byte_size: Precision::Exact(8_000),
                 column_statistics: vec![ColumnStatistics::new_unknown()],
+                ..Default::default()
             },
             schema.clone(),
         ));
@@ -1005,6 +1006,7 @@ mod tests {
             num_rows: Precision::Absent,
             total_byte_size: Precision::Exact(8_000),
             column_statistics: vec![ColumnStatistics::new_unknown()],
+            ..Default::default()
         };
         let input = Arc::new(StatisticsExec::new(input_stats.clone(), schema.clone()));
         let sort = [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();

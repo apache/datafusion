@@ -4,12 +4,19 @@
 
 //! This module provides data structures to represent statistics
 
+use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display};
+use std::sync::Arc;
 
 use crate::{Result, ScalarValue};
 
 use crate::error::_plan_err;
+use crate::partitioning::{
+    SplitPoint, downsample_split_points, validate_range_split_points,
+};
 use crate::utils::aggregate::precision_add;
+use crate::utils::compare_rows;
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Schema};
 
 /// Represents a value with a degree of certainty. `Precision` is used to
@@ -347,6 +354,512 @@ impl From<Precision<usize>> for Precision<ScalarValue> {
     }
 }
 
+/// A schema column index paired with its [`SortOptions`].
+///
+/// Used by [`DistributionStatistics`] to identify lexicographically ordered
+/// key tuples without coupling `datafusion-common` to physical expressions.
+///
+/// # Example
+/// ```
+/// use arrow::compute::SortOptions;
+/// use datafusion_common::stats::ColumnSortKey;
+///
+/// let key = ColumnSortKey::new(0, SortOptions::default());
+/// assert_eq!(key.index, 0);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ColumnSortKey {
+    /// Index of the column in the relation's [`Schema`].
+    pub index: usize,
+    /// Ordering direction and null placement for this column.
+    pub options: SortOptions,
+}
+
+impl ColumnSortKey {
+    /// Creates a new [`ColumnSortKey`] for `index` with `options`.
+    pub fn new(index: usize, options: SortOptions) -> Self {
+        Self { index, options }
+    }
+}
+
+impl Display for ColumnSortKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let direction = if self.options.descending {
+            "DESC"
+        } else {
+            "ASC"
+        };
+        let nulls = if self.options.nulls_first {
+            "NULLS FIRST"
+        } else {
+            "NULLS LAST"
+        };
+        write!(f, "Col[{}] {direction} {nulls}", self.index)
+    }
+}
+
+// TODO: Generalize key and column synopses to support mergeable quantile
+// sketches (such as KLL), order-agnostic 1D column distributions, composite
+// `[min, max]` bounds (#23089, #25483, #26509), and a trait-backed extension
+// point for format-specific synopses without changing `DistributionStatistics`'s
+// outer container API.
+#[derive(Debug, PartialEq, Eq, PartialOrd)]
+pub(crate) struct KeyQuantiles {
+    pub(crate) samples: Arc<[SplitPoint]>,
+}
+
+impl Clone for KeyQuantiles {
+    fn clone(&self) -> Self {
+        Self {
+            samples: Arc::clone(&self.samples),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct KeyDistributionEntry {
+    pub(crate) key: Arc<[ColumnSortKey]>,
+    pub(crate) quantiles: Precision<KeyQuantiles>,
+}
+
+impl Clone for KeyDistributionEntry {
+    fn clone(&self) -> Self {
+        Self {
+            key: Arc::clone(&self.key),
+            quantiles: self.quantiles.clone(),
+        }
+    }
+}
+
+impl KeyDistributionEntry {
+    fn remap_columns(
+        &self,
+        mut map_col: impl FnMut(usize) -> Option<usize>,
+    ) -> Option<Self> {
+        let mut remapped = Vec::with_capacity(self.key.len());
+        for sort_key in self.key.iter() {
+            let new_index = map_col(sort_key.index)?;
+            if remapped
+                .iter()
+                .any(|existing: &ColumnSortKey| existing.index == new_index)
+            {
+                return None;
+            }
+            remapped.push(ColumnSortKey::new(new_index, sort_key.options));
+        }
+        Some(Self {
+            key: Arc::from(remapped),
+            quantiles: self.quantiles.clone(),
+        })
+    }
+
+    fn clamp_to_column_statistics(&self, column_statistics: &[ColumnStatistics]) -> Self {
+        let Some(summary) = self.quantiles.get_value() else {
+            return self.clone();
+        };
+        let Some(lead_key) = self.key.first() else {
+            return Self {
+                key: Arc::clone(&self.key),
+                quantiles: self.quantiles.clone().to_inexact(),
+            };
+        };
+        let Some(col_stats) = column_statistics.get(lead_key.index) else {
+            return Self {
+                key: Arc::clone(&self.key),
+                quantiles: self.quantiles.clone().to_inexact(),
+            };
+        };
+
+        let options = lead_key.options;
+        let is_single_column = self.key.len() == 1;
+        let no_nulls = col_stats.null_count == Precision::Exact(0);
+        let no_non_nulls = col_stats.distinct_count == Precision::Exact(0);
+
+        let first_non_null = if options.descending {
+            col_stats.max_value.get_value().filter(|v| !v.is_null())
+        } else {
+            col_stats.min_value.get_value().filter(|v| !v.is_null())
+        };
+        let last_non_null = if options.descending {
+            col_stats.min_value.get_value().filter(|v| !v.is_null())
+        } else {
+            col_stats.max_value.get_value().filter(|v| !v.is_null())
+        };
+
+        let low_bound = (!options.nulls_first || no_nulls)
+            .then_some(first_non_null)
+            .flatten();
+        let high_bound = (options.nulls_first || no_nulls)
+            .then_some(last_non_null)
+            .flatten();
+
+        if !no_nulls && !no_non_nulls && low_bound.is_none() && high_bound.is_none() {
+            return Self {
+                key: Arc::clone(&self.key),
+                quantiles: self.quantiles.clone().to_inexact(),
+            };
+        }
+
+        let clamped: Vec<SplitPoint> = summary
+            .samples
+            .iter()
+            .filter(|sample| {
+                let Some(v0) = sample.values().first() else {
+                    return false;
+                };
+                if no_nulls && v0.is_null() {
+                    return false;
+                }
+                if no_non_nulls {
+                    return !is_single_column && v0.is_null();
+                }
+                if let Some(low) = low_bound {
+                    let keep_low = compare_rows(
+                        std::slice::from_ref(low),
+                        std::slice::from_ref(v0),
+                        std::slice::from_ref(&options),
+                    )
+                    .map(|ord| {
+                        if is_single_column {
+                            // Partition `< v0` requires at least `low < v0`.
+                            ord == Ordering::Less
+                        } else {
+                            // With trailing key columns, `low == v0` can still split on trailing keys.
+                            ord != Ordering::Greater
+                        }
+                    })
+                    .unwrap_or(true);
+                    if !keep_low {
+                        return false;
+                    }
+                }
+                if let Some(high) = high_bound {
+                    let keep_high = compare_rows(
+                        std::slice::from_ref(v0),
+                        std::slice::from_ref(high),
+                        std::slice::from_ref(&options),
+                    )
+                    .map(|ord| ord != Ordering::Greater)
+                    .unwrap_or(true);
+                    if !keep_high {
+                        return false;
+                    }
+                }
+                true
+            })
+            .cloned()
+            .collect();
+
+        let quantiles = if clamped.len() == summary.samples.len() {
+            Precision::Inexact(summary.clone())
+        } else {
+            Precision::Inexact(KeyQuantiles {
+                samples: Arc::from(clamped),
+            })
+        };
+
+        Self {
+            key: Arc::clone(&self.key),
+            quantiles,
+        }
+    }
+}
+
+impl Display for KeyDistributionEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let key_str = self
+            .key
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(f, "([{key_str}]: Quantiles={})", self.quantiles)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DistributionStatisticsInner {
+    pub(crate) key_entries: Vec<KeyDistributionEntry>,
+}
+
+/// Encapsulated container for column and multi-column distribution synopses on
+/// [`Statistics`].
+///
+/// [`DistributionStatistics`] decouples distribution producers (file formats,
+/// catalogs, and streaming sources) from optimizer consumers (such as
+/// range-partition scaling) without exposing internal storage layout. When
+/// empty, [`DistributionStatistics`] performs no heap allocation.
+///
+/// # Example
+/// ```
+/// use arrow::compute::SortOptions;
+/// use datafusion_common::stats::{ColumnSortKey, Precision};
+/// use datafusion_common::{DistributionStatistics, ScalarValue, SplitPoint, Statistics};
+///
+/// let key = vec![ColumnSortKey::new(0, SortOptions::default())];
+/// let samples = vec![
+///     SplitPoint::new(vec![ScalarValue::Int32(Some(10))]),
+///     SplitPoint::new(vec![ScalarValue::Int32(Some(20))]),
+///     SplitPoint::new(vec![ScalarValue::Int32(Some(30))]),
+/// ];
+/// let stats = Statistics::default()
+///     .try_with_key_quantiles(key.clone(), Precision::Inexact(samples))
+///     .unwrap();
+/// assert_eq!(
+///     stats.distribution_statistics.max_partition_count(&key),
+///     Some(4)
+/// );
+/// ```
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DistributionStatistics {
+    pub(crate) inner: Option<Arc<DistributionStatisticsInner>>,
+}
+
+impl Clone for DistributionStatistics {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.as_ref().map(Arc::clone),
+        }
+    }
+}
+
+impl DistributionStatistics {
+    /// Creates an empty [`DistributionStatistics`] container.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn from_entries(entries: Vec<KeyDistributionEntry>) -> Self {
+        if entries.is_empty() {
+            Self { inner: None }
+        } else {
+            Self {
+                inner: Some(Arc::new(DistributionStatisticsInner {
+                    key_entries: entries,
+                })),
+            }
+        }
+    }
+
+    fn find_key_entry(&self, key: &[ColumnSortKey]) -> Option<&KeyDistributionEntry> {
+        self.inner
+            .as_ref()?
+            .key_entries
+            .iter()
+            .find(|entry| entry.key.as_ref() == key)
+    }
+
+    /// Returns `true` if no distribution synopses are present.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_none()
+    }
+
+    /// Removes all distribution synopses.
+    pub fn clear(&mut self) {
+        self.inner = None;
+    }
+
+    /// Inserts or replaces an empirical quantile boundary summary for `key`.
+    ///
+    /// Passing [`Precision::Absent`] removes any existing summary for `key`.
+    /// Returns an error if `key` is empty or if `quantiles` do not match the
+    /// width and strict ordering of `key`.
+    pub fn try_with_key_quantiles(
+        mut self,
+        key: Vec<ColumnSortKey>,
+        quantiles: Precision<Vec<SplitPoint>>,
+    ) -> Result<Self> {
+        if key.is_empty() {
+            return _plan_err!(
+                "DistributionStatistics key must contain at least one column"
+            );
+        }
+        let sort_options: Vec<SortOptions> =
+            key.iter().map(|sort_key| sort_key.options).collect();
+        let validated = match quantiles {
+            Precision::Exact(s) => {
+                validate_range_split_points(&s, &sort_options)?;
+                Some(Precision::Exact(KeyQuantiles {
+                    samples: Arc::from(s),
+                }))
+            }
+            Precision::Inexact(s) => {
+                validate_range_split_points(&s, &sort_options)?;
+                Some(Precision::Inexact(KeyQuantiles {
+                    samples: Arc::from(s),
+                }))
+            }
+            Precision::Absent => None,
+        };
+
+        match validated {
+            Some(quantiles) => {
+                let inner = self.inner.get_or_insert_with(|| {
+                    Arc::new(DistributionStatisticsInner {
+                        key_entries: Vec::new(),
+                    })
+                });
+                let entries = &mut Arc::make_mut(inner).key_entries;
+                if let Some(existing) = entries
+                    .iter_mut()
+                    .find(|entry| entry.key.as_ref() == key.as_slice())
+                {
+                    existing.quantiles = quantiles;
+                } else {
+                    entries.push(KeyDistributionEntry {
+                        key: Arc::from(key),
+                        quantiles,
+                    });
+                }
+            }
+            None => {
+                if let Some(inner) = &mut self.inner {
+                    let entries = &mut Arc::make_mut(inner).key_entries;
+                    entries.retain(|entry| entry.key.as_ref() != key.as_slice());
+                    if entries.is_empty() {
+                        self.inner = None;
+                    }
+                }
+            }
+        }
+        Ok(self)
+    }
+
+    /// Returns the largest range partition count supported by the synopsis for
+    /// `key`, or `None` if no synopsis is available for `key`.
+    pub fn max_partition_count(&self, key: &[ColumnSortKey]) -> Option<usize> {
+        let entry = self.find_key_entry(key)?;
+        Some(entry.quantiles.get_value()?.samples.len() + 1)
+    }
+
+    /// Derives `target_partitions - 1` balanced [`SplitPoint`] boundaries for
+    /// `target_partitions` range partitions over `key`, or `None` when `key` has
+    /// no synopsis, `target_partitions == 0`, or `target_partitions` exceeds
+    /// [`Self::max_partition_count`].
+    pub fn derive_split_points(
+        &self,
+        key: &[ColumnSortKey],
+        target_partitions: usize,
+    ) -> Option<Vec<SplitPoint>> {
+        let entry = self.find_key_entry(key)?;
+        downsample_split_points(&entry.quantiles.get_value()?.samples, target_partitions)
+    }
+
+    /// Returns `Some(true)` if `key` has an exact synopsis, `Some(false)` if it
+    /// has an inexact synopsis, or `None` if `key` has no synopsis.
+    pub fn is_key_exact(&self, key: &[ColumnSortKey]) -> Option<bool> {
+        self.find_key_entry(key)?.quantiles.is_exact()
+    }
+
+    /// Demotes all synopses in `self` from [`Precision::Exact`] to
+    /// [`Precision::Inexact`].
+    pub fn to_inexact(mut self) -> Self {
+        if let Some(inner) = &mut self.inner {
+            let needs_demote = inner
+                .key_entries
+                .iter()
+                .any(|entry| entry.quantiles.is_exact() == Some(true));
+            if needs_demote {
+                for entry in &mut Arc::make_mut(inner).key_entries {
+                    entry.quantiles = entry.quantiles.clone().to_inexact();
+                }
+            }
+        }
+        self
+    }
+
+    /// Remaps column indices in all synopses using `map_col`, dropping synopses
+    /// that reference omitted columns or collapse onto duplicate column indices.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    pub fn remap_columns(&self, mut map_col: impl FnMut(usize) -> Option<usize>) -> Self {
+        let Some(inner) = &self.inner else {
+            return Self::default();
+        };
+        let mut remapped: Vec<KeyDistributionEntry> =
+            Vec::with_capacity(inner.key_entries.len());
+        for entry in &inner.key_entries {
+            if let Some(mapped) = entry.remap_columns(&mut map_col)
+                && !remapped
+                    .iter()
+                    .any(|existing| existing.key.as_ref() == mapped.key.as_ref())
+            {
+                remapped.push(mapped);
+            }
+        }
+        Self::from_entries(remapped)
+    }
+
+    /// Demotes synopses to [`Precision::Inexact`] and prunes boundary points
+    /// whose leading key value provably creates an empty partition given
+    /// `column_statistics`.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    pub fn clamp_to_column_statistics(
+        &self,
+        column_statistics: &[ColumnStatistics],
+    ) -> Self {
+        let Some(inner) = &self.inner else {
+            return Self::default();
+        };
+        let clamped = inner
+            .key_entries
+            .iter()
+            .map(|entry| entry.clamp_to_column_statistics(column_statistics))
+            .collect();
+        Self::from_entries(clamped)
+    }
+
+    /// Iterates key-quantile synopses for serialization across DataFusion crates.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    pub fn iter_key_quantiles(
+        &self,
+    ) -> impl Iterator<Item = (&[ColumnSortKey], Precision<&[SplitPoint]>)> {
+        self.inner
+            .iter()
+            .flat_map(|inner| inner.key_entries.iter())
+            .map(|entry| {
+                let quantiles = match &entry.quantiles {
+                    Precision::Exact(q) => Precision::Exact(q.samples.as_ref()),
+                    Precision::Inexact(q) => Precision::Inexact(q.samples.as_ref()),
+                    Precision::Absent => Precision::Absent,
+                };
+                (entry.key.as_ref(), quantiles)
+            })
+    }
+}
+
+impl Display for DistributionStatistics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Some(inner) = &self.inner else {
+            return Ok(());
+        };
+        let entries = inner
+            .key_entries
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        write!(f, "{entries}")
+    }
+}
+
 /// Statistics for a relation
 /// Fields are optional and can be inexact because the sources
 /// sometimes provide approximate estimates for performance reasons
@@ -367,6 +880,8 @@ pub struct Statistics {
     /// It must contains a [`ColumnStatistics`] for each field in the schema of
     /// the table to which the [`Statistics`] refer.
     pub column_statistics: Vec<ColumnStatistics>,
+    /// Optional distribution synopses over columns and ordered key tuples.
+    pub distribution_statistics: DistributionStatistics,
 }
 
 /// Returns `true` when the statistics prove that the input contains no rows.
@@ -405,6 +920,7 @@ impl Default for Statistics {
             num_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: vec![],
+            distribution_statistics: DistributionStatistics::default(),
         }
     }
 }
@@ -417,6 +933,7 @@ impl Statistics {
             num_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics: Statistics::unknown_column(schema),
+            distribution_statistics: DistributionStatistics::default(),
         }
     }
 
@@ -474,6 +991,28 @@ impl Statistics {
         self
     }
 
+    /// Sets [`Self::distribution_statistics`].
+    pub fn with_distribution_statistics(
+        mut self,
+        distribution_statistics: DistributionStatistics,
+    ) -> Self {
+        self.distribution_statistics = distribution_statistics;
+        self
+    }
+
+    /// Inserts or replaces an empirical quantile boundary summary for `key` on
+    /// [`Self::distribution_statistics`].
+    pub fn try_with_key_quantiles(
+        mut self,
+        key: Vec<ColumnSortKey>,
+        quantiles: Precision<Vec<SplitPoint>>,
+    ) -> Result<Self> {
+        self.distribution_statistics = self
+            .distribution_statistics
+            .try_with_key_quantiles(key, quantiles)?;
+        Ok(self)
+    }
+
     /// If the exactness of a [`Statistics`] instance is lost, this function relaxes
     /// the exactness of all information by converting them [`Precision::Inexact`].
     pub fn to_inexact(mut self) -> Self {
@@ -484,6 +1023,7 @@ impl Statistics {
             .into_iter()
             .map(|s| s.to_inexact())
             .collect();
+        self.distribution_statistics = self.distribution_statistics.to_inexact();
         self
     }
 
@@ -534,6 +1074,11 @@ impl Statistics {
                     .push(self.column_statistics[prev_idx].clone()),
             }
         }
+
+        self.distribution_statistics =
+            self.distribution_statistics.remap_columns(|col_idx| {
+                projection.iter().position(|&src_idx| src_idx == col_idx)
+            });
 
         self
     }
@@ -658,6 +1203,11 @@ impl Statistics {
                 }
             }
         };
+        if is_known_empty(&self) {
+            self.distribution_statistics.clear();
+        } else {
+            self.distribution_statistics = self.distribution_statistics.to_inexact();
+        }
         Ok(self)
     }
 
@@ -740,6 +1290,8 @@ impl Statistics {
         for col_stats in &mut column_statistics {
             cast_sum_value_to_sum_type_in_place(&mut col_stats.sum_value);
         }
+        let mut distribution_statistics: Option<DistributionStatistics> = None;
+        merge_distribution_statistics_in_place(&mut distribution_statistics, first);
 
         // Merge the remaining items in a single pass.
         for (i, stat) in std::iter::once(second).chain(items).enumerate() {
@@ -753,6 +1305,7 @@ impl Statistics {
             }
             num_rows = num_rows.add(&stat.num_rows);
             total_byte_size = total_byte_size.add(&stat.total_byte_size);
+            merge_distribution_statistics_in_place(&mut distribution_statistics, stat);
 
             // Uses precision_add for sum (reuses the lhs accumulator for
             // direct numeric addition), while preserving the NDV update
@@ -787,7 +1340,46 @@ impl Statistics {
             num_rows,
             total_byte_size,
             column_statistics,
+            distribution_statistics: distribution_statistics.unwrap_or_default(),
         })
+    }
+}
+
+// TODO: Once `DistributionStatistics` supports mergeable sketches (such as
+// KLL) and custom synopses, combine distinct summaries across non-empty inputs
+// weighted by `num_rows` rather than dropping disagreed keys.
+fn merge_distribution_statistics_in_place(
+    accumulated: &mut Option<DistributionStatistics>,
+    item: &Statistics,
+) {
+    if is_known_empty(item) {
+        return;
+    }
+    let Some(current) = accumulated else {
+        *accumulated = Some(item.distribution_statistics.clone());
+        return;
+    };
+    let Some(inner) = &mut current.inner else {
+        return;
+    };
+    let entries = &mut Arc::make_mut(inner).key_entries;
+    entries.retain_mut(|cand| {
+        let Some(other) = item.distribution_statistics.find_key_entry(&cand.key) else {
+            return false;
+        };
+        match (&cand.quantiles, &other.quantiles) {
+            (
+                Precision::Exact(a) | Precision::Inexact(a),
+                Precision::Exact(b) | Precision::Inexact(b),
+            ) if a == b => {
+                cand.quantiles = Precision::Inexact(a.clone());
+                true
+            }
+            _ => false,
+        }
+    });
+    if entries.is_empty() {
+        current.inner = None;
     }
 }
 
@@ -1057,6 +1649,9 @@ impl Display for Statistics {
             "Rows={}, Bytes={}, [{}]",
             self.num_rows, self.total_byte_size, column_stats
         )?;
+        if !self.distribution_statistics.is_empty() {
+            write!(f, ", Distributions=[{}]", self.distribution_statistics)?;
+        }
 
         Ok(())
     }
@@ -1541,6 +2136,7 @@ mod tests {
             num_rows: Precision::Exact(42),
             total_byte_size: Precision::Exact(500),
             column_statistics: counts.into_iter().map(col_stats_i64).collect(),
+            ..Default::default()
         }
     }
 
@@ -1623,6 +2219,7 @@ mod tests {
                     byte_size: Precision::Exact(40),
                 },
             ],
+            ..Default::default()
         };
 
         let stats2 = Statistics {
@@ -1646,6 +2243,7 @@ mod tests {
                     byte_size: Precision::Exact(60),
                 },
             ],
+            ..Default::default()
         };
 
         let items = vec![stats1, stats2];
@@ -1709,6 +2307,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Exact(40),
             }],
+            ..Default::default()
         };
 
         let stats2 = Statistics {
@@ -1722,6 +2321,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Inexact(60),
             }],
+            ..Default::default()
         };
 
         let items = vec![stats1, stats2];
@@ -2281,6 +2881,7 @@ mod tests {
                     byte_size: Precision::Exact(8000),
                 },
             ],
+            ..Default::default()
         };
 
         // Apply fetch of 100 rows (10% of original)
@@ -2355,6 +2956,7 @@ mod tests {
                 distinct_count: Precision::Inexact(50),
                 byte_size: Precision::Inexact(4000),
             }],
+            ..Default::default()
         };
 
         let result = original_stats.clone().with_fetch(Some(500), 0, 1).unwrap();
@@ -2380,6 +2982,7 @@ mod tests {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(800),
             column_statistics: vec![col_stats_i64(10)],
+            ..Default::default()
         };
 
         let result = original_stats.clone().with_fetch(Some(50), 100, 1).unwrap();
@@ -2398,6 +3001,7 @@ mod tests {
             num_rows: Precision::Inexact(0),
             total_byte_size: Precision::Inexact(0),
             column_statistics: vec![col_stats_i64(10)],
+            ..Default::default()
         };
 
         let result = original_stats.clone().with_fetch(None, 0, 1).unwrap();
@@ -2412,6 +3016,7 @@ mod tests {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(800),
             column_statistics: vec![col_stats_i64(10)],
+            ..Default::default()
         };
 
         let result = original_stats.clone().with_fetch(None, 0, 1).unwrap();
@@ -2427,6 +3032,7 @@ mod tests {
             num_rows: Precision::Absent,
             total_byte_size: Precision::Exact(800),
             column_statistics: vec![col_stats_i64(10)],
+            ..Default::default()
         };
 
         let result = original_stats.clone().with_fetch(None, 0, 1).unwrap();
@@ -2440,6 +3046,7 @@ mod tests {
             num_rows: Precision::Absent,
             total_byte_size: Precision::Exact(800),
             column_statistics: vec![col_stats_i64(10)],
+            ..Default::default()
         };
 
         let result = original_stats.with_fetch(Some(1), 0, 1).unwrap();
@@ -2460,6 +3067,7 @@ mod tests {
             num_rows: Precision::Exact(1000),
             total_byte_size: Precision::Exact(8000),
             column_statistics: vec![col_stats_i64(10)],
+            ..Default::default()
         };
 
         // Skip 200, fetch 300, so we get rows 200-500
@@ -2480,6 +3088,7 @@ mod tests {
             num_rows: Precision::Exact(1000), // per partition
             total_byte_size: Precision::Exact(8000),
             column_statistics: vec![col_stats_i64(10)],
+            ..Default::default()
         };
 
         // Fetch 100 per partition, 4 partitions = 400 total
@@ -2504,6 +3113,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Absent,
             }],
+            ..Default::default()
         };
 
         let result = original_stats.clone().with_fetch(Some(100), 0, 1).unwrap();
@@ -2522,6 +3132,7 @@ mod tests {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(800),
             column_statistics: vec![col_stats_i64(10)],
+            ..Default::default()
         };
 
         // Skip 50, fetch 100, but only 50 rows remain
@@ -2548,6 +3159,7 @@ mod tests {
             num_rows: Precision::Exact(1000),
             total_byte_size: Precision::Exact(8000),
             column_statistics: vec![original_col_stats.clone()],
+            ..Default::default()
         };
 
         let result = original_stats.with_fetch(Some(250), 0, 1).unwrap();
@@ -2628,6 +3240,7 @@ mod tests {
                     byte_size: Precision::Exact(8000),
                 },
             ],
+            ..Default::default()
         };
 
         // Apply fetch of 100 rows (10% of original)
@@ -2671,6 +3284,7 @@ mod tests {
                     byte_size: Precision::Absent, // One column has no byte_size
                 },
             ],
+            ..Default::default()
         };
 
         // Apply fetch of 100 rows (10% of original)
@@ -2690,6 +3304,7 @@ mod tests {
                 distinct_count: Precision::Inexact(500),
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let result = stats.with_fetch(Some(10), 0, 1).unwrap();
@@ -2712,6 +3327,7 @@ mod tests {
                 distinct_count: Precision::Inexact(500),
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let result = stats.with_fetch(Some(10), 5, 1).unwrap();
@@ -2734,6 +3350,7 @@ mod tests {
                 distinct_count: Precision::Inexact(500),
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let result = stats.with_fetch(Some(100), 995, 1).unwrap();
@@ -2754,6 +3371,7 @@ mod tests {
                 distinct_count: Precision::Inexact(5),
                 ..Default::default()
             }],
+            ..Default::default()
         };
 
         let result = stats.with_fetch(Some(10), 0, 1).unwrap();
@@ -2792,6 +3410,7 @@ mod tests {
                     byte_size: Precision::Exact(40),
                 },
             ],
+            ..Default::default()
         };
 
         let stats2 = Statistics {
@@ -2815,6 +3434,7 @@ mod tests {
                     byte_size: Precision::Exact(60),
                 },
             ],
+            ..Default::default()
         };
 
         let items = vec![&stats1, &stats2];
@@ -2873,6 +3493,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Exact(40),
             }],
+            ..Default::default()
         };
 
         let stats2 = Statistics {
@@ -2886,6 +3507,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Inexact(60),
             }],
+            ..Default::default()
         };
 
         let items = vec![&stats1, &stats2];
@@ -2947,6 +3569,7 @@ mod tests {
                 distinct_count: Precision::Exact(10),
                 byte_size: Precision::Exact(40),
             }],
+            ..Default::default()
         };
 
         let items = vec![&stats];
@@ -2995,6 +3618,7 @@ mod tests {
                 distinct_count: Precision::Exact(8),
                 byte_size: Precision::Exact(80),
             }],
+            ..Default::default()
         };
 
         let stats2 = Statistics {
@@ -3008,6 +3632,7 @@ mod tests {
                 distinct_count: Precision::Exact(15),
                 byte_size: Precision::Exact(160),
             }],
+            ..Default::default()
         };
 
         let stats3 = Statistics {
@@ -3021,6 +3646,7 @@ mod tests {
                 distinct_count: Precision::Exact(25),
                 byte_size: Precision::Exact(240),
             }],
+            ..Default::default()
         };
 
         let items = vec![&stats1, &stats2, &stats3];
@@ -3068,6 +3694,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Exact(80),
             }],
+            ..Default::default()
         };
 
         let stats2 = Statistics {
@@ -3081,6 +3708,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Exact(80),
             }],
+            ..Default::default()
         };
 
         let items = vec![&stats1, &stats2];
@@ -3117,6 +3745,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Exact(100),
             }],
+            ..Default::default()
         };
 
         let stats2 = Statistics {
@@ -3130,6 +3759,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Exact(100),
             }],
+            ..Default::default()
         };
 
         let items = vec![&stats1, &stats2];
@@ -3166,6 +3796,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Inexact(40),
             }],
+            ..Default::default()
         };
 
         let stats2 = Statistics {
@@ -3179,6 +3810,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Inexact(60),
             }],
+            ..Default::default()
         };
 
         let items = vec![&stats1, &stats2];
@@ -3385,5 +4017,213 @@ mod tests {
         assert!(!is_known_empty(&statistics(Precision::Inexact(0))));
         assert!(!is_known_empty(&statistics(Precision::Exact(1))));
         assert!(!is_known_empty(&statistics(Precision::Absent)));
+    }
+
+    #[test]
+    fn test_distribution_statistics_lifecycle_and_clamping() -> Result<()> {
+        let sp = |v: i32| SplitPoint::new(vec![ScalarValue::Int32(Some(v))]);
+        let asc = SortOptions::default();
+
+        // 1. Validation, upsert/removal, & down-sampling
+        let samples = (10..=50).step_by(10).map(sp).collect::<Vec<_>>();
+        let key1 = vec![ColumnSortKey::new(1, asc)];
+        let dist = DistributionStatistics::new()
+            .try_with_key_quantiles(key1.clone(), Precision::Exact(vec![sp(10)]))?
+            .try_with_key_quantiles(key1.clone(), Precision::Exact(samples.clone()))?;
+        assert_eq!(dist.max_partition_count(&key1), Some(6));
+        assert_eq!(dist.is_key_exact(&key1), Some(true));
+        assert_eq!(dist.derive_split_points(&key1, 0), None);
+        assert_eq!(dist.derive_split_points(&key1, 1), Some(vec![]));
+        assert_eq!(
+            dist.derive_split_points(&key1, 3),
+            Some(vec![sp(20), sp(40)])
+        );
+        assert_eq!(dist.derive_split_points(&key1, 6), Some(samples.clone()));
+        assert_eq!(dist.derive_split_points(&key1, 7), None);
+
+        let cleared = dist
+            .clone()
+            .try_with_key_quantiles(key1.clone(), Precision::Absent)?;
+        assert!(cleared.is_empty());
+        assert_eq!(cleared, DistributionStatistics::default());
+
+        // 2. Projection remaps retained keys and drops omitted keys
+        let key0 = vec![ColumnSortKey::new(0, asc)];
+        let base_stats = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .add_column_statistics(ColumnStatistics::new_unknown())
+            .add_column_statistics(ColumnStatistics::new_unknown())
+            .add_column_statistics(ColumnStatistics::new_unknown())
+            .with_distribution_statistics(dist.clone().try_with_key_quantiles(
+                key0.clone(),
+                Precision::Inexact(vec![sp(10)]),
+            )?);
+        let projected = base_stats.clone().project(Some(&[2usize, 1]));
+        assert_eq!(
+            projected.distribution_statistics.max_partition_count(&key1),
+            Some(6)
+        );
+        assert_eq!(
+            projected.distribution_statistics.max_partition_count(&key0),
+            None
+        );
+        let projected_reordered = base_stats.project(Some(&[1usize, 2]));
+        assert_eq!(
+            projected_reordered
+                .distribution_statistics
+                .max_partition_count(&key0),
+            Some(6)
+        );
+
+        // 3. `with_fetch` demotes to inexact when rows remain and clears when empty
+        let fetched = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .with_distribution_statistics(dist.clone())
+            .with_fetch(Some(10), 0, 1)?;
+        assert_eq!(
+            fetched.distribution_statistics.is_key_exact(&key1),
+            Some(false)
+        );
+        let skipped_all = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .with_distribution_statistics(dist.clone())
+            .with_fetch(Some(10), 10, 1)?;
+        assert!(skipped_all.distribution_statistics.is_empty());
+
+        // 4. `try_merge_iter` preserves matching summaries, ignores Exact(0) inputs,
+        //    and drops disagreed or one-sided summaries across non-empty inputs
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let make_merge_item =
+            |rows: Precision<usize>, dist_stats: DistributionStatistics| {
+                Statistics::new_unknown(&schema)
+                    .with_num_rows(rows)
+                    .with_distribution_statistics(dist_stats)
+            };
+        let exact_item = make_merge_item(Precision::Exact(10), dist.clone());
+        let inexact_item =
+            make_merge_item(Precision::Inexact(20), dist.clone().to_inexact());
+        let empty_item =
+            make_merge_item(Precision::Exact(0), DistributionStatistics::default());
+        let missing_item =
+            make_merge_item(Precision::Exact(5), DistributionStatistics::default());
+
+        let merged_single_non_empty =
+            Statistics::try_merge_iter([&empty_item, &exact_item, &empty_item], &schema)?;
+        assert_eq!(
+            merged_single_non_empty
+                .distribution_statistics
+                .is_key_exact(&key1),
+            Some(true)
+        );
+        let merged_two_exact =
+            Statistics::try_merge_iter([&exact_item, &exact_item], &schema)?;
+        assert_eq!(
+            merged_two_exact.distribution_statistics.is_key_exact(&key1),
+            Some(false)
+        );
+        let merged_agree = Statistics::try_merge_iter(
+            [&exact_item, &empty_item, &inexact_item],
+            &schema,
+        )?;
+        assert_eq!(
+            merged_agree
+                .distribution_statistics
+                .max_partition_count(&key1),
+            Some(6)
+        );
+        assert_eq!(
+            merged_agree.distribution_statistics.is_key_exact(&key1),
+            Some(false)
+        );
+        let merged_disagree =
+            Statistics::try_merge_iter([&exact_item, &missing_item], &schema)?;
+        assert!(merged_disagree.distribution_statistics.is_empty());
+
+        // 5. Property check across all SortOptions combinations and nullability:
+        //    every retained 1D split point must partition the surviving domain
+        //    into two non-empty subsets.
+        for descending in [false, true] {
+            for nulls_first in [false, true] {
+                let options = SortOptions {
+                    descending,
+                    nulls_first,
+                };
+                let mut raw = (10..=60).step_by(10).collect::<Vec<_>>();
+                if descending {
+                    raw.reverse();
+                }
+                let candidate_samples = raw.into_iter().map(sp).collect::<Vec<_>>();
+                let key = vec![ColumnSortKey::new(0, options)];
+                let key_stats = DistributionStatistics::new().try_with_key_quantiles(
+                    key.clone(),
+                    Precision::Exact(candidate_samples.clone()),
+                )?;
+
+                for has_nulls in [false, true] {
+                    for (min_v, max_v) in [(20, 50), (25, 45), (30, 30), (10, 60)] {
+                        let col_stats = ColumnStatistics::new_unknown()
+                            .with_min_value(Precision::Exact(ScalarValue::Int32(Some(
+                                min_v,
+                            ))))
+                            .with_max_value(Precision::Exact(ScalarValue::Int32(Some(
+                                max_v,
+                            ))))
+                            .with_null_count(if has_nulls {
+                                Precision::Absent
+                            } else {
+                                Precision::Exact(0)
+                            });
+
+                        let clamped = key_stats.clamp_to_column_statistics(&[col_stats]);
+                        let max_parts = clamped.max_partition_count(&key).unwrap();
+                        let actual =
+                            clamped.derive_split_points(&key, max_parts).unwrap();
+
+                        let mut domain: Vec<ScalarValue> = (min_v..=max_v)
+                            .map(|v| ScalarValue::Int32(Some(v)))
+                            .collect();
+                        if has_nulls {
+                            domain.push(ScalarValue::Int32(None));
+                        }
+
+                        let expected: Vec<SplitPoint> = candidate_samples
+                            .iter()
+                            .filter(|sample| {
+                                let has_left = domain.iter().any(|x| {
+                                    compare_rows(
+                                        std::slice::from_ref(x),
+                                        sample.values(),
+                                        &[options],
+                                    )
+                                    .unwrap()
+                                        == Ordering::Less
+                                });
+                                let has_right = domain.iter().any(|x| {
+                                    compare_rows(
+                                        std::slice::from_ref(x),
+                                        sample.values(),
+                                        &[options],
+                                    )
+                                    .unwrap()
+                                        != Ordering::Less
+                                });
+                                has_left && has_right
+                            })
+                            .cloned()
+                            .collect();
+
+                        assert_eq!(
+                            actual, expected,
+                            "mismatch for options={options:?}, has_nulls={has_nulls}, range=[{min_v}, {max_v}]"
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }

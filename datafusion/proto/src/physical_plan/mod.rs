@@ -285,10 +285,9 @@ mod file_scan_config_serde {
         ))])
         .expect("single expression ordering");
         Partitioning::Range(
-            RangePartitioning::try_new_with_samples(
+            RangePartitioning::try_new(
                 ordering,
                 vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
-                2,
             )
             .unwrap(),
         )

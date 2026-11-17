@@ -1039,6 +1039,49 @@ pub struct Statistics {
     pub total_byte_size: ::core::option::Option<Precision>,
     #[prost(message, repeated, tag = "3")]
     pub column_stats: ::prost::alloc::vec::Vec<ColumnStats>,
+    #[prost(message, optional, tag = "5")]
+    pub distribution_stats: ::core::option::Option<DistributionStats>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SplitPoint {
+    #[prost(message, repeated, tag = "1")]
+    pub value: ::prost::alloc::vec::Vec<ScalarValue>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ColumnSortKey {
+    #[prost(uint64, tag = "1")]
+    pub index: u64,
+    #[prost(bool, tag = "2")]
+    pub descending: bool,
+    #[prost(bool, tag = "3")]
+    pub nulls_first: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct QuantileSamples {
+    #[prost(enumeration = "PrecisionInfo", tag = "1")]
+    pub precision_info: i32,
+    #[prost(message, repeated, tag = "2")]
+    pub sample_point: ::prost::alloc::vec::Vec<SplitPoint>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct KeyDistributionStats {
+    #[prost(message, repeated, tag = "1")]
+    pub key: ::prost::alloc::vec::Vec<ColumnSortKey>,
+    #[prost(oneof = "key_distribution_stats::Synopsis", tags = "2")]
+    pub synopsis: ::core::option::Option<key_distribution_stats::Synopsis>,
+}
+/// Nested message and enum types in `KeyDistributionStats`.
+pub mod key_distribution_stats {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Synopsis {
+        #[prost(message, tag = "2")]
+        Quantiles(super::QuantileSamples),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DistributionStats {
+    #[prost(message, repeated, tag = "1")]
+    pub key_distributions: ::prost::alloc::vec::Vec<KeyDistributionStats>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ColumnStats {

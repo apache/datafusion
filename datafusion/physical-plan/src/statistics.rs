@@ -355,6 +355,7 @@ impl StatisticsContext {
     ///     num_rows: Precision::Exact(1000),
     ///     total_byte_size: Precision::Absent,
     ///     column_statistics: vec![ColumnStatistics::new_unknown(); 2],
+    ///     ..Default::default()
     /// };
     /// let plan = StatisticsExec::new(stats, schema);
     ///
@@ -806,6 +807,7 @@ mod tests {
                 num_rows: Precision::Exact(num_rows),
                 total_byte_size: Precision::Absent,
                 column_statistics: col_stats,
+                ..Default::default()
             },
             schema,
         ))

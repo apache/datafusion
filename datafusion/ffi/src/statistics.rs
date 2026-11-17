@@ -35,10 +35,13 @@ pub(crate) fn deserialize_statistics(bytes: &[u8]) -> Result<Statistics> {
 mod tests {
     use std::sync::Arc;
 
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
-    use datafusion_common::stats::Precision;
-    use datafusion_common::{ColumnStatistics, Statistics};
+    use datafusion_common::stats::{ColumnSortKey, Precision};
+    use datafusion_common::{
+        ColumnStatistics, DistributionStatistics, SplitPoint, Statistics,
+    };
 
     use super::*;
 
@@ -80,6 +83,15 @@ mod tests {
                     byte_size: Precision::Inexact(2048),
                 },
             ],
+            distribution_statistics: DistributionStatistics::new()
+                .try_with_key_quantiles(
+                    vec![ColumnSortKey::new(0, SortOptions::default())],
+                    Precision::Exact(vec![
+                        SplitPoint::new(vec![ScalarValue::Int32(Some(0))]),
+                        SplitPoint::new(vec![ScalarValue::Int32(Some(25))]),
+                    ]),
+                )
+                .unwrap(),
         };
 
         let bytes = serialize_statistics(&original);
@@ -101,6 +113,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Absent,
             }],
+            ..Default::default()
         };
 
         let bytes = serialize_statistics(&original);

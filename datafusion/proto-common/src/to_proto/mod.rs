@@ -22,7 +22,8 @@ use arrow::ipc::writer::{
 use datafusion_common::parsers::CsvQuoteStyle;
 use datafusion_common::{
     Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, JoinSide, ScalarValue, Statistics,
+    DataFusionError, DistributionStatistics, JoinSide, ScalarValue, SplitPoint,
+    Statistics,
     config::{
         CsvOptions, JsonOptions, ParquetCdcOptions, ParquetColumnOptions, ParquetOptions,
         TableParquetOptions,
@@ -30,7 +31,7 @@ use datafusion_common::{
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
-    stats::Precision,
+    stats::{ColumnSortKey, Precision},
 };
 
 #[derive(Debug)]
@@ -792,11 +793,88 @@ impl From<&Precision<ScalarValue>> for protobuf::Precision {
 impl From<&Statistics> for protobuf::Statistics {
     fn from(s: &Statistics) -> protobuf::Statistics {
         let column_stats = s.column_statistics.iter().map(|s| s.into()).collect();
+        let distribution_stats = (!s.distribution_statistics.is_empty())
+            .then(|| protobuf::DistributionStats::from(&s.distribution_statistics));
         protobuf::Statistics {
             num_rows: Some(protobuf::Precision::from(&s.num_rows)),
             total_byte_size: Some(protobuf::Precision::from(&s.total_byte_size)),
             column_stats,
+            distribution_stats,
         }
+    }
+}
+
+impl From<&ColumnSortKey> for protobuf::ColumnSortKey {
+    fn from(k: &ColumnSortKey) -> Self {
+        Self {
+            index: k.index as u64,
+            descending: k.options.descending,
+            nulls_first: k.options.nulls_first,
+        }
+    }
+}
+
+impl TryFrom<&SplitPoint> for protobuf::SplitPoint {
+    type Error = Error;
+
+    fn try_from(sp: &SplitPoint) -> Result<Self, Self::Error> {
+        let value = sp
+            .values()
+            .iter()
+            .map(protobuf::ScalarValue::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { value })
+    }
+}
+
+impl TryFrom<Precision<&[SplitPoint]>> for protobuf::QuantileSamples {
+    type Error = Error;
+
+    fn try_from(q: Precision<&[SplitPoint]>) -> Result<Self, Self::Error> {
+        match q {
+            Precision::Exact(samples) => {
+                let sample_point = samples
+                    .iter()
+                    .map(protobuf::SplitPoint::try_from)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Self {
+                    precision_info: protobuf::PrecisionInfo::Exact.into(),
+                    sample_point,
+                })
+            }
+            Precision::Inexact(samples) => {
+                let sample_point = samples
+                    .iter()
+                    .map(protobuf::SplitPoint::try_from)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Self {
+                    precision_info: protobuf::PrecisionInfo::Inexact.into(),
+                    sample_point,
+                })
+            }
+            Precision::Absent => Ok(Self {
+                precision_info: protobuf::PrecisionInfo::Absent.into(),
+                sample_point: vec![],
+            }),
+        }
+    }
+}
+
+impl From<&DistributionStatistics> for protobuf::DistributionStats {
+    fn from(dist: &DistributionStatistics) -> Self {
+        let key_distributions = dist
+            .iter_key_quantiles()
+            .filter_map(|(key, quantiles)| {
+                let quantiles = protobuf::QuantileSamples::try_from(quantiles).ok()?;
+                Some(protobuf::KeyDistributionStats {
+                    key: key.iter().map(protobuf::ColumnSortKey::from).collect(),
+                    synopsis: Some(
+                        protobuf::key_distribution_stats::Synopsis::Quantiles(quantiles),
+                    ),
+                })
+            })
+            .collect();
+        Self { key_distributions }
     }
 }
 

@@ -915,6 +915,7 @@ mod tests {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(800),
             column_statistics: vec![column(1, 50, 7, 40), column(-3, 3, 0, 7)],
+            ..Default::default()
         };
         let body = StatisticsExec::new(body_statistics.clone(), schema.clone());
         let context = StatisticsContext::new();

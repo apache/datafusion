@@ -591,6 +591,7 @@ fn stats_cartesian_product(
         num_rows,
         total_byte_size,
         column_statistics: cross_join_stats,
+        ..Default::default()
     }
 }
 
@@ -776,6 +777,7 @@ mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            ..Default::default()
         };
 
         let right = Statistics {
@@ -789,6 +791,7 @@ mod tests {
                 null_count: Precision::Exact(2),
                 byte_size: Precision::Absent,
             }],
+            ..Default::default()
         };
 
         let result = stats_cartesian_product(left, right);
@@ -828,6 +831,7 @@ mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            ..Default::default()
         };
 
         assert_eq!(result, expected);
@@ -858,6 +862,7 @@ mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            ..Default::default()
         };
 
         let right = Statistics {
@@ -871,6 +876,7 @@ mod tests {
                 null_count: Precision::Exact(2),
                 byte_size: Precision::Absent,
             }],
+            ..Default::default()
         };
 
         let result = stats_cartesian_product(left, right);
@@ -906,6 +912,7 @@ mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            ..Default::default()
         };
 
         assert_eq!(result, expected);
@@ -927,6 +934,7 @@ mod tests {
                 null_count: Precision::Exact(0),
                 byte_size: Precision::Absent,
             }],
+            ..Default::default()
         };
 
         let right = Statistics {
@@ -940,6 +948,7 @@ mod tests {
                 null_count: Precision::Exact(0),
                 byte_size: Precision::Absent,
             }],
+            ..Default::default()
         };
 
         let result = stats_cartesian_product(left, right);

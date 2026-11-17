@@ -2000,28 +2000,93 @@ mod tests {
     }
 
     #[test]
-    fn test_interleave_rejects_different_range_scaling_capacity() -> Result<()> {
+    fn test_interleave_range_partitioning_and_statistics_merge() -> Result<()> {
+        use crate::statistics::{StatisticsArgs, StatisticsContext};
+        use crate::streaming::StreamingTableExec;
+        use crate::test::TestPartitionStream;
+        use datafusion_common::DistributionStatistics;
+        use datafusion_common::stats::{ColumnSortKey, Precision};
+
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
-        let ordering = [PhysicalSortExpr::new_default(col("a", &schema)?)].into();
+        let options = SortOptions::default();
+        let key = vec![ColumnSortKey::new(0, options)];
+        let ordering: LexOrdering =
+            [PhysicalSortExpr::new(col("a", &schema)?, options)].into();
+        let layout = Partitioning::Range(RangePartitioning::try_new(
+            ordering,
+            vec![
+                SplitPoint::new(vec![ScalarValue::Int32(Some(30))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(50))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(70))]),
+            ],
+        )?);
         let samples = (10..=90)
             .step_by(10)
             .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
             .collect();
-        let sampled = RangePartitioning::try_new_with_samples(ordering, samples, 4)?;
-        let source = Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
-        let sampled: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
-            source,
-            Partitioning::Range(sampled),
-        )?);
-        let exact = make_range_exec(&schema, vec![30, 50, 70], SortOptions::default())?;
-        assert!(can_interleave([&sampled, &sampled].into_iter()));
-        for inputs in [
-            vec![Arc::clone(&sampled), Arc::clone(&exact)],
-            vec![exact, sampled],
-        ] {
-            assert!(!can_interleave(inputs.iter()));
-            assert!(InterleaveExec::try_new(inputs).is_err());
-        }
+        let dist_stats = DistributionStatistics::new()
+            .try_with_key_quantiles(key.clone(), Precision::Exact(samples))?;
+
+        let make_stream_source =
+            |with_dist_stats: bool| -> Result<Arc<dyn ExecutionPlan>> {
+                let partitions = (0..4)
+                    .map(|_| {
+                        Arc::new(TestPartitionStream {
+                            schema: Arc::clone(&schema),
+                            batches: vec![],
+                        }) as _
+                    })
+                    .collect();
+                let stats = if with_dist_stats {
+                    Statistics::new_unknown(&schema)
+                        .with_distribution_statistics(dist_stats.clone())
+                } else {
+                    Statistics::new_unknown(&schema)
+                };
+                Ok(Arc::new(
+                    StreamingTableExec::try_new(
+                        Arc::clone(&schema),
+                        partitions,
+                        None,
+                        None,
+                        false,
+                        None,
+                    )?
+                    .with_output_partitioning(layout.clone())?
+                    .with_statistics(stats),
+                ))
+            };
+
+        let with_stats = make_stream_source(true)?;
+        let without_stats = make_stream_source(false)?;
+
+        // DistributionStatistics is statistical metadata, not physical layout:
+        // InterleaveExec accepts matching Range layouts regardless of whether
+        // both carry DistributionStatistics, and merges them conservatively
+        // (dropping one-sided keys).
+        assert!(can_interleave([&with_stats, &without_stats].into_iter()));
+        let mixed: Arc<dyn ExecutionPlan> = Arc::new(InterleaveExec::try_new(vec![
+            Arc::clone(&with_stats),
+            without_stats,
+        ])?);
+        let mixed_stats =
+            StatisticsContext::new().compute_arc(&mixed, &StatisticsArgs::new())?;
+        assert!(mixed_stats.distribution_statistics.is_empty());
+
+        let both: Arc<dyn ExecutionPlan> = Arc::new(InterleaveExec::try_new(vec![
+            Arc::clone(&with_stats),
+            with_stats,
+        ])?);
+        let both_stats =
+            StatisticsContext::new().compute_arc(&both, &StatisticsArgs::new())?;
+        assert_eq!(
+            both_stats.distribution_statistics.max_partition_count(&key),
+            Some(10)
+        );
+        assert_eq!(
+            both_stats.distribution_statistics.is_key_exact(&key),
+            Some(false)
+        );
         Ok(())
     }
 

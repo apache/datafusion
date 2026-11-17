@@ -1256,6 +1256,7 @@ mod tests {
                 distinct_count: Precision::Exact(3),
                 byte_size: Precision::Exact(12),
             }],
+            ..Default::default()
         };
         let stats_inner =
             Arc::new(MemTable::try_new(Arc::clone(&schema), vec![vec![batch]])?);

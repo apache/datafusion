@@ -423,6 +423,7 @@ mod tests {
                 distinct_count: Precision::Exact(ndv),
                 byte_size: Precision::Exact(16),
             }],
+            ..Default::default()
         }
     }
 
