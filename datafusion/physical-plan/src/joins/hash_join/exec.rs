@@ -1805,18 +1805,16 @@ impl ExecutionPlan for HashJoinExec {
             .flatten()
             .flatten();
 
-        // See the comments on `enable_migration_hash_join` for details.
-        let use_regular = if let Some(prepared) = &self.prepared_build {
+        if let Some(prepared) = &self.prepared_build {
             // Public join fields can change after builder validation.
             prepared.validate(self)?;
-            prepared.is_regular()
-        } else {
-            context
-                .session_config()
-                .options()
-                .execution
-                .enable_migration_hash_join
-        };
+        }
+        // See the comments on `enable_migration_hash_join` for details.
+        let use_regular = context
+            .session_config()
+            .options()
+            .execution
+            .enable_migration_hash_join;
         let regular_join = use_regular
             .then(|| RegularJoinKind::from_join_type(self.join_type))
             .flatten();
