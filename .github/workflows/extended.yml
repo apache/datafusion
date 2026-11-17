@@ -90,7 +90,7 @@ jobs:
         name: Show runner and Rust details
         if: github.event_name == 'workflow_dispatch'
         run: |
-          git rev-parse HEAD
+          git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD
           if command -v lscpu >/dev/null; then lscpu; else cat /proc/cpuinfo; fi
           cat /proc/meminfo
           for file in /sys/fs/cgroup/cpu.max /sys/fs/cgroup/cpuset.cpus.effective /sys/fs/cgroup/memory.max; do
