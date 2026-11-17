@@ -196,7 +196,6 @@ fn to_outer_reference(expr: Expr, outer_schema: &DFSchema) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use datafusion_common::Spans;
-    use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_expr::logical_plan::Union;
     use datafusion_expr::{Operator, col};
 
