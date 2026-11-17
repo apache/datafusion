@@ -29,7 +29,7 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::placement::ExpressionPlacement;
 use indexmap::{IndexMap, IndexSet};
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
@@ -192,45 +192,13 @@ impl CaseBody {
         });
 
         // Find the candidates for precomputation and the columns used outside of them.
-        let mut direct_column_indices = HashSet::<usize>::new();
-        let mut precompute_candidates = IndexSet::<Arc<dyn PhysicalExpr>>::new();
-        if can_precompute {
-            self.exprs().for_each(|expr| {
-                expr.apply(|expr| {
-                    if is_precomputable(expr, schema) {
-                        precompute_candidates.insert(Arc::clone(expr));
-                        return Ok(TreeNodeRecursion::Jump);
-                    }
-                    if let Some(column) = expr.downcast_ref::<Column>() {
-                        direct_column_indices.insert(column.index());
-                    }
-                    Ok(TreeNodeRecursion::Continue)
-                })
-                .expect("Closure cannot fail");
-            });
-        }
-
-        // Precomputing only pays off when it spares filtering a column that is not
-        // otherwise used. Candidates referring only to used columns are evaluated in place.
-        let precomputed = precompute_candidates
-            .into_iter()
-            .filter(|expr| {
-                collect_columns(expr)
-                    .iter()
-                    .any(|column| !direct_column_indices.contains(&column.index()))
-            })
-            .collect::<IndexSet<_>>();
-
-        // Determine the set of columns that are used by the expressions of the case body
-        // outside of the precomputed expressions.
         // Use an ordered set so lambda variables continue to be positioned after columns
         let mut used_column_indices = BTreeSet::<usize>::new();
+        let mut precompute_candidates = IndexSet::<Arc<dyn PhysicalExpr>>::new();
         self.exprs().for_each(|expr| {
             expr.apply(|expr| {
-                if !precomputed.is_empty()
-                    && is_precomputable(expr, schema)
-                    && precomputed.contains(expr)
-                {
+                if can_precompute && is_precomputable(expr, schema) {
+                    precompute_candidates.insert(Arc::clone(expr));
                     return Ok(TreeNodeRecursion::Jump);
                 }
                 if let Some(column) = expr.downcast_ref::<Column>() {
@@ -244,6 +212,18 @@ impl CaseBody {
             })
             .expect("Closure cannot fail");
         });
+
+        // Precomputing only pays off when it spares filtering a column that is not
+        // otherwise used. Candidates referring only to used columns are evaluated in place,
+        // so they add no columns to the used ones.
+        let precomputed = precompute_candidates
+            .into_iter()
+            .filter(|expr| {
+                collect_columns(expr)
+                    .iter()
+                    .any(|column| !used_column_indices.contains(&column.index()))
+            })
+            .collect::<IndexSet<_>>();
 
         // Construct a mapping from the original column index to the projected column index.
         let column_index_map = used_column_indices
