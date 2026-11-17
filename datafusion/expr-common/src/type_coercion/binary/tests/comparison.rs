@@ -897,27 +897,44 @@ fn test_type_union_coercion_prefers_finer_timestamp_unit() {
 
 #[test]
 fn test_struct_type_union_field_contracts() -> Result<()> {
-    let struct_type =
-        |data_type, nullable, origin: &str| {
-            DataType::Struct(
-                vec![Field::new("value", data_type, nullable).with_metadata(
-                    HashMap::from([("origin".to_string(), origin.to_string())]),
-                )]
-                .into(),
-            )
-        };
+    use arrow::datatypes::Metadata;
+
+    let struct_type = |data_type, nullable, metadata: Metadata| {
+        DataType::Struct(
+            vec![Field::new("value", data_type, nullable).with_metadata(metadata)].into(),
+        )
+    };
+    let first = Metadata::new().with("origin", "first");
+    let second = Metadata::new().with("origin", "second");
+    let extension = first
+        .clone()
+        .with("ARROW:extension:name", "example.id")
+        .with("ARROW:extension:metadata", "{}");
     let inputs = [
         DataType::Null,
-        struct_type(DataType::Int32, false, "first"),
-        struct_type(DataType::Int64, true, "second"),
+        struct_type(DataType::Int32, false, extension.clone()),
+        struct_type(DataType::Int64, true, second.clone()),
     ];
     assert_eq!(
         try_type_union_resolution_with_struct(&inputs)?,
-        vec![struct_type(DataType::Int64, true, "first"); 3],
+        vec![struct_type(DataType::Int64, true, first); 3],
     );
     assert_eq!(
         try_type_union_resolution(&[inputs[2].clone(), inputs[1].clone()])?,
-        vec![struct_type(DataType::Int64, true, "second"); 2],
+        vec![struct_type(DataType::Int64, true, second); 2],
+    );
+
+    let null_child = struct_type(
+        DataType::Null,
+        true,
+        Metadata::new()
+            .with("origin", "ignored")
+            .with("null_only", "ignored")
+            .with("ARROW:extension:name", "example.null"),
+    );
+    assert_eq!(
+        try_type_union_resolution_with_struct(&[null_child, inputs[1].clone()])?,
+        vec![struct_type(DataType::Int32, true, extension); 2],
     );
     Ok(())
 }
