@@ -915,6 +915,8 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 <li><p><a class="reference internal" href="#op-arr-contains">&#64;&gt; (array contains)</a></p></li>
 <li><p><a class="reference internal" href="#op-arr-contained-by">&lt;&#64; (array is contained by)</a></p></li>
 <li><p><a class="reference internal" href="#op-at-time-zone">AT TIME ZONE</a></p></li>
+<li><p><a class="reference internal" href="#op-like-any">LIKE ANY (like any of a list of patterns)</a></p></li>
+<li><p><a class="reference internal" href="#op-ilike-any">ILIKE ANY (case-insensitive like any of a list of patterns)</a></p></li>
 </ul>
 <section id="op-str-cat">
 <span id="id26"></span><h3><code class="docutils literal notranslate"><span class="pre">||</span></code><a class="headerlink" href="#op-str-cat" title="Link to this heading">#</a></h3>
@@ -1016,6 +1018,79 @@ timestamps at all (a string literal, for example) are cast to
 <p>Note that a timezone written as a fixed offset string follows the ISO 8601
 convention, so <code class="docutils literal notranslate"><span class="pre">'+05:30'</span></code> is 5 hours 30 minutes <em>east</em> of UTC. PostgreSQL
 applies the opposite (POSIX) convention to offsets spelled this way.</p>
+</section>
+<section id="op-like-any">
+<span id="like-any"></span><h3><code class="docutils literal notranslate"><span class="pre">LIKE</span> <span class="pre">ANY</span></code><a class="headerlink" href="#op-like-any" title="Link to this heading">#</a></h3>
+<p>Like Any: <code class="docutils literal notranslate"><span class="pre">expression</span> <span class="pre">LIKE</span> <span class="pre">ANY</span> <span class="pre">(pattern1,</span> <span class="pre">...,</span> <span class="pre">patternN)</span></code> is true when
+<code class="docutils literal notranslate"><span class="pre">expression</span></code> matches at least one pattern. It is the same as
+<code class="docutils literal notranslate"><span class="pre">expression</span> <span class="pre">LIKE</span> <span class="pre">pattern1</span> <span class="pre">OR</span> <span class="pre">...</span> <span class="pre">OR</span> <span class="pre">expression</span> <span class="pre">LIKE</span> <span class="pre">patternN</span></code>, following Spark.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="k">LIKE</span><span class="w"> </span><span class="k">ANY</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;dat%&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%sql&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">like_any</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">like_any</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">NOT</span></code> before <code class="docutils literal notranslate"><span class="pre">LIKE</span></code> applies to each pattern, so <code class="docutils literal notranslate"><span class="pre">expression</span> <span class="pre">NOT</span> <span class="pre">LIKE</span> <span class="pre">ANY</span> <span class="pre">(...)</span></code>
+is true when <code class="docutils literal notranslate"><span class="pre">expression</span></code> fails to match at least one pattern. <code class="docutils literal notranslate"><span class="pre">NOT</span></code> before the
+expression negates the whole match:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span>
+<span class="w">  </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">LIKE</span><span class="w"> </span><span class="k">ANY</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;dat%&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%sql&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">per_pattern</span><span class="p">,</span>
+<span class="w">  </span><span class="k">NOT</span><span class="w"> </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="k">LIKE</span><span class="w"> </span><span class="k">ANY</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;dat%&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%sql&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">whole_match</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-------------+-------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">per_pattern</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">whole_match</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------+-------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="k">false</span><span class="w">       </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------------+-------------+</span>
+</pre></div>
+</div>
+<p>An <code class="docutils literal notranslate"><span class="pre">ESCAPE</span></code> character applies to every pattern:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;data_fusion&#39;</span><span class="w"> </span><span class="k">LIKE</span><span class="w"> </span><span class="k">ANY</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;data\_%&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%sql&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">ESCAPE</span><span class="w"> </span><span class="s1">&#39;\&#39;</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">escaped</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">---------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">escaped</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">    </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">---------+</span>
+</pre></div>
+</div>
+<p>A NULL pattern gives NULL only when no other pattern matches. A NULL
+expression gives NULL:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span>
+<span class="w">  </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="k">LIKE</span><span class="w"> </span><span class="k">ANY</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;dat%&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">one_match</span><span class="p">,</span>
+<span class="w">  </span><span class="s1">&#39;datafusion&#39;</span><span class="w"> </span><span class="k">LIKE</span><span class="w"> </span><span class="k">ANY</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;%sql&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">NULL</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">no_match</span><span class="p">,</span>
+<span class="w">  </span><span class="k">NULL</span><span class="w"> </span><span class="k">LIKE</span><span class="w"> </span><span class="k">ANY</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;dat%&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%sql&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">null_subject</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-----------+----------+--------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">one_match</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">no_match</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">null_subject</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------+----------+--------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">      </span><span class="o">|</span><span class="w"> </span><span class="k">NULL</span><span class="w">     </span><span class="o">|</span><span class="w"> </span><span class="k">NULL</span><span class="w">         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------+----------+--------------+</span>
+</pre></div>
+</div>
+<p>Snowflake differs here: its <code class="docutils literal notranslate"><span class="pre">LIKE</span> <span class="pre">ANY</span></code> returns NULL when any argument is NULL,
+so <code class="docutils literal notranslate"><span class="pre">'datafusion'</span> <span class="pre">LIKE</span> <span class="pre">ANY</span> <span class="pre">('dat%',</span> <span class="pre">NULL)</span></code> is NULL in Snowflake.</p>
+<p>The patterns must be a parenthesized list. An array of patterns, such as
+<code class="docutils literal notranslate"><span class="pre">ARRAY['dat%',</span> <span class="pre">'%sql']</span></code> or <code class="docutils literal notranslate"><span class="pre">make_array('dat%',</span> <span class="pre">'%sql')</span></code>, is not supported.
+Neither is a subquery that supplies the pattern list, such as
+<code class="docutils literal notranslate"><span class="pre">LIKE</span> <span class="pre">ANY</span> <span class="pre">(SELECT</span> <span class="pre">'dat%')</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">expression</span></code> must not be volatile, because each pattern could see a different
+value. For example, <code class="docutils literal notranslate"><span class="pre">CAST(random()</span> <span class="pre">AS</span> <span class="pre">VARCHAR)</span> <span class="pre">LIKE</span> <span class="pre">ANY</span> <span class="pre">('0%',</span> <span class="pre">'%')</span></code> is
+rejected. Volatile patterns are allowed. A scalar subquery without volatile
+functions, such as <code class="docutils literal notranslate"><span class="pre">(SELECT</span> <span class="pre">max(s)</span> <span class="pre">FROM</span> <span class="pre">t)</span></code>, can be <code class="docutils literal notranslate"><span class="pre">expression</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">LIKE</span> <span class="pre">ALL</span></code> and <code class="docutils literal notranslate"><span class="pre">LIKE</span> <span class="pre">SOME</span></code> are not supported.</p>
+</section>
+<section id="op-ilike-any">
+<span id="ilike-any"></span><h3><code class="docutils literal notranslate"><span class="pre">ILIKE</span> <span class="pre">ANY</span></code><a class="headerlink" href="#op-ilike-any" title="Link to this heading">#</a></h3>
+<p>Case-Insensitive Like Any: the same as <a class="reference internal" href="#op-like-any"><code class="docutils literal notranslate"><span class="pre">LIKE</span> <span class="pre">ANY</span></code></a>, using
+<code class="docutils literal notranslate"><span class="pre">ILIKE</span></code> for each pattern.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="s1">&#39;DataFusion&#39;</span><span class="w"> </span><span class="k">ILIKE</span><span class="w"> </span><span class="k">ANY</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;dat%&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;%sql&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">ilike_any</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">ilike_any</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">      </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------+</span>
+</pre></div>
+</div>
 </section>
 </section>
 <section id="literals">
@@ -1165,6 +1240,8 @@ bar
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-arr-contains"><code class="docutils literal notranslate"><span class="pre">@&gt;</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-arr-contained-by"><code class="docutils literal notranslate"><span class="pre">&lt;@</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-at-time-zone"><code class="docutils literal notranslate"><span class="pre">AT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-like-any"><code class="docutils literal notranslate"><span class="pre">LIKE</span> <span class="pre">ANY</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#op-ilike-any"><code class="docutils literal notranslate"><span class="pre">ILIKE</span> <span class="pre">ANY</span></code></a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#literals">Literals</a><ul class="nav section-nav flex-column">
