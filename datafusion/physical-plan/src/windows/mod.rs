@@ -8,6 +8,7 @@ mod bounded_window_agg_exec;
 #[cfg(feature = "proto")]
 mod proto;
 mod utils;
+mod view_buffers;
 mod window_agg_exec;
 
 use std::borrow::Borrow;

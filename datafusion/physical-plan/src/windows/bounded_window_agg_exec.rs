@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
+use super::view_buffers::{prune_array_prefix, prune_batch_prefix, view_column_indices};
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SplitMetrics,
 };
@@ -1200,6 +1201,8 @@ pub struct BoundedWindowAggStream {
     /// The record batch executor receives as input (i.e. the columns needed
     /// while calculating aggregation results).
     input_buffer: RecordBatch,
+    /// See [`ViewBufferWatermarks`].
+    view_watermarks: ViewBufferWatermarks,
     /// Each partition's rows, accumulated across input batches. All window
     /// expressions calculate their results against these shared rows without
     /// copying.
@@ -1285,7 +1288,7 @@ impl BoundedWindowAggStream {
         // Prune `self.window_agg_states`:
         self.prune_out_columns();
         // Prune `self.partition_buffers`:
-        self.prune_partition_batches();
+        self.prune_partition_batches()?;
         // Prune `self.input_buffer`:
         self.prune_input_batch(n_out)?;
         // Prune internal state of search algorithm.
@@ -1318,10 +1321,12 @@ impl BoundedWindowAggStream {
     ) -> Result<Self> {
         let state = window_expr.iter().map(|_| IndexMap::default()).collect();
         let empty_batch = RecordBatch::new_empty(Arc::clone(&schema));
+        let view_watermarks = ViewBufferWatermarks::new(&input.schema(), &window_expr)?;
         Ok(Self {
             schema,
             input,
             input_buffer: empty_batch,
+            view_watermarks,
             partition_buffers: IndexMap::default(),
             window_agg_states: state,
             finished: false,
@@ -1433,7 +1438,7 @@ impl BoundedWindowAggStream {
 
     /// Removes partitions that have ended. For the remaining partitions,
     /// drops buffered rows that no window expression will need again.
-    fn prune_partition_batches(&mut self) {
+    fn prune_partition_batches(&mut self) -> Result<()> {
         // Check that per-state and per-partition end-flags are consistent;
         // otherwise, the pruning code below might produce inconsistent state.
         #[cfg(debug_assertions)]
@@ -1455,6 +1460,8 @@ impl BoundedWindowAggStream {
         for window_agg_state in self.window_agg_states.iter_mut() {
             window_agg_state.retain(|_, WindowState { state, .. }| !state.is_end);
         }
+        self.view_watermarks
+            .drop_ended_partitions(&self.partition_buffers, &self.window_agg_states);
 
         // Calculate how many rows to prune from each partition's batch. For a
         // single window expression, rows before min(window_frame_range.start,
@@ -1491,7 +1498,8 @@ impl BoundedWindowAggStream {
             }
         }
 
-        // Drop the prunable prefix of each partition's buffered batch:
+        // Drop the prunable prefix of each partition's buffered batch, keeping
+        // the buffer lists of its view columns short (see `prune_batch_prefix`):
         for (partition_row, n_prune) in n_prune_each_partition.iter() {
             debug_assert!(
                 *n_prune > 0,
@@ -1499,31 +1507,33 @@ impl BoundedWindowAggStream {
             );
             let pb_state = &mut self.partition_buffers[partition_row];
 
-            let batch = &pb_state.record_batch;
-            pb_state.record_batch = batch.slice(*n_prune, batch.num_rows() - n_prune);
+            let (view_columns, watermarks) = self
+                .view_watermarks
+                .partition_mut(partition_row, &pb_state.record_batch);
+            pb_state.record_batch = prune_batch_prefix(
+                &pb_state.record_batch,
+                *n_prune,
+                view_columns,
+                watermarks,
+            )?;
 
             // Update state indices since we have pruned some rows from the beginning:
             for window_agg_state in self.window_agg_states.iter_mut() {
                 window_agg_state[partition_row].state.prune_state(*n_prune);
             }
         }
+        Ok(())
     }
 
     /// Prunes the section of the input batch whose aggregate results
     /// are calculated and emitted.
     fn prune_input_batch(&mut self, n_out: usize) -> Result<()> {
         // Prune first n_out rows from the input_buffer
-        let n_to_keep = self.input_buffer.num_rows() - n_out;
-        let batch_to_keep = self
-            .input_buffer
-            .columns()
-            .iter()
-            .map(|elem| elem.slice(n_out, n_to_keep))
-            .collect::<Vec<_>>();
-        self.input_buffer = RecordBatch::try_new_with_options(
-            self.input_buffer.schema(),
-            batch_to_keep,
-            &RecordBatchOptions::new().with_row_count(Some(n_to_keep)),
+        self.input_buffer = prune_batch_prefix(
+            &self.input_buffer,
+            n_out,
+            &self.view_watermarks.input_columns,
+            &mut self.view_watermarks.input,
         )?;
         Ok(())
     }
@@ -1549,14 +1559,125 @@ impl BoundedWindowAggStream {
                 continue;
             }
             partition_batch.n_out_row = 0;
-            for partition_window_agg_states in self.window_agg_states.iter_mut() {
+            for (expr_index, partition_window_agg_states) in
+                self.window_agg_states.iter_mut().enumerate()
+            {
                 if let Some(WindowState { state, .. }) =
                     partition_window_agg_states.get_mut(partition_key)
                 {
-                    let out_col = &mut state.out_col;
+                    let out_col = &state.out_col;
                     let n_to_keep = out_col.len() - n_emitted;
-                    *out_col = out_col.slice(n_emitted, n_to_keep);
+                    // Kept results are extended by `concat` too.
+                    state.out_col = match self.view_watermarks.out_col_mut(
+                        expr_index,
+                        partition_key,
+                        n_to_keep,
+                    ) {
+                        Some(watermark) => {
+                            prune_array_prefix(out_col, n_emitted, watermark)
+                        }
+                        None => out_col.slice(n_emitted, n_to_keep),
+                    };
                 }
+            }
+        }
+    }
+}
+
+/// The watermarks of [`prune_batch_prefix`] for the view columns of the
+/// input buffer and of each partition's batch, and of [`prune_array_prefix`]
+/// for the view-typed results each window expression keeps per partition.
+/// A partition's entry is made when it is first pruned and dropped when the
+/// partition ends.
+struct ViewBufferWatermarks {
+    /// The view columns of the input schema, i.e. of `input_buffer`.
+    input_columns: Vec<usize>,
+    input: Vec<usize>,
+    /// The view columns of the partition batches, taken from the first one
+    /// pruned: they share one schema, which may be a projection of the input's.
+    partition_columns: Option<Vec<usize>>,
+    partitions: HashMap<PartitionKey, Vec<usize>>,
+    /// Per window expression with a view-typed result, by partition.
+    out_cols: Vec<Option<HashMap<PartitionKey, usize>>>,
+}
+
+impl ViewBufferWatermarks {
+    fn new(
+        input_schema: &SchemaRef,
+        window_expr: &[Arc<dyn WindowExpr>],
+    ) -> Result<Self> {
+        let input_columns = view_column_indices(input_schema);
+        let out_cols = window_expr
+            .iter()
+            .map(|expr| {
+                use arrow::datatypes::DataType::{BinaryView, Utf8View};
+                let is_view = matches!(expr.field()?.data_type(), Utf8View | BinaryView);
+                Ok(is_view.then(HashMap::default))
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            input: vec![0; input_columns.len()],
+            input_columns,
+            partition_columns: None,
+            partitions: HashMap::default(),
+            out_cols,
+        })
+    }
+
+    /// The view columns of the partition batches and the watermarks of
+    /// `partition`'s batch (`batch`).
+    fn partition_mut(
+        &mut self,
+        partition: &PartitionKey,
+        batch: &RecordBatch,
+    ) -> (&[usize], &mut [usize]) {
+        let columns = self
+            .partition_columns
+            .get_or_insert_with(|| view_column_indices(&batch.schema()));
+        if columns.is_empty() {
+            return (&[], &mut []);
+        }
+        let n_view_columns = columns.len();
+        let watermarks = self
+            .partitions
+            .entry(partition.clone())
+            .or_insert_with(|| vec![0; n_view_columns]);
+        (columns.as_slice(), watermarks.as_mut_slice())
+    }
+
+    /// The watermark of the results of window expression `expr_index` for
+    /// `partition`, or `None` when they are not a view array or none are kept
+    /// (`WindowAggState::update` replaces an empty `out_col`).
+    fn out_col_mut(
+        &mut self,
+        expr_index: usize,
+        partition: &PartitionKey,
+        n_to_keep: usize,
+    ) -> Option<&mut usize> {
+        let map = self.out_cols[expr_index].as_mut()?;
+        if n_to_keep == 0 {
+            if !map.is_empty() {
+                map.remove(partition);
+            }
+            return None;
+        }
+        Some(map.entry(partition.clone()).or_insert(0))
+    }
+
+    fn drop_ended_partitions(
+        &mut self,
+        partition_buffers: &PartitionBatches,
+        window_agg_states: &[PartitionWindowAggStates],
+    ) {
+        if !self.partitions.is_empty() {
+            self.partitions
+                .retain(|partition, _| partition_buffers.contains_key(partition));
+        }
+        for (map, states) in self.out_cols.iter_mut().zip(window_agg_states) {
+            if let Some(map) = map
+                && !map.is_empty()
+            {
+                map.retain(|partition, _| states.contains_key(partition));
             }
         }
     }
@@ -1699,11 +1820,11 @@ mod tests {
     use crate::{ExecutionPlan, WindowExpr, displayable, execute_stream};
 
     use arrow::array::{
-        RecordBatch,
+        Array, AsArray, RecordBatch,
         builder::{Int64Builder, UInt64Builder},
     };
-    use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::compute::{SortOptions, concat_batches};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef, UInt64Type};
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
     use datafusion_execution::config::SessionConfig;
@@ -1712,10 +1833,11 @@ mod tests {
     };
     use datafusion_expr::{
         WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
+        WindowUDF,
     };
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
-    use datafusion_functions_window::lead_lag::lead_udwf;
+    use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
     use datafusion_functions_window::nth_value::last_value_udwf;
     use datafusion_functions_window::nth_value::nth_value_udwf;
     use datafusion_functions_window::row_number::row_number_udwf;
@@ -3214,6 +3336,178 @@ mod tests {
         // The whole batch belongs to one partition, so its columns are reused
         // rather than gathered into a new batch.
         assert!(Arc::ptr_eq(result[0].1.column(0), single.column(0)));
+        Ok(())
+    }
+
+    fn view_value(ts: u64) -> String {
+        format!("a value longer than twelve bytes {ts:04}")
+    }
+
+    fn max_view_buffers(batch: &RecordBatch) -> usize {
+        let views = batch
+            .columns()
+            .iter()
+            .filter_map(|c| c.as_string_view_opt());
+        views.map(|v| v.data_buffers().len()).max().unwrap_or(0)
+    }
+
+    /// Runs `functions` (window function, argument) `ORDER BY ts`, with
+    /// several partitions `PARTITION BY pk`, over 60 batches with one row per partition and a `Utf8View` column
+    /// `s` with a data buffer per batch. Returns the output and the most data
+    /// buffers a view column of an output batch, of the input buffer and of a
+    /// partition batch listed.
+    async fn run_view_window(
+        functions: &[(Arc<WindowUDF>, &str)],
+        n_partitions: u64,
+        mode: InputOrderMode,
+    ) -> Result<(RecordBatch, [usize; 3])> {
+        use arrow::array::{ArrayRef, StringViewArray, UInt64Array};
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::UInt64, false),
+            Field::new("ts", DataType::UInt64, false),
+            Field::new("s", DataType::Utf8View, true),
+        ]));
+        let batches = (0..60)
+            .map(|i| {
+                let ts: Vec<u64> =
+                    (0..n_partitions).map(|p| i * n_partitions + p).collect();
+                let s: StringViewArray =
+                    ts.iter().map(|&t| Some(view_value(t))).collect();
+                let columns: Vec<ArrayRef> = vec![
+                    Arc::new(UInt64Array::from_iter_values(0..n_partitions)),
+                    Arc::new(UInt64Array::from(ts)),
+                    Arc::new(s),
+                ];
+                Ok(RecordBatch::try_new(Arc::clone(&schema), columns)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let partition_by: Vec<_> = (n_partitions > 1)
+            .then(|| col("pk", &schema))
+            .transpose()?
+            .into_iter()
+            .collect();
+        let causal = Arc::new(WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            WindowFrameBound::CurrentRow,
+        ));
+        let window_exprs = functions
+            .iter()
+            .map(|(udwf, arg)| {
+                create_window_expr(
+                    &WindowFunctionDefinition::WindowUDF(Arc::clone(udwf)),
+                    udwf.name().to_string(),
+                    &[col(arg, &schema)?],
+                    &partition_by,
+                    &[PhysicalSortExpr::new_default(col("ts", &schema)?)],
+                    Arc::clone(&causal),
+                    Arc::clone(&schema),
+                    false,
+                    false,
+                    None,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let exec =
+            BoundedWindowAggExec::try_new(window_exprs, input, mode.clone(), true)?;
+        assert_eq!(exec.input_order_mode, mode);
+
+        // Drive the stream itself to look at what it keeps between batches.
+        let mut stream = super::BoundedWindowAggStream::new(
+            Arc::clone(&exec.schema),
+            exec.window_expr.clone(),
+            exec.input.execute(0, Arc::new(TaskContext::default()))?,
+            crate::metrics::BaselineMetrics::new(&exec.metrics, 0),
+            exec.get_search_algo()?,
+            0,
+            None,
+        )?;
+        let (mut output, mut max) = (vec![], [0; 3]);
+        while let Some(batch) = stream.next().await {
+            output.push(batch?);
+            let partitions = stream.partition_buffers.values();
+            let kept = [
+                max_view_buffers(output.last().unwrap()),
+                max_view_buffers(&stream.input_buffer),
+                partitions
+                    .map(|p| max_view_buffers(&p.record_batch))
+                    .max()
+                    .unwrap_or(0),
+            ];
+            max = std::array::from_fn(|i| max[i].max(kept[i]));
+        }
+        let output = concat_batches(&exec.schema, &output)?;
+        assert_eq!(output.num_rows() as u64, 60 * n_partitions);
+        let ts = output.column(1).as_primitive::<UInt64Type>();
+        let s = output.column(2).as_string_view();
+        assert!((0..output.num_rows()).all(|i| s.value(i) == view_value(ts.value(i))));
+        Ok((output, max))
+    }
+
+    /// `lead` keeps a row of lookahead in the input buffer.
+    #[tokio::test]
+    async fn input_buffer_view_columns_do_not_accumulate_buffers() -> Result<()> {
+        let functions = [(lead_udwf(), "ts")];
+        let (output, [out, input, _]) =
+            run_view_window(&functions, 1, InputOrderMode::Sorted).await?;
+        assert!(out <= 4 && input <= 4, "{out} / {input} buffers");
+        let lead = output.column(3).as_primitive::<UInt64Type>();
+        assert_eq!(lead.iter().skip(58).collect_vec(), [Some(59), None]);
+        Ok(())
+    }
+
+    /// `lag(s)` keeps a row of `s` in the partition batch.
+    #[tokio::test]
+    async fn partition_buffer_view_columns_do_not_accumulate_buffers() -> Result<()> {
+        let functions = [(lag_udwf(), "s")];
+        let (output, [_, _, partition]) =
+            run_view_window(&functions, 1, InputOrderMode::Sorted).await?;
+        assert!(partition <= 4, "{partition} buffers");
+        let lag = output.column(3).as_string_view();
+        assert!(lag.is_null(0) && lag.value(59) == view_value(58));
+        Ok(())
+    }
+
+    /// `lead(ts)` waits for the next row, a causal `last_value(s)` or
+    /// `lag(s)` does not, so a string result per partition stays in `out_col`
+    /// across batches.
+    #[tokio::test]
+    async fn kept_view_results_do_not_accumulate_buffers() -> Result<()> {
+        for (second, lag) in [(last_value_udwf(), 0), (lag_udwf(), 1)] {
+            let functions = [(lead_udwf(), "ts"), (second, "s")];
+            for (n_partitions, mode) in
+                [(1, InputOrderMode::Sorted), (2, InputOrderMode::Linear)]
+            {
+                let (output, [out, ..]) =
+                    run_view_window(&functions, n_partitions, mode).await?;
+                assert!(out <= 4, "{out} buffers");
+                let n = output.num_rows() - lag * n_partitions as usize;
+                let s = output.column(2).as_string_view().slice(0, n);
+                let result = output.column(4).as_string_view();
+                assert_eq!(result.slice(output.num_rows() - n, n), s);
+            }
+        }
+        Ok(())
+    }
+
+    /// `Linear` mode, two partitions interleaved in every batch.
+    #[tokio::test]
+    async fn linear_mode_view_columns_do_not_accumulate_buffers() -> Result<()> {
+        let functions = [(lead_udwf(), "s")];
+        let (output, max) =
+            run_view_window(&functions, 2, InputOrderMode::Linear).await?;
+        assert!(max.iter().all(|&n| n <= 4), "{max:?} buffers");
+        let ts = output.column(1).as_primitive::<UInt64Type>();
+        let lead = output.column(3).as_string_view();
+        for i in 0..output.num_rows() {
+            let next = ts.value(i) + 2;
+            assert!(if next < 120 {
+                lead.value(i) == view_value(next)
+            } else {
+                lead.is_null(i)
+            });
+        }
         Ok(())
     }
 }
