@@ -3135,6 +3135,28 @@ async fn roundtrip_struct_literal_window_function_argument() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_struct_literal_in_nested_case_with_only_literal_results() -> Result<()>
+{
+    let ctx = struct_rows_ctx().await?;
+    // the inner CASE has no column to take names from; it comes second, then first
+    for sql in [
+        "SELECT CASE WHEN st IS NOT NULL THEN st \
+           ELSE CASE WHEN random() > 2 THEN named_struct('a', 0, 'b', 'z') \
+                     ELSE named_struct('a', 9, 'b', 'w') END \
+         END AS r FROM struct_rows",
+        "SELECT CASE WHEN st IS NULL \
+           THEN CASE WHEN random() > 2 THEN named_struct('a', 0, 'b', 'z') \
+                     ELSE named_struct('a', 9, 'b', 'w') END \
+           ELSE st \
+         END AS r FROM struct_rows",
+    ] {
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        assert_struct_literal_roundtrip_rows(&ctx, plan, |_| {}).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_struct_literal_list_next_to_large_list_column() -> Result<()> {
     use serde_json::Value;
 

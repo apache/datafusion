@@ -32,7 +32,7 @@ use datafusion::common::{
     DFSchema, ScalarValue, not_impl_err, plan_err, substrait_datafusion_err,
     substrait_err,
 };
-use datafusion::logical_expr::{Expr, ExprSchemable};
+use datafusion::logical_expr::{Case, Expr, ExprSchemable};
 use prost::Message;
 use std::sync::Arc;
 use substrait::proto;
@@ -578,15 +578,22 @@ pub(crate) fn from_substrait_literal(
     Ok(scalar_value)
 }
 
-/// Gives struct-typed literals among `exprs` the field names of an expression of the
-/// same shape next to them.
+/// Renames the fields of the struct literals in `exprs` after those of the first
+/// expression in `exprs` that isn't a literal and has a struct type, such as a column.
 ///
-/// Substrait types carry no struct field names, so a struct literal is consumed with
-/// generated names (`c0`, `c1`, ...). Next to a column of the same shape, as in
-/// `coalesce(s, [])` with `s: List<Struct{a, b}>`, the literal would be
-/// `List<Struct{c0, c1}>`, and DataFusion matches struct fields by name, so the two types
-/// can't be unified. Substrait matches struct fields by position, so taking the column's
-/// names keeps the meaning of the plan.
+/// For example, in `coalesce(s, [])` with `s: List<Struct{a, b}>`:
+///
+/// - before: `s` is `List<Struct{a, b}>`, `[]` is `List<Struct{c0, c1}>`
+/// - after: both are `List<Struct{a, b}>`
+///
+/// This is needed because a Substrait literal's type has no field names, so the
+/// consumer names its fields `c0`, `c1`, ..., while a column keeps the names from its
+/// table. DataFusion matches struct fields by name, so it can't combine
+/// `Struct{a, b}` with `Struct{c0, c1}`. Substrait matches them by position, so giving
+/// the literal the column's names doesn't change what the plan means.
+///
+/// A literal whose shape differs from the column's (another number of fields, other
+/// nesting) is left as it is, and so is everything if no expression has a struct type.
 pub(crate) fn name_struct_literals_like_siblings(
     exprs: &mut [&mut Expr],
     input_schema: &DFSchema,
@@ -607,7 +614,8 @@ pub(crate) fn name_struct_literals_like_siblings(
 }
 
 /// If `expr` is a struct-typed literal, possibly aliased, gives it the field names of
-/// `named_type` when the two have the same shape. Anything else is left unchanged.
+/// `named_type` when the two have the same shape. A `CASE` whose results are all
+/// literals counts as a literal: each result is renamed. Anything else is left unchanged.
 pub(crate) fn name_struct_literal_like(expr: &mut Expr, named_type: &DataType) {
     match expr {
         Expr::Alias(alias) => name_struct_literal_like(&mut alias.expr, named_type),
@@ -624,26 +632,51 @@ pub(crate) fn name_struct_literal_like(expr: &mut Expr, named_type: &DataType) {
                 *value = renamed;
             }
         }
+        Expr::Case(case) if case_results(case).all(is_literal) => {
+            for (_, then) in case.when_then_expr.iter_mut() {
+                name_struct_literal_like(then, named_type);
+            }
+            if let Some(else_expr) = case.else_expr.as_mut() {
+                name_struct_literal_like(else_expr, named_type);
+            }
+        }
         _ => {}
     }
 }
 
-/// Returns true if `expr` is a literal, possibly aliased.
+/// Returns true if `expr` is a literal, possibly aliased, or a `CASE` whose results are
+/// all literals.
 pub(crate) fn is_literal(expr: &Expr) -> bool {
     match expr {
         Expr::Alias(alias) => is_literal(&alias.expr),
         Expr::Literal(..) => true,
+        Expr::Case(case) => case_results(case).all(is_literal),
         _ => false,
     }
 }
 
-/// Returns true if `expr` is a literal whose type contains a struct, possibly aliased.
+/// Returns true if `expr` is a literal whose type contains a struct, possibly aliased,
+/// or a `CASE` whose results are all literals and include one.
 pub(crate) fn is_struct_literal(expr: &Expr) -> bool {
     match expr {
         Expr::Alias(alias) => is_struct_literal(&alias.expr),
         Expr::Literal(value, _) => contains_struct(&value.data_type()),
+        Expr::Case(case) => {
+            case_results(case).all(is_literal)
+                && case_results(case).any(is_struct_literal)
+        }
         _ => false,
     }
+}
+
+/// The results of `case`: its `THEN`s, then its `ELSE` if it has one. Its conditions
+/// aren't results: `CASE WHEN x > 0 THEN {c0: 1} ELSE {c0: 2} END` has only literal
+/// results.
+fn case_results(case: &Case) -> impl Iterator<Item = &Expr> {
+    case.when_then_expr
+        .iter()
+        .map(|(_, then)| then.as_ref())
+        .chain(case.else_expr.as_deref())
 }
 
 pub(crate) fn contains_struct(data_type: &DataType) -> bool {
