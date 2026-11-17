@@ -408,7 +408,7 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
+        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21  # v2.90.4
         with:
           tool: cargo-llvm-cov
       - name: Rust Dependency Cache
@@ -582,7 +582,7 @@ jobs:
               clang-18 --version
               clang++-18 --version
           - name: Setup wasm-pack
-            uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
+            uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21  # v2.90.4
             with:
               tool: wasm-pack
       - name: Run tests with headless mode
@@ -739,7 +739,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rustup
       - name: Install protoc
-        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
+        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21  # v2.90.4
         with:
           tool: protoc@3.36.2
       - name: Run gen
@@ -812,7 +812,7 @@ jobs:
           submodules: true
           fetch-depth: 1
       - name: Install taplo
-        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
+        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21  # v2.90.4
         with:
           tool: taplo-cli@0.10.0
       # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
@@ -904,7 +904,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
+        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21  # v2.90.4
         with:
           tool: cargo-msrv
 
