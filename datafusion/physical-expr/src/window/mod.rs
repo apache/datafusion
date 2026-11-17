@@ -8,7 +8,7 @@ mod standard;
 mod standard_window_function_expr;
 mod window_expr;
 
-pub use aggregate::PlainAggregateWindowExpr;
+pub use aggregate::{PlainAggregateWindowExpr, result_never_null};
 pub use sliding_aggregate::SlidingAggregateWindowExpr;
 pub use standard::StandardWindowExpr;
 pub use standard_window_function_expr::StandardWindowFunctionExpr;

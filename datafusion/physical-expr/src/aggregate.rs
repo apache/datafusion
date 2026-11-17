@@ -1126,8 +1126,8 @@ impl AggregateFunctionExpr {
             return None;
         }
         let expr = Arc::new(Column::new(self.name(), aggr_func_idx));
-        let options =
-            SortOptions::new(monotonicity == SetMonotonicity::Decreasing, false);
+        // A growing frame can have NULL results before its first non-NULL input.
+        let options = SortOptions::new(monotonicity == SetMonotonicity::Decreasing, true);
         Some(PhysicalSortExpr { expr, options })
     }
 }
