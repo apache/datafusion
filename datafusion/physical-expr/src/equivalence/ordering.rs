@@ -293,17 +293,7 @@ impl Display for ExplicitNullsOrdering<'_> {
             if idx > 0 {
                 write!(f, ", ")?;
             }
-            let direction = if sort_expr.options.descending {
-                "DESC"
-            } else {
-                "ASC"
-            };
-            let nulls = if sort_expr.options.nulls_first {
-                "FIRST"
-            } else {
-                "LAST"
-            };
-            write!(f, "{} {direction} NULLS {nulls}", sort_expr.expr)?;
+            write!(f, "{} {}", sort_expr.expr, sort_expr.options)?;
         }
         Ok(())
     }

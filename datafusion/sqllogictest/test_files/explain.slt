@@ -278,6 +278,20 @@ physical_plan
 01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false], facts=[order: [a@0 ASC NULLS LAST]]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true, facts=[none]
 
+query TT
+EXPLAIN SELECT a, b, c FROM simple_explain_test WHERE a = b AND c = 5 ORDER BY b;
+----
+logical_plan
+01)Sort: simple_explain_test.b ASC NULLS LAST
+02)--Filter: simple_explain_test.b = simple_explain_test.a AND simple_explain_test.c = Int32(5)
+03)----TableScan: simple_explain_test projection=[a, b, c], partial_filters=[simple_explain_test.b = simple_explain_test.a, simple_explain_test.c = Int32(5)]
+physical_plan
+01)SortPreservingMergeExec: [b@1 ASC NULLS LAST], facts=[order: [b@1 ASC NULLS LAST]; equal: {b@1, a@0}; constant: c@2 = 5]
+02)--SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[true], facts=[order: [b@1 ASC NULLS LAST]; equal: {b@1, a@0}; constant: c@2 = 5]
+03)----FilterExec: b@1 = a@0 AND c@2 = 5, facts=[equal: {b@1, a@0}; constant: c@2 = 5]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, facts=[none]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.csv]]}, projection=[a, b, c], file_type=csv, has_header=true, facts=[none]
+
 statement ok
 set datafusion.explain.show_equivalences = false;
 

@@ -197,13 +197,10 @@ fn create_tree_recursive(
     }
 
     if show_equivalences {
-        let facts = plan.equivalence_properties().facts();
-        if facts.is_empty() {
-            extra_info.insert("facts".to_string(), "none".to_string());
-        }
-        for (key, value) in facts {
-            extra_info.insert(key.to_string(), value);
-        }
+        extra_info.insert(
+            "facts".to_string(),
+            plan.equivalence_properties().to_string(),
+        );
     }
 
     let mut node = RenderTreeNode::new(plan.name().to_string(), extra_info);

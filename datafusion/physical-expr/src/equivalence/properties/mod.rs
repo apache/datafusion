@@ -1901,7 +1901,7 @@ impl EquivalenceProperties {
     ///
     /// Orderings always spell out NULL placement. Literal-only constants and
     /// equivalence classes are skipped, and empty sections are omitted.
-    pub fn facts(&self) -> Vec<(&'static str, String)> {
+    fn facts(&self) -> Vec<(&'static str, String)> {
         let is_literal = |expr: &Arc<dyn PhysicalExpr>| expr.is::<Literal>();
         let mut facts = vec![];
 
