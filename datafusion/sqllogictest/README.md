@@ -259,7 +259,8 @@ Runs the same `.slt` once per combination of config values. Each directive is a 
 - Each override is applied like `SET <key> = <value>`, so `datafusion.runtime.*`
   keys (e.g. `datafusion.runtime.memory_limit`) and config-dependent UDFs behave
   exactly as they would for an in-file `SET`.
-- Supported by the default runner and by `--substrait-round-trip`. `--complete`
+- Supported by the default runner, by `--substrait-round-trip`, and by
+  `--unparser-round-trip`. `--complete`
   rejects a file that declares directives, since it would overwrite the file
   with the output of a single combination. The Postgres runner ignores them.
 - Every combination runs even if an earlier one fails. Each failure is prefixed
@@ -485,6 +486,34 @@ and uncorrelated `WHERE EXISTS`:
 
 ```shell
 cargo test --test sqllogictests --features substrait -- --substrait-round-trip --substrait-optimize joins_conditionless.slt
+```
+
+## Running tests: Unparser round-trip mode
+
+This mode runs each query through the SQL unparser. The runner plans the SQL, unparses the
+logical plan with `plan_to_sql` and the default dialect, plans the unparsed SQL again in the
+same `SessionContext`, and executes the result (SQL statement → DF logical → SQL statement →
+DF logical → DF physical → execute).
+
+The runner passes `Ddl`, `Dml`, `Copy`, `Explain`, `Show` and `Statement` plans through unchanged,
+because SQL cannot express them as a query.
+
+| Failure                 | Meaning                                        |
+| ----------------------- | ---------------------------------------------- |
+| Error while unparsing   | The unparser does not support the plan.        |
+| Error while re-planning | The unparser produced SQL that does not plan.  |
+| Different rows          | The unparser changed the meaning of the query. |
+
+_WARNING_: many files fail in this mode, so it is opt-in and CI does not run it. To run the suite in this mode:
+
+```shell
+cargo test --test sqllogictests -- --unparser-round-trip
+```
+
+Add `--unparser-optimize` to optimize the logical plan before unparsing it:
+
+```shell
+cargo test --test sqllogictests -- --unparser-round-trip --unparser-optimize select.slt
 ```
 
 ## `.slt` file format

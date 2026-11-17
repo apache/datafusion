@@ -9,6 +9,7 @@ use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err}
 use datafusion::execution::memory_pool::DEFAULT_DRIFT_LOG_THRESHOLD;
 #[cfg(feature = "substrait")]
 use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
+use datafusion_sqllogictest::DataFusionUnparserRoundTrip;
 use datafusion_sqllogictest::TestFile;
 use datafusion_sqllogictest::{
     CountingAllocator, enable_memory_drift_logging, flush_thread_allocations,
@@ -216,8 +217,24 @@ async fn run_tests() -> Result<()> {
                     options.postgres_runner,
                     options.complete,
                     options.substrait_round_trip,
+                    options.unparser_round_trip,
                 ) {
-                    (_, _, true) => {
+                    (_, _, _, true) => {
+                        run_matrix(
+                            Engine::UnparserRoundTrip {
+                                optimize: options.unparser_optimize,
+                            },
+                            test_file,
+                            validator,
+                            m_clone,
+                            m_style_clone,
+                            filters.as_ref(),
+                            currently_running_sql_tracker_clone,
+                            colored_output,
+                        )
+                        .await
+                    }
+                    (_, _, true, _) => {
                         run_test_file_substrait_round_trip(
                             test_file,
                             validator,
@@ -230,7 +247,7 @@ async fn run_tests() -> Result<()> {
                         )
                         .await
                     }
-                    (false, false, _) => {
+                    (false, false, _, _) => {
                         run_test_file(
                             test_file,
                             validator,
@@ -242,7 +259,7 @@ async fn run_tests() -> Result<()> {
                         )
                         .await
                     }
-                    (false, true, _) => {
+                    (false, true, _, _) => {
                         run_complete_file(
                             test_file,
                             validator,
@@ -252,7 +269,7 @@ async fn run_tests() -> Result<()> {
                         )
                         .await
                     }
-                    (true, false, _) => {
+                    (true, false, _, _) => {
                         run_test_file_with_postgres(
                             test_file,
                             validator,
@@ -263,7 +280,7 @@ async fn run_tests() -> Result<()> {
                         )
                         .await
                     }
-                    (true, true, _) => {
+                    (true, true, _, _) => {
                         run_complete_file_with_postgres(
                             test_file,
                             validator,
@@ -452,6 +469,9 @@ enum Engine {
     SubstraitRoundTrip {
         optimize: bool,
     },
+    UnparserRoundTrip {
+        optimize: bool,
+    },
 }
 
 impl Engine {
@@ -462,6 +482,7 @@ impl Engine {
             Engine::DataFusion => "Datafusion",
             #[cfg(feature = "substrait")]
             Engine::SubstraitRoundTrip { .. } => "DatafusionSubstraitRoundTrip",
+            Engine::UnparserRoundTrip { .. } => "DatafusionUnparserRoundTrip",
         }
     }
 }
@@ -620,6 +641,9 @@ impl MatrixRunner<'_> {
             Engine::SubstraitRoundTrip { optimize } => {
                 self.run_substrait_round_trip(&test_ctx, pb, optimize).await
             }
+            Engine::UnparserRoundTrip { optimize } => {
+                self.run_unparser_round_trip(&test_ctx, pb, optimize).await
+            }
         }
     }
 
@@ -690,6 +714,28 @@ impl MatrixRunner<'_> {
     ) -> Result<()> {
         let mut runner = sqllogictest::Runner::new(|| async {
             Ok(DataFusionSubstraitRoundTrip::new(
+                test_ctx.session_ctx().clone(),
+                self.relative_path.to_path_buf(),
+                pb.clone(),
+            )
+            .with_optimization(optimize)
+            .with_currently_executing_sql_tracker(
+                self.currently_executing_sql_tracker.clone(),
+            ))
+        });
+        self.drive_runner(&mut runner, &pb).await
+    }
+
+    /// Unparser round-trip engine: each query's logical plan is unparsed to SQL
+    /// and the SQL is planned again before execution.
+    async fn run_unparser_round_trip(
+        &self,
+        test_ctx: &TestContext,
+        pb: ProgressBar,
+        optimize: bool,
+    ) -> Result<()> {
+        let mut runner = sqllogictest::Runner::new(|| async {
+            Ok(DataFusionUnparserRoundTrip::new(
                 test_ctx.session_ctx().clone(),
                 self.relative_path.to_path_buf(),
                 pb.clone(),
@@ -1070,6 +1116,22 @@ struct Options {
         help = "Optimize logical plans before serializing them in Substrait round-trip mode"
     )]
     substrait_optimize: bool,
+
+    #[clap(
+        long,
+        conflicts_with = "complete",
+        conflicts_with = "postgres_runner",
+        conflicts_with = "substrait_round_trip",
+        help = "Before executing each query, unparse its logical plan to SQL and plan that SQL again"
+    )]
+    unparser_round_trip: bool,
+
+    #[clap(
+        long,
+        requires = "unparser_round_trip",
+        help = "Optimize logical plans before unparsing them in unparser round-trip mode"
+    )]
+    unparser_optimize: bool,
 
     #[clap(long, env = "INCLUDE_SQLITE", help = "Include sqlite files")]
     include_sqlite: bool,
