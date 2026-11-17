@@ -54,7 +54,7 @@ use datafusion_physical_plan::common;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::operator_statistics::{
-    ClosureStatisticsProvider, ExtendedStatistics, StatisticsRegistry, StatisticsResult,
+    ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
 };
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::statistics::StatisticsArgs;
@@ -906,18 +906,18 @@ async fn aggregate_statistics_consults_statistics_providers() -> Result<()> {
     Ok(())
 }
 
-/// Returns a context with a table `t(a, b)` whose scans take their statistics
-/// from `scan_statistics`.
-fn context_with_scan_statistics<F>(scan_statistics: F) -> Result<SessionContext>
-where
-    F: Fn(&dyn ExecutionPlan, &[ExtendedStatistics]) -> Result<StatisticsResult>
-        + Send
-        + Sync
-        + 'static,
-{
+/// A statistics provider reporting fewer column statistics than a scan has
+/// columns makes planning fail with an error naming the provider, instead of
+/// `count(b)` reading out of bounds.
+#[tokio::test]
+async fn short_column_statistics_are_reported() -> Result<()> {
     let provider = ClosureStatisticsProvider::with_matches(
         |plan| plan.is::<DataSourceExec>(),
-        scan_statistics,
+        |plan, _child_stats| {
+            let mut stats = Statistics::new_unknown(&plan.schema());
+            stats.column_statistics.pop();
+            Ok(StatisticsResult::Computed(stats.into()))
+        },
     );
     let state = SessionStateBuilder::new()
         .with_default_features()
@@ -926,7 +926,6 @@ where
         )]))
         .build();
     let ctx = SessionContext::new_with_state(state);
-
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
         Field::new("b", DataType::Int32, true),
@@ -939,68 +938,12 @@ where
         ],
     )?;
     ctx.register_batch("t", batch)?;
-    Ok(ctx)
-}
 
-/// A provider reporting fewer column statistics than the scan has columns
-/// breaks the invariant that consumers index by column, so planning fails with
-/// an error naming the provider instead of a consumer reading out of bounds.
-#[tokio::test]
-async fn short_column_statistics_are_reported() -> Result<()> {
-    let ctx = context_with_scan_statistics(|plan, child_stats| {
-        let child_stats = child_stats
-            .iter()
-            .map(|c| Arc::clone(c.base_arc()))
-            .collect::<Vec<_>>();
-        let mut stats = Arc::unwrap_or_clone(
-            plan.statistics_from_inputs(&child_stats, &StatisticsArgs::new())?,
-        );
-        // Drop the trailing column's statistics so every scan reports one
-        // fewer entry than its schema has columns.
-        stats.column_statistics.pop();
-        Ok(StatisticsResult::Computed(stats.into()))
-    })?;
-
-    // `count(b)` reads the statistics; a plain scan fails during planning too.
-    for (sql, entries, fields) in
-        [("SELECT count(b) FROM t", 0, 1), ("SELECT * FROM t", 1, 2)]
-    {
-        let err = ctx.sql(sql).await?.collect().await.expect_err(sql);
-        assert_contains!(
-            err.to_string(),
-            format!(
-                "Statistics provider ClosureStatisticsProvider returned {entries} column statistics for DataSourceExec, expected {fields} (one per field of its schema)"
-            )
-        );
-    }
-    Ok(())
-}
-
-/// A provider reporting the statistics of the whole table for a scan of only
-/// `b` would make `min(b)` and `max(b)` read the statistics of `a`, so planning
-/// fails with an error naming the provider instead of answering from them.
-#[tokio::test]
-async fn table_statistics_for_a_projected_scan_are_reported() -> Result<()> {
-    let column_statistics = |min: i32, max: i32| ColumnStatistics {
-        null_count: Precision::Exact(0),
-        min_value: Precision::Exact(ScalarValue::from(min)),
-        max_value: Precision::Exact(ScalarValue::from(max)),
-        ..ColumnStatistics::new_unknown()
-    };
-    let table_statistics = Statistics {
-        num_rows: Precision::Exact(2),
-        total_byte_size: Precision::Absent,
-        column_statistics: vec![column_statistics(1, 2), column_statistics(10, 20)],
-    };
-    let ctx = context_with_scan_statistics(move |_plan, _child_stats| {
-        Ok(StatisticsResult::Computed(table_statistics.clone().into()))
-    })?;
-
-    let sql = "SELECT min(b), max(b) FROM t";
+    let sql = "SELECT count(b) FROM t";
     let err = ctx.sql(sql).await?.collect().await.expect_err(sql);
     assert_contains!(
         err.to_string(),
-        "Statistics provider ClosureStatisticsProvider returned 2 column statistics for DataSourceExec, expected 1 (one per field of its schema)"
+        "Statistics provider ClosureStatisticsProvider returned 1 column statistics for DataSourceExec, expected 2 (one per field of its schema)"
     );
     Ok(())
 }

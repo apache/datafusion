@@ -713,13 +713,8 @@ impl StatisticsContext {
     }
 }
 
-/// Returns an error unless `statistics`, computed for `plan` by `provider` or,
-/// if `None`, by the operator itself, hold one [`ColumnStatistics`] per field
-/// of `plan`'s schema, as [`Statistics::column_statistics`] requires. Consumers
-/// index it by column, so a mismatch could make them go out of bounds or read
-/// the statistics of another column.
-///
-/// [`ColumnStatistics`]: datafusion_common::ColumnStatistics
+/// Returns an error if the number of column statistics in `statistics` differs
+/// from the number of fields in `plan`'s schema.
 fn validate_column_statistics(
     plan: &dyn ExecutionPlan,
     statistics: &Statistics,

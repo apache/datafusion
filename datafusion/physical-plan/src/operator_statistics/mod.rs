@@ -263,12 +263,6 @@ pub enum StatisticsResult {
 /// `COUNT(*)`, `MIN` and `MAX` without scanning and remove limits. Return
 /// `Inexact` for anything that is an estimate.
 ///
-/// Computed statistics must also hold one [`ColumnStatistics`] per field of the
-/// node's schema, or the statistics walk returns an error. To override only
-/// some values, start from [`Statistics::new_unknown`].
-///
-/// [`ColumnStatistics`]: datafusion_common::ColumnStatistics
-///
 /// # Implementing a Custom Provider
 ///
 /// ```ignore
@@ -2841,11 +2835,10 @@ mod tests {
         Ok(())
     }
 
-    /// Consumers index `column_statistics` by column, so the walk rejects an
-    /// operator or a provider that does not report one entry per field.
+    /// The walk rejects an operator or provider whose number of column
+    /// statistics differs from the number of fields.
     #[test]
     fn test_wrong_column_statistics_count_is_rejected() {
-        // Two fields: one entry too few, and one too many.
         for num_columns in [1, 3] {
             let source = MockSourceExec::with_column_stats(
                 make_schema(),
@@ -2861,7 +2854,6 @@ mod tests {
             );
         }
 
-        // No entries, and one too many.
         for num_columns in [0, 3] {
             let provider = ClosureStatisticsProvider::new(move |_plan, _child_stats| {
                 Ok(StatisticsResult::Computed(ExtendedStatistics::from(

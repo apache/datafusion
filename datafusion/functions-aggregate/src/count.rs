@@ -1206,10 +1206,8 @@ mod tests {
         Ok(())
     }
 
-    /// `value_from_stats` is public and has no error channel, so a direct
-    /// caller passing fewer column statistics than the schema has fields gets
-    /// `None` instead of a panic, as with `sum`. The statistics walk rejects
-    /// such statistics during planning.
+    /// `value_from_stats` is public and cannot return an error, so a column
+    /// without statistics gives `None` instead of a panic, as in `sum`.
     #[test]
     fn count_value_from_stats_out_of_bounds_column_returns_none() {
         let statistics = datafusion_common::Statistics {
