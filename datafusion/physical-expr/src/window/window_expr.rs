@@ -980,13 +980,15 @@ mod tests {
 
     #[test]
     fn frames_are_well_formed_rejects_inverted_and_out_of_bounds_frames() {
+        // built from variables: clippy rejects a literal reversed or one-element range
+        let frame = |start: usize, end: usize| start..end;
         assert!(frames_are_well_formed(&[0..0, 0..2, 1..3, 3..3], 0..3));
         assert!(frames_are_well_formed(&[], 0..0));
         // starts after it ends
-        assert!(!frames_are_well_formed(&[0..2, 2..1], 0..3));
+        assert!(!frames_are_well_formed(&[frame(0, 2), frame(2, 1)], 0..3));
         // ends after the data, starts before the partition
-        assert!(!frames_are_well_formed(&[0..4], 0..3));
-        assert!(!frames_are_well_formed(&[2..4], 3..6));
+        assert!(!frames_are_well_formed(&[frame(0, 4)], 0..3));
+        assert!(!frames_are_well_formed(&[frame(2, 4)], 3..6));
     }
 
     /// The guard must only turn away frames that cannot occur in a valid query: the frames of every
@@ -1027,7 +1029,9 @@ mod tests {
                 for (end_pos, end) in &line {
                     // the planner rejects UNBOUNDED FOLLOWING as a start, UNBOUNDED PRECEDING as an end
                     // and a start after the end
-                    if *start_pos == i128::MAX || *end_pos == i128::MIN || start_pos > end_pos
+                    if *start_pos == i128::MAX
+                        || *end_pos == i128::MIN
+                        || start_pos > end_pos
                     {
                         continue;
                     }
@@ -1047,11 +1051,8 @@ mod tests {
                         } else {
                             Arc::clone(&keys)
                         };
-                        let frame = WindowFrame::new_bounds(
-                            units,
-                            start.clone(),
-                            end.clone(),
-                        );
+                        let frame =
+                            WindowFrame::new_bounds(units, start.clone(), end.clone());
                         let mut ctx =
                             WindowFrameContext::new(Arc::new(frame), vec![options]);
                         let mut ranges = Vec::new();
