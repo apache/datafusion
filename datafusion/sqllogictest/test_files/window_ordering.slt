@@ -3,7 +3,6 @@
 # SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Window result ordering and physical sort elimination.
-# Known incorrect results are intentional here; correct results are noted separately.
 # Query records preserve returned row order. EXPLAIN records capture missing and redundant sorts.
 # https://github.com/apache/datafusion/issues/27422
 # https://github.com/apache/datafusion/issues/27267
@@ -57,307 +56,306 @@ statement ok
 CREATE TABLE count_part(g INT NOT NULL, ts INT NOT NULL) AS VALUES (1, 1), (1, 2), (2, 3), (2, 4);
 
 # BUG-27422-A: Sliding MAX declares ASC for descending input
-# Correct result: 3, 5, 5
 query I
 SELECT MAX(x) OVER (ORDER BY x DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS m FROM u ORDER BY m ASC NULLS LAST;
 ----
-5
-5
 3
+5
+5
 
 query TT
 EXPLAIN SELECT MAX(x) OVER (ORDER BY x DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS m FROM u ORDER BY m ASC NULLS LAST;
 ----
 physical_plan
-01)ProjectionExec: expr=[max(u.x) ORDER BY [u.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@1 as m]
-02)--BoundedWindowAggExec: wdw=[max(u.x) ORDER BY [u.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "max(u.x) ORDER BY [u.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[x@0 DESC], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[m@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[max(u.x) ORDER BY [u.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@1 as m]
+03)----BoundedWindowAggExec: wdw=[max(u.x) ORDER BY [u.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "max(u.x) ORDER BY [u.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[x@0 DESC], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-27422-B: Sliding MIN declares DESC for ascending input
-# Correct result: 3, 1, 1
 query I
 SELECT MIN(x) OVER (ORDER BY x ASC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS m FROM u ORDER BY m DESC NULLS LAST;
 ----
-1
-1
 3
+1
+1
 
 query TT
 EXPLAIN SELECT MIN(x) OVER (ORDER BY x ASC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS m FROM u ORDER BY m DESC NULLS LAST;
 ----
 physical_plan
-01)ProjectionExec: expr=[min(u.x) ORDER BY [u.x ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@1 as m]
-02)--BoundedWindowAggExec: wdw=[min(u.x) ORDER BY [u.x ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "min(u.x) ORDER BY [u.x ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[m@0 DESC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[min(u.x) ORDER BY [u.x ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@1 as m]
+03)----BoundedWindowAggExec: wdw=[min(u.x) ORDER BY [u.x ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "min(u.x) ORDER BY [u.x ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-27422-C: A preceding-only frame starts empty
-# Correct result: 1, 3, NULL
 query I
 SELECT MAX(x) OVER (ORDER BY x ASC ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING) AS m FROM u ORDER BY m ASC NULLS LAST;
 ----
-NULL
 1
 3
+NULL
 
 query TT
 EXPLAIN SELECT MAX(x) OVER (ORDER BY x ASC ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING) AS m FROM u ORDER BY m ASC NULLS LAST;
 ----
 physical_plan
-01)ProjectionExec: expr=[max(u.x) ORDER BY [u.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING@1 as m]
-02)--BoundedWindowAggExec: wdw=[max(u.x) ORDER BY [u.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING: Field { "max(u.x) ORDER BY [u.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING": nullable Int32 }, frame: ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING], mode=[Sorted]
-03)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[m@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[max(u.x) ORDER BY [u.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING@1 as m]
+03)----BoundedWindowAggExec: wdw=[max(u.x) ORDER BY [u.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING: Field { "max(u.x) ORDER BY [u.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING": nullable Int32 }, frame: ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING], mode=[Sorted]
+04)------SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-27422-D: NULL inputs first create a leading NULL result
-# Correct result: 1, 3, 5, NULL
 query I
 SELECT MAX(x) OVER (ORDER BY x ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS m FROM nullable ORDER BY m ASC NULLS LAST;
 ----
-NULL
 1
 3
 5
+NULL
 
 query TT
 EXPLAIN SELECT MAX(x) OVER (ORDER BY x ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS m FROM nullable ORDER BY m ASC NULLS LAST;
 ----
 physical_plan
-01)ProjectionExec: expr=[max(nullable.x) ORDER BY [nullable.x ASC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@1 as m]
-02)--BoundedWindowAggExec: wdw=[max(nullable.x) ORDER BY [nullable.x ASC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "max(nullable.x) ORDER BY [nullable.x ASC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[x@0 ASC], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[m@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[max(nullable.x) ORDER BY [nullable.x ASC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@1 as m]
+03)----BoundedWindowAggExec: wdw=[max(nullable.x) ORDER BY [nullable.x ASC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "max(nullable.x) ORDER BY [nullable.x ASC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[x@0 ASC], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-27422-E: An empty frame and trailing NULL inputs put NULL results at both ends
-# Correct result: 1, 3, 3, NULL, NULL
 query I
 SELECT MAX(x) OVER (ORDER BY x ASC NULLS LAST ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING) AS m FROM trailing ORDER BY m ASC NULLS LAST;
 ----
-NULL
 1
 3
 3
+NULL
 NULL
 
 query TT
 EXPLAIN SELECT MAX(x) OVER (ORDER BY x ASC NULLS LAST ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING) AS m FROM trailing ORDER BY m ASC NULLS LAST;
 ----
 physical_plan
-01)ProjectionExec: expr=[max(trailing.x) ORDER BY [trailing.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING@1 as m]
-02)--BoundedWindowAggExec: wdw=[max(trailing.x) ORDER BY [trailing.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING: Field { "max(trailing.x) ORDER BY [trailing.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING": nullable Int32 }, frame: ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING], mode=[Sorted]
-03)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[m@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[max(trailing.x) ORDER BY [trailing.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING@1 as m]
+03)----BoundedWindowAggExec: wdw=[max(trailing.x) ORDER BY [trailing.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING: Field { "max(trailing.x) ORDER BY [trailing.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING": nullable Int32 }, frame: ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING], mode=[Sorted]
+04)------SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-SUM-DESC: Unsigned SUM rises while the sliding frame fills and then falls
-# Correct result: 3, 5, 5, 7, 9
 query I
 SELECT SUM(x) OVER (ORDER BY x DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS s FROM unsigned_v ORDER BY s ASC NULLS LAST;
 ----
-5
-9
-7
-5
 3
+5
+5
+7
+9
 
 query TT
 EXPLAIN SELECT SUM(x) OVER (ORDER BY x DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS s FROM unsigned_v ORDER BY s ASC NULLS LAST;
 ----
 physical_plan
-01)ProjectionExec: expr=[sum(unsigned_v.x) ORDER BY [unsigned_v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@1 as s]
-02)--BoundedWindowAggExec: wdw=[sum(unsigned_v.x) ORDER BY [unsigned_v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "sum(unsigned_v.x) ORDER BY [unsigned_v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[x@0 DESC], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[s@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[sum(unsigned_v.x) ORDER BY [unsigned_v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@1 as s]
+03)----BoundedWindowAggExec: wdw=[sum(unsigned_v.x) ORDER BY [unsigned_v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "sum(unsigned_v.x) ORDER BY [unsigned_v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": nullable UInt64 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[x@0 DESC], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-COUNT-NULL: COUNT output has no NULLs but decreases when non-NULL inputs leave
-# Correct result: 1, 1, 2, 2, 3
 query I
 SELECT COUNT(x) OVER (ORDER BY x ASC NULLS LAST ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS c FROM n ORDER BY c ASC;
 ----
 1
+1
+2
 2
 3
-2
-1
 
 query TT
 EXPLAIN SELECT COUNT(x) OVER (ORDER BY x ASC NULLS LAST ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS c FROM n ORDER BY c ASC;
 ----
 physical_plan
-01)ProjectionExec: expr=[count(n.x) ORDER BY [n.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW@1 as c]
-02)--BoundedWindowAggExec: wdw=[count(n.x) ORDER BY [n.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW: Field { "count(n.x) ORDER BY [n.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN 2 PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[c@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[count(n.x) ORDER BY [n.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW@1 as c]
+03)----BoundedWindowAggExec: wdw=[count(n.x) ORDER BY [n.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW: Field { "count(n.x) ORDER BY [n.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN 2 PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-27267-MAX: Growing MAX declares the wrong NULL placement
-# Correct result: 3, 3, 5, NULL
 query I
 SELECT m FROM (SELECT ts, MAX(x) OVER (ORDER BY ts) AS m FROM (SELECT * FROM running ORDER BY ts)) ORDER BY m ASC NULLS LAST;
 ----
-NULL
 3
 3
 5
+NULL
 
 query TT
 EXPLAIN SELECT m FROM (SELECT ts, MAX(x) OVER (ORDER BY ts) AS m FROM (SELECT * FROM running ORDER BY ts)) ORDER BY m ASC NULLS LAST;
 ----
 physical_plan
-01)ProjectionExec: expr=[max(running.x) ORDER BY [running.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as m]
-02)--BoundedWindowAggExec: wdw=[max(running.x) ORDER BY [running.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(running.x) ORDER BY [running.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[m@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[max(running.x) ORDER BY [running.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as m]
+03)----BoundedWindowAggExec: wdw=[max(running.x) ORDER BY [running.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(running.x) ORDER BY [running.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-27267-SHRINK: A shrinking frame eventually contains only NULL inputs
-# Correct result: NULL, NULL, 3
 query I
 SELECT MAX(x) OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS m FROM shrinking ORDER BY m DESC NULLS FIRST;
 ----
+NULL
+NULL
 3
-NULL
-NULL
 
 query TT
 EXPLAIN SELECT MAX(x) OVER (ORDER BY ts ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS m FROM shrinking ORDER BY m DESC NULLS FIRST;
 ----
 physical_plan
-01)ProjectionExec: expr=[max(shrinking.x) ORDER BY [shrinking.ts ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING@2 as m]
-02)--WindowAggExec: wdw=[max(shrinking.x) ORDER BY [shrinking.ts ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING: Ok(Field { name: "max(shrinking.x) ORDER BY [shrinking.ts ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(NULL)), is_causal: false }]
-03)----SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[m@0 DESC], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[max(shrinking.x) ORDER BY [shrinking.ts ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING@2 as m]
+03)----WindowAggExec: wdw=[max(shrinking.x) ORDER BY [shrinking.ts ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING: Ok(Field { name: "max(shrinking.x) ORDER BY [shrinking.ts ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(NULL)), is_causal: false }]
+04)------SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-27267-FILTER: FILTER produces an empty growing aggregate over NOT NULL input
-# Correct result: 3, 3, 5, NULL
 query I
 SELECT MAX(x) FILTER (WHERE x > 2) OVER (ORDER BY ts) AS m FROM filtered ORDER BY m ASC NULLS LAST;
 ----
-NULL
 3
 3
 5
+NULL
 
 query TT
 EXPLAIN SELECT MAX(x) FILTER (WHERE x > 2) OVER (ORDER BY ts) AS m FROM filtered ORDER BY m ASC NULLS LAST;
 ----
 physical_plan
-01)ProjectionExec: expr=[max(filtered.x) FILTER (WHERE filtered.x > Int64(2)) ORDER BY [filtered.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as m]
-02)--BoundedWindowAggExec: wdw=[max(filtered.x) FILTER (WHERE filtered.x > Int64(2)) ORDER BY [filtered.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(filtered.x) FILTER (WHERE filtered.x > Int64(2)) ORDER BY [filtered.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[m@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[max(filtered.x) FILTER (WHERE filtered.x > Int64(2)) ORDER BY [filtered.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as m]
+03)----BoundedWindowAggExec: wdw=[max(filtered.x) FILTER (WHERE filtered.x > Int64(2)) ORDER BY [filtered.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(filtered.x) FILTER (WHERE filtered.x > Int64(2)) ORDER BY [filtered.ts ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-27267-PRECEDING: A growing frame excluding the current row starts empty
-# Correct result: 1, 3, 3, NULL
 query I
 SELECT MAX(x) OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS m FROM filtered ORDER BY m ASC NULLS LAST;
 ----
-NULL
 1
 3
 3
+NULL
 
 query TT
 EXPLAIN SELECT MAX(x) OVER (ORDER BY ts ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS m FROM filtered ORDER BY m ASC NULLS LAST;
 ----
 physical_plan
-01)ProjectionExec: expr=[max(filtered.x) ORDER BY [filtered.ts ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING@2 as m]
-02)--BoundedWindowAggExec: wdw=[max(filtered.x) ORDER BY [filtered.ts ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING: Field { "max(filtered.x) ORDER BY [filtered.ts ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING], mode=[Sorted]
-03)----SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[m@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[max(filtered.x) ORDER BY [filtered.ts ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING@2 as m]
+03)----BoundedWindowAggExec: wdw=[max(filtered.x) ORDER BY [filtered.ts ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING: Field { "max(filtered.x) ORDER BY [filtered.ts ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING], mode=[Sorted]
+04)------SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-27267-FOLLOW-NOT-NULL: A following-only shrinking frame ends empty over NOT NULL input
-# Correct result: NULL, 5, 5, 5
 query I
 SELECT MAX(x) OVER (ORDER BY ts ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING) AS m FROM filtered ORDER BY m DESC NULLS FIRST;
 ----
-5
-5
-5
 NULL
+5
+5
+5
 
 query TT
 EXPLAIN SELECT MAX(x) OVER (ORDER BY ts ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING) AS m FROM filtered ORDER BY m DESC NULLS FIRST;
 ----
 physical_plan
-01)ProjectionExec: expr=[max(filtered.x) ORDER BY [filtered.ts ASC NULLS LAST] ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING@2 as m]
-02)--WindowAggExec: wdw=[max(filtered.x) ORDER BY [filtered.ts ASC NULLS LAST] ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING: Ok(Field { name: "max(filtered.x) ORDER BY [filtered.ts ASC NULLS LAST] ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Following(UInt64(1)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-03)----SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[m@0 DESC], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[max(filtered.x) ORDER BY [filtered.ts ASC NULLS LAST] ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING@2 as m]
+03)----WindowAggExec: wdw=[max(filtered.x) ORDER BY [filtered.ts ASC NULLS LAST] ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING: Ok(Field { name: "max(filtered.x) ORDER BY [filtered.ts ASC NULLS LAST] ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Following(UInt64(1)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+04)------SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-27267-PARTITION: Shrinking-frame NULL placement is also wrong within partitions
-# Correct result: (1, NULL), (1, 3), (2, NULL), (2, 7)
 query II
 SELECT g, MAX(x) OVER (PARTITION BY g ORDER BY ts ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS m FROM shrinking_part ORDER BY g ASC NULLS LAST, m DESC NULLS FIRST;
 ----
-1 3
 1 NULL
-2 7
+1 3
 2 NULL
+2 7
 
 query TT
 EXPLAIN SELECT g, MAX(x) OVER (PARTITION BY g ORDER BY ts ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS m FROM shrinking_part ORDER BY g ASC NULLS LAST, m DESC NULLS FIRST;
 ----
 physical_plan
-01)ProjectionExec: expr=[g@0 as g, max(shrinking_part.x) PARTITION BY [shrinking_part.g] ORDER BY [shrinking_part.ts ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING@3 as m]
-02)--WindowAggExec: wdw=[max(shrinking_part.x) PARTITION BY [shrinking_part.g] ORDER BY [shrinking_part.ts ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING: Ok(Field { name: "max(shrinking_part.x) PARTITION BY [shrinking_part.g] ORDER BY [shrinking_part.ts ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(NULL)), is_causal: false }]
-03)----SortExec: expr=[g@0 ASC NULLS LAST, ts@1 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[g@0 ASC NULLS LAST, m@1 DESC], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[g@0 as g, max(shrinking_part.x) PARTITION BY [shrinking_part.g] ORDER BY [shrinking_part.ts ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING@3 as m]
+03)----WindowAggExec: wdw=[max(shrinking_part.x) PARTITION BY [shrinking_part.g] ORDER BY [shrinking_part.ts ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING: Ok(Field { name: "max(shrinking_part.x) PARTITION BY [shrinking_part.g] ORDER BY [shrinking_part.ts ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true }), frame: WindowFrame { units: Rows, start_bound: CurrentRow, end_bound: Following(UInt64(NULL)), is_causal: false }]
+04)------SortExec: expr=[g@0 ASC NULLS LAST, ts@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-PARTITION-COUNT: A globally sorted argument does not prevent COUNT resetting per partition
-# Correct result: 1, 1, 2, 2, 3, 3
 query I
 SELECT COUNT(x) OVER (PARTITION BY x ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS c FROM same_key ORDER BY c ASC;
 ----
 1
-2
-3
 1
 2
+2
+3
 3
 
 query TT
 EXPLAIN SELECT COUNT(x) OVER (PARTITION BY x ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS c FROM same_key ORDER BY c ASC;
 ----
 physical_plan
-01)ProjectionExec: expr=[count(same_key.x) PARTITION BY [same_key.x] ORDER BY [same_key.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW@1 as c]
-02)--BoundedWindowAggExec: wdw=[count(same_key.x) PARTITION BY [same_key.x] ORDER BY [same_key.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW: Field { "count(same_key.x) PARTITION BY [same_key.x] ORDER BY [same_key.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN 2 PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[c@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[count(same_key.x) PARTITION BY [same_key.x] ORDER BY [same_key.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW@1 as c]
+03)----BoundedWindowAggExec: wdw=[count(same_key.x) PARTITION BY [same_key.x] ORDER BY [same_key.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW: Field { "count(same_key.x) PARTITION BY [same_key.x] ORDER BY [same_key.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN 2 PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-PARTITION-COUNT-STAR: COUNT(1) passes the argument-ordering check for unrelated partition and order keys
-# Correct result: 1, 1, 2, 2
 query I
 SELECT COUNT(*) OVER (PARTITION BY g ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS c FROM count_part ORDER BY c ASC;
 ----
 1
-2
 1
+2
 2
 
 query TT
 EXPLAIN SELECT COUNT(*) OVER (PARTITION BY g ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS c FROM count_part ORDER BY c ASC;
 ----
 physical_plan
-01)ProjectionExec: expr=[count(Int64(1)) PARTITION BY [count_part.g] ORDER BY [count_part.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@2 as c]
-02)--BoundedWindowAggExec: wdw=[count(Int64(1)) PARTITION BY [count_part.g] ORDER BY [count_part.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "count(Int64(1)) PARTITION BY [count_part.g] ORDER BY [count_part.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[g@0 ASC NULLS LAST, ts@1 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[c@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[count(Int64(1)) PARTITION BY [count_part.g] ORDER BY [count_part.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@2 as c]
+03)----BoundedWindowAggExec: wdw=[count(Int64(1)) PARTITION BY [count_part.g] ORDER BY [count_part.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "count(Int64(1)) PARTITION BY [count_part.g] ORDER BY [count_part.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[g@0 ASC NULLS LAST, ts@1 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # BUG-PARTITION-LIMIT: The missing final sort changes which rows survive LIMIT
-# Correct result: 1, 1
 query I
 SELECT COUNT(*) OVER (PARTITION BY g ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS c FROM count_part ORDER BY c ASC LIMIT 2;
 ----
 1
-2
+1
 
 query TT
 EXPLAIN SELECT COUNT(*) OVER (PARTITION BY g ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS c FROM count_part ORDER BY c ASC LIMIT 2;
 ----
 physical_plan
-01)ProjectionExec: expr=[count(Int64(1)) PARTITION BY [count_part.g] ORDER BY [count_part.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@2 as c]
-02)--GlobalLimitExec: skip=0, fetch=2
+01)SortExec: TopK(fetch=2), expr=[c@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[count(Int64(1)) PARTITION BY [count_part.g] ORDER BY [count_part.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW@2 as c]
 03)----BoundedWindowAggExec: wdw=[count(Int64(1)) PARTITION BY [count_part.g] ORDER BY [count_part.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "count(Int64(1)) PARTITION BY [count_part.g] ORDER BY [count_part.ts ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
-04)------SortExec: TopK(fetch=2), expr=[g@0 ASC NULLS LAST, ts@1 ASC NULLS LAST], preserve_partitioning=[false]
+04)------SortExec: expr=[g@0 ASC NULLS LAST, ts@1 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
@@ -387,7 +385,7 @@ COPY (SELECT g, x FROM nullable_part ORDER BY g ASC NULLS LAST, x ASC) TO 'test_
 statement ok
 CREATE EXTERNAL TABLE nl(g INT, x INT NOT NULL) STORED AS CSV WITH ORDER (g ASC NULLS LAST, x ASC) LOCATION 'test_files/scratch/window_ordering/nl.csv' OPTIONS ('format.has_header' 'false');
 
-# OPT-PARTITION-NF-ROW-NUMBER: The supplied partition ordering is not among the two candidates
+# OPT-PARTITION-NF-ROW-NUMBER: ROW_NUMBER preserves ASC NULLS FIRST partition ordering
 query III
 SELECT g, x, ROW_NUMBER() OVER (PARTITION BY g ORDER BY x) AS r FROM nf ORDER BY g ASC NULLS FIRST, r ASC NULLS LAST;
 ----
@@ -403,11 +401,10 @@ EXPLAIN SELECT g, x, ROW_NUMBER() OVER (PARTITION BY g ORDER BY x) AS r FROM nf 
 ----
 physical_plan
 01)ProjectionExec: expr=[g@0 as g, x@1 as x, row_number() PARTITION BY [nf.g] ORDER BY [nf.x ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as r]
-02)--SortExec: expr=[g@0 ASC, row_number() PARTITION BY [nf.g] ORDER BY [nf.x ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 ASC NULLS LAST], preserve_partitioning=[false]
-03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [nf.g] ORDER BY [nf.x ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [nf.g] ORDER BY [nf.x ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/window_ordering/nf.csv]]}, projection=[g, x], output_ordering=[g@0 ASC, x@1 ASC NULLS LAST], file_type=csv, has_header=false
+02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [nf.g] ORDER BY [nf.x ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [nf.g] ORDER BY [nf.x ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/window_ordering/nf.csv]]}, projection=[g, x], output_ordering=[g@0 ASC, x@1 ASC NULLS LAST], file_type=csv, has_header=false
 
-# OPT-PARTITION-DL-SUM: A partition-constant aggregate loses its ordering for this NULL placement
+# OPT-PARTITION-DL-SUM: Partition-constant SUM preserves DESC NULLS LAST ordering
 query II
 SELECT g, SUM(x) OVER (PARTITION BY g) AS s FROM dl ORDER BY g DESC NULLS LAST, s ASC NULLS LAST;
 ----
@@ -422,10 +419,9 @@ query TT
 EXPLAIN SELECT g, SUM(x) OVER (PARTITION BY g) AS s FROM dl ORDER BY g DESC NULLS LAST, s ASC NULLS LAST;
 ----
 physical_plan
-01)SortExec: expr=[g@0 DESC NULLS LAST, s@1 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[g@0 as g, sum(dl.x) PARTITION BY [dl.g] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as s]
-03)----WindowAggExec: wdw=[sum(dl.x) PARTITION BY [dl.g] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(dl.x) PARTITION BY [dl.g] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/window_ordering/dl.csv]]}, projection=[g, x], output_ordering=[g@0 DESC NULLS LAST, x@1 ASC NULLS LAST], file_type=csv, has_header=false
+01)ProjectionExec: expr=[g@0 as g, sum(dl.x) PARTITION BY [dl.g] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as s]
+02)--WindowAggExec: wdw=[sum(dl.x) PARTITION BY [dl.g] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(dl.x) PARTITION BY [dl.g] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/window_ordering/dl.csv]]}, projection=[g, x], output_ordering=[g@0 DESC NULLS LAST, x@1 ASC NULLS LAST], file_type=csv, has_header=false
 
 # CONTROL-PARTITION-NL-ROW-NUMBER: The supported NULL placement already avoids the final sort
 query III
@@ -446,7 +442,7 @@ physical_plan
 02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [nl.g] ORDER BY [nl.x ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [nl.g] ORDER BY [nl.x ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/window_ordering/nl.csv]]}, projection=[g, x], output_ordering=[g@0 ASC NULLS LAST, x@1 ASC NULLS LAST], file_type=csv, has_header=false
 
-# OPT-SLIDING-PARTITION: Sliding MAX lacks the partition-prefixed result ordering
+# OPT-SLIDING-PARTITION: Sliding MAX supplies an ordering within each partition
 query II
 SELECT g, MAX(x) OVER (PARTITION BY g ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS m FROM part ORDER BY g ASC NULLS LAST, m ASC NULLS LAST;
 ----
@@ -461,11 +457,10 @@ query TT
 EXPLAIN SELECT g, MAX(x) OVER (PARTITION BY g ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS m FROM part ORDER BY g ASC NULLS LAST, m ASC NULLS LAST;
 ----
 physical_plan
-01)SortExec: expr=[g@0 ASC NULLS LAST, m@1 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[g@0 as g, max(part.x) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW@2 as m]
-03)----BoundedWindowAggExec: wdw=[max(part.x) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW: Field { "max(part.x) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN 2 PRECEDING AND CURRENT ROW], mode=[Sorted]
-04)------SortExec: expr=[g@0 ASC NULLS LAST, x@1 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[g@0 as g, max(part.x) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW@2 as m]
+02)--BoundedWindowAggExec: wdw=[max(part.x) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW: Field { "max(part.x) PARTITION BY [part.g] ORDER BY [part.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN 2 PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[g@0 ASC NULLS LAST, x@1 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # CONTROL-GROWING-PARTITION: Growing MAX already supplies the partition-prefixed result ordering
 query II
@@ -487,7 +482,7 @@ physical_plan
 03)----SortExec: expr=[g@0 ASC NULLS LAST, x@1 ASC NULLS LAST], preserve_partitioning=[false]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
-# OPT-MIN-ASC: Sliding MIN follows ascending input but declares the opposite direction
+# OPT-MIN-ASC: Sliding MIN follows ascending argument ordering
 query I
 SELECT MIN(x) OVER (ORDER BY x ASC ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS m FROM v ORDER BY m ASC NULLS LAST;
 ----
@@ -501,11 +496,10 @@ query TT
 EXPLAIN SELECT MIN(x) OVER (ORDER BY x ASC ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS m FROM v ORDER BY m ASC NULLS LAST;
 ----
 physical_plan
-01)SortExec: expr=[m@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[min(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW@1 as m]
-03)----BoundedWindowAggExec: wdw=[min(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW: Field { "min(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN 2 PRECEDING AND CURRENT ROW], mode=[Sorted]
-04)------SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[min(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW@1 as m]
+02)--BoundedWindowAggExec: wdw=[min(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW: Field { "min(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN 2 PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # OPT-NONCAUSAL-MAX-ASC: A frame containing the current row preserves the sorted extremum direction
 query I
@@ -521,11 +515,10 @@ query TT
 EXPLAIN SELECT MAX(x) OVER (ORDER BY x ASC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS m FROM v ORDER BY m ASC NULLS LAST;
 ----
 physical_plan
-01)SortExec: expr=[m@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[max(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@1 as m]
-03)----BoundedWindowAggExec: wdw=[max(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { "max(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
-04)------SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[max(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@1 as m]
+02)--BoundedWindowAggExec: wdw=[max(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { "max(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
+03)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # OPT-NONCAUSAL-MIN-DESC: A frame containing the current row preserves the sorted extremum direction
 query I
@@ -541,11 +534,10 @@ query TT
 EXPLAIN SELECT MIN(x) OVER (ORDER BY x DESC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS m FROM v ORDER BY m DESC NULLS LAST;
 ----
 physical_plan
-01)SortExec: expr=[m@0 DESC NULLS LAST], preserve_partitioning=[false]
-02)--ProjectionExec: expr=[min(v.x) ORDER BY [v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@1 as m]
-03)----BoundedWindowAggExec: wdw=[min(v.x) ORDER BY [v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { "min(v.x) ORDER BY [v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
-04)------SortExec: expr=[x@0 DESC], preserve_partitioning=[false]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+01)ProjectionExec: expr=[min(v.x) ORDER BY [v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@1 as m]
+02)--BoundedWindowAggExec: wdw=[min(v.x) ORDER BY [v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { "min(v.x) ORDER BY [v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING], mode=[Sorted]
+03)----SortExec: expr=[x@0 DESC], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # OPT-FULL-PARTITION-FIRST: A full-partition value function has one value within each partition
 query II
@@ -626,7 +618,8 @@ physical_plan
 03)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
-# CONTROL-COUNT-NOT-NULL: An unpartitioned fixed-width COUNT fills and then remains constant
+# PLAN-REGRESSION-COUNT-NOT-NULL: A monotonic fixed-width COUNT now retains the final sort.
+# Generic set monotonicity cannot prove this bounded-frame ordering (see COUNT DISTINCT below).
 query I
 SELECT COUNT(x) OVER (ORDER BY x ASC ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS c FROM v ORDER BY c ASC;
 ----
@@ -640,10 +633,11 @@ query TT
 EXPLAIN SELECT COUNT(x) OVER (ORDER BY x ASC ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS c FROM v ORDER BY c ASC;
 ----
 physical_plan
-01)ProjectionExec: expr=[count(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW@1 as c]
-02)--BoundedWindowAggExec: wdw=[count(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW: Field { "count(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN 2 PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[c@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[count(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW@1 as c]
+03)----BoundedWindowAggExec: wdw=[count(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW: Field { "count(v.x) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN 2 PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # CONTROL-SIGNED-SUM: Signed SUM already keeps the required final sort
 query I
@@ -664,6 +658,116 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[sum(v.x) ORDER BY [v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "sum(v.x) ORDER BY [v.x DESC NULLS FIRST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW": nullable Int64 }, frame: ROWS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
 04)------SortExec: expr=[x@0 DESC], preserve_partitioning=[false]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# REGRESSION-COUNT-DISTINCT: Ordered non-NULL input does not make a sliding distinct count monotonic
+query I
+SELECT COUNT(DISTINCT x) OVER (ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS c
+FROM (VALUES (1), (1), (2), (3), (3)) AS t(x)
+ORDER BY c ASC;
+----
+1
+1
+2
+2
+3
+
+query TT
+EXPLAIN SELECT COUNT(DISTINCT x) OVER (ORDER BY x ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS c
+FROM (VALUES (1), (1), (2), (3), (3)) AS t(x)
+ORDER BY c ASC;
+----
+physical_plan
+01)SortExec: expr=[c@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[count(DISTINCT t.x) ORDER BY [t.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW@1 as c]
+03)----BoundedWindowAggExec: wdw=[count(DISTINCT t.x) ORDER BY [t.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW: Field { "count(DISTINCT t.x) ORDER BY [t.x ASC NULLS LAST] ROWS BETWEEN 2 PRECEDING AND CURRENT ROW": Int64 }, frame: ROWS BETWEEN 2 PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------ProjectionExec: expr=[column1@0 as x]
+05)--------SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# REGRESSION-FILTER: A sliding FILTER can produce NULLs between non-NULL results
+query I
+SELECT MAX(x) FILTER (WHERE x % 2 = 0) OVER (
+    ORDER BY x ROWS BETWEEN CURRENT ROW AND CURRENT ROW
+) AS m FROM v ORDER BY m ASC NULLS LAST;
+----
+2
+4
+NULL
+NULL
+NULL
+
+query TT
+EXPLAIN SELECT MAX(x) FILTER (WHERE x % 2 = 0) OVER (
+    ORDER BY x ROWS BETWEEN CURRENT ROW AND CURRENT ROW
+) AS m FROM v ORDER BY m ASC NULLS LAST;
+----
+physical_plan
+01)SortExec: expr=[m@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[max(v.x) FILTER (WHERE v.x % Int64(2) = Int64(0)) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND CURRENT ROW@1 as m]
+03)----BoundedWindowAggExec: wdw=[max(v.x) FILTER (WHERE v.x % Int64(2) = Int64(0)) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND CURRENT ROW: Field { "max(v.x) FILTER (WHERE v.x % Int64(2) = Int64(0)) ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN CURRENT ROW AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# CONTROL-FULL-PARTITION-ROW-NUMBER: A whole-partition frame does not make ROW_NUMBER constant
+query I
+SELECT ROW_NUMBER() OVER (
+    ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+) AS r FROM v ORDER BY r DESC;
+----
+5
+4
+3
+2
+1
+
+query TT
+EXPLAIN SELECT ROW_NUMBER() OVER (
+    ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+) AS r FROM v ORDER BY r DESC;
+----
+physical_plan
+01)SortExec: expr=[r@0 DESC], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[row_number() ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as r]
+03)----BoundedWindowAggExec: wdw=[row_number() ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ORDER BY [v.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+04)------SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# REGRESSION-GROWING-EXTREMUM-NULLS: Opposite value directions do not make a leading NULL constant
+query I
+SELECT MAX(x) OVER (
+    ORDER BY x DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+) AS m FROM nullable ORDER BY m ASC NULLS LAST;
+----
+5
+5
+5
+NULL
+
+query TT
+EXPLAIN SELECT MAX(x) OVER (
+    ORDER BY x DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+) AS m FROM nullable ORDER BY m ASC NULLS LAST;
+----
+physical_plan
+01)SortExec: expr=[m@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[max(nullable.x) ORDER BY [nullable.x DESC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as m]
+03)----BoundedWindowAggExec: wdw=[max(nullable.x) ORDER BY [nullable.x DESC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(nullable.x) ORDER BY [nullable.x DESC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[x@0 DESC], preserve_partitioning=[false]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE unsorted_partition(a0 INT, a INT, b INT, c INT, d INT)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+# REGRESSION-UNSORTED-PARTITION: Counts can decrease as the stream switches between
+# values of d, so ordering by the count requires a sort that cannot finish on unbounded input.
+query error Cannot execute pipeline breaking queries, operator: SortExec: TopK
+SELECT COUNT(*) OVER (PARTITION BY d ORDER BY a ROWS UNBOUNDED PRECEDING) AS c
+FROM unsorted_partition
+ORDER BY c LIMIT 4;
 
 statement ok
 SET datafusion.execution.target_partitions = 4;
