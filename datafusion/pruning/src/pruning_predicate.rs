@@ -1439,6 +1439,18 @@ fn build_is_null_column_expr(
     required_columns: &mut RequiredColumns,
     with_not: bool,
 ) -> Option<Arc<dyn PhysicalExpr>> {
+    // A cast that preserves nulls and cannot introduce any leaves the null count
+    // unchanged. The schema adapter adds one when a nullable table column sits
+    // over a REQUIRED file column, so look through it to the column beneath.
+    if let Some(cast) = expr.downcast_ref::<phys_expr::CastExpr>() {
+        let from = cast.expr().data_type(schema).ok()?;
+        return cast
+            .is_bigger_cast(&from)
+            .then(|| {
+                build_is_null_column_expr(cast.expr(), schema, required_columns, with_not)
+            })
+            .flatten();
+    }
     if let Some(col) = expr.downcast_ref::<phys_expr::Column>() {
         let field = schema.field_with_name(col.name()).ok()?;
 
@@ -6038,6 +6050,113 @@ mod tests {
             &statistics,
             expected_ret,
         );
+    }
+
+    /// `v` cast to a nullable field of its own type, which is what the schema
+    /// adapter builds for a nullable table column over a REQUIRED file column.
+    fn nullable_cast_of_required_column() -> (SchemaRef, Arc<dyn PhysicalExpr>) {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("v", 0));
+        let cast: Arc<dyn PhysicalExpr> =
+            Arc::new(phys_expr::CastExpr::new_with_target_field(
+                column,
+                Arc::new(Field::new("v", DataType::Int64, true)),
+                None,
+            ));
+        (schema, cast)
+    }
+
+    #[test]
+    fn prune_is_null_through_nullability_only_cast() -> Result<()> {
+        let (schema, cast) = nullable_cast_of_required_column();
+        let statistics = TestStatistics::new().with(
+            "v",
+            ContainerStats::new()
+                .with_null_counts(vec![Some(0), Some(1), None])
+                .with_row_counts(vec![Some(10), Some(10), Some(10)]),
+        );
+
+        // IS NULL can only match a container that may hold a null
+        let is_null: Arc<dyn PhysicalExpr> =
+            Arc::new(phys_expr::IsNullExpr::new(Arc::clone(&cast)));
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(is_null)?;
+        assert_eq!(predicate.prune(&statistics)?, vec![false, true, true]);
+
+        // IS NOT NULL can match unless every row of the container is null
+        let statistics = TestStatistics::new().with(
+            "v",
+            ContainerStats::new()
+                .with_null_counts(vec![Some(10), Some(0), None])
+                .with_row_counts(vec![Some(10), Some(10), Some(10)]),
+        );
+        let is_not_null: Arc<dyn PhysicalExpr> =
+            Arc::new(phys_expr::IsNotNullExpr::new(cast));
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(is_not_null)?;
+        assert_eq!(predicate.prune(&statistics)?, vec![false, true, true]);
+        Ok(())
+    }
+
+    /// The shape of a TopK dynamic filter, `v IS NULL OR v < threshold`, over a
+    /// nullable table column whose file column is REQUIRED.
+    #[test]
+    fn prune_topk_filter_through_nullability_only_cast() -> Result<()> {
+        let (schema, cast) = nullable_cast_of_required_column();
+        let is_null: Arc<dyn PhysicalExpr> =
+            Arc::new(phys_expr::IsNullExpr::new(Arc::clone(&cast)));
+        let below_threshold: Arc<dyn PhysicalExpr> =
+            Arc::new(phys_expr::BinaryExpr::new(
+                cast,
+                Operator::Lt,
+                Arc::new(phys_expr::Literal::new(ScalarValue::Int64(Some(100)))),
+            ));
+        let topk: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::BinaryExpr::new(
+            is_null,
+            Operator::Or,
+            below_threshold,
+        ));
+
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(topk)?;
+
+        // Containers hold [500, 600], [10, 20] and [50, 150], none with nulls.
+        // Only the first lies entirely above the threshold.
+        let statistics = TestStatistics::new().with(
+            "v",
+            ContainerStats::new_i64(
+                vec![Some(500), Some(10), Some(50)],
+                vec![Some(600), Some(20), Some(150)],
+            )
+            .with_null_counts(vec![Some(0), Some(0), Some(0)])
+            .with_row_counts(vec![Some(10), Some(10), Some(10)]),
+        );
+        assert_eq!(predicate.prune(&statistics)?, vec![false, true, true]);
+        Ok(())
+    }
+
+    #[test]
+    fn prune_is_null_through_null_introducing_cast_is_not_pruned() -> Result<()> {
+        // A string that does not parse becomes NULL, so a container with no
+        // null strings can still yield nulls after the cast.
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, false)]));
+        let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("v", 0));
+        let cast: Arc<dyn PhysicalExpr> =
+            Arc::new(phys_expr::CastExpr::new(column, DataType::Int64, None));
+        let is_null: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::IsNullExpr::new(cast));
+
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(is_null)?;
+        let statistics = TestStatistics::new().with(
+            "v",
+            ContainerStats::new().with_null_counts(vec![Some(0), Some(0)]),
+        );
+        assert_eq!(predicate.prune(&statistics)?, vec![true, true]);
+        Ok(())
     }
 
     #[test]
