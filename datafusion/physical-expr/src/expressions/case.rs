@@ -2258,7 +2258,15 @@ mod tests {
         }
 
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_float64_array(&result)?;
         assert_eq!(result.len(), batch.num_rows());
+        // Rows 0 and 3 take `random()`, rows 1 and 2 take the `ELSE`
+        for row in [0, 3] {
+            assert!(result.is_valid(row));
+            assert!((0.0..1.0).contains(&result.value(row)));
+        }
+        assert_eq!(result.value(1), -3.0);
+        assert_eq!(result.value(2), 777.0);
         Ok(())
     }
 
@@ -2751,9 +2759,18 @@ mod tests {
         }
 
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-        let b = as_int32_array(result.as_struct().column(1))?;
-        assert_eq!(b.value(0), 10);
-        assert_eq!(result.logical_nulls().unwrap().null_count(), 3);
+        let expected = StructArray::try_new(
+            batch.column(1).as_struct().fields().clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), None, None, None])),
+                Arc::new(Int32Array::from(vec![Some(10), None, None, None])),
+                Arc::new(StringArray::from(vec![Some("p"), None, None, None])),
+            ],
+            Some(arrow::buffer::NullBuffer::from(vec![
+                true, false, false, false,
+            ])),
+        )?;
+        assert_eq!(result.as_struct(), &expected);
         Ok(())
     }
 
