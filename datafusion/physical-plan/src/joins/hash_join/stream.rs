@@ -537,7 +537,7 @@ pub(super) fn lookup_join_hashmap(
 ///
 /// The input array must be sorted (e.g., `[0, 1, 1, 2, 2, ...]`) and contain no null values.
 #[inline]
-fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
+pub(super) fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
     if indices.is_empty() {
         return 0;
     }

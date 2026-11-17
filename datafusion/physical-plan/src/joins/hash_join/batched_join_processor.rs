@@ -22,7 +22,7 @@ use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 
 use super::build::RegularJoinLeftData;
-use super::stream::lookup_join_hashmap;
+use super::stream::{count_distinct_sorted_indices, lookup_join_hashmap};
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::hash_utils::create_hashes;
 use crate::joins::Map;
@@ -314,18 +314,18 @@ impl BatchedJoinProcessor {
         Ok(())
     }
 
-    /// Join another portion of the current probe batch against the build batch.
+    /// Return a materialized joined batch in the output schema for one probe chunk.
     ///
-    /// 1. Collect up to `batch_size` key-equal row-index pairs
-    ///    in `build_indices` and `probe_indices`.
-    /// 2. Apply the join filter, record successful matches,
-    ///    and add probe rows now known to be unmatched for right/full joins.
-    /// 3. Materialize those pairs into a batch. [`Self::next_output_batch`]
-    ///    coalesces small batches of surviving pairs and unmatched rows.
+    /// For an INNER JOIN on `t1.c1 = t2.c1 AND t1.c2 > t2.c2`, with
+    /// `batch_size = 8192`:
     ///
-    /// One call may cover part of one probe row's matches or several probe rows.
-    /// An empty batch means this chunk produced no output; `None` means the
-    /// current probe batch is drained.
+    /// 1. Use the index to look up at most 8192 key-equal row pairs (`t1.c1 = t2.c1`).
+    /// 2. Evaluate the residual filter `t1.c2 > t2.c2`; suppose only 100 pairs pass.
+    /// 3. Materialize those 100 pairs in the final output schema and return the batch.
+    ///
+    /// For non-inner joins, matched rows will be tracked for final output.
+    ///
+    /// For small output batches, the caller will coalesce them for final output.
     fn probe_chunk(&mut self) -> Result<Option<RecordBatch>> {
         let Some(probe) = &mut self.probe else {
             return Ok(None);
@@ -386,14 +386,16 @@ impl BatchedJoinProcessor {
             }
         };
 
-        // Equality pairs are ordered by probe row. A row continuing from the
-        // previous chunk contributes fanout, but not another probe hit.
-        let mut matched_probe_rows = 0;
-        for &row in probe_indices.values().iter() {
-            if probe.last_probe_row_with_key_match != Some(row) {
-                matched_probe_rows += 1;
-                probe.last_probe_row_with_key_match = Some(row);
+        // Update metrics `probe_hit_rate` and `avg_fanout``
+        let mut matched_probe_rows = count_distinct_sorted_indices(&probe_indices);
+        if let (Some(&first), Some(&last)) = (
+            probe_indices.values().first(),
+            probe_indices.values().last(),
+        ) {
+            if Some(first) == probe.last_probe_row_with_key_match {
+                matched_probe_rows -= 1;
             }
+            probe.last_probe_row_with_key_match = Some(last);
         }
         self.metrics.probe_hit_rate.add_part(matched_probe_rows);
         self.metrics.avg_fanout.add_part(build_indices.len());
