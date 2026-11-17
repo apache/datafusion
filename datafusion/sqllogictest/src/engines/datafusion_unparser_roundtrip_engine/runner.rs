@@ -151,6 +151,7 @@ async fn run_query_unparser_round_trip(
     let round_tripped_plan = match &logical_plan {
         // SQL cannot express these plans as a query, so they run unchanged.
         LogicalPlan::Ddl(_)
+        | LogicalPlan::Analyze(_)
         | LogicalPlan::Explain(_)
         | LogicalPlan::Dml(_)
         | LogicalPlan::Copy(_)

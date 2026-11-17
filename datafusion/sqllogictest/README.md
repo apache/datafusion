@@ -495,7 +495,7 @@ logical plan with `plan_to_sql` and the default dialect, plans the unparsed SQL 
 same `SessionContext`, and executes the result (SQL statement → DF logical → SQL statement →
 DF logical → DF physical → execute).
 
-The runner passes `Ddl`, `Dml`, `Copy`, `Explain`, `Show` and `Statement` plans through unchanged,
+The runner passes `Ddl`, `Dml`, `Copy`, `Explain`, `Analyze`, `Show` and `Statement` plans through unchanged,
 because SQL cannot express them as a query.
 
 | Failure                 | Meaning                                        |
