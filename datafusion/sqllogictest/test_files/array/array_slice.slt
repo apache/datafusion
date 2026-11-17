@@ -335,6 +335,27 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2,
 ----
 [2] [e]
 
+# array_slice scalar function #26 (with a stride that overflows the offset type)
+query ??
+select array_slice(make_array(1, 2, 3, 4, 5), 2, 2, 2147483647), list_slice(make_array('h', 'e', 'l', 'l', 'o'), 2, 4, 2147483647);
+----
+[2] [e]
+
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 2, 2, 9223372036854775807), make_array(1, 2, 3, 4, 5)[2:2:2147483647];
+----
+[2] [2]
+
+query ??
+select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'ListView(Int64)'), 2, 2, 2147483647), array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeListView(Int64)'), 2, 2, 9223372036854775807);
+----
+[2] [2]
+
+query ?
+select array_slice(a, 2, 2, s) from (values (make_array(1, 2, 3, 4, 5), 2147483647)) t(a, s);
+----
+[2]
+
 # array_slice with columns
 query ?
 select array_slice(column1, column2, column3) from slices;
