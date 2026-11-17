@@ -756,6 +756,20 @@ physical_plan
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
+CREATE UNBOUNDED EXTERNAL TABLE unsorted_partition(a0 INT, a INT, b INT, c INT, d INT)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+# REGRESSION-UNSORTED-PARTITION: Counts can decrease as the stream switches between
+# values of d, so ordering by the count requires a sort that cannot finish on unbounded input.
+query error Cannot execute pipeline breaking queries, operator: SortExec: TopK
+SELECT COUNT(*) OVER (PARTITION BY d ORDER BY a ROWS UNBOUNDED PRECEDING) AS c
+FROM unsorted_partition
+ORDER BY c LIMIT 4;
+
+statement ok
 SET datafusion.execution.target_partitions = 4;
 
 statement ok
