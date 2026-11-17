@@ -259,7 +259,8 @@ pub(super) trait ToHashableKey: ArrowNativeTypeOp {
     /// the result of this value can be used as the key in hash maps/sets
     fn into_hashable_key(self) -> Self::HashableKey;
 
-    /// Compares two keys, in a way that vectorizes when comparing many values with a key
+    /// Compares two keys, in a way that compiles to efficient code when comparing many
+    /// values with a key
     #[inline]
     fn keys_eq(a: Self::HashableKey, b: Self::HashableKey) -> bool {
         a == b
@@ -302,8 +303,10 @@ impl ToHashableKey for i128 {
         self
     }
 
-    /// `a == b` is not vectorized, as `i128` is not a vector lane type, but this
-    /// vectorizes as operations on the 64-bit halves.
+    /// On x86-64-v3 and above, `a == b` is compiled to a per-value `sete`,
+    /// which prevents the compiler from sharing one vector compare and select
+    /// between several values. Comparing the 64-bit halves with XOR and OR
+    /// allows it to, which is measurably faster for a few literals.
     #[inline]
     fn keys_eq(a: i128, b: i128) -> bool {
         let x = (a ^ b) as u128;
