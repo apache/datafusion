@@ -44,7 +44,7 @@ use std::fmt::{Debug, Formatter};
 
 pub(super) type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug)]
 enum EvalMethod {
     /// CASE WHEN condition THEN result
     ///      [WHEN ...]
@@ -155,20 +155,6 @@ impl LazyProjectedBody {
         Ok(self.projected.get_or_init(|| projected))
     }
 }
-
-/// The projection is derived from the [`CaseBody`], which is already hashed.
-impl Hash for LazyProjectedBody {
-    fn hash<H: Hasher>(&self, _state: &mut H) {}
-}
-
-/// The projection is derived from the [`CaseBody`], which is already compared.
-impl PartialEq for LazyProjectedBody {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-impl Eq for LazyProjectedBody {}
 
 /// The body of a CASE expression which consists of an optional base expression, the "when/then"
 /// branches and an optional "else" branch.
@@ -443,7 +429,7 @@ fn crosses_map(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
 ///
 /// When `supports_projection` is false, evaluation uses the original body and full batch because
 /// the expression may depend on input columns that are not visible in its children.
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug)]
 struct ProjectedCaseBody {
     projection: Vec<usize>,
     /// Expressions over the input batch whose results are appended after the projected columns
@@ -1830,6 +1816,8 @@ mod tests {
     use datafusion_expr::type_coercion::binary::type_union_coercion;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use half::f16;
+
+    use std::assert_matches;
 
     #[derive(Debug, Hash, PartialEq, Eq)]
     struct CustomColumn {
@@ -3391,7 +3379,7 @@ mod tests {
             make_lit_i32(250),
         ));
         let expr = CaseExpr::try_new(None, vec![(predicate, make_col("c2", 1))], None)?;
-        assert_eq!(expr.eval_method, EvalMethod::InfallibleExprOrNull);
+        assert_matches!(expr.eval_method, EvalMethod::InfallibleExprOrNull);
         match expr.evaluate(&batch)? {
             ColumnarValue::Array(array) => {
                 assert_eq!(1000, array.len());
