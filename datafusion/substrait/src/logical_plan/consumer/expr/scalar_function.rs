@@ -2,7 +2,9 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::literal::{is_struct_literal, name_struct_literals_like_siblings};
+use super::literal::{
+    contains_struct, has_literal_value, name_struct_literals_like_first_struct_expr,
+};
 use crate::logical_plan::consumer::SubstraitConsumerContext;
 use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
 use datafusion::common::Result;
@@ -82,12 +84,8 @@ pub async fn from_scalar_function(
             Ok(expr.resolve_lambda_variables(input_schema)?.data)
         }
     } else if let Ok(func) = udf_func {
-        build_naming_struct_literals_if_needed(args, input_schema, |args| {
-            Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
-                func.to_owned(),
-                args,
-            )))
-        })
+        let call = expr::ScalarFunction::new_udf(func.to_owned(), args);
+        Ok(name_struct_literal_args_if_needed(call, input_schema))
     } else if let Some(op) = name_to_op(fn_name) {
         if args.len() < 2 {
             return not_impl_err!(
@@ -96,20 +94,20 @@ pub async fn from_scalar_function(
             );
         }
         // an operator always combines its operands, so they need the same field names
-        name_struct_literals_like_siblings(&mut args, input_schema);
+        name_struct_literals_like_first_struct_expr(&mut args, input_schema);
         // In those cases we build a balanced tree of BinaryExprs
         arg_list_to_binary_op_tree(op, args)
     } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
         // these combine their arguments too, as in `s BETWEEN low AND high`
-        name_struct_literals_like_siblings(&mut args, input_schema);
+        name_struct_literals_like_first_struct_expr(&mut args, input_schema);
         builder.build(consumer, f, args)
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
     }
 }
 
-/// Builds a function call with `build`, renaming its struct literals after a same-shaped
-/// argument only if the call doesn't type-check without it.
+/// Renames the struct literals among the arguments of `call` after a same-shaped
+/// argument, only if `call` doesn't type-check without it.
 ///
 /// `coalesce(s, [])` needs one type for `s: List<Struct{a, b}>` and the literal's
 /// `List<Struct{c0, c1}>`, so the literal takes `s`'s names. `named_struct('left', s,
@@ -117,28 +115,38 @@ pub async fn from_scalar_function(
 /// `get_field(..., 'c0')`, so the literal is left alone. Function signatures can't tell
 /// these apart, hence the check; operators always combine their operands and always
 /// rename.
-fn build_naming_struct_literals_if_needed(
-    args: Vec<Expr>,
+fn name_struct_literal_args_if_needed(
+    mut call: expr::ScalarFunction,
     input_schema: &DFSchema,
-    build: impl Fn(Vec<Expr>) -> Result<Expr>,
-) -> Result<Expr> {
-    if !args.iter().any(is_struct_literal) {
-        return build(args);
+) -> Expr {
+    if !has_struct_literal_arg(&call.args, input_schema) {
+        return Expr::ScalarFunction(call);
     }
     // works as is (`get_type` runs the function's own type coercion): keep the names
-    let expr = build(args.clone())?;
-    if expr.get_type(input_schema).is_ok() {
-        return Ok(expr);
+    let original = Expr::ScalarFunction(call.clone());
+    if original.get_type(input_schema).is_ok() {
+        return original;
     }
     // doesn't type-check: retry with the literals renamed
-    let mut renamed_args = args;
-    name_struct_literals_like_siblings(&mut renamed_args, input_schema);
-    let renamed = build(renamed_args)?;
+    name_struct_literals_like_first_struct_expr(&mut call.args, input_schema);
+    let renamed = Expr::ScalarFunction(call);
     // if renaming doesn't help either, keep the original so the error stays the same
-    Ok(if renamed.get_type(input_schema).is_ok() {
+    if renamed.get_type(input_schema).is_ok() {
         renamed
     } else {
-        expr
+        original
+    }
+}
+
+/// Returns true if one of `args` is a struct literal (its value comes only from
+/// literals, see [`has_literal_value`], and its type contains a struct). A call without
+/// one has nothing to rename, so it skips the type checks.
+fn has_struct_literal_arg(args: &[Expr], input_schema: &DFSchema) -> bool {
+    args.iter().any(|arg| {
+        has_literal_value(arg)
+            && arg
+                .get_type(input_schema)
+                .is_ok_and(|data_type| contains_struct(&data_type))
     })
 }
 

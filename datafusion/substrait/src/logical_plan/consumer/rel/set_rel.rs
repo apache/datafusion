@@ -3,7 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::expr::{
-    contains_struct, is_literal, name_struct_literal_like,
+    contains_struct, has_literal_value, rename_literal_fields,
 };
 use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::arrow::datatypes::{DataType, Field};
@@ -107,7 +107,7 @@ fn name_projected_struct_literals(
                     // keep the column's name, which the plans above may refer to: an
                     // unaliased literal is named after its value, field names included
                     let name = expr.schema_name().to_string();
-                    name_struct_literal_like(&mut expr, named_type);
+                    rename_literal_fields(&mut expr, named_type);
                     expr.alias_if_changed(name)
                 })
                 .collect::<datafusion::common::Result<_>>()?;
@@ -176,7 +176,7 @@ fn removes_duplicates(aggregate: &Aggregate) -> bool {
 fn projects_literal(input: &LogicalPlan, column: usize) -> bool {
     match input {
         LogicalPlan::Projection(projection) => {
-            projection.expr.get(column).is_some_and(is_literal)
+            projection.expr.get(column).is_some_and(has_literal_value)
         }
         LogicalPlan::Union(union) => union
             .inputs

@@ -594,7 +594,7 @@ pub(crate) fn from_substrait_literal(
 ///
 /// A literal whose shape differs from the column's (another number of fields, other
 /// nesting) is left as it is, and so is everything if no expression has a struct type.
-pub(crate) fn name_struct_literals_like_siblings<'a>(
+pub(crate) fn name_struct_literals_like_first_struct_expr<'a>(
     exprs: impl IntoIterator<Item = &'a mut Expr>,
     input_schema: &DFSchema,
 ) {
@@ -602,7 +602,7 @@ pub(crate) fn name_struct_literals_like_siblings<'a>(
     // the names come from the first expression that isn't a literal and contains a struct
     let Some(named_type) = exprs
         .iter()
-        .filter(|e| !is_literal(e) && !matches!(***e, Expr::Lambda(_)))
+        .filter(|e| !has_literal_value(e) && !matches!(***e, Expr::Lambda(_)))
         .filter_map(|e| e.get_type(input_schema).ok())
         .find(contains_struct)
     else {
@@ -610,16 +610,16 @@ pub(crate) fn name_struct_literals_like_siblings<'a>(
     };
 
     for expr in exprs.iter_mut() {
-        name_struct_literal_like(expr, &named_type);
+        rename_literal_fields(expr, &named_type);
     }
 }
 
 /// If `expr` is a struct-typed literal, possibly aliased, gives it the field names of
 /// `named_type` when the two have the same shape. A `CASE` whose results are all
 /// literals counts as a literal: each result is renamed. Anything else is left unchanged.
-pub(crate) fn name_struct_literal_like(expr: &mut Expr, named_type: &DataType) {
+pub(crate) fn rename_literal_fields(expr: &mut Expr, named_type: &DataType) {
     match expr {
-        Expr::Alias(alias) => name_struct_literal_like(&mut alias.expr, named_type),
+        Expr::Alias(alias) => rename_literal_fields(&mut alias.expr, named_type),
         Expr::Literal(value, _) => {
             let value_type = value.data_type();
             if !contains_struct(&value_type) {
@@ -633,39 +633,25 @@ pub(crate) fn name_struct_literal_like(expr: &mut Expr, named_type: &DataType) {
                 *value = renamed;
             }
         }
-        Expr::Case(case) if case_results(case).all(is_literal) => {
+        Expr::Case(case) if case_results(case).all(has_literal_value) => {
             for (_, then) in case.when_then_expr.iter_mut() {
-                name_struct_literal_like(then, named_type);
+                rename_literal_fields(then, named_type);
             }
             if let Some(else_expr) = case.else_expr.as_mut() {
-                name_struct_literal_like(else_expr, named_type);
+                rename_literal_fields(else_expr, named_type);
             }
         }
         _ => {}
     }
 }
 
-/// Returns true if `expr` is a literal, possibly aliased, or a `CASE` whose results are
-/// all literals.
-pub(crate) fn is_literal(expr: &Expr) -> bool {
+/// Returns true if the value of `expr` comes only from literals: `expr` is a literal, an
+/// alias of one, or a `CASE` whose results (not its conditions) all are.
+pub(crate) fn has_literal_value(expr: &Expr) -> bool {
     match expr {
-        Expr::Alias(alias) => is_literal(&alias.expr),
+        Expr::Alias(alias) => has_literal_value(&alias.expr),
         Expr::Literal(..) => true,
-        Expr::Case(case) => case_results(case).all(is_literal),
-        _ => false,
-    }
-}
-
-/// Returns true if `expr` is a literal whose type contains a struct, possibly aliased,
-/// or a `CASE` whose results are all literals and include one.
-pub(crate) fn is_struct_literal(expr: &Expr) -> bool {
-    match expr {
-        Expr::Alias(alias) => is_struct_literal(&alias.expr),
-        Expr::Literal(value, _) => contains_struct(&value.data_type()),
-        Expr::Case(case) => {
-            case_results(case).all(is_literal)
-                && case_results(case).any(is_struct_literal)
-        }
+        Expr::Case(case) => case_results(case).all(has_literal_value),
         _ => false,
     }
 }

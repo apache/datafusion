@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::literal::name_struct_literals_like_siblings;
+use super::literal::name_struct_literals_like_first_struct_expr;
 use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::DFSchema;
 use datafusion::logical_expr::{Case, Expr};
@@ -70,7 +70,7 @@ pub async fn from_if_then(
         .iter_mut()
         .map(|(_, then)| then.as_mut())
         .chain(else_expr.as_deref_mut());
-    name_struct_literals_like_siblings(results, input_schema);
+    name_struct_literals_like_first_struct_expr(results, input_schema);
     Ok(Expr::Case(Case {
         expr,
         when_then_expr,

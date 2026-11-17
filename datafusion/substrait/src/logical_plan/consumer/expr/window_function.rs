@@ -5,7 +5,7 @@
 use crate::logical_plan::consumer::SubstraitConsumerContext;
 
 use super::aggregate_function::validate_aggregation_phase;
-use super::literal::name_struct_literals_like_siblings;
+use super::literal::name_struct_literals_like_first_struct_expr;
 use crate::logical_plan::consumer::{
     SubstraitConsumer, from_substrait_func_args, from_substrait_rex_vec,
     from_substrait_sorts, substrait_fun_name,
@@ -106,7 +106,7 @@ pub async fn from_window_function(
 
     // a struct literal argument has generated field names; it takes those of a
     // same-shaped argument, whose type it must share (e.g. a default value)
-    name_struct_literals_like_siblings(&mut args, input_schema);
+    name_struct_literals_like_first_struct_expr(&mut args, input_schema);
 
     Ok(Expr::from(expr::WindowFunction {
         fun,
