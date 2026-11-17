@@ -1824,14 +1824,7 @@ impl Unparser<'_> {
             }
             // BigQuery, the only dialect with this style, rejects an array of arrays.
             (ArrayTypeStyle::AngleBracket, None)
-                if !matches!(
-                    inner.data_type(),
-                    DataType::List(_)
-                        | DataType::LargeList(_)
-                        | DataType::FixedSizeList(_, _)
-                        | DataType::ListView(_)
-                        | DataType::LargeListView(_)
-                ) =>
+                if !matches!(*elem, ast::DataType::Array(_)) =>
             {
                 ast::ArrayElemTypeDef::AngleBracket(elem)
             }
@@ -3753,6 +3746,10 @@ mod tests {
         let large_list = DataType::LargeList(Arc::clone(&utf8));
         let fixed_list = DataType::FixedSizeList(Arc::clone(&utf8), 3);
         let nested = DataType::List(Arc::new(Field::new_list_field(list.clone(), true)));
+        let dict_nested = DataType::List(Arc::new(Field::new_list_field(
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(list.clone())),
+            true,
+        )));
 
         let square: &dyn Dialect = &DefaultDialect {};
         let angle: &dyn Dialect = &BigQueryDialect {};
@@ -3772,6 +3769,7 @@ mod tests {
             (&duckdb, &list, Some("VARCHAR[]")),
             (angle, &list, Some("ARRAY<STRING>")),
             (angle, &nested, None),
+            (angle, &dict_nested, None),
             (angle, &fixed_list, None),
             (&custom_angle, &list, Some("ARRAY<VARCHAR>")),
             (none, &list, None),
