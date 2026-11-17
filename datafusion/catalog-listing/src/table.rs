@@ -302,6 +302,11 @@ impl ListingTable {
         self
     }
 
+    /// Returns the [`FileStatisticsCache`] used to cache parquet file statistics, if set.
+    pub fn cache(&self) -> Option<&Arc<FileStatisticsCache>> {
+        self.collected_statistics.as_ref()
+    }
+
     /// Specify the SQL definition for this table, if any
     pub fn with_definition(mut self, definition: Option<String>) -> Self {
         self.definition = definition;
@@ -321,6 +326,11 @@ impl ListingTable {
     /// Get the schema source
     pub fn schema_source(&self) -> SchemaSource {
         self.schema_source
+    }
+
+    /// Returns the physical schema of the files, excluding partition columns.
+    pub fn file_schema(&self) -> &SchemaRef {
+        &self.file_schema
     }
 
     /// Deprecated: Set the [`SchemaAdapterFactory`] for this [`ListingTable`]

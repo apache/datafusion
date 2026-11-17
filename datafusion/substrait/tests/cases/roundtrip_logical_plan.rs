@@ -971,7 +971,7 @@ async fn roundtrip_scalar_subquery_projection_with_join_rewrite() -> Result<()> 
       Left Join:
         TableScan: data projection=[a]
         Aggregate: groupBy=[[]], aggr=[[max(data2.b)]]
-          TableScan: data2 projection=[b], partial_filters=[Boolean(true)]
+          TableScan: data2 projection=[b]
     "
     );
 

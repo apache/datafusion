@@ -59,9 +59,8 @@ impl SeededRandomState {
 /// This expression computes the hash of join key columns using a specific RandomState.
 /// It returns a UInt64Array containing the hash values.
 ///
-/// This is used for:
-/// - Computing routing hashes (with RepartitionExec's 0,0,0,0 seeds)
-/// - Computing lookup hashes (with HashJoin's 'J','O','I','N' seeds)
+/// The hash join does not build this expression. It exists so that
+/// `datafusion-proto` can still decode serialized plans that contain it.
 pub struct HashExpr {
     /// Columns to hash
     on_columns: Vec<PhysicalExprRef>,
@@ -354,8 +353,9 @@ impl HashTableLookupExpr {
     /// * `pruning_bitmap` - key-range summary covering every partition's keys
     ///   for pruning only, or `None`
     ///
-    /// A single non-empty map is probed directly without routing, so it may be
-    /// any [`Map`] and `router` is ignored. Otherwise `router` is required.
+    /// When `maps` has exactly one entry, that map is probed directly without
+    /// routing and `router` is ignored. Otherwise `router` is required, even if
+    /// only one entry is non-empty.
     ///
     /// # Public Only for Internal Use:
     /// `datafusion-proto` tests require this constructor, but it is not part of

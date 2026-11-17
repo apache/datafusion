@@ -364,6 +364,10 @@ impl PhysicalExpr for ScalarFunctionExpr {
         self.fun.signature().volatility == Volatility::Volatile
     }
 
+    fn short_circuits(&self) -> bool {
+        self.fun.short_circuits()
+    }
+
     fn placement(&self) -> ExpressionPlacement {
         let arg_placements: Vec<_> =
             self.args.iter().map(|arg| arg.placement()).collect();

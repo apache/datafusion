@@ -507,7 +507,7 @@ message LogicalExprNode {
     CastNode cast = 11;
     NegativeNode negative = 13;
     InListNode in_list = 14;
-    Wildcard wildcard = 15;
+    // was  Wildcard wildcard = 15;
     // was  ScalarFunctionNode scalar_function = 16;
     TryCastNode try_cast = 17;
 
@@ -549,10 +549,6 @@ message LogicalExprNode {
     Lambda lambda = 38;
     LambdaVariable lambda_variable = 39;
   }
-}
-
-message Wildcard {
-  TableReference qualifier = 1;
 }
 
 message SubqueryNode {
@@ -747,6 +743,7 @@ message SimilarToNode {
   LogicalExprNode expr = 2;
   LogicalExprNode pattern = 3;
   string escape_char = 4;
+  bool case_insensitive = 5;
 }
 
 message CaseNode {
@@ -1404,12 +1401,15 @@ message CsvScanExecNode {
   bool truncate_rows = 8;
   // Custom one-byte line terminator. Absent means the default newline terminator.
   optional bytes terminator = 9;
+  bool match_columns_by_header = 10;
 }
 
 message JsonScanExecNode {
   FileScanExecConf base_conf = 1;
   // Absent means newline-delimited JSON for compatibility with older payloads.
   optional bool newline_delimited = 2;
+  // Absent means false: a JSON number or boolean in a string column is an error.
+  optional bool coerce_primitive = 3;
 }
 
 message AvroScanExecNode {
