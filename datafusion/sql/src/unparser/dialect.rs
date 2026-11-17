@@ -376,7 +376,8 @@ pub enum DistinctFromStyle {
 pub enum ArrayTypeStyle {
     /// `INT[]`, and `INT[3]` for a fixed-size list, as in PostgreSQL and DuckDB
     SquareBracket,
-    /// `ARRAY<INT>`, as in BigQuery. A fixed-size list is not supported.
+    /// `ARRAY<INT>`, as in BigQuery. A fixed-size list and a list of lists are
+    /// not supported.
     AngleBracket,
     /// The dialect has no array type, as in MySQL and SQLite
     Unsupported,

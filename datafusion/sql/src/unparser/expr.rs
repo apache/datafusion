@@ -1822,11 +1822,20 @@ impl Unparser<'_> {
             (ArrayTypeStyle::SquareBracket, size) => {
                 ast::ArrayElemTypeDef::SquareBracket(elem, size.map(|s| s as u64))
             }
-            (ArrayTypeStyle::AngleBracket, None) => {
+            // BigQuery, the only dialect with this style, rejects an array of arrays.
+            (ArrayTypeStyle::AngleBracket, None)
+                if !matches!(
+                    inner.data_type(),
+                    DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::FixedSizeList(_, _)
+                        | DataType::ListView(_)
+                        | DataType::LargeListView(_)
+                ) =>
+            {
                 ast::ArrayElemTypeDef::AngleBracket(elem)
             }
-            (ArrayTypeStyle::AngleBracket, Some(_))
-            | (ArrayTypeStyle::Unsupported, _) => {
+            (ArrayTypeStyle::AngleBracket, _) | (ArrayTypeStyle::Unsupported, _) => {
                 return not_impl_err!(
                     "Unsupported DataType for this dialect: conversion: {data_type}"
                 );
@@ -3762,7 +3771,7 @@ mod tests {
             (&PostgreSqlDialect {}, &list, Some("VARCHAR[]")),
             (&duckdb, &list, Some("VARCHAR[]")),
             (angle, &list, Some("ARRAY<STRING>")),
-            (angle, &nested, Some("ARRAY<ARRAY<STRING>>")),
+            (angle, &nested, None),
             (angle, &fixed_list, None),
             (&custom_angle, &list, Some("ARRAY<VARCHAR>")),
             (none, &list, None),
