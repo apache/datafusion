@@ -520,6 +520,8 @@ Options:
 <span class="w">      </span>--maxrows<span class="w"> </span>&lt;MAXROWS&gt;
 <span class="w">          </span>The<span class="w"> </span>max<span class="w"> </span>number<span class="w"> </span>of<span class="w"> </span>rows<span class="w"> </span>to<span class="w"> </span>display<span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="s1">&#39;Table&#39;</span><span class="w"> </span>format
 <span class="w">          </span><span class="o">[</span>possible<span class="w"> </span>values:<span class="w"> </span>numbers<span class="o">(</span><span class="m">0</span>/10/...<span class="o">)</span>,<span class="w"> </span>inf<span class="o">(</span>no<span class="w"> </span>limit<span class="o">)]</span><span class="w"> </span><span class="o">[</span>default:<span class="w"> </span><span class="m">40</span><span class="o">]</span>
+<span class="w">      </span>--target-width<span class="w"> </span>&lt;TARGET_WIDTH&gt;
+<span class="w">          </span>Target<span class="w"> </span>output<span class="w"> </span>width<span class="w"> </span><span class="k">in</span><span class="w"> </span>terminal<span class="w"> </span>columns<span class="w"> </span><span class="o">(</span>auto,<span class="w"> </span><span class="m">1</span>..65535,<span class="w"> </span><span class="m">0</span><span class="w"> </span>or<span class="w"> </span>inf<span class="w"> </span><span class="k">for</span><span class="w"> </span>no<span class="w"> </span>limit<span class="o">)</span>.<span class="w"> </span>A<span class="w"> </span>wide<span class="w"> </span>character<span class="w"> </span>or<span class="w"> </span>TREE<span class="w"> </span>node<span class="w"> </span>may<span class="w"> </span>exceed<span class="w"> </span>this<span class="w"> </span>width.<span class="w"> </span><span class="o">[</span>default:<span class="w"> </span>auto<span class="o">]</span>
 <span class="w">      </span>--color
 <span class="w">          </span>Enables<span class="w"> </span>console<span class="w"> </span>syntax<span class="w"> </span>highlighting
 <span class="w">  </span>-d,<span class="w"> </span>--disk-limit<span class="w"> </span>&lt;DISK_LIMIT&gt;
@@ -533,6 +535,15 @@ Options:
 <span class="w">          </span>Print<span class="w"> </span>version
 </pre></div>
 </div>
+<section id="output-width">
+<h2>Output width<a class="headerlink" href="#output-width" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">--target-width</span> <span class="pre">auto</span></code> (default) uses the terminal width as the target for tables and explain plans.
+Use <code class="docutils literal notranslate"><span class="pre">--target-width</span> <span class="pre">100</span></code> for a fixed target, or <code class="docutils literal notranslate"><span class="pre">--target-width</span> <span class="pre">0</span></code> / <code class="docutils literal notranslate"><span class="pre">--target-width</span> <span class="pre">inf</span></code> for
+no limit. Change it in the CLI with <code class="docutils literal notranslate"><span class="pre">\pset</span> <span class="pre">target_width</span> <span class="pre">&lt;value&gt;</span></code>.
+A character wider than the target is kept intact. TREE plans use 29-column boxes,
+so a single node can exceed a narrower target.</p>
+<p>With <code class="docutils literal notranslate"><span class="pre">auto</span></code>, redirected output is unlimited. CSV, TSV, and JSON output is unchanged.</p>
+</section>
 <section id="commands">
 <h2>Commands<a class="headerlink" href="#commands" title="Link to this heading">#</a></h2>
 <p>Available commands inside DataFusion CLI are:</p>
@@ -763,6 +774,7 @@ for details.</p>
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#output-width">Output width</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#commands">Commands</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#supported-sql">Supported SQL</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#show-all-verbose"><code class="docutils literal notranslate"><span class="pre">SHOW</span> <span class="pre">ALL</span> <span class="pre">[VERBOSE]</span></code></a></li>
