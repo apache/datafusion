@@ -757,6 +757,8 @@ pub(crate) struct RowGroupReverser {
     /// Tracks the distinct buffers held by [`Self::pending`] and
     /// [`Self::reversed`], so buffers shared across batches are charged once.
     memory: RecordBatchMemoryTracker,
+    /// Set when a failed finish left state that must not be polled again.
+    failed: bool,
     /// Charges the memory pool for the batches held. `None` when the scan was
     /// opened without a pool.
     reservation: Option<MemoryReservation>,
@@ -773,12 +775,16 @@ impl RowGroupReverser {
             pending_rows: 0,
             reversed: Vec::new(),
             memory: RecordBatchMemoryTracker::new(),
+            failed: false,
             reservation,
         }
     }
 
     /// Returns the next batch of the finished row group, last rows first.
     fn pop(&mut self) -> Option<RecordBatch> {
+        if self.failed {
+            return None;
+        }
         let batch = self.reversed.pop()?;
         let freed = self.memory.uncount_batch_with_array_overhead(&batch);
         if let Some(reservation) = &self.reservation {
@@ -792,6 +798,9 @@ impl RowGroupReverser {
     /// `limit` rows are dropped as soon as later batches cover the limit, so
     /// at most `limit` rows plus one batch are held.
     fn push(&mut self, batch: RecordBatch) -> Result<()> {
+        if self.failed {
+            return internal_err!("cannot push after a failed row group reversal");
+        }
         if batch.num_rows() == 0 {
             return Ok(());
         }
@@ -823,6 +832,9 @@ impl RowGroupReverser {
     /// Ends the current row group: trims it to its last `limit` rows and
     /// reverses it, ready for [`Self::pop`].
     fn finish(&mut self) -> Result<()> {
+        if self.failed {
+            return internal_err!("cannot finish after a failed row group reversal");
+        }
         if let Some(limit) = self.limit
             && self.pending_rows > limit
             && let Some(front) = self.pending.front_mut()
@@ -835,19 +847,50 @@ impl RowGroupReverser {
             *front = sliced;
         }
         self.pending_rows = 0;
+
+        // Reverse every pending batch before mutating the tracker or the
+        // reservation, so a reversal error leaves both untouched.
+        let reversed: Result<Vec<_>> =
+            self.pending.iter().map(reverse_batch_rows).collect();
+        let reversed = match reversed {
+            Ok(reversed) => reversed,
+            Err(e) => {
+                self.rollback();
+                return Err(e);
+            }
+        };
         // The reversed copies replace the decoded batches, so count each
         // reversed batch before releasing the decoded one. Shared buffers stay
         // charged until the last batch that holds them is released.
-        for batch in self.pending.drain(..) {
-            let reversed = reverse_batch_rows(&batch)?;
+        for (batch, reversed) in self.pending.drain(..).zip(reversed) {
             self.memory.count_batch_with_array_overhead(&reversed);
             self.memory.uncount_batch_with_array_overhead(&batch);
             self.reversed.push(reversed);
         }
         if let Some(reservation) = &self.reservation {
-            reservation.try_resize(self.memory.memory_usage())?;
+            let stored = self.memory.memory_usage();
+            if let Err(e) = reservation.try_resize(stored) {
+                self.rollback();
+                return Err(e);
+            }
         }
         Ok(())
+    }
+
+    /// Releases every retained batch and resets the reservation after a failed
+    /// finish, so a later poll cannot shrink more than the reservation holds.
+    fn rollback(&mut self) {
+        for batch in self.pending.drain(..) {
+            self.memory.uncount_batch_with_array_overhead(&batch);
+        }
+        for batch in self.reversed.drain(..) {
+            self.memory.uncount_batch_with_array_overhead(&batch);
+        }
+        self.pending_rows = 0;
+        if let Some(reservation) = &self.reservation {
+            let _ = reservation.try_resize(0);
+        }
+        self.failed = true;
     }
 }
 
@@ -1104,8 +1147,11 @@ mod tests {
     #[test]
     fn row_group_reverser_counts_shared_buffers_once() {
         let batch = shared_buffer_batch();
-        let size = batch.get_array_memory_size();
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(size + size / 2));
+        let mut tracker = RecordBatchMemoryTracker::new();
+        tracker.count_batch_with_array_overhead(&batch);
+        let expected = tracker.memory_usage();
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(expected + expected / 2));
         let reservation = MemoryConsumer::new("reverse-test").register(&pool);
         let mut reverser = RowGroupReverser::new(None, Some(reservation));
 
@@ -1114,29 +1160,69 @@ mod tests {
         reverser.push(batch.clone()).unwrap();
         reverser.push(batch).unwrap();
 
-        assert!(
-            pool.reserved() <= size,
-            "shared buffers charged more than once: {} > {size}",
-            pool.reserved()
+        assert_eq!(
+            pool.reserved(),
+            expected,
+            "shared buffers must be charged exactly once"
         );
     }
 
     #[test]
     fn row_group_reverser_releases_shared_buffers() {
         let batch = shared_buffer_batch();
-        let size = batch.get_array_memory_size();
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(size * 8));
+        let mut tracker = RecordBatchMemoryTracker::new();
+        tracker.count_batch_with_array_overhead(&batch);
+        let expected = tracker.memory_usage();
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(expected * 8));
         let reservation = MemoryConsumer::new("reverse-test").register(&pool);
         let mut reverser = RowGroupReverser::new(None, Some(reservation));
 
         reverser.push(batch.clone()).unwrap();
         reverser.push(batch).unwrap();
         reverser.finish().unwrap();
-        assert!(pool.reserved() > 0);
+        let total = pool.reserved();
+        assert!(total > 0);
 
-        assert!(reverser.pop().is_some());
+        // The first pop must release exactly the first reversed batch, not the
+        // whole reservation and not part of the batch that remains.
+        let first = reverser.pop().unwrap();
+        let mut first_tracker = RecordBatchMemoryTracker::new();
+        first_tracker.count_batch_with_array_overhead(&first);
+        let first_size = first_tracker.memory_usage();
+        assert!(total >= first_size);
+        assert_eq!(
+            pool.reserved(),
+            total - first_size,
+            "intermediate reservation after the first pop"
+        );
+
         assert!(reverser.pop().is_some());
         assert!(reverser.pop().is_none());
         assert_eq!(pool.reserved(), 0, "all held batches must be released");
+    }
+
+    #[test]
+    fn row_group_reverser_resize_error_rolls_back() {
+        let batch = shared_buffer_batch();
+        let mut tracker = RecordBatchMemoryTracker::new();
+        tracker.count_batch_with_array_overhead(&batch);
+        let expected = tracker.memory_usage();
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(expected + expected / 2));
+        let reservation = MemoryConsumer::new("reverse-test").register(&pool);
+        let mut reverser = RowGroupReverser::new(None, Some(reservation));
+
+        reverser.push(batch.clone()).unwrap();
+        reverser.push(batch).unwrap();
+        // Reversing the two batches needs independent buffers, more than the
+        // pool allows. The failed finish must roll back, not leave a smaller
+        // reservation behind for a later pop to over-shrink.
+        let err = reverser.finish().unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to allocate"),
+            "unexpected error: {err}"
+        );
+        assert!(reverser.pop().is_none());
+        assert_eq!(pool.reserved(), 0);
     }
 }
