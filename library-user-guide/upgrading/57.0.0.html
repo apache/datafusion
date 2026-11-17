@@ -519,6 +519,16 @@ parents and siblings unchanged. The values themselves are shared through <code c
 <p>Update logical-plan snapshots if needed: generated lambda parameter names are
 local to lexical scopes, so sibling lambdas may reuse names.</p>
 </section>
+<section id="null-results-of-set-monotonic-aggregate-udfs">
+<h3>NULL results of set-monotonic aggregate UDFs<a class="headerlink" href="#null-results-of-set-monotonic-aggregate-udfs" title="Link to this heading">#</a></h3>
+<p>A UDAF that returns <code class="docutils literal notranslate"><span class="pre">SetMonotonicity::Increasing</span></code> or <code class="docutils literal notranslate"><span class="pre">Decreasing</span></code> must return a
+non-NULL result once it has seen a non-NULL input, and must not go back to NULL as
+more inputs are added. Window ordering inference relies on this; see <code class="docutils literal notranslate"><span class="pre">SetMonotonicity</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">AggregateFunctionExpr::get_result_ordering</span></code> now describes an ever-expanding
+frame with <code class="docutils literal notranslate"><span class="pre">NULLS</span> <span class="pre">FIRST</span></code>. <code class="docutils literal notranslate"><span class="pre">PlainAggregateWindowExpr::add_equal_orderings</span></code> is
+deprecated because it does not check the frame bounds or FILTER predicate;
+inspect the window execution plan’s equivalence properties instead.</p>
+</section>
 <section id="groupclusteringmode-full-no-longer-implies-sorted-input">
 <span id="groupclusteringmodefull-no-longer-implies-sorted-input"></span><h3><code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> no longer implies sorted input<a class="headerlink" href="#groupclusteringmode-full-no-longer-implies-sorted-input" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">AggregateExec</span></code> can now select <code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> when the input’s
@@ -627,6 +637,7 @@ For counting rows, use <code class="docutils literal notranslate"><span class="p
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-57-0-0">DataFusion 57.0.0</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#substrait-consumers-use-explicit-scope-context">Substrait consumers use explicit scope context</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-results-of-set-monotonic-aggregate-udfs">NULL results of set-monotonic aggregate UDFs</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupclusteringmode-full-no-longer-implies-sorted-input"><code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> no longer implies sorted input</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-spark-moved-to-its-own-repository"><code class="docutils literal notranslate"><span class="pre">datafusion-spark</span></code> moved to its own repository</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetfilereaderfactory-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">ParquetFileReaderFactory</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
