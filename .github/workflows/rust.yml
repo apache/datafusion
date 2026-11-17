@@ -36,8 +36,8 @@
 #
 # # Pull requests from forks
 #
-# A PR from a fork runs this workflow on the fork, on the contributor's own
-# runners, except macOS, which runs upstream, including in the merge queue.
+# Contributors can dispatch this workflow on a fork's feature branch. macOS
+# runs upstream, including in the merge queue.
 # `fork_ci_status.yml` mirrors that run as the `Rust (fork)` check
 # on the PR. Upstream runs `check-fmt`, `check-workflow-tool-installs`, and
 # `examples-check-datafusion-crates` for such a PR; the other jobs carry an
@@ -55,9 +55,9 @@ concurrency:
 
 on:
   push:
-    branches-ignore:
-      - 'gh-readonly-queue/**'
-      - 'dependabot/**'
+    branches:
+      - main
+      - 'branch-*'
     paths-ignore:
       - "docs/**"
       - "**.md"
