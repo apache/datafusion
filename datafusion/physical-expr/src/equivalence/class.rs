@@ -187,8 +187,9 @@ impl EquivalenceClass {
     pub fn new(exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>) -> Self {
         let mut class = Self::default();
         for expr in exprs {
-            class.push(expr);
+            class.insert(expr);
         }
+        class.promote_sub_expressions();
         class
     }
 
@@ -201,6 +202,13 @@ impl EquivalenceClass {
     /// Insert the expression into this class, meaning it is known to be equal to
     /// all other expressions in this class.
     pub fn push(&mut self, expr: Arc<dyn PhysicalExpr>) {
+        self.insert(expr);
+        self.promote_sub_expressions();
+    }
+
+    /// Inserts the expression without checking the canonical expression, so
+    /// the caller must call `promote_sub_expressions` afterwards.
+    fn insert(&mut self, expr: Arc<dyn PhysicalExpr>) {
         if let Some(lit) = expr.downcast_ref::<Literal>() {
             let expr_across = AcrossPartitions::Uniform(Some(lit.value().clone()));
             if let Some(across) = self.constant.as_mut() {
@@ -213,7 +221,6 @@ impl EquivalenceClass {
             }
         }
         self.exprs.insert(expr);
-        self.promote_sub_expressions();
     }
 
     /// Makes sure the canonical expression does not contain another expression
@@ -228,19 +235,23 @@ impl EquivalenceClass {
                 return;
             };
             let children = canonical.children();
-            let Some(idx) = self.exprs.iter().skip(1).position(|expr| {
-                // Only the children are searched: an expression equal to the
-                // canonical expression itself is not inside it. The unwrap is
-                // safe because the closure always returns `Ok`.
-                children
+            // Only the children are searched: an expression equal to the
+            // canonical expression itself is not inside it.
+            let Some(idx) =
+                self.exprs
                     .iter()
-                    .any(|child| child.exists(|node| Ok(node == expr)).unwrap())
-            }) else {
+                    .enumerate()
+                    .skip(1)
+                    .find_map(|(idx, expr)| {
+                        children
+                            .iter()
+                            .any(|child| child.exists(|node| Ok(node == expr)).unwrap())
+                            .then_some(idx)
+                    })
+            else {
                 return;
             };
-            // `idx` skips the canonical expression, so the expression to
-            // promote is at `idx + 1`.
-            self.exprs.move_index(idx + 1, 0);
+            self.exprs.move_index(idx, 0);
         }
     }
 
@@ -1779,7 +1790,7 @@ mod tests {
             Arc::clone(&a_plus_b),
             Arc::clone(&a),
         ])]);
-        assert!(group.normalize_expr(Arc::clone(&a_plus_b)).eq(&a));
+        assert_eq!(&group.normalize_expr(Arc::clone(&a_plus_b)), &a);
 
         // Two classes bridged by `extend` through the shared `c`
         let mut group = EquivalenceGroup::default();
@@ -1787,7 +1798,7 @@ mod tests {
         let mut other = EquivalenceGroup::default();
         other.add_equal_conditions(c, Arc::clone(&a));
         group.extend(other);
-        assert!(group.normalize_expr(a_plus_b).eq(&a));
+        assert_eq!(&group.normalize_expr(a_plus_b), &a);
         Ok(())
     }
 
@@ -1808,7 +1819,7 @@ mod tests {
         let other = EquivalenceClass::new([b_times_c, a_plus_b, Arc::clone(&a)]);
         let mut class = EquivalenceClass::new([a_plus_b_plus_c]);
         class.extend(other);
-        assert!(class.canonical_expr().unwrap().eq(&a));
+        assert_eq!(class.canonical_expr().unwrap(), &a);
         Ok(())
     }
 }

@@ -341,6 +341,9 @@ CREATE TABLE eq_t (a BIGINT, b BIGINT, c BIGINT) AS VALUES (1, 1, 2), (3, 3, 4),
 # The filter puts a and b in one class, and c and a + 1 in another. The inner
 # ORDER BY a + 1 LIMIT 100 sorts by a member of the second class, so the outer
 # ORDER BY a + 1 is already satisfied and the plan has no second sort.
+# No class here holds a member together with one of its own sub-expressions:
+# this plan guards against a fix inside normalize_expr, which would add a
+# second sort.
 query TT
 EXPLAIN SELECT * FROM (SELECT * FROM eq_t ORDER BY a + 1 LIMIT 100) WHERE a = b AND c = a + 1 ORDER BY a + 1;
 ----
@@ -363,6 +366,18 @@ DROP TABLE eq_t;
 # ORDER BY a below it
 statement ok
 CREATE TABLE eq_sub (a INT, b INT) AS VALUES (1, 0), (2, 3), (1, 0), (5, 0);
+
+query TT
+EXPLAIN SELECT a, sum(b) OVER (PARTITION BY a + b ORDER BY a) FROM eq_sub WHERE a + b = a ORDER BY a;
+----
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[a@0 as a, sum(eq_sub.b) PARTITION BY [eq_sub.a + eq_sub.b] ORDER BY [eq_sub.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as sum(eq_sub.b) PARTITION BY [eq_sub.a + eq_sub.b] ORDER BY [eq_sub.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+03)----BoundedWindowAggExec: wdw=[sum(eq_sub.b) PARTITION BY [eq_sub.a + eq_sub.b] ORDER BY [eq_sub.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(eq_sub.b) PARTITION BY [eq_sub.a + eq_sub.b] ORDER BY [eq_sub.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------RepartitionExec: partitioning=Hash([a@0 + b@1], 4), input_partitions=1
+06)----------FilterExec: a@0 + b@1 = a@0
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II
 SELECT a, sum(b) OVER (PARTITION BY a + b ORDER BY a) FROM eq_sub WHERE a + b = a ORDER BY a;
