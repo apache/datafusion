@@ -13,7 +13,7 @@
 name: Datafusion extended tests
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  group: ${{ github.repository }}-${{ github.head_ref || inputs.pr_head_sha || github.sha }}-${{ github.workflow }}-${{ inputs.suite || 'all' }}
   cancel-in-progress: true
 
 # Run these required checks in the merge queue before merging into main.
@@ -33,6 +33,15 @@ on:
       pr_head_sha:
         description: 'PR head SHA'
         type: string
+      suite:
+        description: 'Test suite'
+        type: choice
+        default: all
+        options:
+          - all
+          - extended
+          - hash-collisions
+          - sqlite
 
 permissions:
   contents: read
@@ -43,7 +52,7 @@ jobs:
   linux-test-extended:
     name: cargo test 'extended_tests' (amd64)
     # Long-running job: run in the merge queue, on release pushes, or manually.
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (!inputs.suite || inputs.suite == 'all' || inputs.suite == 'extended')
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:
@@ -53,7 +62,14 @@ jobs:
           ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
           fetch-depth: 1
       - name: Checkout test data
+        if: hashFiles('.github/actions/checkout-test-data/action.yaml') != ''
         uses: ./.github/actions/checkout-test-data
+      - name: Checkout test data for older revisions
+        if: hashFiles('.github/actions/checkout-test-data/action.yaml') == ''
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git submodule sync -- testing parquet-testing
+          git submodule update --init --depth=1 testing parquet-testing
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6  # v2.0.0
       - parallel:
@@ -70,12 +86,28 @@ jobs:
         id: sccache
         if: vars.USE_RUNS_ON == 'true'
         uses: ./.github/actions/setup-sccache
+      - &runner-details
+        name: Show runner and Rust details
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git rev-parse HEAD
+          if command -v lscpu >/dev/null; then lscpu; else cat /proc/cpuinfo; fi
+          cat /proc/meminfo
+          for file in /sys/fs/cgroup/cpu.max /sys/fs/cgroup/cpuset.cpus.effective /sys/fs/cgroup/memory.max; do
+            if test -f "$file"; then printf '%s: ' "$file"; cat "$file"; fi
+          done
+          rustc -vV
+          printf 'RUST_BACKTRACE=%s\n' "${RUST_BACKTRACE-<unset>}"
+          printf 'RUSTFLAGS=%s\n' "${RUSTFLAGS-<unset>}"
+          printf 'CARGO_ENCODED_RUSTFLAGS=%s\n' "${CARGO_ENCODED_RUSTFLAGS-<unset>}"
+          printf 'CARGO_BUILD_JOBS=%s\n' "${CARGO_BUILD_JOBS-<unset>}"
       # For debugging, test binaries can be large.
       - name: Show available disk space
         run: |
           df -h
       # Give the longest-running suite the build lock before the other Cargo commands.
       - name: Build extended tests
+        if: vars.USE_RUNS_ON == 'true'
         shell: bash
         run: |
           extended_test_binary="$(cargo xtask ci step test extended-build |
@@ -87,14 +119,26 @@ jobs:
           printf 'XTASK_BINARY=%s\n' "$xtask_binary" >> "$GITHUB_ENV"
       - parallel:
           - name: Run extended tests
+            if: vars.USE_RUNS_ON == 'true'
             # Invoke the built xtask directly so Cargo cannot wait on a fuzz build.
             run: '"$XTASK_BINARY" ci step test extended --binary "$EXTENDED_TEST_BINARY"'
           - name: Run fuzz tests
+            if: vars.USE_RUNS_ON == 'true'
             run: cargo xtask ci step test fuzz
           # Migrate it to the above unified fuzz runner over time
           # Tracker: https://github.com/apache/datafusion/issues/27082
           - name: Run unmigrated fuzzers with more iterations
+            if: vars.USE_RUNS_ON == 'true'
             run: cargo xtask ci step test fuzz-legacy
+      - name: Run extended tests
+        if: vars.USE_RUNS_ON != 'true'
+        run: cargo xtask ci step test extended
+      - name: Run fuzz tests
+        if: vars.USE_RUNS_ON != 'true'
+        run: cargo xtask ci step test fuzz
+      - name: Run unmigrated fuzzers with more iterations
+        if: vars.USE_RUNS_ON != 'true'
+        run: cargo xtask ci step test fuzz-legacy
       - name: Report compiler cache statistics
         if: ${{ always() && steps.sccache.outcome == 'success' }}
         run: sccache --show-stats
@@ -108,7 +152,7 @@ jobs:
   hash-collisions:
     name: cargo test hash collisions (amd64)
     # Long-running job: run in the merge queue, on release pushes, or manually.
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (!inputs.suite || inputs.suite == 'all' || inputs.suite == 'hash-collisions')
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -134,7 +178,7 @@ jobs:
   sqllogictest-sqlite:
     name: "Run sqllogictests with the sqlite test suite"
     # Long-running job: run in the merge queue, on release pushes, or manually.
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (!inputs.suite || inputs.suite == 'all' || inputs.suite == 'sqlite')
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -153,5 +197,6 @@ jobs:
       - name: Configure compiler cache
         if: vars.USE_RUNS_ON == 'true'
         uses: ./.github/actions/setup-sccache
+      - *runner-details
       - name: Run sqllogictest
         run: cargo xtask ci step test sqlite
