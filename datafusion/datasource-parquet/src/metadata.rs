@@ -8,13 +8,12 @@
 use crate::file_format::ObjectStoreFetch;
 use crate::leaf_resolver::LeafResolver;
 use crate::{Int96Coercer, apply_file_schema_type_coercions};
-use arrow::array::{Array, ArrayRef, BooleanArray};
+use arrow::array::{Array, ArrayRef, BooleanArray, DynComparator, make_comparator};
 use arrow::compute::kernels::cmp::eq;
-use arrow::compute::{SortOptions, and, sum};
+use arrow::compute::{SortOptions, and, nullif, sum};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
-use datafusion_common::utils::compare_rows;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, HashSet, Result, ScalarValue, Statistics,
     internal_datafusion_err,
@@ -1308,35 +1307,36 @@ fn num_columns_ordered_across_row_groups(
     };
     let resolver = LeafResolver::new(parquet_schema, &arrow_schema);
 
-    let column_bounds: Vec<_> = sorting_columns
-        .iter()
-        .map(|sorting_column| {
-            row_group_sort_bounds(row_groups, parquet_schema, &resolver, sorting_column)
-        })
-        .collect();
+    // Compares the value that sorts last in one row group with the value that
+    // sorts first in another
+    let comparator = |sorting_column: &SortingColumn| -> Option<DynComparator> {
+        let (first, last) =
+            row_group_sort_bounds(row_groups, parquet_schema, &resolver, sorting_column)?;
+        let options =
+            SortOptions::new(sorting_column.descending, sorting_column.nulls_first);
+        make_comparator(&last, &first, options).ok()
+    };
+    // One comparator per sorting column, created when the column is first
+    // needed. A later column is often not needed at all.
+    let mut comparators: Vec<Option<DynComparator>> = vec![];
 
     let mut num_ordered = sorting_columns.len();
     // Compare each row group with the next one, column by column
     for i in 0..row_groups.len() - 1 {
-        let columns = sorting_columns.iter().zip(&column_bounds);
-        for (column, (sorting_column, bounds)) in columns.take(num_ordered).enumerate() {
-            let Some(bounds) = bounds else {
+        for column in 0..num_ordered {
+            if column == comparators.len() {
+                comparators.push(comparator(&sorting_columns[column]));
+            }
+            let Some(compare) = &comparators[column] else {
                 num_ordered = column;
                 break;
             };
-            let options = [SortOptions::new(
-                sorting_column.descending,
-                sorting_column.nulls_first,
-            )];
-            let last = std::slice::from_ref(&bounds[i].1);
-            let next_first = std::slice::from_ref(&bounds[i + 1].0);
-            // An unsupported comparison does not prove the order
-            match compare_rows(last, next_first, &options) {
+            match compare(i, i + 1) {
                 // In order, so the later columns do not matter here
-                Ok(Ordering::Less) => break,
+                Ordering::Less => break,
                 // Equal, so the next column decides
-                Ok(Ordering::Equal) => {}
-                Ok(Ordering::Greater) | Err(_) => {
+                Ordering::Equal => {}
+                Ordering::Greater => {
                     num_ordered = column;
                     break;
                 }
@@ -1346,14 +1346,16 @@ fn num_columns_ordered_across_row_groups(
     num_ordered
 }
 
-/// Returns the values that sort first and last in each row group under
-/// `sorting_column`, or `None` if the statistics do not provide them.
+/// Returns two arrays with one entry per row group: the values that sort
+/// first and the values that sort last under `sorting_column`. A null entry
+/// means that the value is NULL. Returns `None` if the statistics do not
+/// provide the values.
 fn row_group_sort_bounds(
     row_groups: &[RowGroupMetaData],
     parquet_schema: &SchemaDescriptor,
     resolver: &LeafResolver,
     sorting_column: &SortingColumn,
-) -> Option<Vec<(ScalarValue, ScalarValue)>> {
+) -> Option<(ArrayRef, ArrayRef)> {
     let column_index = usize::try_from(sorting_column.column_idx).ok()?;
     let name = parquet_schema.columns().get(column_index)?.name();
     // The statistics must belong to the sorting column
@@ -1367,40 +1369,29 @@ fn row_group_sort_bounds(
     let mins = converter.row_group_mins(row_groups).ok()?;
     let maxes = converter.row_group_maxes(row_groups).ok()?;
     let null_counts = converter.row_group_null_counts(row_groups).ok()?;
-    let null = ScalarValue::try_new_null(mins.data_type()).ok()?;
 
-    row_groups
-        .iter()
-        .enumerate()
-        .map(|(i, row_group)| {
-            if null_counts.is_null(i) {
-                return None;
-            }
-            let null_count = null_counts.value(i);
-            if null_count == row_group.num_rows() as u64 {
-                return Some((null.clone(), null.clone()));
-            }
-            if mins.is_null(i) || maxes.is_null(i) {
-                return None;
-            }
-            let min = ScalarValue::try_from_array(&mins, i).ok()?;
-            let max = ScalarValue::try_from_array(&maxes, i).ok()?;
-            let (mut first, mut last) = if sorting_column.descending {
-                (max, min)
-            } else {
-                (min, max)
-            };
-            // Statistics exclude nulls, which sort before or after all values
-            if null_count > 0 {
-                if sorting_column.nulls_first {
-                    first = null.clone();
-                } else {
-                    last = null.clone();
-                }
-            }
-            Some((first, last))
-        })
-        .collect()
+    let bounds_are_known = null_counts.null_count() == 0
+        && row_groups.iter().enumerate().all(|(i, row_group)| {
+            // A row group with only NULLs has no min and max
+            null_counts.value(i) == row_group.num_rows() as u64
+                || (mins.is_valid(i) && maxes.is_valid(i))
+        });
+    if !bounds_are_known {
+        return None;
+    }
+
+    let (first, last) = if sorting_column.descending {
+        (maxes, mins)
+    } else {
+        (mins, maxes)
+    };
+    // Statistics exclude nulls, which sort before or after all values
+    let has_nulls = BooleanArray::from_unary(&null_counts, |count| count > 0);
+    if sorting_column.nulls_first {
+        Some((nullif(&first, &has_nulls).ok()?, last))
+    } else {
+        Some((first, nullif(&last, &has_nulls).ok()?))
+    }
 }
 
 #[cfg(test)]
