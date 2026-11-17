@@ -1761,6 +1761,41 @@ async fn union_distinct_consume() -> Result<()> {
 }
 
 #[tokio::test]
+async fn nary_union_distinct_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/union_distinct_nary.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data UNION SELECT a FROM data2 UNION SELECT a FROM data",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn consume_nary_union_distinct_as_single_union() -> Result<()> {
+    let ctx = create_context().await?;
+    let proto_plan =
+        read_json("tests/testdata/test_plans/union_distinct_nary.substrait.json");
+    // Skip optimization: OptimizeUnions would hide nested unions and distincts.
+    let consumed = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+    let mut distincts = 0;
+    let mut union_widths = vec![];
+    consumed.apply(|node| {
+        match node {
+            LogicalPlan::Distinct(_) => distincts += 1,
+            LogicalPlan::Union(union) => union_widths.push(union.inputs.len()),
+            _ => {}
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert_eq!(distincts, 1);
+    assert_eq!(union_widths, vec![3]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn simple_intersect_table_reuse() -> Result<()> {
     // Substrait does currently NOT maintain the alias of the tables.
     // Instead, when we consume Substrait, we add aliases before a join that'd otherwise collide.
