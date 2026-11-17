@@ -8,7 +8,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::{ExecutionPlan, LimitBehavior, WindowLookahead};
+use datafusion_physical_plan::{
+    ExecutionPlan, ExecutionPlanProperties, LimitBehavior, WindowLookahead,
+};
 use std::sync::Arc;
 
 /// This rule inspects [`ExecutionPlan`]'s attempting to find fetch limits that were not pushed
@@ -181,6 +183,13 @@ fn apply_limit(
     let Some(fetch) = fetch else {
         return Some(Transformed::no(Arc::clone(node)));
     };
+    // Only a sort with one output partition gives the window above the first
+    // rows of every partition it reads: the partitions of one TopK share a
+    // threshold, and `TopKRepartition` copies the TopK below a hash
+    // repartition, where it keeps each input partition's first rows instead.
+    if node.output_partitioning().partition_count() > 1 {
+        return Some(Transformed::no(Arc::clone(node)));
+    }
     // Carry on past this sort rather than stopping: the subtree below may hold
     // another independent limit over another window.
     Some(Transformed::yes(node.with_fetch(Some(fetch)).unwrap()))
@@ -219,7 +228,9 @@ mod tests {
     use datafusion_physical_plan::InputOrderMode;
     use datafusion_physical_plan::displayable;
     use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+    use datafusion_physical_plan::Partitioning;
     use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+    use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::windows::{
         BoundedWindowAggExec, create_udwf_window_expr,
     };
@@ -233,24 +244,40 @@ mod tests {
         Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]))
     }
 
+    fn ordered_by_a(
+        input: &Arc<dyn ExecutionPlan>,
+    ) -> datafusion_common::Result<LexOrdering> {
+        let s = input.schema();
+        Ok(
+            LexOrdering::new(vec![PhysicalSortExpr::new_default(col("a", &s)?).asc()])
+                .unwrap(),
+        )
+    }
+
     /// Wrap `input` in `SortExec -> BoundedWindowAggExec(udwf)`, both ordered by `a`.
-    /// The frame ends at the current row, so the window adds no lookahead of its own
-    /// and the fetch a test asserts on comes only from what the rule carried down.
     fn sort_then_window(
         udwf: &Arc<WindowUDF>,
         name: &str,
         input: Arc<dyn ExecutionPlan>,
         input_order_mode: InputOrderMode,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let ordering = ordered_by_a(&input)?;
+        let sort: Arc<dyn ExecutionPlan> =
+            Arc::new(SortExec::new(ordering, input).with_preserve_partitioning(true));
+        window_over(udwf, name, sort, input_order_mode)
+    }
+
+    /// Wrap `input` in `BoundedWindowAggExec(udwf)` ordered by `a`.
+    /// The frame ends at the current row, so the window adds no lookahead of its own
+    /// and the fetch a test asserts on comes only from what the rule carried down.
+    fn window_over(
+        udwf: &Arc<WindowUDF>,
+        name: &str,
+        input: Arc<dyn ExecutionPlan>,
+        input_order_mode: InputOrderMode,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let s = input.schema();
-
-        let ordering =
-            LexOrdering::new(vec![PhysicalSortExpr::new_default(col("a", &s)?).asc()])
-                .unwrap();
-
-        let sort: Arc<dyn ExecutionPlan> = Arc::new(
-            SortExec::new(ordering.clone(), input).with_preserve_partitioning(true),
-        );
+        let ordering = ordered_by_a(&input)?;
 
         let window_expr = Arc::new(StandardWindowExpr::new(
             create_udwf_window_expr(udwf, &[], &s, name.to_string(), false)?,
@@ -265,7 +292,7 @@ mod tests {
 
         Ok(Arc::new(BoundedWindowAggExec::try_new(
             vec![window_expr],
-            sort,
+            input,
             input_order_mode,
             true,
         )?))
@@ -345,6 +372,93 @@ mod tests {
           BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Linear]
             SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
               PlaceholderRowExec
+        "#);
+    }
+
+    /// `PlaceholderRowExec` hashed into `partitions` output partitions.
+    fn hash_repartition(partitions: usize) -> Arc<dyn ExecutionPlan> {
+        let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
+        let s = input.schema();
+        let hash = Partitioning::Hash(vec![col("a", &s).unwrap()], partitions);
+        Arc::new(RepartitionExec::try_new(input, hash).unwrap())
+    }
+
+    /// The window reads each partition of its input on its own, so a fetch on a
+    /// sort that keeps more than one partition does not bound what the window
+    /// needs. The window partition keys play no part in that, so these tests
+    /// vary only the partition count.
+    #[test]
+    fn a_partitioned_sort_does_not_take_the_fetch() {
+        let window = sort_then_window(
+            &row_number_udwf(),
+            "row_number",
+            hash_repartition(4),
+            InputOrderMode::Sorted,
+        )
+        .unwrap();
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(window, 0, Some(100)));
+        let optimized = optimize(plan);
+        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+        GlobalLimitExec: skip=0, fetch=100
+          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+            SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+              RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+                PlaceholderRowExec
+        "#);
+    }
+
+    /// The same plan with a repartition that emits one partition: it is the
+    /// partition count that blocks the pushdown, not the repartition itself.
+    #[test]
+    fn a_sort_with_one_output_partition_still_takes_the_fetch() {
+        let window = sort_then_window(
+            &row_number_udwf(),
+            "row_number",
+            hash_repartition(1),
+            InputOrderMode::Sorted,
+        )
+        .unwrap();
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(window, 0, Some(100)));
+        let optimized = optimize(plan);
+        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+        GlobalLimitExec: skip=0, fetch=100
+          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+            SortExec: TopK(fetch=100), expr=[a@0 ASC], preserve_partitioning=[true]
+              RepartitionExec: partitioning=Hash([a@0], 1), input_partitions=1
+                PlaceholderRowExec
+        "#);
+    }
+
+    /// A merge below the window takes the fetch however many partitions it reads,
+    /// because it emits its input's first rows in order from one partition.
+    #[test]
+    fn a_merge_below_a_window_still_takes_the_fetch() {
+        let input = hash_repartition(4);
+        let ordering = ordered_by_a(&input).unwrap();
+        let sort: Arc<dyn ExecutionPlan> = Arc::new(
+            SortExec::new(ordering.clone(), input).with_preserve_partitioning(true),
+        );
+        let merge: Arc<dyn ExecutionPlan> =
+            Arc::new(SortPreservingMergeExec::new(ordering, sort));
+        let window = window_over(
+            &row_number_udwf(),
+            "row_number",
+            merge,
+            InputOrderMode::Sorted,
+        )
+        .unwrap();
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(window, 0, Some(100)));
+        let optimized = optimize(plan);
+        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+        GlobalLimitExec: skip=0, fetch=100
+          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+            SortPreservingMergeExec: [a@0 ASC], fetch=100
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+                  PlaceholderRowExec
         "#);
     }
 
