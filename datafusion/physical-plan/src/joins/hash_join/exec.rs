@@ -160,30 +160,25 @@ fn subtree_max_len(data: &ArrayData) -> usize {
 ///
 /// On `Some`, the memory of the [`ArrayMap`] has already been added to
 /// `reservation`; the caller creates the map with [`ArrayMap::try_new`].
-#[expect(clippy::too_many_arguments)]
 fn array_map_key_range(
     bounds: Option<&PartitionBounds>,
-    schema: &SchemaRef,
-    batches: &[RecordBatch],
-    on_left: &[PhysicalExprRef],
+    keys: &[ArrayRef],
     reservation: &mut MemoryReservation,
     perfect_hash_join_small_build_threshold: usize,
     perfect_hash_join_min_key_density: f64,
     null_equality: NullEquality,
 ) -> Result<Option<(u64, u64)>> {
+    let [key] = keys else {
+        return Ok(None);
+    };
     // `bounds` are also collected for dynamic filters, on any key type, so the
     // key type cannot be inferred from their presence.
-    if !is_perfect_hash_join_candidate(on_left, schema)? {
+    if !ArrayMap::is_supported_type(key.data_type()) {
         return Ok(None);
     }
 
-    if null_equality == NullEquality::NullEqualsNull {
-        for batch in batches.iter() {
-            let arrays = evaluate_expressions_to_arrays(on_left, batch)?;
-            if arrays[0].null_count() > 0 {
-                return Ok(None);
-            }
-        }
+    if null_equality == NullEquality::NullEqualsNull && key.null_count() > 0 {
+        return Ok(None);
     }
 
     let (min_val, max_val) = if let Some(bounds) = bounds {
@@ -213,10 +208,10 @@ fn array_map_key_range(
     };
 
     let range = ArrayMap::calculate_range(min_val, max_val);
-    let num_row: usize = batches.iter().map(|x| x.num_rows()).sum();
+    let num_rows = key.len();
 
     // TODO: support create ArrayMap<u64>
-    if num_row >= u32::MAX as usize {
+    if num_rows >= u32::MAX as usize {
         return Ok(None);
     }
 
@@ -226,7 +221,7 @@ fn array_map_key_range(
         return Ok(None);
     }
 
-    let dense_ratio = (num_row as f64) / ((range + 1) as f64);
+    let dense_ratio = (num_rows as f64) / ((range + 1) as f64);
 
     if range >= perfect_hash_join_small_build_threshold as u64
         && dense_ratio <= perfect_hash_join_min_key_density
@@ -234,7 +229,7 @@ fn array_map_key_range(
         return Ok(None);
     }
 
-    let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_row);
+    let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_rows);
     reservation.try_grow(mem_size)?;
 
     Ok(Some((min_val, max_val)))
@@ -1904,6 +1899,7 @@ impl ExecutionPlan for HashJoinExec {
             self.null_equality,
             &self.join_type,
             &self.join_schema,
+            self.filter.as_ref(),
         )?;
         // Project statistics if there is a projection
         let stats = stats.project(self.projection.as_ref());
@@ -3269,9 +3265,7 @@ fn build_in_memory(
 
     let join_hash_map = if let Some((min_val, max_val)) = array_map_key_range(
         bounds.as_ref(),
-        schema,
-        std::slice::from_ref(&batch),
-        on_left,
+        &left_values,
         &mut map_reservation,
         config.execution.perfect_hash_join_small_build_threshold,
         config.execution.perfect_hash_join_min_key_density,
@@ -3548,7 +3542,7 @@ mod tests {
     use crate::filter::FilterExecBuilder;
     use crate::joins::hash_join::stream::lookup_join_hashmap;
     use crate::statistics::StatisticsContext;
-    use crate::test::{TestMemoryExec, assert_join_metrics};
+    use crate::test::{TestMemoryExec, assert_join_metrics, exec::StatisticsExec};
     use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
@@ -3565,7 +3559,7 @@ mod tests {
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type};
     use datafusion_common::hash_utils::create_hashes;
-    use datafusion_common::stats::Precision;
+    use datafusion_common::stats::{ColumnStatistics, Precision};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
         ScalarValue, assert_batches_eq, assert_batches_sorted_eq, assert_contains,
@@ -6042,6 +6036,64 @@ mod tests {
         };
         assert_eq!(num_rows(None)?, Precision::Inexact(40));
         assert_eq!(num_rows(Some(0))?, Precision::Inexact(10));
+        Ok(())
+    }
+
+    #[test]
+    fn residual_filter_is_used_by_statistics_context() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+        ]);
+        let column_stats = |min: i64, max: i64, distinct_count: usize| ColumnStatistics {
+            null_count: Precision::Exact(0),
+            max_value: Precision::Exact(ScalarValue::Int64(Some(max))),
+            min_value: Precision::Exact(ScalarValue::Int64(Some(min))),
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Exact(distinct_count),
+            byte_size: Precision::Absent,
+        };
+        let input_stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![column_stats(1, 100, 100), column_stats(1, 50, 50)],
+        };
+        let left: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(input_stats.clone(), schema.clone()));
+        let right: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(input_stats, schema));
+        let on = vec![(
+            Arc::new(Column::new("key", 0)) as PhysicalExprRef,
+            Arc::new(Column::new("key", 0)) as PhysicalExprRef,
+        )];
+        let filter = JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("left_value", 0)),
+                Operator::Lt,
+                Arc::new(Column::new("right_value", 1)),
+            )),
+            vec![
+                ColumnIndex {
+                    index: 1,
+                    side: JoinSide::Left,
+                },
+                ColumnIndex {
+                    index: 1,
+                    side: JoinSide::Right,
+                },
+            ],
+            Arc::new(Schema::new(vec![
+                Field::new("left_value", DataType::Int64, false),
+                Field::new("right_value", DataType::Int64, false),
+            ])),
+        );
+        let join = HashJoinExecBuilder::new(left, right, on, JoinType::Inner)
+            .with_filter(Some(filter))
+            .build()?;
+
+        let stats = StatisticsContext::new().compute(&join, &StatisticsArgs::new())?;
+
+        assert_eq!(stats.num_rows, Precision::Inexact(49));
         Ok(())
     }
 
@@ -10549,8 +10601,8 @@ mod tests {
     /// Here the build-side logical NULL lives in exactly one build partition, so
     /// the `keys_have_null` flag has to survive the per-partition aggregation in
     /// `build_partitioned_filter` and widen the *routed* filter as a whole: the
-    /// probe NULL is routed to a single `CASE` branch, and OR-ing `IS NULL` into
-    /// that one branch would still drop it for every other route.
+    /// probe NULL is routed to a single partition, and OR-ing `IS NULL` into
+    /// that one partition's check would still drop it for every other route.
     #[tokio::test]
     async fn test_partitioned_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null()
     -> Result<()> {

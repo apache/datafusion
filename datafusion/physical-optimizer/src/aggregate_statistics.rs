@@ -137,12 +137,13 @@ fn take_optimizable(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn ExecutionPl
     {
         let mut child = Arc::clone(agg_exec.input());
         loop {
-            if let Some(partial_agg_exec) = child.downcast_ref::<AggregateExec>()
-                && partial_agg_exec.mode().input_mode() == AggregateInputMode::Raw
-                && partial_agg_exec.group_expr().is_empty()
-                && partial_agg_exec.filter_expr().iter().all(|e| e.is_none())
-            {
-                return Some(child);
+            // Stop at the first aggregate: only this `Final`'s own `Partial` is usable.
+            if let Some(partial_agg_exec) = child.downcast_ref::<AggregateExec>() {
+                let usable = partial_agg_exec.mode().input_mode()
+                    == AggregateInputMode::Raw
+                    && partial_agg_exec.group_expr().is_empty()
+                    && partial_agg_exec.filter_expr().iter().all(|e| e.is_none());
+                return usable.then(|| Arc::clone(&child));
             }
             if let [childrens_child] = child.children().as_slice() {
                 child = Arc::clone(childrens_child);

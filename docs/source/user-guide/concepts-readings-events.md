@@ -208,6 +208,8 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 The [DataFusion Community Showcase](https://github.com/apache/datafusion/issues/22963) is a
 regular virtual event where community members share what they are building with DataFusion.
 
+- **2026-11-12** [Vol. 8: Cloudflare Basin SQL (Sergio Esteves) & Teradata Labs (Artur Borycki)](https://www.youtube.com/watch?v=zmp-jIzZcfg)
+- **2026-10-15** [Vol. 7: Bauplan (Jacopo Tagliabue) & Phoebe Genomics (Tim Poterba)](https://www.youtube.com/watch?v=dMUHiFvFpCc)
 - **2026-10-01** [Vol. 6: Hotdata (Shefeek Jinaah) & Veeva Systems (Bruce Ritchie)](https://www.youtube.com/watch?v=0QGbk6gnAX4)
 - **2026-09-17** [Vol. 5: Zarr DataFusion (Jayendra Parmar) & Rerun.io (Timothy Saucer)](https://www.youtube.com/watch?v=vD113GhJwaM)
 - **2026-08-20** [Vol. 4: RDF Fusion & Cloudflare R2 SQL](https://www.youtube.com/watch?v=oKEtmUzdPoM)
@@ -217,6 +219,9 @@ regular virtual event where community members share what they are building with 
 
 # 🌎 Community Events
 
+See the [Apache DataFusion Luma calendar](https://luma.com/datafusion) for upcoming events.
+
+- **2027-03-18** [London Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/27385) - [RSVP](https://luma.com/rub2nj6m)
 - **2026-11-12** [San Francisco Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/25665) - [RSVP](https://luma.com/k04h0om1)
 - **2026-09-30** [London Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/24512) - [RSVP](https://luma.com/r12f1t5o)
 - **2026-09-03** [Boston Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/21541) - [RSVP](https://luma.com/yexgqifv)
