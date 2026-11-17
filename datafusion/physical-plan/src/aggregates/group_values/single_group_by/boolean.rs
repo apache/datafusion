@@ -70,6 +70,17 @@ impl GroupValues for GroupValuesBoolean {
         Ok(())
     }
 
+    fn find(&mut self, cols: &[ArrayRef], groups: &mut Vec<Option<usize>>) -> Result<()> {
+        let array = cols[0].as_boolean();
+        groups.clear();
+        groups.extend(array.iter().map(|value| match value {
+            Some(false) => self.false_group,
+            Some(true) => self.true_group,
+            None => self.null_group,
+        }));
+        Ok(())
+    }
+
     fn size(&self) -> usize {
         size_of::<Self>()
     }

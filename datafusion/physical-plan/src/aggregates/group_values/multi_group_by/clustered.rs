@@ -25,6 +25,9 @@ use crate::aggregates::group_values::GroupValues;
 /// group-id or emission contracts. In particular, `First(n)` shifts the remaining
 /// keys and their ids together. Inputs clustered by only a subset of the keys
 /// must use a hash table.
+///
+/// Without a hash table, [`GroupValues::find`] scans the buffered groups once
+/// per run of equal probe rows: worst case O(probe runs × buffered groups).
 pub(crate) struct GroupValuesClustered {
     schema: SchemaRef,
     columns: Vec<Box<dyn GroupColumn>>,
@@ -116,6 +119,22 @@ impl GroupValues for GroupValuesClustered {
         let first_group = old_len - usize::from(continues);
         for (index, range) in ranges.iter().enumerate() {
             groups.resize(range.end, first_group + index);
+        }
+        Ok(())
+    }
+
+    fn find(&mut self, cols: &[ArrayRef], groups: &mut Vec<Option<usize>>) -> Result<()> {
+        groups.clear();
+        // Clustered input usually matches the newest group, so scan from the end.
+        let len = self.len();
+        for range in partition(cols)?.ranges() {
+            let found = (0..len).rev().find(|&group| {
+                self.columns
+                    .iter()
+                    .zip(cols)
+                    .all(|(stored, input)| stored.equal_to(group, input, range.start))
+            });
+            groups.resize(range.end, found);
         }
         Ok(())
     }
@@ -574,6 +593,59 @@ mod tests {
             assert_eq!(values[1].null_count(), 0);
             assert_eq!(values[1].data_type(), &DataType::FixedSizeBinary(0));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn find_does_not_insert() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let mut clustered = GroupValuesClustered::try_new(schema)?;
+        let stored: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![Some(1), Some(1), None, Some(2)])),
+            Arc::new(StringArray::from(vec![
+                Some("x"),
+                Some("x"),
+                None,
+                Some("y"),
+            ])),
+        ];
+        let mut groups = Vec::new();
+        clustered.intern(&stored, &mut groups)?;
+        assert_eq!(groups, vec![0, 0, 1, 2]);
+
+        // Probes are not clustered and may match any buffered group.
+        let probe: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![
+                Some(2),
+                Some(1),
+                Some(1),
+                None,
+                Some(2),
+            ])),
+            Arc::new(StringArray::from(vec![
+                Some("y"),
+                Some("x"),
+                Some("y"),
+                None,
+                Some("y"),
+            ])),
+        ];
+        let mut found = Vec::new();
+        clustered.find(&probe, &mut found)?;
+        assert_eq!(found, vec![Some(2), Some(0), None, Some(1), Some(2)]);
+        assert_eq!(clustered.len(), 3);
+
+        clustered.emit(EmitTo::First(1))?;
+        clustered.find(&probe, &mut found)?;
+        assert_eq!(found, vec![Some(1), None, None, Some(0), Some(1)]);
+
+        clustered.emit(EmitTo::All)?;
+        clustered.find(&probe, &mut found)?;
+        assert_eq!(found, vec![None; 5]);
+        assert!(clustered.is_empty());
         Ok(())
     }
 

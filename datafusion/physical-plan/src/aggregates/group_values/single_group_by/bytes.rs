@@ -63,6 +63,19 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
         Ok(())
     }
 
+    fn find(&mut self, cols: &[ArrayRef], groups: &mut Vec<Option<usize>>) -> Result<()> {
+        assert_eq!(cols.len(), 1);
+        let arr = &cols[0];
+
+        groups.clear();
+        self.map.find(arr, |group_idx| {
+            groups.push(group_idx);
+        });
+
+        assert_eq!(groups.len(), arr.len());
+        Ok(())
+    }
+
     fn size(&self) -> usize {
         self.map.size() + size_of::<Self>()
     }

@@ -84,6 +84,14 @@ pub trait GroupValues: Send {
     /// assigned.
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
 
+    /// Looks up the group id for each input row of `cols` without assigning
+    /// new group ids.
+    ///
+    /// When the function returns, `groups` has been cleared and contains one
+    /// entry per input row: `Some(group_id)` if the value is already stored
+    /// and `None` otherwise. Stored values and group ids are unchanged.
+    fn find(&mut self, cols: &[ArrayRef], groups: &mut Vec<Option<usize>>) -> Result<()>;
+
     /// Returns the number of bytes of memory used by this [`GroupValues`].
     ///
     /// May be expensive; check the implementation before calling on hot paths.
@@ -212,13 +220,208 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        ArrayRef, AsArray, BooleanArray, Int32Array, StringArray, StringViewArray,
+        ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Int32Array,
+        Int64Array, LargeStringArray, ListArray, StringArray, StringViewArray,
     };
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_expr::{EmitTo, GroupSelection};
 
-    use super::new_group_values;
+    use super::{GroupValues, GroupValuesRows, new_group_values};
     use crate::aggregates::order::GroupClustering;
+
+    /// Interns `batches`, then checks that `find` returns the interned id for
+    /// each stored row, `None` for `missing`, and never inserts.
+    fn assert_find_matches_intern(
+        schema: Arc<Schema>,
+        batches: Vec<Vec<ArrayRef>>,
+        missing: Vec<ArrayRef>,
+    ) {
+        let mut gv: Box<dyn GroupValues> =
+            new_group_values(schema, &GroupClustering::None).unwrap();
+        let mut interned = vec![];
+        let mut expected = vec![];
+        for batch in &batches {
+            gv.intern(batch, &mut interned).unwrap();
+            expected.push(interned.iter().copied().map(Some).collect::<Vec<_>>());
+        }
+        let num_groups = gv.len();
+
+        // `groups` is cleared, so start with stale contents.
+        let mut found = vec![Some(usize::MAX); 3];
+        for (batch, expected) in batches.iter().zip(&expected) {
+            gv.find(batch, &mut found).unwrap();
+            assert_eq!(&found, expected);
+        }
+        assert_eq!(gv.len(), num_groups);
+
+        let n = missing[0].len();
+        gv.find(&missing, &mut found).unwrap();
+        assert_eq!(found, vec![None; n]);
+        assert_eq!(gv.len(), num_groups);
+    }
+
+    fn single(data_type: DataType) -> Arc<Schema> {
+        Arc::new(Schema::new(vec![Field::new("g", data_type, true)]))
+    }
+
+    #[test]
+    fn find_matches_intern_single_column() {
+        let long = "a long value that is not inline";
+        let ints = || -> ArrayRef {
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(2), Some(1)]))
+        };
+        assert_find_matches_intern(
+            single(DataType::Int32),
+            vec![vec![ints()]],
+            vec![Arc::new(Int32Array::from(vec![Some(99), Some(100)]))],
+        );
+
+        let strs = |v: Vec<Option<&str>>| -> ArrayRef { Arc::new(StringArray::from(v)) };
+        assert_find_matches_intern(
+            single(DataType::Utf8),
+            vec![
+                vec![strs(vec![Some("a"), None, Some(long), Some("a")])],
+                vec![strs(vec![Some("b"), Some(long)])],
+            ],
+            vec![strs(vec![
+                Some("zz"),
+                Some("a different long value, not inline"),
+            ])],
+        );
+        // no null stored: a null probe is missing
+        assert_find_matches_intern(
+            single(DataType::Utf8),
+            vec![vec![strs(vec![Some("a")])]],
+            vec![strs(vec![None, Some("b")])],
+        );
+
+        assert_find_matches_intern(
+            single(DataType::LargeUtf8),
+            vec![vec![Arc::new(LargeStringArray::from(vec![
+                Some("a"),
+                None,
+                Some(long),
+            ]))]],
+            vec![Arc::new(LargeStringArray::from(vec![
+                Some("q"),
+                Some("rr"),
+            ]))],
+        );
+
+        assert_find_matches_intern(
+            single(DataType::Binary),
+            vec![vec![Arc::new(BinaryArray::from_opt_vec(vec![
+                Some(b"a".as_ref()),
+                None,
+                Some(long.as_bytes()),
+            ]))]],
+            vec![Arc::new(BinaryArray::from_opt_vec(vec![Some(
+                b"q".as_ref(),
+            )]))],
+        );
+
+        assert_find_matches_intern(
+            single(DataType::Utf8View),
+            vec![vec![Arc::new(StringViewArray::from(vec![
+                Some("a"),
+                None,
+                Some(long),
+                Some("a"),
+            ]))]],
+            vec![Arc::new(StringViewArray::from(vec![
+                Some("q"),
+                Some("a different long value, not inline"),
+            ]))],
+        );
+
+        assert_find_matches_intern(
+            single(DataType::BinaryView),
+            vec![vec![Arc::new(BinaryViewArray::from(vec![
+                Some(b"a".as_ref()),
+                None,
+                Some(long.as_bytes()),
+            ]))]],
+            vec![Arc::new(BinaryViewArray::from(vec![Some(b"q".as_ref())]))],
+        );
+
+        assert_find_matches_intern(
+            single(DataType::Boolean),
+            vec![vec![Arc::new(BooleanArray::from(vec![
+                Some(true),
+                None,
+                Some(true),
+            ]))]],
+            vec![Arc::new(BooleanArray::from(vec![Some(false)]))],
+        );
+        assert_find_matches_intern(
+            single(DataType::Boolean),
+            vec![vec![Arc::new(BooleanArray::from(vec![Some(false)]))]],
+            vec![Arc::new(BooleanArray::from(vec![Some(true), None]))],
+        );
+    }
+
+    #[test]
+    fn find_matches_intern_multi_column() {
+        // (Int64, Utf8) -> GroupValuesColumn
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let batch: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![Some(1), Some(1), None, Some(2)])),
+            Arc::new(StringArray::from(vec![
+                Some("x"),
+                Some("y"),
+                Some("x"),
+                None,
+            ])),
+        ];
+        let missing: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![Some(1), Some(3)])),
+            Arc::new(StringArray::from(vec![Some("z"), Some("x")])),
+        ];
+        assert_find_matches_intern(schema, vec![batch], missing);
+
+        // Exercise the row fallback explicitly; this schema also supports columns.
+        let list = |v: Vec<Option<Vec<Option<i32>>>>| -> ArrayRef {
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(v))
+        };
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
+                true,
+            ),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let batch: Vec<ArrayRef> = vec![
+            list(vec![Some(vec![Some(1)]), None, Some(vec![Some(1)])]),
+            Arc::new(Int32Array::from(vec![Some(1), Some(1), Some(2)])),
+        ];
+        let missing: Vec<ArrayRef> = vec![
+            list(vec![Some(vec![Some(1)]), Some(vec![Some(7)])]),
+            Arc::new(Int32Array::from(vec![Some(3), Some(1)])),
+        ];
+        let mut gv = GroupValuesRows::try_new(Arc::clone(&schema)).unwrap();
+        gv.intern(&batch, &mut vec![]).unwrap();
+        let mut found = vec![];
+        gv.find(&batch, &mut found).unwrap();
+        assert_eq!(found, vec![Some(0), Some(1), Some(2)]);
+        gv.find(&missing, &mut found).unwrap();
+        assert_eq!(found, vec![None; 2]);
+        assert_eq!(gv.len(), 3);
+
+        // find on an empty Rows group values
+        let mut gv = GroupValuesRows::try_new(schema).unwrap();
+        let probe: Vec<ArrayRef> = vec![
+            list(vec![Some(vec![Some(1)])]),
+            Arc::new(Int32Array::from(vec![Some(1)])),
+        ];
+        let mut found = vec![];
+        gv.find(&probe, &mut found).unwrap();
+        assert_eq!(found, vec![None]);
+        assert!(gv.is_empty());
+    }
 
     #[test]
     fn preserving_values_keep_group_indices_valid() {
