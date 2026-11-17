@@ -879,7 +879,7 @@ pub struct ParquetOptions {
     #[prost(bool, tag = "41")]
     pub write_row_group_number_distinct_values: bool,
     /// default = false
-    #[prost(bool, tag = "42")]
+    #[prost(bool, tag = "43")]
     pub dictionary_filter_on_read: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
