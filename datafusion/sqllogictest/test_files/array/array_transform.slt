@@ -70,6 +70,21 @@ SELECT array_transform(
 ----
 [arrow.uuid]
 
+statement ok
+CREATE TABLE metadata_lists AS VALUES ([1]), ([]), (NULL);
+
+query ??
+SELECT
+    array_transform(column1, x -> with_metadata(x, 'k', 'v')),
+    array_transform(
+        arrow_cast(column1, 'LargeList(Int64)'),
+        x -> with_metadata(x, 'k', 'v')
+    )
+FROM metadata_lists
+WHERE cardinality(column1) = 0;
+----
+[] []
+
 # return scalar
 query I?
 SELECT t.number, array_transform([1, 2], e1 -> 24) from t;
