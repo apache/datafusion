@@ -1030,6 +1030,7 @@ mod tests {
                 .with_metadata(Metadata::new().with("source", "name")),
             Field::new("plain", DataType::Utf8, true),
             Field::new("large", DataType::LargeUtf8, true),
+            Field::new("required", DataType::Utf8, false),
         ]);
         let df_schema = DFSchema::try_from(schema.clone())?;
         let null_with_metadata = Expr::Literal(
@@ -1083,6 +1084,10 @@ mod tests {
                 .otherwise(col("large"))?,
                 Metadata::new().with("source", "name"),
             ),
+            (
+                when(col("id").gt(lit(1)), col("required")).otherwise(lit("x"))?,
+                Metadata::new(),
+            ),
         ];
 
         for (expr, expected) in cases {
@@ -1096,6 +1101,11 @@ mod tests {
             .return_field(&schema)?;
             assert_eq!(logical.metadata(), &expected, "logical field of {expr}");
             assert_eq!(physical.metadata(), &expected, "physical field of {expr}");
+            assert_eq!(
+                (physical.data_type(), physical.is_nullable()),
+                (logical.data_type(), logical.is_nullable()),
+                "physical field of {expr}"
+            );
         }
 
         Ok(())
