@@ -3128,6 +3128,48 @@ mod tests {
         )
     }
 
+    /// `WITH w AS MATERIALIZED (test) SELECT c FROM w UNION ALL (WITH w AS
+    /// MATERIALIZED (test) SELECT b FROM w)`, where both occurrences have the
+    /// same id, as a plan that is cloned has. Each occurrence prunes its own
+    /// body from its own scans.
+    #[test]
+    fn materialized_cte_nested_occurrence_with_the_same_id() -> Result<()> {
+        let id = MaterializedCteId::next();
+        let occurrence =
+            |column: &str, rest: Option<LogicalPlan>| -> Result<LogicalPlan> {
+                let body = test_table_scan()?;
+                let scan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+                    MaterializedCteScan::new(id, "w", Arc::clone(body.schema())),
+                ));
+                let mut continuation =
+                    LogicalPlanBuilder::from(scan).project(vec![col(column)])?;
+                if let Some(rest) = rest {
+                    continuation = continuation.union(rest)?;
+                }
+                Ok(LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                    MaterializedCte::try_new(
+                        id,
+                        "w",
+                        Arc::new(body),
+                        Arc::new(continuation.build()?),
+                    )?,
+                )))
+            };
+        let plan = occurrence("c", Some(occurrence("b", None)?))?;
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        MaterializedCte: name=w
+          TableScan: test projection=[c]
+          Union
+            MaterializedCteScan: name=w
+            MaterializedCte: name=w
+              TableScan: test projection=[b]
+              MaterializedCteScan: name=w
+        "
+        )
+    }
+
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
     fn optimize(plan: LogicalPlan) -> Result<LogicalPlan> {

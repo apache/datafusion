@@ -1075,11 +1075,13 @@ mod tests {
 
         let all = MaterializedCteScanExec::new(0, "c", Arc::clone(&schema), 1);
         all.check_body_schema(&schema)?;
+        assert_eq!(all.projection(), None);
 
         let ca_schema = Arc::new(schema.project(&[2, 0])?);
         let ca = MaterializedCteScanExec::new(0, "c", Arc::clone(&ca_schema), 1)
             .with_projection(Some(vec![2, 0]));
         ca.check_body_schema(&schema)?;
+        assert_eq!(ca.projection(), Some([2, 0].as_slice()));
         // The projection selects other types or columns than the scan schema.
         assert!(all.check_body_schema(&ca_schema).is_err());
         let wrong = MaterializedCteScanExec::new(0, "c", Arc::clone(&ca_schema), 1)
@@ -1105,6 +1107,7 @@ mod tests {
         let none = MaterializedCteScanExec::new(0, "c", empty_schema, 1)
             .with_projection(Some(vec![]));
         none.check_body_schema(&schema)?;
+        assert_eq!(none.projection(), Some([].as_slice()));
         let none = none.bind(Arc::clone(&buffer));
         let batches = collect(none.execute(0, context)?).await?;
         assert_eq!(batches.len(), 1);
