@@ -40,9 +40,12 @@ use datafusion_functions_aggregate::{
     count::count_udaf,
     grouping::grouping_udaf,
     min_max::{max_udaf, min_udaf},
+    planner::AggregateFunctionPlanner,
 };
 use datafusion_functions_nested::make_array::make_array_udf;
-use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
+use datafusion_functions_window::{
+    planner::WindowFunctionPlanner, rank::rank_udwf, row_number::row_number_udwf,
+};
 use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
 use sqlparser::dialect::{
@@ -1328,7 +1331,7 @@ fn select_aggregate_with_having_referencing_column_not_in_select() {
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @r#"Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.first_name" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "count(*)" appears in the SELECT clause satisfies this requirement"#
+        @r#"Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: While expanding wildcard, column "person.first_name" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "count(Int64(1))" appears in the SELECT clause satisfies this requirement"#
     );
 }
 
@@ -1596,10 +1599,10 @@ fn select_aggregate_with_group_by_with_having_using_count_star_not_in_select() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @"
     Projection: person.first_name, max(person.age)
-      Filter: max(person.age) > Int64(100) AND count(*) < Int64(50)
-        Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age), count(*)]]
+      Filter: max(person.age) > Int64(100) AND count(Int64(1)) < Int64(50)
+        Aggregate: groupBy=[[person.first_name]], aggr=[[max(person.age), count(Int64(1))]]
           TableScan: person
     "
     );
@@ -1625,8 +1628,8 @@ fn select_aggregate_with_group_by_placeholder_expression() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
-      Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(Int64(1)) AS count(*)
+      Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(Int64(1))]]
         TableScan: person
     "#
     );
@@ -1644,9 +1647,9 @@ fn select_aggregate_with_having_placeholder_expression() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
+    Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(Int64(1)) AS count(*)
       Filter: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END = Utf8("young")
-        Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+        Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(Int64(1))]]
           TableScan: person
     "#
     );
@@ -1665,8 +1668,8 @@ fn select_aggregate_with_order_by_placeholder_expression() {
         plan,
         @r#"
     Sort: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END ASC NULLS LAST
-      Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(*)
-        Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(*)]]
+      Projection: CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END, count(Int64(1)) AS count(*)
+        Aggregate: groupBy=[[CASE WHEN person.age < $1 THEN Utf8("young") ELSE Utf8("old") END]], aggr=[[count(Int64(1))]]
           TableScan: person
     "#
     );
@@ -2645,9 +2648,9 @@ fn select_group_by_count_star() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.state, count(*)
-      Aggregate: groupBy=[[person.state]], aggr=[[count(*)]]
+        @"
+    Projection: person.state, count(Int64(1)) AS count(*)
+      Aggregate: groupBy=[[person.state]], aggr=[[count(Int64(1))]]
         TableScan: person
     "
     );
@@ -3158,15 +3161,15 @@ fn union_all_with_duplicate_expressions() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @"
     Union
       Union
         Projection: Int64(0) AS a, Int64(0) AS b
           EmptyRelation: rows=1
         Projection: Int64(1) AS a, Int64(1) AS b
           EmptyRelation: rows=1
-      Projection: count(*) AS a, count(*) AS b
-        Aggregate: groupBy=[[]], aggr=[[count(*)]]
+      Projection: count(Int64(1)) AS a, count(Int64(1)) AS b
+        Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
           TableScan: orders
     "
     );
@@ -3200,7 +3203,7 @@ fn intersect_with_duplicate_expressions() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @"
     LeftSemi Join: left.a = right.a, left.b = right.b
       Distinct:
         SubqueryAlias: left
@@ -3213,8 +3216,8 @@ fn intersect_with_duplicate_expressions() {
               Projection: Int64(1) AS a, Int64(1) AS b
                 EmptyRelation: rows=1
       SubqueryAlias: right
-        Projection: count(*) AS a, count(*) AS b
-          Aggregate: groupBy=[[]], aggr=[[count(*)]]
+        Projection: count(Int64(1)) AS a, count(Int64(1)) AS b
+          Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
             TableScan: orders
     "
     );
@@ -3229,7 +3232,7 @@ fn except_with_duplicate_expressions() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @"
     LeftAnti Join: left.a = right.a, left.b = right.b
       Distinct:
         SubqueryAlias: left
@@ -3242,8 +3245,8 @@ fn except_with_duplicate_expressions() {
               Projection: Int64(1) AS a, Int64(1) AS b
                 EmptyRelation: rows=1
       SubqueryAlias: right
-        Projection: count(*) AS a, count(*) AS b
-          Aggregate: groupBy=[[]], aggr=[[count(*)]]
+        Projection: count(Int64(1)) AS a, count(Int64(1)) AS b
+          Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
             TableScan: orders
     "
     );
@@ -4215,6 +4218,8 @@ fn mock_session_state() -> MockSessionState {
         .with_window_function(rank_udwf())
         .with_window_function(row_number_udwf())
         .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
+        .with_expr_planner(Arc::new(AggregateFunctionPlanner))
+        .with_expr_planner(Arc::new(WindowFunctionPlanner))
 }
 
 fn logical_plan_from_state(
@@ -4579,12 +4584,12 @@ fn scalar_subquery_reference_outer_field() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
+        @"
     Projection: j1.j1_string, j2.j2_string
       Filter: j1.j1_id = j2.j2_id - Int64(1) AND j2.j2_id < (<subquery>)
         Subquery:
-          Projection: count(*)
-            Aggregate: groupBy=[[]], aggr=[[count(*)]]
+          Projection: count(Int64(1)) AS count(*)
+            Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
               Filter: outer_ref(j2.j2_id) = j1.j1_id AND j1.j1_id = j3.j3_id
                 Cross Join:
                   TableScan: j1
@@ -4604,8 +4609,8 @@ fn aggregate_with_rollup() {
     assert_snapshot!(
         plan,
         @r"
-    Projection: person.id, person.state, person.age, count(*)
-      Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[count(*)]]
+    Projection: person.id, person.state, person.age, count(Int64(1)) AS count(*)
+      Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[count(Int64(1))]]
         TableScan: person
     "
     );
@@ -4618,9 +4623,9 @@ fn aggregate_with_rollup_with_grouping() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.id, person.state, person.age, grouping(person.state), grouping(person.age), grouping(person.state) + grouping(person.age), count(*)
-      Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[grouping(person.state), grouping(person.age), count(*)]]
+        @"
+    Projection: person.id, person.state, person.age, grouping(person.state), grouping(person.age), grouping(person.state) + grouping(person.age), count(Int64(1)) AS count(*)
+      Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.state, person.age))]], aggr=[[grouping(person.state), grouping(person.age), count(Int64(1))]]
         TableScan: person
     "
     );
@@ -4660,9 +4665,9 @@ fn aggregate_with_cube() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.id, person.state, person.age, count(*)
-      Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.age), (person.id, person.state, person.age))]], aggr=[[count(*)]]
+        @"
+    Projection: person.id, person.state, person.age, count(Int64(1)) AS count(*)
+      Aggregate: groupBy=[[GROUPING SETS ((person.id), (person.id, person.state), (person.id, person.age), (person.id, person.state, person.age))]], aggr=[[count(Int64(1))]]
         TableScan: person
     "
     );
@@ -4687,9 +4692,9 @@ fn aggregate_with_grouping_sets() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: person.id, person.state, person.age, count(*)
-      Aggregate: groupBy=[[GROUPING SETS ((person.id, person.state), (person.id, person.state, person.age), (person.id, person.id, person.state))]], aggr=[[count(*)]]
+        @"
+    Projection: person.id, person.state, person.age, count(Int64(1)) AS count(*)
+      Aggregate: groupBy=[[GROUPING SETS ((person.id, person.state), (person.id, person.state, person.age), (person.id, person.id, person.state))]], aggr=[[count(Int64(1))]]
         TableScan: person
     "
     );
@@ -5853,7 +5858,7 @@ fn test_using_join_wildcard_schema_semi_anti() {
     let s_columns = &["s.x1", "s.x2", "s.x3"];
     let t_columns = &["t.x1", "t.x2", "t.x3"];
 
-    let sql = "WITH 
+    let sql = "WITH
         s AS (SELECT 1 AS x1, 2 AS x2, 3 AS x3),
         t AS (SELECT 1 AS x1, 4 AS x2, 5 AS x3)
         SELECT * FROM s LEFT SEMI JOIN t USING (x1)";

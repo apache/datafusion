@@ -419,6 +419,36 @@ SELECT * FROM (
 ----
 1 10
 
+# An ORDER BY ... LIMIT above the query that declares the CTE does not limit an
+# aggregate in the shared body. The body groups by the sort column, but every
+# reference reads the whole body: the filter keeps only groups after the first
+# 100, and count(*) counts all 200.
+statement ok
+CREATE TABLE g AS SELECT value AS x FROM generate_series(1, 200);
+
+query I
+SELECT * FROM (
+  WITH c AS MATERIALIZED (SELECT x FROM g GROUP BY x)
+  SELECT x FROM c WHERE x > 100
+) s ORDER BY x LIMIT 3
+----
+101
+102
+103
+
+query II
+SELECT * FROM (
+  WITH c AS MATERIALIZED (SELECT x FROM g GROUP BY x)
+  SELECT c.x, m.n FROM c CROSS JOIN (SELECT count(*) AS n FROM c) m
+) s ORDER BY x LIMIT 3
+----
+1 200
+2 200
+3 200
+
+statement ok
+DROP TABLE g;
+
 # Spill: the body does not fit in the memory limit, so it is written to disk
 # and replayed from there by every reference. Part of the in-memory prefix is
 # also moved to disk, so that the two references have memory to decode the

@@ -16,10 +16,8 @@ const CI_COMMAND: &str = "cargo xtask ci step";
 const CI_SHORTCUT: &str = "cargo ci-step";
 const TPCH_DATA_DIR: &str = "datafusion/sqllogictest/test_files/tpch/data";
 /// Physical-plan fuzzers awaiting migration to the centralized driver.
-const LEGACY_FUZZ_TESTS: &[&str] = &[
-    "joins::hash_join::partitioned_hash_eval::tests::routed_lookup_fuzz",
-    "joins::key_range_bitmap::tests::union_fuzz",
-];
+const LEGACY_FUZZ_TESTS: &[&str] =
+    &["joins::hash_join::partitioned_hash_eval::tests::routed_lookup_fuzz"];
 
 /// Metadata and implementation for one CI step.
 ///
@@ -463,12 +461,13 @@ impl StepContext {
             }
             "fuzz" => {
                 cmd_builder.doc("Run the centralized fuzz tests.");
-                // Match extended's packages and features to reuse compiled dependencies.
+                // Use `cargo-nextest` to show each test's elapsed time.
                 cmd_builder
                     .program("cargo")
                     .args([
-                        "test",
-                        "--profile",
+                        "nextest",
+                        "run",
+                        "--cargo-profile",
                         "ci",
                         "-p",
                         "datafusion",
@@ -478,6 +477,9 @@ impl StepContext {
                         "fuzz",
                         "--features",
                         "avro,backtrace,extended_tests,parquet_encryption",
+                        "--no-fail-fast",
+                        "--status-level",
+                        "pass",
                     ])
                     .env("RUST_BACKTRACE", "1");
             }
@@ -498,8 +500,7 @@ impl StepContext {
                     ])
                     .args(LEGACY_FUZZ_TESTS)
                     .env("RUST_BACKTRACE", "1")
-                    .env("DATAFUSION_ROUTED_LOOKUP_FUZZ_ITERATIONS", "10000")
-                    .env("DATAFUSION_KEY_RANGE_UNION_FUZZ_ITERATIONS", "10000");
+                    .env("DATAFUSION_ROUTED_LOOKUP_FUZZ_ITERATIONS", "10000");
             }
             "hash-collisions" => {
                 cmd_builder.doc(
@@ -974,12 +975,14 @@ cargo test \
 
 cd /workspace && \
 RUST_BACKTRACE=1 \
-cargo test \
---profile ci \
+cargo nextest run \
+--cargo-profile ci \
 -p datafusion \
 -p datafusion-fuzz \
 --test fuzz \
---features avro,backtrace,extended_tests,parquet_encryption
+--features avro,backtrace,extended_tests,parquet_encryption \
+--no-fail-fast \
+--status-level pass
 ")
                 },
             },
@@ -990,14 +993,13 @@ cargo test \
 # Run unmigrated physical-plan fuzz tests with more iterations.
 
 cd /workspace && \
-DATAFUSION_KEY_RANGE_UNION_FUZZ_ITERATIONS=10000 \
 DATAFUSION_ROUTED_LOOKUP_FUZZ_ITERATIONS=10000 \
 RUST_BACKTRACE=1 \
 cargo test \
 --profile ci \
 -p datafusion-physical-plan \
 --lib \
--- --exact joins::hash_join::partitioned_hash_eval::tests::routed_lookup_fuzz joins::key_range_bitmap::tests::union_fuzz
+-- --exact joins::hash_join::partitioned_hash_eval::tests::routed_lookup_fuzz
 ")
                 },
             },

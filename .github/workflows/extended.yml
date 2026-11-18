@@ -4,7 +4,7 @@
 
 # Each test command below is implemented with `cargo xtask` so developers can
 # run the same suite locally. Append `--explain` to print the underlying
-# `cargo test` invocation without running it. Job setup, the clean working tree
+# test command without running it. Job setup, the clean working tree
 # check, and `cargo clean` remain in this workflow.
 #
 # See `xtask/README.md` for details about DataFusion's `xtask` tooling.
@@ -47,7 +47,7 @@ jobs:
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
+      - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
@@ -65,6 +65,10 @@ jobs:
             run: |
               sudo apt-get update
               sudo apt-get install -y protobuf-compiler
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
+        with:
+          tool: nextest
       # For debugging, test binaries can be large.
       - name: Show available disk space
         run: |
@@ -92,7 +96,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
+      - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
@@ -116,7 +120,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
+      - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - parallel:
           - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
             with:

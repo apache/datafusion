@@ -750,11 +750,7 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
     } = original_expr.clone().rewrite(&mut rewriter)?;
 
     if !transformed {
-        // TODO: remove the next line after `Expr::Wildcard` is removed
-        #[expect(deprecated)]
-        if matches!(&transformed_expr, Expr::Column(_))
-            || matches!(&transformed_expr, Expr::Wildcard { .. })
-        {
+        if matches!(&transformed_expr, Expr::Column(_)) {
             inner_projection_exprs.push(transformed_expr.clone());
             Ok(vec![transformed_expr])
         } else {
