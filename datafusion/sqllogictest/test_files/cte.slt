@@ -306,6 +306,38 @@ SELECT * FROM ranges
 2 4
 1 4
 
+# deduplicating recursive CTE keeps rows whose hashes collide within a batch.
+# With an equal first column, the hash of (g, s, o) is symmetric in s and o, so
+# ('x', 'a', 'b') and ('x', 'b', 'a') collide.
+query TTT rowsort
+WITH RECURSIVE t AS (
+    SELECT arrow_cast(g, 'Utf8') AS g, arrow_cast(s, 'Utf8') AS s, arrow_cast(o, 'Utf8') AS o
+    FROM (VALUES ('x', 'a', 'b'), ('x', 'b', 'a'), ('x', 'c', 'd')) edges(g, s, o)
+    UNION
+    SELECT * FROM t WHERE false
+)
+SELECT * FROM t
+----
+x a b
+x b a
+x c d
+
+# transitive closure over Utf8 columns with a cycle
+query I
+WITH RECURSIVE
+    edges AS (
+        SELECT arrow_cast(g, 'Utf8') AS g, arrow_cast(s, 'Utf8') AS s, arrow_cast(o, 'Utf8') AS o
+        FROM (VALUES ('x', 'z', 'c1'), ('x', 'c2', 'c1'), ('x', 'c1', 'c2'), ('x', 'm1', 'z'), ('x', 'm2', 'z')) edges(g, s, o)
+    ),
+    closure AS (
+        SELECT g, s, o FROM edges
+        UNION
+        SELECT closure.g, closure.s, edges.o FROM closure JOIN edges ON closure.o = edges.s
+    )
+SELECT count(*) FROM closure
+----
+12
+
 # setup
 statement ok
 CREATE EXTERNAL TABLE balance STORED as CSV LOCATION '../core/tests/data/recursive_cte/balance.csv' OPTIONS ('format.has_header' 'true');
