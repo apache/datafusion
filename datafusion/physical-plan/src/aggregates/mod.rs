@@ -219,7 +219,7 @@ mod spill;
 mod topk;
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
-const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
+pub(crate) const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
     // This seed is chosen to be a large 64-bit number
     datafusion_common::hash_utils::RandomState::with_seed(15395726432021054657);
 

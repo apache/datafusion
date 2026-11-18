@@ -587,4 +587,25 @@ mod tests {
             BooleanArray::from(vec![true, true, false, true, false, false, false])
         );
     }
+
+    /// The test "deduplicating recursive CTE keeps rows whose hashes collide within a batch" in
+    /// `cte.slt` relies on `('x', 'a', 'b')` and `('x', 'b', 'a')` having the same hash in the
+    /// deduplication. If this test fails, the hashing changed and the SLT test needs new rows
+    /// whose hashes collide.
+    #[test]
+    fn cte_slt_rows_have_colliding_hashes() -> Result<()> {
+        use crate::aggregates::AGGREGATION_HASH_SEED;
+        use arrow::array::{ArrayRef, StringArray};
+        use datafusion_common::hash_utils::create_hashes;
+
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec!["x", "x"])),
+            Arc::new(StringArray::from(vec!["a", "b"])),
+            Arc::new(StringArray::from(vec!["b", "a"])),
+        ];
+        let mut hashes = vec![0; 2];
+        create_hashes(&columns, &AGGREGATION_HASH_SEED, &mut hashes)?;
+        assert_eq!(hashes[0], hashes[1]);
+        Ok(())
+    }
 }
