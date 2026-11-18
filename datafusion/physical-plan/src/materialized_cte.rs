@@ -678,7 +678,7 @@ impl MaterializedCteScanExec {
     /// Create a scan that is not yet bound to a buffer. See [`Self::bind`].
     ///
     /// The scan outputs all the columns of the body, which must have the
-    /// schema `schema`. See [`Self::with_projection`].
+    /// schema `schema`. See [`Self::with_body_projection`].
     pub fn new(
         id: u64,
         name: impl Into<String>,
@@ -704,13 +704,23 @@ impl MaterializedCteScanExec {
         }
     }
 
-    /// Make this scan output only the columns `projection` of the body.
+    /// Make this scan output only the columns `projection` of the body, in
+    /// this order.
     ///
     /// The schema given to [`Self::new`] must then be the schema of these
-    /// columns, not the schema of the body.
-    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
-        self.projection = projection;
-        self
+    /// columns, not the schema of the body. Returns an error if `projection`
+    /// does not have one index for each column of that schema.
+    pub fn with_body_projection(mut self, projection: Vec<usize>) -> Result<Self> {
+        let len = self.schema.fields().len();
+        if projection.len() != len {
+            return internal_err!(
+                "The scan of the materialized CTE {} has {len} columns, but its projection has {} indexes",
+                self.name,
+                projection.len()
+            );
+        }
+        self.projection = Some(projection);
+        Ok(self)
     }
 
     /// The indexes of the columns of the body that this scan outputs. `None`
@@ -1010,7 +1020,7 @@ mod tests {
         let projected_schema = Arc::new(schema.project(&[1])?);
         let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
         let scan = MaterializedCteScanExec::new(0, "c", projected_schema, 1)
-            .with_projection(Some(vec![1]))
+            .with_body_projection(vec![1])?
             .bind(buffer)
             .with_body_statistics(Arc::new(body_statistics.clone()));
         let statistics = context.compute(&scan, &StatisticsArgs::new())?;
@@ -1079,14 +1089,18 @@ mod tests {
 
         let ca_schema = Arc::new(schema.project(&[2, 0])?);
         let ca = MaterializedCteScanExec::new(0, "c", Arc::clone(&ca_schema), 1)
-            .with_projection(Some(vec![2, 0]));
+            .with_body_projection(vec![2, 0])?;
         ca.check_body_schema(&schema)?;
         assert_eq!(ca.projection(), Some([2, 0].as_slice()));
         // The projection selects other types or columns than the scan schema.
         assert!(all.check_body_schema(&ca_schema).is_err());
         let wrong = MaterializedCteScanExec::new(0, "c", Arc::clone(&ca_schema), 1)
-            .with_projection(Some(vec![2, 5]));
+            .with_body_projection(vec![2, 5])?;
         assert!(wrong.check_body_schema(&schema).is_err());
+        // The projection must have one index for each column of the schema.
+        let short = MaterializedCteScanExec::new(0, "c", Arc::clone(&ca_schema), 1)
+            .with_body_projection(vec![2]);
+        assert!(short.is_err());
         assert_eq!(
             crate::displayable(&ca).one_line().to_string().trim(),
             "MaterializedCteScanExec: name=c, projection=[c, a]"
@@ -1105,7 +1119,7 @@ mod tests {
 
         let empty_schema = Arc::new(Schema::empty());
         let none = MaterializedCteScanExec::new(0, "c", empty_schema, 1)
-            .with_projection(Some(vec![]));
+            .with_body_projection(vec![])?;
         none.check_body_schema(&schema)?;
         assert_eq!(none.projection(), Some([].as_slice()));
         let none = none.bind(Arc::clone(&buffer));
@@ -1226,7 +1240,8 @@ mod tests {
         let scan = |projection: Vec<usize>| {
             let projected = Arc::new(schema.project(&projection).unwrap());
             let scan = MaterializedCteScanExec::new(0, "c", Arc::clone(&projected), 1)
-                .with_projection(Some(projection));
+                .with_body_projection(projection)
+                .unwrap();
             scan.check_body_schema(&schema).unwrap();
             (projected, scan.bind(Arc::clone(&buffer)))
         };

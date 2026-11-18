@@ -195,13 +195,13 @@ pub struct MaterializedCteScan {
     pub name: String,
     /// The schema of this scan: the columns of the CTE body that
     /// `projection` selects
-    pub schema: DFSchemaRef,
+    schema: DFSchemaRef,
     /// The indexes of the columns of the CTE body that this scan outputs, in
     /// output order. `None` means all the columns, in the order of the body.
     ///
     /// The indexes refer to the schema of the body of the [`MaterializedCte`]
     /// with the same id, and the scan reads the buffered batches by position.
-    pub projection: Option<Vec<usize>>,
+    projection: Option<Vec<usize>>,
 }
 
 impl MaterializedCteScan {
@@ -308,7 +308,17 @@ impl MaterializedCteScan {
                 self.check_body_schema(body)?;
                 project_schema(body, projection)?
             }
-            None => body.clone(),
+            None => {
+                let len = self.schema.fields().len();
+                if body.fields().len() != len {
+                    return internal_err!(
+                        "A scan of the materialized CTE {} reads all its {len} columns, but the CTE has {} columns",
+                        self.name,
+                        body.fields().len()
+                    );
+                }
+                body.clone()
+            }
         };
         let qualifiers = self.schema.iter().map(|(q, _)| q.cloned()).collect();
         let schema =
@@ -634,6 +644,54 @@ mod tests {
             cb.schema().functional_dependencies()
         );
         new_cb.check_body_schema(&new_body)?;
+        Ok(())
+    }
+
+    #[test]
+    fn with_body_schema_rejects_a_body_of_another_width() -> Result<()> {
+        let id = MaterializedCteId::next();
+        let all = MaterializedCteScan::new(id, "c", schema(DataType::Int32));
+        // The analyzer can change the types of the body, so a new type is accepted.
+        let utf8 = all.with_body_schema(&schema(DataType::Utf8))?;
+        assert_eq!(utf8.schema().field(0).data_type(), &DataType::Utf8);
+        let err = all.with_body_schema(&wide_schema()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("reads all its 1 columns, but the CTE has 4 columns"),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn check_invariants_rejects_a_scan_that_does_not_match_the_body() -> Result<()> {
+        use crate::logical_plan::InvariantLevel;
+        let id = MaterializedCteId::next();
+        let cte = MaterializedCte::try_new(
+            id,
+            "c",
+            body(DataType::Int32),
+            Arc::new(scan(id, DataType::Int32)),
+        )?;
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte.clone()))
+            .check_invariants(InvariantLevel::Executable)?;
+
+        // `with_new_inputs` does not check the scans, so a rule can build
+        // this plan. The invariant check rejects it.
+        let invalid = cte
+            .with_new_inputs(body(DataType::Int32), Arc::new(scan(id, DataType::Utf8)));
+        let invalid = LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(invalid));
+        let err = invalid
+            .check_invariants(InvariantLevel::Executable)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("A scan of the materialized CTE c does not match the CTE"),
+            "{err}"
+        );
+
+        // A scan whose CTE is not in the plan is not checked.
+        scan(id, DataType::Utf8).check_invariants(InvariantLevel::Executable)?;
         Ok(())
     }
 

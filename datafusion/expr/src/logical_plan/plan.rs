@@ -25,9 +25,7 @@ use crate::expr_rewriter::{
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::logical_plan::materialized_cte::{
-    MaterializedCte, MaterializedCtePlan, MaterializedCteScan,
-};
+use crate::logical_plan::materialized_cte::{MaterializedCte, MaterializedCtePlan};
 use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::type_coercion::other::coerce_union_type;
 use crate::utils::{
@@ -417,7 +415,9 @@ impl LogicalPlan {
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => cte.schema(),
-            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => &scan.schema,
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
+                scan.schema()
+            }
             LogicalPlan::Union(Union { schema, .. }) => schema,
             LogicalPlan::Show(Show { output_schema, .. }) => output_schema,
             LogicalPlan::Dml(DmlStatement { output_schema, .. }) => output_schema,
@@ -2521,17 +2521,11 @@ impl LogicalPlan {
                     )) => {
                         write!(f, "MaterializedCte: name={name}")
                     }
-                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
-                        MaterializedCteScan {
-                            name,
-                            schema,
-                            projection,
-                            ..
-                        },
-                    )) => {
-                        write!(f, "MaterializedCteScan: name={name}")?;
-                        if projection.is_some() {
-                            let names: Vec<&str> = schema
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
+                        write!(f, "MaterializedCteScan: name={}", scan.name())?;
+                        if scan.projection().is_some() {
+                            let names: Vec<&str> = scan
+                                .schema()
                                 .fields()
                                 .iter()
                                 .map(|field| field.name().as_str())

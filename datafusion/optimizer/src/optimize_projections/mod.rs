@@ -285,7 +285,7 @@ fn optimize_projections(
             // owns the CTE then removes from the body the columns that no
             // scan reads.
             let new_scan = scan.with_projection(indices.indices())?;
-            let transformed = new_scan.projection != scan.projection;
+            let transformed = new_scan.projection() != scan.projection();
             return Ok(Transformed::new_transformed(
                 LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(new_scan)),
                 transformed,

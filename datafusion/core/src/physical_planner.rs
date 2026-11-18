@@ -83,9 +83,9 @@ use datafusion_expr::physical_planning_context::{
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, MaterializedCte, MaterializedCteId, MaterializedCtePlan,
-    MaterializedCteScan, Operator, RecursiveQuery, Show, ShowKind, SkipType,
-    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    Filter, JoinType, MaterializedCte, MaterializedCteId, MaterializedCtePlan, Operator,
+    RecursiveQuery, Show, ShowKind, SkipType, StringifiedPlan, WindowFrame,
+    WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{
     AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
@@ -285,14 +285,12 @@ fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>>
                     )) if nested.id == old_id => {
                         Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
                     }
-                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(mut scan))
                         if scan.id == old_id =>
                     {
+                        scan.id = new_id;
                         Ok(Transformed::yes(LogicalPlan::MaterializedCte(
-                            MaterializedCtePlan::Scan(MaterializedCteScan {
-                                id: new_id,
-                                ..scan
-                            }),
+                            MaterializedCtePlan::Scan(scan),
                         )))
                     }
                     _ => Ok(Transformed::no(node)),
@@ -948,15 +946,18 @@ impl DefaultPhysicalPlanner {
 
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
                 // Unbound until `bind_materialized_cte_scans` runs on the whole plan.
-                Arc::new(
-                    MaterializedCteScanExec::new(
-                        scan.id.as_u64(),
-                        &scan.name,
-                        Arc::clone(scan.schema.inner()),
-                        session.config().target_partitions(),
-                    )
-                    .with_projection(scan.projection.clone()),
-                )
+                let exec = MaterializedCteScanExec::new(
+                    scan.id.as_u64(),
+                    &scan.name,
+                    Arc::clone(scan.schema().inner()),
+                    session.config().target_partitions(),
+                );
+                match scan.projection() {
+                    Some(projection) => {
+                        Arc::new(exec.with_body_projection(projection.to_vec())?)
+                    }
+                    None => Arc::new(exec),
+                }
             }
 
             // 1 Child
