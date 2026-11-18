@@ -1,6 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 disallowed-methods = [
     { path = "tokio::task::spawn", reason = "To provide cancel-safety, use `SpawnedTask::spawn` instead (https://github.com/apache/datafusion/issues/6513)" },
     { path = "tokio::task::spawn_blocking", reason = "To provide cancel-safety, use `SpawnedTask::spawn_blocking` instead (https://github.com/apache/datafusion/issues/6513)" },
+    { path = "arrow_array::array::AnyDictionaryArray::with_values", reason = "Running code on every dictionary value can cost far more than the batch has rows; use `datafusion_common::utils::map_dictionary_values`" },
+    { path = "arrow_array::array::DictionaryArray::with_values", reason = "Running code on every dictionary value can cost far more than the batch has rows; use `datafusion_common::utils::map_dictionary_values`" },
     { path = "std::vec::Vec::reserve", reason = "Use `Vec::try_reserve` so allocation failures can be reported instead of panicking", replacement = "try_reserve" },
 ]
 
@@ -21,3 +27,8 @@ future-size-threshold = 10000
 # - https://github.com/apache/datafusion/issues/16652
 # - https://rust-lang.github.io/rust-clippy/master/index.html#result_large_err
 large-error-threshold = 70
+
+# `DFSchema` caches a name index in a `OnceLock`, which is excluded from its
+# `Hash` and `Eq`, so plans and expressions containing it are safe hash keys.
+# See: https://rust-lang.github.io/rust-clippy/master/index.html#mutable_key_type
+ignore-interior-mutability = ["bytes::Bytes", "datafusion_common::DFSchema"]

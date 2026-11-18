@@ -22,7 +22,8 @@ use crate::helper::plan_metrics::plan_spill_count;
 
 #[tokio::test]
 async fn test_memory_limit_with_spill() {
-    let ctx = SessionContext::new();
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
 
     ctx.sql("SET datafusion.runtime.memory_limit = '1M'")
         .await
@@ -38,14 +39,19 @@ async fn test_memory_limit_with_spill() {
         .await
         .unwrap();
 
-    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1 desc;";
+    // Two MiB of input exceeds the one MiB pool without a large fixture.
+    let query = "select * from generate_series(1,262144) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     let plan = df.create_physical_plan().await.unwrap();
     let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
     let stream = plan.execute(0, task_ctx).unwrap();
 
-    let _results = collect(stream).await;
+    let results = collect(stream).await.unwrap();
+    assert_eq!(
+        results.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        262_144
+    );
     let spill_count = plan_spill_count(plan.as_ref());
     assert!(spill_count > 0, "Expected spills but none occurred");
 }

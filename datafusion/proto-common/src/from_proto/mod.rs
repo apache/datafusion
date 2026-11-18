@@ -1163,6 +1163,10 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
                 .ignore_trailing_whitespace
                 .first()
                 .map(|h| *h != 0),
+            match_columns_by_header: proto_opts
+                .match_columns_by_header
+                .first()
+                .map(|h| *h != 0),
         })
     }
 }
@@ -1190,6 +1194,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             pushdown_filters: value.pushdown_filters,
             reorder_filters: value.reorder_filters,
             force_filter_selections: value.force_filter_selections,
+            enable_exact_reverse_scan: value.enable_exact_reverse_scan,
             data_pagesize_limit: to_usize(
                 value.data_pagesize_limit,
                 "data_pagesize_limit",
@@ -1723,7 +1728,11 @@ mod tests {
 
     #[test]
     fn test_parquet_encoding_round_trip() {
-        for encoding in [None, Some(DFParquetEncoding::ByteStreamSplit)] {
+        for encoding in [
+            None,
+            Some(DFParquetEncoding::ByteStreamSplit),
+            Some(DFParquetEncoding::Alp),
+        ] {
             let opts = ParquetOptions {
                 encoding,
                 ..ParquetOptions::default()

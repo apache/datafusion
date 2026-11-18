@@ -1663,22 +1663,25 @@ mod tests {
     fn bloom_filter_pruning_error_retains_row_group_without_match() {
         let schema =
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
-        let cast_expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
-            Arc::new(PhysicalColumn::new("c1", 0)),
-            DataType::FixedSizeBinary(4),
+        // c1 = CAST('abc' AS Int32): constant folding fails, so the
+        // simplifier keeps the cast, and the cast fails at evaluation.
+        let value: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+            Arc::new(Literal::new(ScalarValue::from("abc"))),
+            DataType::Int32,
             None,
         ));
-        let literal: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(
-            ScalarValue::FixedSizeBinary(4, Some(vec![0, 0, 0, 1])),
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::new(PhysicalColumn::new("c1", 0)),
+            Operator::Eq,
+            value,
         ));
-        let expr = Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal));
         let pruning_predicate = PruningPredicateBuilder::new()
             .with_file_schema(schema)
             .try_build(expr)
             .unwrap();
 
         // A nonempty map bypasses the no-filter path. Evaluating the predicate
-        // then fails because Arrow cannot cast Int32 statistics to FixedSizeBinary.
+        // then fails because 'abc' is not an Int32.
         let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
         sbbf.insert(&1_i32);
         let mut bloom_statistics = BloomFilterStatistics::new();

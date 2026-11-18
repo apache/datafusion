@@ -14,6 +14,9 @@ use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
+#[deprecated(since = "56.0.0", note = "This type is now called `UnionExtractFunc`")]
+pub type UnionExtractFun = UnionExtractFunc;
+
 #[user_doc(
     doc_section(label = "Union Functions"),
     description = "Returns the value of the given field in the union when selected, or NULL otherwise.",
@@ -37,17 +40,17 @@ use datafusion_macros::user_doc;
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct UnionExtractFun {
+pub struct UnionExtractFunc {
     signature: Signature,
 }
 
-impl Default for UnionExtractFun {
+impl Default for UnionExtractFunc {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl UnionExtractFun {
+impl UnionExtractFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
@@ -55,7 +58,7 @@ impl UnionExtractFun {
     }
 }
 
-impl ScalarUDFImpl for UnionExtractFun {
+impl ScalarUDFImpl for UnionExtractFunc {
     fn name(&self) -> &str {
         "union_extract"
     }
@@ -165,12 +168,12 @@ mod tests {
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
-    use super::UnionExtractFun;
+    use super::UnionExtractFunc;
 
     // when it becomes possible to construct union scalars in SQL, this should go to sqllogictests
     #[test]
     fn test_scalar_value() -> Result<()> {
-        let fun = UnionExtractFun::new();
+        let fun = UnionExtractFunc::new();
 
         let fields = UnionFields::try_new(
             vec![1, 3],

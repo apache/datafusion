@@ -2848,7 +2848,7 @@ mod tests {
         let ctx = SessionContext::new_with_config(
             SessionConfig::new()
                 .with_information_schema(true)
-                .with_system_catalog(Some(String::from("system"))),
+                .with_partition_information_schema(true),
         );
 
         // Create catalog
@@ -2864,7 +2864,7 @@ mod tests {
             .await?;
 
         // Check table exists in schema
-        let results = ctx.sql("SELECT * FROM system.information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
+        let results = ctx.sql("SELECT * FROM test.information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
         Ok(())

@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{DataFusionError, Result};
@@ -18,6 +18,7 @@ use datafusion_execution::memory_pool::{
     GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+use datafusion_expr::AggregateUDF;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -64,6 +65,30 @@ pub(super) fn sum_over_sorted_input(
     keys: &[&str],
     batches: Vec<Vec<Vec<i64>>>,
 ) -> Result<AggregateExec> {
+    aggregate_over_sorted_input(mode, keys, batches, sum_udaf())
+}
+
+/// Like [`sum_over_sorted_input`], but aggregates `v` with `udaf`. For `Final`
+/// mode, the state of `udaf` must be a single `Int64` column.
+pub(super) fn aggregate_over_sorted_input(
+    mode: AggregateMode,
+    keys: &[&str],
+    batches: Vec<Vec<Vec<i64>>>,
+    udaf: Arc<AggregateUDF>,
+) -> Result<AggregateExec> {
+    aggregate_expr_over_sorted_input(mode, keys, batches, udaf, |builder, _| Ok(builder))
+}
+
+/// Like [`aggregate_over_sorted_input`], but `configure` can change the
+/// aggregate expression, given the input schema. For example, it can add
+/// `ORDER BY v`.
+pub(super) fn aggregate_expr_over_sorted_input(
+    mode: AggregateMode,
+    keys: &[&str],
+    batches: Vec<Vec<Vec<i64>>>,
+    udaf: Arc<AggregateUDF>,
+    configure: impl FnOnce(AggregateExprBuilder, &SchemaRef) -> Result<AggregateExprBuilder>,
+) -> Result<AggregateExec> {
     let fields = keys
         .iter()
         .chain(&["v"])
@@ -76,10 +101,13 @@ pub(super) fn sum_over_sorted_input(
             .collect::<Result<_>>()?,
     );
     let aggregate_exprs = vec![Arc::new(
-        AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
-            .schema(Arc::clone(&schema))
-            .alias("sum")
-            .build()?,
+        configure(
+            AggregateExprBuilder::new(Arc::clone(&udaf), vec![col("v", &schema)?]),
+            &schema,
+        )?
+        .schema(Arc::clone(&schema))
+        .alias(udaf.name())
+        .build()?,
     )];
 
     let (input_schema, group_by) = if mode == AggregateMode::Final {
@@ -156,6 +184,16 @@ async fn collect_with_held_memory(
         output.push(batch);
     }
     Ok((output, held))
+}
+
+/// Runs `plan` under `limit`.
+pub(super) async fn collect_under_limit(
+    plan: &AggregateExec,
+    limit: usize,
+) -> Result<Vec<RecordBatch>> {
+    let (output, _) =
+        collect_with_held_memory(plan, Arc::new(GreedyMemoryPool::new(limit))).await?;
+    Ok(output)
 }
 
 /// Returns the memory `plan` holds when handing off output without a limit.

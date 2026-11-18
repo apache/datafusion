@@ -176,6 +176,40 @@ async fn schema_merge_can_preserve_metadata() {
     assert_metadata(&actual, &expected_metadata);
 }
 
+/// Expressions pushed into the parquet scan see the field metadata of the table schema
+#[tokio::test]
+async fn pushed_down_projection_sees_field_metadata() {
+    let tmp_dir = TempDir::new().unwrap();
+    let table_dir = tmp_dir.path().join("parquet_test");
+
+    let f1 = Field::new("id", DataType::Int32, true)
+        .with_metadata(make_meta("ARROW:extension:name", "example.ext"));
+    let f2 = Field::new("name", DataType::Utf8, true);
+    write_files(table_dir.as_path(), vec![Schema::new(vec![f1, f2])]);
+    let table_path = table_dir.to_str().unwrap().to_string();
+
+    let ctx = SessionContext::new();
+    let options = ParquetReadOptions::default().skip_metadata(false);
+    ctx.register_parquet("t", &table_path, options)
+        .await
+        .unwrap();
+
+    let actual = ctx
+        .sql("SELECT arrow_metadata(id, 'ARROW:extension:name') AS m FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_snapshot!(batches_to_sort_string(&actual), @r"
+    +-------------+
+    | m           |
+    +-------------+
+    | example.ext |
+    +-------------+
+    ");
+}
+
 /// A column that only some files carry must be inferred as nullable, because
 /// reading the files without it yields nulls, even when every file that has
 /// the column declares it required.

@@ -368,6 +368,14 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     ///
     /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
+
+    /// Keeps the stored groups but releases capacity they do not need, such as
+    /// per-batch scratch buffers, so that [`Self::size`] reflects the stored
+    /// groups. For example, after [`EmitTo::First`] removes most groups, an
+    /// accumulator may keep a buffer it sized for the last input batch.
+    ///
+    /// The default does nothing.
+    fn shrink_to_fit(&mut self) {}
 }
 
 #[cfg(test)]

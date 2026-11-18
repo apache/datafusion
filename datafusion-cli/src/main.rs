@@ -10,7 +10,6 @@ use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
@@ -31,15 +30,13 @@ use datafusion_cli::{
     DATAFUSION_CLI_VERSION, exec,
     pool_type::PoolType,
     print_format::PrintFormat,
-    print_options::{MaxRows, PrintOptions},
+    print_options::{MaxRows, PrintOptions, TargetWidth},
 };
 
 use clap::Parser;
-use datafusion::common::config::Dialect;
 use datafusion::common::config_err;
 use datafusion::config::ConfigOptions;
 use datafusion::execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
-use datafusion_spark::SessionStateBuilderSpark;
 use mimalloc::MiMalloc;
 
 #[global_allocator]
@@ -131,14 +128,15 @@ struct Args {
     )]
     maxrows: MaxRows,
 
-    #[clap(long, help = "Enables console syntax highlighting")]
-    color: bool,
-
     #[clap(
         long,
-        help = "Enable Apache Spark-compatible SQL dialect, functions, and expression planning"
+        help = "Target output width in terminal columns (auto, 1..65535, 0 or inf for no limit). A wide character or TREE node may exceed this width.",
+        default_value = "auto"
     )]
-    spark: bool,
+    target_width: TargetWidth,
+
+    #[clap(long, help = "Enables console syntax highlighting")]
+    color: bool,
 
     #[clap(
         short = 'd',
@@ -240,16 +238,9 @@ async fn main_inner() -> Result<()> {
 
     let runtime_env = rt_builder.build_arc()?;
 
-    let mut state_builder = SessionStateBuilder::new()
-        .with_config(session_config)
-        .with_runtime_env(runtime_env)
-        .with_default_features();
-    if args.spark {
-        state_builder = state_builder.with_spark_features();
-    }
-
     // enable dynamic file query
-    let ctx = SessionContext::new_with_state(state_builder.build()).enable_url_table();
+    let ctx = SessionContext::new_with_config_rt(session_config, runtime_env)
+        .enable_url_table();
     ctx.refresh_catalogs().await?;
     // install dynamic catalog provider that can register required object stores
     ctx.register_catalog_list(Arc::new(DynamicObjectStoreCatalog::new(
@@ -295,6 +286,7 @@ async fn main_inner() -> Result<()> {
         format: args.format,
         quiet: args.quiet,
         maxrows: args.maxrows,
+        target_width: args.target_width,
         color: args.color,
         instrumented_registry: Arc::clone(&instrumented_registry),
     };
@@ -361,10 +353,6 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
     // in the CLI, we want to show NULL values rather the empty strings
     if env::var_os("DATAFUSION_FORMAT_NULL").is_none() {
         config_options.format.null = String::from("NULL");
-    }
-
-    if args.spark {
-        config_options.sql_parser.dialect = Dialect::Spark;
     }
 
     let mut session_config =
@@ -856,7 +844,11 @@ mod tests {
             .build_arc()
             .unwrap();
 
-        let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), rt);
+        // Pin `created_by` so the size of the written parquet files (checked
+        // below) does not depend on the DataFusion version string
+        let config = SessionConfig::default()
+            .set_str("datafusion.execution.parquet.created_by", "datafusion");
+        let ctx = SessionContext::new_with_config_rt(config, rt);
 
         ctx.register_object_store(
             &Url::parse("mem://test_table").unwrap(),
@@ -929,8 +921,8 @@ mod tests {
         +---------------------+-----------+-----------------+------+------+
         | metadata_size_bytes | filename  | file_size_bytes | etag | hits |
         +---------------------+-----------+-----------------+------+------+
-        | 216                 | 0.parquet | 3620            | "0"  | 2    |
-        | 216                 | 1.parquet | 3620            | "1"  | 2    |
+        | 216                 | 0.parquet | 3605            | "0"  | 2    |
+        | 216                 | 1.parquet | 3605            | "1"  | 2    |
         +---------------------+-----------+-----------------+------+------+
         "#);
 

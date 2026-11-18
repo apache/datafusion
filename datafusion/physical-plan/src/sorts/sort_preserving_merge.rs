@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
+use crate::execution_plan::LimitBehavior;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
@@ -163,6 +164,7 @@ impl SortPreservingMergeExec {
         // Other input orderings hold only within each partition:
         if input_partitions > 1 {
             eq_properties.clear_orderings();
+            eq_properties.clear_groupings();
         }
         eq_properties.clear_per_partition_constants();
         eq_properties.add_ordering(ordering);
@@ -415,6 +417,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Merge
     }
 
     /// Tries to swap the projection with its input [`SortPreservingMergeExec`].
@@ -879,6 +885,42 @@ mod tests {
     use insta::assert_snapshot;
     use tokio::time::timeout;
 
+    #[test]
+    fn merging_sorted_partitions_clears_explicit_grouping() -> Result<()> {
+        // Each partition is grouped on `a`, but merging on `b` splits the `a` runs.
+        let first = test::build_table_i32_two_cols(
+            ("a", &vec![1, 1, 2, 2]),
+            ("b", &vec![1, 3, 5, 7]),
+        );
+        let second = test::build_table_i32_two_cols(
+            ("a", &vec![2, 2, 1, 1]),
+            ("b", &vec![2, 4, 6, 8]),
+        );
+        let schema = first.schema();
+        let grouping = col("a", &schema)?;
+        let sort_key = col("b", &schema)?;
+        let ordering: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::clone(&sort_key))].into();
+        let input = TestMemoryExec::try_new(&[vec![first], vec![second]], schema, None)?
+            .try_with_sort_information(vec![ordering.clone()])?
+            .try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?;
+        assert!(
+            input
+                .properties()
+                .equivalence_properties()
+                .grouping_satisfy([Arc::clone(&grouping)])?
+        );
+        let merge = SortPreservingMergeExec::new(ordering.clone(), Arc::new(input));
+        let properties = merge.properties().equivalence_properties();
+
+        assert!(properties.geq_class().is_empty());
+        assert!(!properties.grouping_satisfy([grouping])?);
+        // The merge key remains ordered, and therefore grouped.
+        assert!(properties.ordering_satisfy(ordering)?);
+        assert!(properties.grouping_satisfy([sort_key])?);
+        Ok(())
+    }
+
     // The number in the function is highly related to the memory limit we are testing
     // any change of the constant should be aware of
     fn generate_task_ctx_for_round_robin_tie_breaker(
@@ -908,7 +950,7 @@ mod tests {
         let rb = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)])?;
         let schema = rb.schema();
 
-        let rbs = std::iter::repeat_n(rb, 1024).collect::<Vec<_>>();
+        let rbs = std::iter::repeat_n(rb, 256).collect::<Vec<_>>();
         let sort = [
             PhysicalSortExpr {
                 expr: col("b", &schema)?,

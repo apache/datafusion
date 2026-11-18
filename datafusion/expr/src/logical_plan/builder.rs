@@ -20,8 +20,8 @@ use crate::expr_rewriter::{
 use crate::logical_plan::{
     Aggregate, Analyze, AsOfJoin, AsOfMatch, Distinct, DistinctOn, EmptyRelation,
     Explain, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning,
-    PlanType, Prepare, Projection, Repartition, Sort, SubqueryAlias, TableScanBuilder,
-    Union, Unnest, Values, Window,
+    PlanType, Prepare, Projection, Repartition, Show, ShowKind, Sort, SubqueryAlias,
+    TableScanBuilder, Union, Unnest, Values, Window,
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
@@ -37,6 +37,7 @@ use crate::{
 };
 
 use super::dml::InsertOp;
+use crate::logical_plan::information_schema::ColumnsDetail;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
@@ -251,6 +252,63 @@ impl LogicalPlanBuilder {
         }))
     }
 
+    /// Create a `DESCRIBE <query>` plan, where `schema` is the output schema of the query.
+    pub fn describe(schema: Arc<Schema>) -> Result<Self> {
+        Self::show(
+            ShowKind::Describe { schema },
+            crate::information_schema::columns_schema(ColumnsDetail::Describe),
+        )
+    }
+
+    /// Create a `SHOW TABLES` plan.
+    pub fn show_tables() -> Result<Self> {
+        Self::show(ShowKind::Tables, crate::information_schema::tables_schema())
+    }
+
+    /// Create a `DESCRIBE <table>` or `SHOW [FULL|EXTENDED] COLUMNS FROM <table>` plan.
+    pub fn show_columns(
+        table_ref: TableReference,
+        detail: ColumnsDetail,
+    ) -> Result<Self> {
+        Self::show(
+            ShowKind::Columns { table_ref, detail },
+            crate::information_schema::columns_schema(detail),
+        )
+    }
+
+    /// Create a `SHOW CREATE TABLE <table>` plan.
+    pub fn show_create_table(table_ref: TableReference) -> Result<Self> {
+        Self::show(
+            ShowKind::CreateTable { table_ref },
+            crate::information_schema::views_schema(),
+        )
+    }
+
+    /// Create a `SHOW <variable>` / `SHOW ALL` plan. `name` is `None` for
+    /// `SHOW ALL`.
+    pub fn show_variables(name: Option<String>, verbose: bool) -> Result<Self> {
+        Self::show(
+            ShowKind::Variables { name, verbose },
+            crate::information_schema::df_settings_schema(verbose),
+        )
+    }
+
+    /// Create a `SHOW FUNCTIONS [LIKE <pattern>]` plan.
+    pub fn show_functions(filter: Option<String>) -> Result<Self> {
+        Self::show(
+            ShowKind::Functions { filter },
+            crate::information_schema::show_functions_schema(),
+        )
+    }
+
+    /// Shared helper for the `SHOW`-class factory methods above.
+    fn show(kind: ShowKind, output_schema: Schema) -> Result<Self> {
+        Ok(Self::new(LogicalPlan::Show(Show {
+            kind,
+            output_schema: Arc::new(DFSchema::try_from(output_schema)?),
+        })))
+    }
+
     /// Convert a regular plan into a recursive query.
     /// `is_distinct` indicates whether the recursive term should be de-duplicated (`UNION`) after each iteration or not (`UNION ALL`).
     pub fn to_recursive_query(
@@ -371,7 +429,6 @@ impl LogicalPlanBuilder {
         let mut fields = ValuesFields::new();
         for j in 0..n_cols {
             let field_type = schema.field(j).data_type();
-            let field_nullable = schema.field(j).is_nullable();
             for row in values.iter() {
                 let value = &row[j];
                 let data_type = value.get_type(schema)?;
@@ -386,7 +443,13 @@ impl LogicalPlanBuilder {
                     );
                 }
             }
-            fields.push(field_type.to_owned(), field_nullable);
+            let field = schema.field(j);
+
+            fields.push_with_metadata(
+                field_type.clone(),
+                field.is_nullable(),
+                Some(FieldMetadata::new_from_field(field)),
+            );
         }
 
         Self::infer_inner(values, fields, schema)
@@ -699,8 +762,8 @@ impl LogicalPlanBuilder {
             .map(Self::new)
     }
 
-    /// Apply a projection, aliasing non-Column/non-Alias expressions to
-    /// match the field names from the provided schema.
+    /// Apply a projection, aliasing non-Column expressions to match the field
+    /// names from the provided schema. Existing aliases are renamed.
     pub fn project_with_validation_and_schema(
         self,
         expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
@@ -1377,7 +1440,7 @@ impl LogicalPlanBuilder {
             schema: DFSchemaRef::new(join_schema),
             null_equality,
             null_aware,
-            null_aware_value_keys: 1,
+            null_aware_value_keys: 0,
         })))
     }
 
@@ -1777,10 +1840,6 @@ impl ValuesFields {
         Self::default()
     }
 
-    pub fn push(&mut self, data_type: DataType, nullable: bool) {
-        self.push_with_metadata(data_type, nullable, None);
-    }
-
     pub fn push_with_metadata(
         &mut self,
         data_type: DataType,
@@ -2130,8 +2189,8 @@ pub fn validate_unique_names<'a>(
 
 /// Union two [`LogicalPlan`]s.
 ///
-/// Constructs the UNION plan, but does not perform type-coercion. Therefore the
-/// subtree expressions will not be properly typed until the optimizer pass.
+/// Infers common output types, but does not insert casts into the inputs.
+/// The analyzer must still resolve input expressions and insert any required casts.
 ///
 /// If a properly typed UNION plan is needed, refer to [`TypeCoercionRewriter::coerce_union`]
 /// or alternatively, merge the union input schema using [`coerce_union_schema`] and
@@ -2222,12 +2281,16 @@ fn project_with_validation(
         );
     }
 
-    // When inside a set expression, alias non-Column/non-Alias expressions
-    // to match the left side's field names, avoiding duplicate name errors.
+    // When inside a set expression, alias non-Column expressions to match the
+    // left side's field names, avoiding duplicate name errors. Existing aliases
+    // are renamed too, since they can still collide, e.g. `count(*)` is planned
+    // as `count(1) AS "count(*)"`.
     if let Some(schema) = &schema {
         for (expr, field) in projected_expr.iter_mut().zip(schema.fields()) {
-            if !matches!(expr, Expr::Column(_) | Expr::Alias(_)) {
-                *expr = std::mem::take(expr).alias(field.name());
+            match expr {
+                Expr::Column(_) => {}
+                Expr::Alias(alias) => alias.name.clone_from(field.name()),
+                _ => *expr = std::mem::take(expr).alias(field.name()),
             }
         }
     }
