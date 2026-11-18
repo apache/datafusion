@@ -11,6 +11,8 @@ updates:
     target-branch: main
     labels: [auto-dependencies]
     open-pull-requests-limit: 15
+    cooldown:
+      default-days: 7
     ignore:
       # major version bumps of arrow* and parquet are handled manually
       - dependency-name: "arrow*"
@@ -55,6 +57,8 @@ updates:
     schedule:
       interval: weekly
     labels: [auto-dependencies]
+    cooldown:
+      default-days: 7
     groups:
       # minor and patch bumps are grouped into a single PR
       all-npm-deps:
@@ -72,10 +76,24 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 10
     labels: [auto-dependencies]
+    cooldown:
+      default-days: 7
     groups:
       codeql-actions:
         patterns:
           - "github/codeql-action/*"
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels: [auto-dependencies]
+    cooldown:
+      default-days: 7
+    groups:
+      all:
+        patterns:
+          - "*"
   # Python dependencies are managed as a uv workspace rooted at the top-level
   # pyproject.toml with a shared uv.lock
   - package-ecosystem: "uv"
@@ -83,6 +101,8 @@ updates:
     schedule:
       interval: "weekly"
     labels: [auto-dependencies]
+    cooldown:
+      default-days: 7
     groups:
       # all dependency bumps are grouped into a single PR
       all-uv-deps:

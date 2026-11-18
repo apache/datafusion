@@ -22,16 +22,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Check size of new Git objects
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MERGE_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [ "${{ github.event_name }}" = "merge_group" ]; then
+          if [ "$EVENT_NAME" = "merge_group" ]; then
             # For merge queue, compare against the base branch
-            base_sha="${{ github.event.merge_group.base_sha }}"
-            head_sha="${{ github.event.merge_group.head_sha }}"
+            base_sha="$MERGE_BASE_SHA"
+            head_sha="$MERGE_HEAD_SHA"
           else
             # For pull requests
-            base_sha="${{ github.event.pull_request.base.sha }}"
-            head_sha="${{ github.event.pull_request.head.sha }}"
+            base_sha="$PR_BASE_SHA"
+            head_sha="$PR_HEAD_SHA"
           fi
           ./ci/scripts/check_large_files.sh --base "${base_sha}" --head "${head_sha}"

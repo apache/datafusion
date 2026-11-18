@@ -38,6 +38,7 @@ jobs:
         with:
           submodules: true
           fetch-depth: 1
+          persist-credentials: false
       - name: Setup docs builder
         uses: ./.github/actions/setup-docs-builder
       - name: Build docs html and check for warnings
