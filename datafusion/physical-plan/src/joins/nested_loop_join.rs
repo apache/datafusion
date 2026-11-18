@@ -81,16 +81,7 @@ use crate::metrics::SpillMetrics;
 use crate::spill::replayable_spill_input::ReplayableStreamSource;
 use crate::spill::spill_manager::SpillManager;
 
-/// Whether `NestedLoopJoinExec` may fall back to memory-limited (spilling) execution when its
-/// build side does not fit in the memory pool.
-///
-/// Disabled on `branch-54`: the fallback, added in DataFusion 54.0.0 (apache/datafusion#21448),
-/// returns incorrect results or panics in several cases. It re-executes the build side, losing
-/// rows from Parquet/CSV scans and panicking on a hash repartition (apache/datafusion#24676); it
-/// emits wrong unmatched rows for LEFT-type joins with a multi-partition probe side
-/// (apache/datafusion#22641); and it drops unmatched probe-side rows (apache/datafusion#24745).
-/// These are fixed on `main` and first released in 56.0.0. With the fallback disabled, a build
-/// side that does not fit fails with `ResourcesExhausted`, as it did before 54.0.0.
+/// Disable disk spilling introduced in apache/datafusion#21448 as it comes with bugs, see <https://github.com/apache/datafusion/pull/27562>
 const ENABLE_MEMORY_LIMITED_EXECUTION: bool = false;
 
 #[expect(rustdoc::private_intra_doc_links)]
