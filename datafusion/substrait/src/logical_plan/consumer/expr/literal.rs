@@ -599,6 +599,13 @@ pub(crate) fn name_struct_literals_like_first_struct_expr<'a>(
     input_schema: &DFSchema,
 ) {
     let mut exprs = exprs.into_iter().collect::<Vec<_>>();
+    // nothing to rename: skip computing the types, which walks each expression's subtree
+    if !exprs
+        .iter()
+        .any(|expr| has_struct_literal_value(expr, input_schema))
+    {
+        return;
+    }
     // the names come from the first expression that isn't a literal and contains a struct
     let Some(named_type) = exprs
         .iter()
@@ -654,6 +661,15 @@ pub(crate) fn has_literal_value(expr: &Expr) -> bool {
         Expr::Case(case) => case_results(case).all(has_literal_value),
         _ => false,
     }
+}
+
+/// Returns true if `expr` is a struct literal: its value comes only from literals (see
+/// [`has_literal_value`]) and its type contains a struct.
+pub(crate) fn has_struct_literal_value(expr: &Expr, input_schema: &DFSchema) -> bool {
+    has_literal_value(expr)
+        && expr
+            .get_type(input_schema)
+            .is_ok_and(|data_type| contains_struct(&data_type))
 }
 
 /// The results of `case`: its `THEN`s, then its `ELSE` if it has one. Its conditions

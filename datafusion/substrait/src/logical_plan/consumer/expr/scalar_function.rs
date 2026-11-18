@@ -3,7 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::literal::{
-    contains_struct, has_literal_value, name_struct_literals_like_first_struct_expr,
+    has_struct_literal_value, name_struct_literals_like_first_struct_expr,
 };
 use crate::logical_plan::consumer::SubstraitConsumerContext;
 use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
@@ -119,7 +119,11 @@ fn name_struct_literal_args_if_needed(
     mut call: expr::ScalarFunction,
     input_schema: &DFSchema,
 ) -> Expr {
-    if !has_struct_literal_arg(&call.args, input_schema) {
+    if !call
+        .args
+        .iter()
+        .any(|arg| has_struct_literal_value(arg, input_schema))
+    {
         return Expr::ScalarFunction(call);
     }
     // works as is (`get_type` runs the function's own type coercion): keep the names
@@ -136,18 +140,6 @@ fn name_struct_literal_args_if_needed(
     } else {
         original
     }
-}
-
-/// Returns true if one of `args` is a struct literal (its value comes only from
-/// literals, see [`has_literal_value`], and its type contains a struct). A call without
-/// one has nothing to rename, so it skips the type checks.
-fn has_struct_literal_arg(args: &[Expr], input_schema: &DFSchema) -> bool {
-    args.iter().any(|arg| {
-        has_literal_value(arg)
-            && arg
-                .get_type(input_schema)
-                .is_ok_and(|data_type| contains_struct(&data_type))
-    })
 }
 
 /// Checks whether `expr` uses a lambda parameter that comes from outside of it.
