@@ -124,7 +124,7 @@ fn build_set_comparison_subquery(
         }),
         SetQuantifier::All => {
             let false_exists =
-                exists_subquery(&subquery, Expr::IsFalse(Box::new(comparison.clone())))?;
+                exists_subquery(&subquery, Expr::IsFalse(Box::new(comparison)))?;
             Expr::Case(expr::Case {
                 expr: None,
                 when_then_expr: vec![

@@ -1356,14 +1356,13 @@ fn build_join_with_count_bug(
     // (2) an unmatched outer row's own default aggregate values fail
     //     that same HAVING clause.
     let exists_expr = match having_arm {
-        Some(when_expr) => when(
-            indicator_col.clone().is_null(),
-            unmatched_having_default.is_true(),
-        )
-        .when(when_expr, lit(false))
-        .otherwise(lit(true))?
-        .rewrite(&mut expr_rewrite)
-        .data()?,
+        Some(when_expr) => {
+            when(indicator_col.is_null(), unmatched_having_default.is_true())
+                .when(when_expr, lit(false))
+                .otherwise(lit(true))?
+                .rewrite(&mut expr_rewrite)
+                .data()?
+        }
         None => lit(true),
     };
 
