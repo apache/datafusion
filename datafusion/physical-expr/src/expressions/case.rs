@@ -40,7 +40,7 @@ use std::fmt::{Debug, Formatter};
 
 pub(super) type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug)]
 enum EvalMethod {
     /// CASE WHEN condition THEN result
     ///      [WHEN ...]
@@ -79,30 +79,6 @@ enum EvalMethod {
     /// See [`LiteralLookupTable`] for more details
     WithExprScalarLookupTable(LiteralLookupTable),
 }
-
-/// Implementing hash so we can use `derive` on [`EvalMethod`].
-///
-/// not implementing actual [`Hash`] as it is not dyn compatible so we cannot implement it for
-/// `dyn` [`literal_lookup_table::WhenLiteralIndexMap`].
-///
-/// So implementing empty hash is still valid as the data is derived from `PhysicalExpr` s which are already hashed
-impl Hash for LiteralLookupTable {
-    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
-}
-
-/// Implementing Equal so we can use `derive` on [`EvalMethod`].
-///
-/// not implementing actual [`PartialEq`] as it is not dyn compatible so we cannot implement it for
-/// `dyn` [`literal_lookup_table::WhenLiteralIndexMap`].
-///
-/// So we always return true as the data is derived from `PhysicalExpr` s which are already compared
-impl PartialEq for LiteralLookupTable {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-impl Eq for LiteralLookupTable {}
 
 /// The body of a CASE expression which consists of an optional base expression, the "when/then"
 /// branches and an optional "else" branch.
@@ -1599,6 +1575,8 @@ mod tests {
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use half::f16;
 
+    use std::assert_matches;
+
     #[derive(Debug, Hash, PartialEq, Eq)]
     struct CustomColumn {
         inner: Column,
@@ -2628,7 +2606,7 @@ mod tests {
             make_lit_i32(250),
         ));
         let expr = CaseExpr::try_new(None, vec![(predicate, make_col("c2", 1))], None)?;
-        assert_eq!(expr.eval_method, EvalMethod::InfallibleExprOrNull);
+        assert_matches!(expr.eval_method, EvalMethod::InfallibleExprOrNull);
         match expr.evaluate(&batch)? {
             ColumnarValue::Array(array) => {
                 assert_eq!(1000, array.len());
