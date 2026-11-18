@@ -323,7 +323,7 @@ impl CaseBody {
 fn is_precomputable(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
     if expr.placement() != ExpressionPlacement::MoveTowardsLeafNodes
         || is_volatile(expr)
-        || crosses_map(expr, schema)
+        || may_cross_map(expr, schema)
     {
         return false;
     }
@@ -342,8 +342,9 @@ fn is_precomputable(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
     has_column && only_supported_leaves
 }
 
-/// Returns true if `expr` contains a field access path that reaches into a `Map` value.
-fn crosses_map(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
+/// Returns true if `expr` may contain a field access path that reaches into a `Map`
+/// value, including when the types along the path cannot be determined.
+fn may_cross_map(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
     expr.exists(|e| {
         let Some(func) = e.downcast_ref::<ScalarFunctionExpr>() else {
             return Ok(false);
@@ -361,7 +362,7 @@ fn crosses_map(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
                 (DataType::Struct(fields), Some(name)) => {
                     match fields.iter().find(|f| *f.name() == name) {
                         Some(f) => f.data_type().clone(),
-                        None => return Ok(false),
+                        None => return Ok(true),
                     }
                 }
                 _ => return Ok(false),
@@ -369,7 +370,7 @@ fn crosses_map(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
         }
         Ok(false)
     })
-    .unwrap_or(false)
+    .unwrap_or(true)
 }
 
 /// A derived case body that can be used to evaluate a case expression after projecting
@@ -2465,6 +2466,32 @@ mod tests {
             as_int32_array(&result)?,
             &Int32Array::from(vec![Some(1), Some(2), None])
         );
+        Ok(())
+    }
+
+    /// A field access whose types cannot be resolved against the schema is assumed to
+    /// possibly reach into a map, so it is not precomputed.
+    #[test]
+    fn may_cross_map_when_types_cannot_be_resolved() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s_a = get_field_expr(col("s", &schema)?, "a", &schema)?;
+        assert!(!may_cross_map(&s_a, &schema));
+
+        // `s` has no field `a`
+        let other_struct = Schema::new(vec![
+            Field::new("x", DataType::Int32, true),
+            Field::new(
+                "s",
+                DataType::Struct(vec![Field::new("b", DataType::Int32, true)].into()),
+                true,
+            ),
+        ]);
+        assert!(may_cross_map(&s_a, &other_struct));
+
+        // `s` is out of the schema's bounds
+        let no_struct = Schema::new(vec![Field::new("x", DataType::Int32, true)]);
+        assert!(may_cross_map(&s_a, &no_struct));
         Ok(())
     }
 
