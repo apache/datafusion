@@ -2262,6 +2262,17 @@ fn test_cast_to_fixed_size_array_default_dialect() -> Result<(), DataFusionError
 }
 
 #[test]
+fn test_cast_to_nested_array() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(NULL as int[][][])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT CAST(NULL AS INTEGER[][][])",
+    );
+    Ok(())
+}
+
+#[test]
 fn test_cast_to_tinyint_default_dialect() -> Result<(), DataFusionError> {
     roundtrip_statement_with_dialect_helper!(
         sql: "select cast(3 as tinyint)",
