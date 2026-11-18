@@ -1429,7 +1429,7 @@ config_namespace! {
         /// When planning a scan, the current session value overrides the
         /// corresponding table format option. Already planned scans retain
         /// the value selected when they were planned.
-        pub dictionary_filter_on_read: bool, default = false
+        pub dictionary_filter_on_read: bool, default = true
 
         /// (reading) The maximum predicate cache size, in bytes. When
         /// `pushdown_filters` is enabled, sets the maximum memory used to cache

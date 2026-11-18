@@ -294,7 +294,7 @@ async fn dictionary_pruning_uses_current_session_setting() {
     let ctx = SessionContext::new();
     let create = format!(
         "CREATE EXTERNAL TABLE dictionary_setting STORED AS PARQUET LOCATION '{}' \
-         OPTIONS('format.dictionary_filter_on_read' 'true')",
+         OPTIONS('format.dictionary_filter_on_read' 'false')",
         file.path().display()
     );
     ctx.sql(&create).await.unwrap().collect().await.unwrap();
@@ -330,24 +330,25 @@ async fn dictionary_pruning_uses_current_session_setting() {
             .unwrap_or(0)
     }
 
-    // The table option is `true`, but a planned scan uses the session's
-    // current value (default `false`), so nothing is pruned until the session
-    // enables it, and disabling it again takes effect without a new table.
-    assert_eq!(run(&ctx).await, 0);
-    ctx.sql("SET datafusion.execution.parquet.dictionary_filter_on_read = true")
+    // The table option is `false`, but a planned scan uses the session's
+    // current value (default `true`), so row groups are pruned until the
+    // session disables it, and enabling it again takes effect without a new
+    // table.
+    assert_eq!(run(&ctx).await, 4);
+    ctx.sql("SET datafusion.execution.parquet.dictionary_filter_on_read = false")
         .await
         .unwrap()
         .collect()
         .await
         .unwrap();
-    assert_eq!(run(&ctx).await, 4);
+    assert_eq!(run(&ctx).await, 0);
     ctx.sql("RESET datafusion.execution.parquet.dictionary_filter_on_read")
         .await
         .unwrap()
         .collect()
         .await
         .unwrap();
-    assert_eq!(run(&ctx).await, 0);
+    assert_eq!(run(&ctx).await, 4);
 }
 
 fn repeated_ordered_values(scale: i64) -> Vec<i64> {

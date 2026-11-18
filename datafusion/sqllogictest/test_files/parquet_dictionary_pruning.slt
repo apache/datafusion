@@ -30,8 +30,8 @@
 # When a scan is planned, the session's `dictionary_filter_on_read` overrides
 # the table's own `format.dictionary_filter_on_read` option, so a `SET` takes
 # effect even for a table that already exists. This file still creates table
-# `t` *twice* against the same underlying file -- once before the `SET` below
-# (the off-by-default plan) and once after (the flag taking effect) -- only to
+# `t` *twice* against the same underlying file -- once with the flag off
+# (the baseline plan) and once after it is turned on again -- only to
 # keep the two sets of plans in separate, readable sections; the second
 # `CREATE EXTERNAL TABLE` is not what enables the flag.
 
@@ -65,10 +65,13 @@ statement ok
 set datafusion.execution.target_partitions = 4;
 
 ########
-# Off by default: no dictionary pruning happens without opting in. `t` is
-# created here, before the `SET` further down, so its options capture
+# Off: no dictionary pruning happens when the flag is disabled. `t` is
+# created here, after disabling it, so its options capture
 # dictionary_filter_on_read=false.
 ########
+
+statement ok
+set datafusion.execution.parquet.dictionary_filter_on_read = false;
 
 statement ok
 CREATE EXTERNAL TABLE t
