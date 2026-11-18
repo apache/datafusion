@@ -2790,6 +2790,7 @@ async fn assert_struct_literal_roundtrips(sql: &str) -> Result<()> {
     Ok(())
 }
 
+// coalesce is simplified to a CASE, whose ELSE branch is the literal
 #[tokio::test]
 async fn roundtrip_struct_literal_in_coalesce() -> Result<()> {
     assert_struct_literal_roundtrips(
@@ -2798,8 +2799,7 @@ async fn roundtrip_struct_literal_in_coalesce() -> Result<()> {
     .await
 }
 
-// The lambda parameter is typed from the `coalesce` result, so it only finds `subnet`
-// and `id` if the empty list took the column's field names first.
+// the lambda reads `subnet.id`, which it only finds if `[]` took the column's names
 #[tokio::test]
 async fn roundtrip_struct_literal_next_to_nested_struct_column() -> Result<()> {
     assert_struct_literal_roundtrips(
@@ -2809,6 +2809,7 @@ async fn roundtrip_struct_literal_next_to_nested_struct_column() -> Result<()> {
     .await
 }
 
+// a NULL struct in the ELSE branch, from https://github.com/apache/datafusion/issues/14632
 #[tokio::test]
 async fn roundtrip_struct_literal_in_case_else() -> Result<()> {
     roundtrip(
@@ -2818,6 +2819,7 @@ async fn roundtrip_struct_literal_in_case_else() -> Result<()> {
     .await
 }
 
+// the inner CASE has only literal results, so it takes the names of the outer CASE's column
 #[tokio::test]
 async fn roundtrip_struct_literal_in_nested_case_after_column() -> Result<()> {
     assert_struct_literal_roundtrips(
@@ -2828,6 +2830,7 @@ async fn roundtrip_struct_literal_in_nested_case_after_column() -> Result<()> {
     .await
 }
 
+// same as above, with the inner CASE first: it must not give its generated names to `st`
 #[tokio::test]
 async fn roundtrip_struct_literal_in_nested_case_before_column() -> Result<()> {
     assert_struct_literal_roundtrips(
@@ -2838,6 +2841,7 @@ async fn roundtrip_struct_literal_in_nested_case_before_column() -> Result<()> {
     .await
 }
 
+// up to 3 items, so the optimizer rewrites the IN list into `st = ... OR st = ...`
 #[tokio::test]
 async fn roundtrip_struct_literal_in_list() -> Result<()> {
     assert_struct_literal_roundtrips(
@@ -2847,6 +2851,7 @@ async fn roundtrip_struct_literal_in_list() -> Result<()> {
     .await
 }
 
+// the default value of `lag` must have the type of `st`
 #[tokio::test]
 async fn roundtrip_struct_literal_window_function_argument() -> Result<()> {
     assert_struct_literal_roundtrips(
@@ -2855,6 +2860,7 @@ async fn roundtrip_struct_literal_window_function_argument() -> Result<()> {
     .await
 }
 
+// the input padded with a NULL comes first, so it must not give its generated names
 #[tokio::test]
 async fn roundtrip_struct_literal_union_with_null_first_input() -> Result<()> {
     assert_struct_literal_roundtrips(
@@ -2863,6 +2869,7 @@ async fn roundtrip_struct_literal_union_with_null_first_input() -> Result<()> {
     .await
 }
 
+// the input padded with a NULL comes second
 #[tokio::test]
 async fn roundtrip_struct_literal_union_with_null_second_input() -> Result<()> {
     assert_struct_literal_roundtrips(
@@ -2871,6 +2878,7 @@ async fn roundtrip_struct_literal_union_with_null_second_input() -> Result<()> {
     .await
 }
 
+// the LIMIT hides the projection with the literal from the union
 #[tokio::test]
 async fn roundtrip_struct_literal_union_with_limit() -> Result<()> {
     assert_struct_literal_roundtrips(
@@ -2880,12 +2888,51 @@ async fn roundtrip_struct_literal_union_with_limit() -> Result<()> {
     .await
 }
 
+// the input with the literals is itself a UNION, without ALL
 #[tokio::test]
 async fn roundtrip_struct_literal_union_with_nested_union_input() -> Result<()> {
     assert_struct_literal_roundtrips(
         "SELECT * FROM (SELECT named_struct('a', 0, 'b', 'z') AS r FROM struct_rows \
          UNION SELECT named_struct('a', 9, 'b', 'w') AS r FROM struct_rows) \
          UNION ALL SELECT st AS r FROM struct_rows",
+    )
+    .await
+}
+
+// make_array survives optimization, so it reaches the consumer as a function call
+#[tokio::test]
+async fn roundtrip_struct_literal_in_function_call() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT make_array(st, named_struct('a', 0, 'b', 'z')) FROM struct_rows",
+    )
+    .await
+}
+
+// `r` has the shape of `st` but is independent of it, so it keeps its own names
+#[tokio::test]
+async fn roundtrip_struct_literal_independent_function_argument() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT named_struct('l', st, 'r', named_struct('c0', 42, 'c1', 'q')) FROM struct_rows",
+    )
+    .await
+}
+
+// more than 3 items, so the optimizer doesn't rewrite the IN list into `=`/`OR`
+#[tokio::test]
+async fn roundtrip_struct_literal_in_long_in_list() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT st IN (named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y'), \
+         named_struct('a', 3, 'b', 'z'), named_struct('a', 4, 'b', 'w')) FROM struct_rows",
+    )
+    .await
+}
+
+// the literal is a map's values, renamed through the map type
+#[tokio::test]
+async fn roundtrip_struct_literal_in_map_values() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT CASE WHEN st IS NULL THEN map(['k'], [named_struct('a', 0, 'b', 'z')]) \
+         ELSE map(['k'], [st]) END FROM struct_rows",
     )
     .await
 }
