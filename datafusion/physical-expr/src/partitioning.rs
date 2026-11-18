@@ -375,10 +375,12 @@ impl RangePartitioning {
                 validate_range_split_points(
                     &[start.clone(), first.clone()],
                     &sort_options,
-                )?;
+                )
+                .map_err(|e| e.context("Invalid range partitioning start bound"))?;
             }
             if let Some(end) = &end_bound {
-                validate_range_split_points(&[last.clone(), end.clone()], &sort_options)?;
+                validate_range_split_points(&[last.clone(), end.clone()], &sort_options)
+                    .map_err(|e| e.context("Invalid range partitioning end bound"))?;
             }
         } else {
             let bounds = start_bound
@@ -386,7 +388,8 @@ impl RangePartitioning {
                 .chain(end_bound.iter())
                 .cloned()
                 .collect::<Vec<_>>();
-            validate_range_split_points(&bounds, &sort_options)?;
+            validate_range_split_points(&bounds, &sort_options)
+                .map_err(|e| e.context("Invalid range partitioning bounds"))?;
         }
         self.start_bound = start_bound;
         self.end_bound = end_bound;
