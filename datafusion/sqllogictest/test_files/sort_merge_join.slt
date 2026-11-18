@@ -1168,59 +1168,60 @@ DROP TABLE smj_self_eq;
 statement ok
 CREATE TABLE smj_self_eq_cd (a INT, b INT, c INT, d INT) AS VALUES (1, 0, 1, 1), (2, 3, 5, 2);
 
+# Both queries keep every column of x: a projection above the filter would
+# rebuild the class through EquivalenceClass::new, which promotes on its own
+
 # a joins the class of a + b after the class exists
 query TT
-EXPLAIN SELECT x.a, x.b, y.a, y.b FROM smj_self_eq_cd x JOIN smj_self_eq_cd y ON x.a = y.a AND x.b = y.b WHERE x.a + x.b = x.c AND x.c = x.a;
+EXPLAIN SELECT * FROM smj_self_eq_cd x JOIN smj_self_eq_cd y ON x.a = y.a AND x.b = y.b WHERE x.a + x.b = x.c AND x.c = x.a;
 ----
 logical_plan
 01)Inner Join: x.a = y.a, x.b = y.b
 02)--SubqueryAlias: x
-03)----Projection: smj_self_eq_cd.a, smj_self_eq_cd.b
-04)------Filter: smj_self_eq_cd.a + smj_self_eq_cd.b = smj_self_eq_cd.c AND smj_self_eq_cd.c = smj_self_eq_cd.a
-05)--------TableScan: smj_self_eq_cd projection=[a, b, c]
-06)--SubqueryAlias: y
-07)----TableScan: smj_self_eq_cd projection=[a, b]
+03)----Filter: smj_self_eq_cd.a + smj_self_eq_cd.b = smj_self_eq_cd.c AND smj_self_eq_cd.c = smj_self_eq_cd.a
+04)------TableScan: smj_self_eq_cd projection=[a, b, c, d]
+05)--SubqueryAlias: y
+06)----TableScan: smj_self_eq_cd projection=[a, b, c, d]
 physical_plan
 01)SortMergeJoinExec: join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
 02)--SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[true]
 03)----RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
-04)------FilterExec: a@0 + b@1 = c@2 AND c@2 = a@0, projection=[a@0, b@1]
+04)------FilterExec: a@0 + b@1 = c@2 AND c@2 = a@0
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)--SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[true]
 07)----RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
 08)------DataSourceExec: partitions=1, partition_sizes=[1]
 
-query IIII
-SELECT x.a, x.b, y.a, y.b FROM smj_self_eq_cd x JOIN smj_self_eq_cd y ON x.a = y.a AND x.b = y.b WHERE x.a + x.b = x.c AND x.c = x.a;
+query IIIIIIII
+SELECT * FROM smj_self_eq_cd x JOIN smj_self_eq_cd y ON x.a = y.a AND x.b = y.b WHERE x.a + x.b = x.c AND x.c = x.a;
 ----
-1 0 1 0
+1 0 1 1 1 0 1 1
 
 # a reaches the class of a + b when two classes merge
 query TT
-EXPLAIN SELECT x.a, x.b, y.a, y.b FROM smj_self_eq_cd x JOIN smj_self_eq_cd y ON x.a = y.a AND x.b = y.b WHERE x.a + x.b = x.c AND x.a = x.d AND x.d = x.c;
+EXPLAIN SELECT * FROM smj_self_eq_cd x JOIN smj_self_eq_cd y ON x.a = y.a AND x.b = y.b WHERE x.a + x.b = x.c AND x.a = x.d AND x.d = x.c;
 ----
 logical_plan
 01)Inner Join: x.a = y.a, x.b = y.b
 02)--SubqueryAlias: x
-03)----Projection: smj_self_eq_cd.a, smj_self_eq_cd.b
-04)------Filter: smj_self_eq_cd.a + smj_self_eq_cd.b = smj_self_eq_cd.c AND smj_self_eq_cd.d = smj_self_eq_cd.a AND smj_self_eq_cd.d = smj_self_eq_cd.c
-05)--------TableScan: smj_self_eq_cd projection=[a, b, c, d]
-06)--SubqueryAlias: y
-07)----TableScan: smj_self_eq_cd projection=[a, b]
+03)----Filter: smj_self_eq_cd.a + smj_self_eq_cd.b = smj_self_eq_cd.c AND smj_self_eq_cd.d = smj_self_eq_cd.a AND smj_self_eq_cd.d = smj_self_eq_cd.c
+04)------TableScan: smj_self_eq_cd projection=[a, b, c, d]
+05)--SubqueryAlias: y
+06)----TableScan: smj_self_eq_cd projection=[a, b, c, d]
 physical_plan
 01)SortMergeJoinExec: join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
 02)--SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[true]
 03)----RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
-04)------FilterExec: a@0 + b@1 = c@2 AND d@3 = a@0 AND d@3 = c@2, projection=[a@0, b@1]
+04)------FilterExec: a@0 + b@1 = c@2 AND d@3 = a@0 AND d@3 = c@2
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)--SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[true]
 07)----RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
 08)------DataSourceExec: partitions=1, partition_sizes=[1]
 
-query IIII
-SELECT x.a, x.b, y.a, y.b FROM smj_self_eq_cd x JOIN smj_self_eq_cd y ON x.a = y.a AND x.b = y.b WHERE x.a + x.b = x.c AND x.a = x.d AND x.d = x.c;
+query IIIIIIII
+SELECT * FROM smj_self_eq_cd x JOIN smj_self_eq_cd y ON x.a = y.a AND x.b = y.b WHERE x.a + x.b = x.c AND x.a = x.d AND x.d = x.c;
 ----
-1 0 1 0
+1 0 1 1 1 0 1 1
 
 statement ok
 DROP TABLE smj_self_eq_cd;
