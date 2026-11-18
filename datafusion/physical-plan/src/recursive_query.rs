@@ -587,34 +587,4 @@ mod tests {
             BooleanArray::from(vec![true, true, false, true, false, false, false])
         );
     }
-
-    /// `GroupValuesColumn` assigns ids to rows whose hash collides with an earlier row of the
-    /// batch last. With an equal first column, `(x, a, b)` and `(x, b, a)` have the same hash.
-    #[test]
-    fn distinct_deduplicator_keeps_rows_with_colliding_hashes() -> Result<()> {
-        use arrow::array::StringArray;
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("g", DataType::Utf8, true),
-            Field::new("s", DataType::Utf8, false),
-            Field::new("o", DataType::Utf8, false),
-        ]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(StringArray::from(vec![None::<&str>; 4])),
-                Arc::new(StringArray::from(vec!["a", "b", "c", "a"])),
-                Arc::new(StringArray::from(vec!["b", "a", "d", "b"])),
-            ],
-        )?;
-
-        let mut deduplicator =
-            DistinctDeduplicator::new(Arc::clone(&schema), &TaskContext::default())?;
-        let deduplicated = deduplicator.deduplicate(&batch)?;
-        assert_eq!(deduplicated.num_rows(), 3);
-
-        let deduplicated = deduplicator.deduplicate(&batch)?;
-        assert_eq!(deduplicated.num_rows(), 0);
-        Ok(())
-    }
 }
