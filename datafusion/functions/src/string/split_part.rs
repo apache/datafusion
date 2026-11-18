@@ -233,11 +233,12 @@ fn split_part_scalar(
     delim_scalar: &ScalarValue,
     pos_scalar: &ScalarValue,
 ) -> Result<ColumnarValue> {
-    // Empty input array → empty result.
-    if string_array.is_empty() {
+    // Empty or all-NULL input array → all-NULL result, before the position
+    // is validated (as in the array path, which skips NULL rows).
+    if string_array.null_count() == string_array.len() {
         return Ok(ColumnarValue::Array(new_null_array(
             string_array.data_type(),
-            0,
+            string_array.len(),
         )));
     }
 

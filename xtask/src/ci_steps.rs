@@ -461,12 +461,13 @@ impl StepContext {
             }
             "fuzz" => {
                 cmd_builder.doc("Run the centralized fuzz tests.");
-                // Match extended's packages and features to reuse compiled dependencies.
+                // Use `cargo-nextest` to show each test's elapsed time.
                 cmd_builder
                     .program("cargo")
                     .args([
-                        "test",
-                        "--profile",
+                        "nextest",
+                        "run",
+                        "--cargo-profile",
                         "ci",
                         "-p",
                         "datafusion",
@@ -476,6 +477,9 @@ impl StepContext {
                         "fuzz",
                         "--features",
                         "avro,backtrace,extended_tests,parquet_encryption",
+                        "--no-fail-fast",
+                        "--status-level",
+                        "pass",
                     ])
                     .env("RUST_BACKTRACE", "1");
             }
@@ -971,12 +975,14 @@ cargo test \
 
 cd /workspace && \
 RUST_BACKTRACE=1 \
-cargo test \
---profile ci \
+cargo nextest run \
+--cargo-profile ci \
 -p datafusion \
 -p datafusion-fuzz \
 --test fuzz \
---features avro,backtrace,extended_tests,parquet_encryption
+--features avro,backtrace,extended_tests,parquet_encryption \
+--no-fail-fast \
+--status-level pass
 ")
                 },
             },

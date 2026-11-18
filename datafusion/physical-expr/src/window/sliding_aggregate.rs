@@ -57,6 +57,18 @@ impl SlidingAggregateWindowExpr {
     pub fn get_aggregate_expr(&self) -> &AggregateFunctionExpr {
         &self.aggregate
     }
+
+    /// Whether this window aggregate has a FILTER predicate.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    pub fn has_filter(&self) -> bool {
+        self.filter.is_some()
+    }
 }
 
 /// Incrementally update window function using the fact that batch is

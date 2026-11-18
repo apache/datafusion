@@ -1605,6 +1605,10 @@ impl PhysicalExpr for CaseExpr {
         write!(f, "END")
     }
 
+    fn short_circuits(&self) -> bool {
+        true
+    }
+
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
@@ -1788,7 +1792,7 @@ mod tests {
     use crate::expressions::{binary, cast, col, is_not_null, lambda};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
-    use arrow::datatypes::Field;
+    use arrow::datatypes::{Field, i256};
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::plan_err;
@@ -4038,6 +4042,150 @@ mod tests {
             &lookup_map,
             Arc::new(input_values),
             expected,
+        );
+    }
+
+    /// Covers both the linear and the hash lookup of primitive literals, with inputs
+    /// spanning several chunks of the linear lookup.
+    #[rstest::rstest]
+    fn test_case_when_literal_lookup_int64_by_number_of_literals(
+        #[values(2, 16, 17, 40)] num_literals: i64,
+    ) {
+        let literal = |i: i64| i * 7 - 50;
+        let lookup_map = create_lookup(
+            (0..num_literals).map(|i| (Some(literal(i)), Some(format!("v{i}")))),
+        );
+
+        let (input_values, expected): (Vec<_>, Vec<_>) = (0..700i64)
+            .map(|row| match row % 11 {
+                // Null input
+                0 => (None, None),
+                // No match in WHEN
+                1 => (Some(literal(num_literals) + row), None),
+                _ => {
+                    let i = row % num_literals;
+                    (Some(literal(i)), Some(format!("v{i}")))
+                }
+            })
+            .unzip();
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(Int64Array::from(input_values)),
+            StringArray::from(expected),
+        );
+    }
+
+    /// Covers the lookup of a slice of a nullable array starting at an offset that is
+    /// not a multiple of 8, so that the validity bits of the slice are not byte-aligned.
+    #[rstest::rstest]
+    fn test_case_when_literal_lookup_int64_sliced_with_nulls(
+        #[values(5, 17)] num_literals: i64,
+    ) {
+        const OFFSET: usize = 3;
+        // Spans two linear lookup chunk boundaries, and ends mid-way of a validity word
+        const LEN: usize = 600;
+
+        let literal = |i: i64| i * 7 - 50;
+        let lookup_map = create_lookup(
+            (0..num_literals).map(|i| (Some(literal(i)), Some(format!("v{i}")))),
+        );
+
+        let (input_values, expected): (Vec<_>, Vec<_>) = (0..(OFFSET + LEN) as i64)
+            .map(|row| match row % 13 {
+                // Nulls only in the first half, to also have validity words with no nulls
+                0 | 5 if row < 300 => (None, None),
+                // No match in WHEN
+                1 | 8 => (Some(literal(num_literals) + row), None),
+                _ => {
+                    let i = row % num_literals;
+                    (Some(literal(i)), Some(format!("v{i}")))
+                }
+            })
+            .unzip();
+
+        let input_values = Int64Array::from(input_values).slice(OFFSET, LEN);
+        let expected = StringArray::from(expected).slice(OFFSET, LEN);
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(input_values),
+            expected,
+        );
+    }
+
+    /// Looks up values of a decimal type wider than 64 bits, given the type's null scalar
+    /// and a function making a scalar from the lower and the upper part of its value.
+    ///
+    /// The literals have the upper part set, and the misses differ from them either only in
+    /// the lower part or only in the upper part.
+    fn test_lookup_wide_decimal(
+        num_literals: i64,
+        null: ScalarValue,
+        value: impl Fn(i64, i64) -> ScalarValue,
+    ) {
+        const HIGH: i64 = 5;
+
+        let lookup_map = create_lookup(
+            (0..num_literals).map(|i| (value(i, HIGH), Some(format!("v{i}")))),
+        );
+
+        let (input_values, expected): (Vec<_>, Vec<_>) = (0..300)
+            .map(|row| {
+                let i = row % num_literals;
+                match row % 7 {
+                    0 => (null.clone(), None),
+                    // No match in WHEN, differing in the lower part only
+                    1 => (value(num_literals + i, HIGH), None),
+                    // No match in WHEN, differing in the upper part only
+                    2 => (value(i, HIGH + 1), None),
+                    _ => (value(i, HIGH), Some(format!("v{i}"))),
+                }
+            })
+            .unzip();
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            ScalarValue::iter_to_array(input_values).unwrap(),
+            StringArray::from(expected),
+        );
+    }
+
+    /// Covers both sides of the limit of the number of `Decimal128` literals looked up
+    /// by comparing with each of them.
+    #[rstest::rstest]
+    fn test_case_when_literal_lookup_decimal128_by_number_of_literals(
+        #[values(2, 4, 5)] num_literals: i64,
+    ) {
+        test_lookup_wide_decimal(
+            num_literals,
+            ScalarValue::Decimal128(None, 38, 0),
+            |low, high| {
+                ScalarValue::Decimal128(
+                    Some((i128::from(high) << 64) | i128::from(low)),
+                    38,
+                    0,
+                )
+            },
+        );
+    }
+
+    /// Covers both sides of the limit of the number of `Decimal256` literals looked up
+    /// by comparing with each of them.
+    #[rstest::rstest]
+    fn test_case_when_literal_lookup_decimal256_by_number_of_literals(
+        #[values(2, 3, 4, 5)] num_literals: i64,
+    ) {
+        test_lookup_wide_decimal(
+            num_literals,
+            ScalarValue::Decimal256(None, 76, 0),
+            |low, high| {
+                ScalarValue::Decimal256(
+                    Some(i256::from_parts(low as u128, i128::from(high))),
+                    76,
+                    0,
+                )
+            },
         );
     }
 

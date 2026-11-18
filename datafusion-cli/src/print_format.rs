@@ -12,9 +12,16 @@ use arrow::csv::writer::WriterBuilder;
 use arrow::datatypes::SchemaRef;
 use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use arrow::record_batch::RecordBatch;
-use arrow::util::pretty::pretty_format_batches_with_options;
+use arrow::util::display::ArrayFormatter;
+use datafusion::common::format::ExplainFormat;
 use datafusion::config::FormatOptions;
 use datafusion::error::Result;
+use tabled::builder::Builder;
+use tabled::grid::{config::Position, records::RecordsMut, util::string::get_char_width};
+use tabled::settings::{
+    Span, Style, Width, object::Cell, peaker::Priority, style::HorizontalLine,
+    width::Wrap,
+};
 
 /// Allow records to be printed in different formats
 #[derive(Debug, PartialEq, Eq, clap::ValueEnum, Clone, Copy)]
@@ -25,6 +32,31 @@ pub enum PrintFormat {
     Json,
     NdJson,
     Automatic,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TableOptions {
+    pub maxrows: MaxRows,
+    pub width: Option<u16>,
+    pub explain_format: Option<ExplainFormat>,
+}
+
+#[derive(Clone, Copy)]
+struct PreserveIndent {
+    column: usize,
+    continuation_indent: usize,
+}
+
+const MIN_COLUMN_CONTENT_WIDTH: usize = 2;
+const COLUMN_PADDING_WIDTH: usize = 2;
+const TABLE_BORDER_WIDTH: usize = 1;
+
+fn minimum_table_width(columns: usize) -> usize {
+    columns
+        .saturating_mul(
+            MIN_COLUMN_CONTENT_WIDTH + COLUMN_PADDING_WIDTH + TABLE_BORDER_WIDTH,
+        )
+        .saturating_add(TABLE_BORDER_WIDTH)
 }
 
 impl FromStr for PrintFormat {
@@ -76,68 +108,268 @@ fn print_batches_with_sep<W: std::io::Write>(
     Ok(())
 }
 
-fn keep_only_maxrows(s: &str, maxrows: usize) -> String {
-    let lines: Vec<String> = s.lines().map(String::from).collect();
-
-    assert!(lines.len() >= maxrows + 4); // 4 lines for top and bottom border
-
-    let last_line = &lines[lines.len() - 1]; // bottom border line
-
-    let spaces = last_line.len().saturating_sub(4);
-    let dotted_line = format!("| .{}|", " ".repeat(spaces));
-
-    let mut result = lines[0..(maxrows + 3)].to_vec(); // Keep top border and `maxrows` lines
-    result.extend(vec![dotted_line; 3]); // Append ... lines
-    result.push(last_line.clone());
-
-    result.join("\n")
-}
-
-fn format_batches_with_maxrows<W: std::io::Write>(
+fn print_table_batches<W: std::io::Write>(
     writer: &mut W,
+    schema: SchemaRef,
     batches: &[RecordBatch],
     maxrows: MaxRows,
+    width: Option<u16>,
     format_options: &FormatOptions,
+    preserve_indent: Option<PreserveIndent>,
 ) -> Result<()> {
-    let options: arrow::util::display::FormatOptions = format_options.try_into()?;
+    let schema = batches
+        .iter()
+        .find(|batch| batch.num_rows() > 0)
+        .map_or(schema, RecordBatch::schema);
+    if schema.fields().is_empty() || maxrows == MaxRows::Limited(0) {
+        return Ok(());
+    }
 
-    match maxrows {
-        MaxRows::Limited(maxrows) => {
-            // Filter batches to meet the maxrows condition
-            let mut filtered_batches = Vec::new();
-            let mut row_count: usize = 0;
-            let mut over_limit = false;
-            for batch in batches {
-                if row_count + batch.num_rows() > maxrows {
-                    // If adding this batch exceeds maxrows, slice the batch
-                    let limit = maxrows - row_count;
-                    let sliced_batch = batch.slice(0, limit);
-                    filtered_batches.push(sliced_batch);
-                    over_limit = true;
-                    break;
-                } else {
-                    filtered_batches.push(batch.clone());
-                    row_count += batch.num_rows();
-                }
-            }
-
-            let formatted =
-                pretty_format_batches_with_options(&filtered_batches, &options)?;
-            if over_limit {
-                let mut formatted_str = format!("{formatted}");
-                formatted_str = keep_only_maxrows(&formatted_str, maxrows);
-                writeln!(writer, "{formatted_str}")?;
+    let headers: Vec<_> = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if format_options.types_info {
+                format!("{}\n{}", field.name(), field.data_type())
             } else {
-                writeln!(writer, "{formatted}")?;
+                field.name().to_owned()
             }
+        })
+        .collect();
+    let options = format_options.try_into()?;
+    let limit = match maxrows {
+        MaxRows::Limited(limit) => limit,
+        MaxRows::Unlimited => usize::MAX,
+    };
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut over_limit = false;
+    for batch in batches {
+        let formatters = batch
+            .columns()
+            .iter()
+            .map(|array| ArrayFormatter::try_new(array.as_ref(), &options))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for row in 0..batch.num_rows() {
+            if rows.len() == limit {
+                over_limit = true;
+                break;
+            }
+            rows.push(
+                formatters
+                    .iter()
+                    .map(|formatter| formatter.value(row).try_to_string())
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            );
         }
-        MaxRows::Unlimited => {
-            let formatted = pretty_format_batches_with_options(batches, &options)?;
-            writeln!(writer, "{formatted}")?;
+        if over_limit {
+            break;
         }
     }
 
+    if let Some(width) = width
+        && usize::from(width) < minimum_table_width(schema.fields().len().max(2))
+    {
+        let empty = rows.is_empty();
+        if empty {
+            rows.push(
+                schema
+                    .fields()
+                    .iter()
+                    .map(|field| field.data_type().to_string())
+                    .collect(),
+            );
+        }
+        let visible_rows = rows.len();
+        for (index, row) in rows.into_iter().enumerate() {
+            if index > 0 {
+                writeln!(writer)?;
+            }
+            if usize::from(width) < minimum_table_width(2) {
+                for (column, (header, value)) in headers.iter().zip(row).enumerate() {
+                    print_wrapped(writer, header, width, None)?;
+                    print_wrapped(
+                        writer,
+                        &value,
+                        width,
+                        preserve_indent
+                            .filter(|option| option.column == column)
+                            .map(|option| option.continuation_indent),
+                    )?;
+                }
+                if over_limit && index + 1 == visible_rows {
+                    write!(writer, ".\n.\n.\n")?;
+                }
+                continue;
+            }
+            let vertical_rows: Vec<_> = headers
+                .iter()
+                .zip(row)
+                .map(|(header, value)| vec![header.clone(), value])
+                .collect();
+            let vertical_header = [
+                "Column".to_owned(),
+                if empty { "Type" } else { "Value" }.to_owned(),
+            ];
+            print_table(
+                writer,
+                &vertical_header,
+                &vertical_rows,
+                Some(width),
+                over_limit && index + 1 == visible_rows,
+                None,
+            )?;
+        }
+    } else {
+        print_table(writer, &headers, &rows, width, over_limit, preserve_indent)?;
+    }
     Ok(())
+}
+
+fn print_table<W: std::io::Write>(
+    writer: &mut W,
+    headers: &[String],
+    rows: &[Vec<String>],
+    width: Option<u16>,
+    over_limit: bool,
+    preserve_indent: Option<PreserveIndent>,
+) -> Result<()> {
+    let mut builder = Builder::default();
+    for row in std::iter::once(headers).chain(rows.iter().map(Vec::as_slice)) {
+        builder.push_record(row);
+    }
+    let marker_start = rows.len() + 1;
+    let column_count = builder.count_columns();
+    if column_count == 0 {
+        return Ok(());
+    }
+    if over_limit {
+        for _ in 0..3 {
+            builder.push_record(
+                std::iter::once(".").chain(std::iter::repeat_n("", column_count - 1)),
+            );
+        }
+    }
+    let mut table = builder.build();
+    table.with(
+        Style::ascii()
+            .remove_horizontal()
+            .horizontals([(1, HorizontalLine::full('-', '+', '+', '+'))]),
+    );
+    if over_limit {
+        for row in marker_start..marker_start + 3 {
+            table.modify(Cell::new(row, 0), Span::column(0));
+        }
+    }
+    if let Some(width) = width {
+        table.with(
+            Width::wrap(usize::from(width))
+                .keep_words(true)
+                .priority(Priority::max(false)),
+        );
+        if let Some(option) = preserve_indent {
+            let widths = table
+                .get_dimension()
+                .get_widths()
+                .expect("Width::wrap estimates column widths")
+                .to_vec();
+            for (row_index, row) in rows.iter().enumerate() {
+                let text = wrap_indented(
+                    &row[option.column],
+                    widths[option.column].saturating_sub(COLUMN_PADDING_WIDTH),
+                    option.continuation_indent,
+                );
+                table
+                    .get_records_mut()
+                    .set(Position::new(row_index + 1, option.column), text);
+            }
+            table.get_dimension_mut().clear_height();
+        }
+    }
+    writeln!(writer, "{table}")?;
+    Ok(())
+}
+
+fn print_tree_batches<W: std::io::Write>(
+    writer: &mut W,
+    batches: &[RecordBatch],
+    format_options: &FormatOptions,
+) -> Result<()> {
+    let options = format_options.try_into()?;
+    for batch in batches {
+        let kind = ArrayFormatter::try_new(batch.column(0).as_ref(), &options)?;
+        let plan = ArrayFormatter::try_new(batch.column(1).as_ref(), &options)?;
+        for row in 0..batch.num_rows() {
+            writeln!(writer, "{}", kind.value(row).try_to_string()?)?;
+            writeln!(writer, "{}", plan.value(row).try_to_string()?)?;
+        }
+    }
+    Ok(())
+}
+
+fn print_wrapped<W: std::io::Write>(
+    writer: &mut W,
+    text: &str,
+    width: u16,
+    continuation_indent: Option<usize>,
+) -> Result<()> {
+    let width = usize::from(width);
+    if continuation_indent.is_none()
+        && text
+            .lines()
+            .all(|line| textwrap::core::display_width(line) <= width)
+    {
+        writeln!(writer, "{text}")?;
+        return Ok(());
+    }
+    let text = match continuation_indent {
+        Some(indent) => wrap_indented(text, width, indent),
+        None => {
+            // Keep an indivisible character intact even if it exceeds the target width.
+            let width = text.chars().map(get_char_width).fold(width, usize::max);
+            Wrap::wrap(text, width, true)
+        }
+    };
+    writeln!(writer, "{text}")?;
+    Ok(())
+}
+
+fn wrap_indented(text: &str, width: usize, continuation_indent: usize) -> String {
+    let mut output = String::new();
+    for (index, line) in text.trim_end_matches('\n').split('\n').enumerate() {
+        if index > 0 {
+            output.push('\n');
+        }
+        if textwrap::core::display_width(line) <= width {
+            output.push_str(line);
+        } else {
+            wrap_indented_line(&mut output, line, width, continuation_indent);
+        }
+    }
+    output
+}
+
+fn wrap_indented_line(
+    output: &mut String,
+    line: &str,
+    width: usize,
+    continuation_indent: usize,
+) {
+    let content = line.trim_start_matches(' ');
+    if content.is_empty() {
+        return;
+    }
+    let content_width = if content.is_ascii() { 1 } else { 2 };
+    let max_indent = width.saturating_sub(content_width);
+    let indent = (line.len() - content.len()).min(max_indent);
+    let initial_indent = " ".repeat(indent);
+    let subsequent_indent = " ".repeat((indent + continuation_indent).min(max_indent));
+    let options = textwrap::Options::new(width)
+        .initial_indent(&initial_indent)
+        .subsequent_indent(&subsequent_indent)
+        .word_separator(textwrap::WordSeparator::AsciiSpace)
+        .word_splitter(textwrap::WordSplitter::NoHyphenation)
+        .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit);
+    output.push_str(&textwrap::fill(content, options));
 }
 
 impl PrintFormat {
@@ -151,6 +383,56 @@ impl PrintFormat {
         with_header: bool,
         format_options: &FormatOptions,
     ) -> Result<()> {
+        self.print_batches_with_options(
+            writer,
+            schema,
+            batches,
+            TableOptions {
+                maxrows,
+                width: None,
+                explain_format: None,
+            },
+            with_header,
+            format_options,
+        )
+    }
+
+    pub(crate) fn print_batches_with_options<W: std::io::Write>(
+        &self,
+        writer: &mut W,
+        schema: SchemaRef,
+        batches: &[RecordBatch],
+        table_options: TableOptions,
+        with_header: bool,
+        format_options: &FormatOptions,
+    ) -> Result<()> {
+        let TableOptions {
+            maxrows,
+            width,
+            explain_format,
+        } = table_options;
+        if *self == Self::Table {
+            if explain_format == Some(ExplainFormat::Tree) && width.is_some() {
+                return print_tree_batches(writer, batches, format_options);
+            }
+            let continuation_indent = match explain_format {
+                Some(ExplainFormat::Indent) => Some(4),
+                Some(ExplainFormat::PostgresJSON) => Some(0),
+                _ => None,
+            };
+            return print_table_batches(
+                writer,
+                schema,
+                batches,
+                maxrows,
+                width,
+                format_options,
+                continuation_indent.map(|continuation_indent| PreserveIndent {
+                    column: 1,
+                    continuation_indent,
+                }),
+            );
+        }
         // filter out any empty batches
         let batches: Vec<_> = batches
             .iter()
@@ -158,7 +440,7 @@ impl PrintFormat {
             .cloned()
             .collect();
         if batches.is_empty() {
-            return self.print_empty(writer, schema, format_options);
+            return Ok(());
         }
 
         match self {
@@ -166,38 +448,10 @@ impl PrintFormat {
                 print_batches_with_sep(writer, &batches, b',', with_header)
             }
             Self::Tsv => print_batches_with_sep(writer, &batches, b'\t', with_header),
-            Self::Table => {
-                if maxrows == MaxRows::Limited(0) {
-                    return Ok(());
-                }
-                format_batches_with_maxrows(writer, &batches, maxrows, format_options)
-            }
+            Self::Table => unreachable!("table output is handled above"),
             Self::Json => batches_to_json!(ArrayWriter, writer, &batches),
             Self::NdJson => batches_to_json!(LineDelimitedWriter, writer, &batches),
         }
-    }
-
-    /// Print when the result batches contain no rows
-    fn print_empty<W: std::io::Write>(
-        &self,
-        writer: &mut W,
-        schema: SchemaRef,
-        format_options: &FormatOptions,
-    ) -> Result<()> {
-        match self {
-            // Print column headers for Table format
-            Self::Table if !schema.fields().is_empty() => {
-                let format_options: arrow::util::display::FormatOptions =
-                    format_options.try_into()?;
-
-                let empty_batch = RecordBatch::new_empty(schema);
-                let formatted =
-                    pretty_format_batches_with_options(&[empty_batch], &format_options)?;
-                writeln!(writer, "{formatted}")?;
-            }
-            _ => {}
-        }
-        Ok(())
     }
 }
 
@@ -206,7 +460,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use arrow::array::{Int32Array, Time64NanosecondArray};
+    use arrow::array::{Int32Array, StringArray, Time64NanosecondArray};
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use insta::{allow_duplicates, assert_snapshot};
 
@@ -237,7 +491,6 @@ mod tests {
         assert_snapshot!(output, @r"
         +---+---+---+
         | a | b | c |
-        +---+---+---+
         +---+---+---+
         ");
     }
@@ -475,7 +728,6 @@ mod tests {
         +---+
         | a |
         +---+
-        +---+
         ");
 
         // No output for empty batch when schema contains no columns
@@ -487,6 +739,42 @@ mod tests {
             .with_header(WithHeader::Yes)
             .run();
         assert_eq!(output, "")
+    }
+
+    #[test]
+    fn narrow_tables_preserve_wide_characters() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        for (width, value, expected) in [
+            (1, "中", "s\n中\n"),
+            (1, "ab", "s\na\nb\n"),
+            (1, "a中b", "s\na\n中\nb\n"),
+            (1, "🙂", "s\n🙂\n"),
+            (2, "中", "s\n中\n"),
+        ] {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(StringArray::from(vec![value]))],
+            )?;
+            let mut output = Vec::new();
+            PrintFormat::Table.print_batches_with_options(
+                &mut output,
+                Arc::clone(&schema),
+                &[batch],
+                TableOptions {
+                    maxrows: MaxRows::Unlimited,
+                    width: Some(width),
+                    explain_format: None,
+                },
+                true,
+                &FormatOptions::default(),
+            )?;
+            assert_eq!(
+                String::from_utf8(output).unwrap(),
+                expected,
+                "width {width}, value {value:?}"
+            );
+        }
+        Ok(())
     }
 
     #[test]
