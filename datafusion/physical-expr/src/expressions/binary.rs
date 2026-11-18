@@ -970,6 +970,10 @@ impl PhysicalExpr for BinaryExpr {
         write_child(f, self.right.as_ref(), precedence)
     }
 
+    fn short_circuits(&self) -> bool {
+        matches!(self.op, Operator::And | Operator::Or)
+    }
+
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
