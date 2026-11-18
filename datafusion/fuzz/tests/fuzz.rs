@@ -111,6 +111,20 @@ async fn timestamp_arithmetic() -> Result<()> {
     .await
 }
 
+#[tokio::test]
+async fn merge() -> Result<()> {
+    run_suite(
+        &suites::merge::MergeFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: None,
+            time_limit: Some(Duration::from_secs(4)),
+            cases_per_dataset: 7,
+        },
+    )
+    .await
+}
+
 async fn run_suite<T: FuzzTest>(test: &T, config: RunConfig) -> Result<()> {
     eprintln!("Running fuzz suite: {}", test.name());
     let stats = run(test, config).await?;
