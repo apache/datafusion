@@ -43,12 +43,12 @@ async fn test_filter_pushdown_io_disabled() {
     // Note: in practice, the default 512 KiB metadata size hint often covers
     // the OffsetIndex and Bloom filters for small files, so they wouldn't
     // need separate requests.
-    assert_snapshot!(test.query("SELECT * FROM t WHERE val = 7").await, @r"
+    assert_snapshot!(test.query("SELECT * FROM t WHERE val = 7").await, @"
     --- Query: SELECT * FROM t WHERE val = 7 (1 rows) ---
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 489..1402)
+        Read Parquet footer (offsets 489..1396)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
     Request 4
@@ -70,12 +70,12 @@ async fn test_filter_pushdown_io_disabled() {
 #[tokio::test]
 async fn test_filter_pushdown_io_enabled() {
     let test = filter_pushdown_test(true).await;
-    assert_snapshot!(test.query("SELECT * FROM t WHERE val = 7").await, @r"
+    assert_snapshot!(test.query("SELECT * FROM t WHERE val = 7").await, @"
     --- Query: SELECT * FROM t WHERE val = 7 (1 rows) ---
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 489..1402)
+        Read Parquet footer (offsets 489..1396)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
     Request 4

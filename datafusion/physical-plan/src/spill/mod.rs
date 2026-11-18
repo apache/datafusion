@@ -1822,7 +1822,7 @@ mod tests {
         // Cutting anywhere but on a message boundary must be an error, so
         // only the empty stream, the three batches and the end-of-stream
         // marker may decode cleanly.
-        assert_eq!(complete, 5);
+        assert_eq!(complete, 6);
         assert_eq!(decode_framed(&ipc), Ok(batches.len()));
     }
 

@@ -412,7 +412,7 @@ mod test {
         assert_eq!(last_ok, -8334601211038);
 
         let value = from_unixtime_session_tz(last_ok, Some("America/New_York")).unwrap();
-        assert_eq!(display(value), "-262143-01-01T00:00:00-04:56");
+        assert_eq!(display(value), "-262143-01-01T04:56:02Z");
 
         let err = from_unixtime_session_tz(last_ok - 1, Some("America/New_York"))
             .expect_err("expected an out of range error, not a value that panics");

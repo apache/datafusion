@@ -46,12 +46,12 @@ async fn test_topk_io_dynamic_filter() {
     let test = topk_test(true).await;
     // Note: in practice, the default 512 KiB metadata size hint would fetch
     // the page index of a small file like this along with the footer.
-    assert_snapshot!(test.query("SELECT * FROM t ORDER BY id DESC LIMIT 2").await, @r"
+    assert_snapshot!(test.query("SELECT * FROM t ORDER BY id DESC LIMIT 2").await, @"
     --- Query: SELECT * FROM t ORDER BY id DESC LIMIT 2 (2 rows) ---
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 489..1402)
+        Read Parquet footer (offsets 489..1396)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
     Request 4
@@ -66,12 +66,12 @@ async fn test_topk_io_dynamic_filter() {
 #[tokio::test]
 async fn test_topk_io_no_dynamic_filter() {
     let test = topk_test(false).await;
-    assert_snapshot!(test.query("SELECT * FROM t ORDER BY id DESC LIMIT 2").await, @r"
+    assert_snapshot!(test.query("SELECT * FROM t ORDER BY id DESC LIMIT 2").await, @"
     --- Query: SELECT * FROM t ORDER BY id DESC LIMIT 2 (2 rows) ---
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 489..1402)
+        Read Parquet footer (offsets 489..1396)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
     Request 4

@@ -43,12 +43,12 @@ async fn test_parquet_bloom_filter_io_matching() {
     // Note: in practice, the default 512 KiB metadata size hint often covers
     // the OffsetIndex and Bloom filters for small files, so they wouldn't
     // need separate requests.
-    assert_snapshot!(test.query("SELECT * FROM t WHERE a = 10 AND b = 100").await, @r"
+    assert_snapshot!(test.query("SELECT * FROM t WHERE a = 10 AND b = 100").await, @"
     --- Query: SELECT * FROM t WHERE a = 10 AND b = 100 (1 rows) ---
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 213..678)
+        Read Parquet footer (offsets 213..676)
     Request 3
         Read OffsetIndex for columns 'a', 'b' (rg 0) (offsets 192..213)
     Request 4
@@ -70,12 +70,12 @@ async fn test_parquet_bloom_filter_io_pruned() {
     // loaded upfront. With incremental pruning
     // (https://github.com/apache/datafusion/issues/25811), `a` would be
     // evaluated first and the Bloom filter for `b` would not be loaded.
-    assert_snapshot!(test.query("SELECT * FROM t WHERE a = 999 AND b = 100").await, @r"
+    assert_snapshot!(test.query("SELECT * FROM t WHERE a = 999 AND b = 100").await, @"
     --- Query: SELECT * FROM t WHERE a = 999 AND b = 100 (0 rows) ---
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 213..678)
+        Read Parquet footer (offsets 213..676)
     Request 3
         Read OffsetIndex for columns 'a', 'b' (rg 0) (offsets 192..213)
     Request 4

@@ -46,12 +46,12 @@ async fn test_page_pruning_io_no_predicate() {
     let test = page_pruning_test(true).await;
     // Note: in practice, the default 512 KiB metadata size hint would fetch
     // the page index of a small file like this along with the footer.
-    assert_snapshot!(test.query("SELECT * FROM t").await, @r"
+    assert_snapshot!(test.query("SELECT * FROM t").await, @"
     --- Query: SELECT * FROM t (9 rows) ---
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 323..838)
+        Read Parquet footer (offsets 323..836)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0) (offsets 178..323)
     Request 4
@@ -66,12 +66,12 @@ async fn test_page_pruning_io_no_predicate() {
 #[tokio::test]
 async fn test_page_pruning_io_one_page() {
     let test = page_pruning_test(true).await;
-    assert_snapshot!(test.query("SELECT * FROM t WHERE id = 5").await, @r"
+    assert_snapshot!(test.query("SELECT * FROM t WHERE id = 5").await, @"
     --- Query: SELECT * FROM t WHERE id = 5 (1 rows) ---
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 323..838)
+        Read Parquet footer (offsets 323..836)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0) (offsets 178..323)
     Request 4
@@ -86,12 +86,12 @@ async fn test_page_pruning_io_one_page() {
 #[tokio::test]
 async fn test_page_pruning_io_two_pages() {
     let test = page_pruning_test(true).await;
-    assert_snapshot!(test.query("SELECT * FROM t WHERE id > 3").await, @r"
+    assert_snapshot!(test.query("SELECT * FROM t WHERE id > 3").await, @"
     --- Query: SELECT * FROM t WHERE id > 3 (6 rows) ---
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 323..838)
+        Read Parquet footer (offsets 323..836)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0) (offsets 178..323)
     Request 4
@@ -109,12 +109,12 @@ async fn test_page_pruning_io_two_pages() {
 #[tokio::test]
 async fn test_page_pruning_io_disabled() {
     let test = page_pruning_test(false).await;
-    assert_snapshot!(test.query("SELECT * FROM t WHERE id = 5").await, @r"
+    assert_snapshot!(test.query("SELECT * FROM t WHERE id = 5").await, @"
     --- Query: SELECT * FROM t WHERE id = 5 (1 rows) ---
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 323..838)
+        Read Parquet footer (offsets 323..836)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0) (offsets 178..323)
     Request 4

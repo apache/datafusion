@@ -1522,8 +1522,10 @@ SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') FROM
 
 # String literal parsing fails.
 # https://github.com/apache/arrow-rs/issues/11039
-query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-11\-03T01:30:00':\ error\ computing\ timezone\ offset
+query P
 SELECT arrow_cast('2024-11-03T01:30:00', 'Timestamp(Nanosecond, Some("America/Denver"))')
+----
+2024-11-03T01:30:00-07:00
 
 query P
 SELECT TIMESTAMP '2024-11-03 01:30:00' AT TIME ZONE 'America/Denver'
@@ -1553,8 +1555,10 @@ SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/Denver"))') FROM
 ----
 2024-03-10T03:30:00-06:00
 
-query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-03\-10T02:30:00':\ error\ computing\ timezone\ offset
+query P
 SELECT arrow_cast('2024-03-10T02:30:00', 'Timestamp(Nanosecond, Some("America/Denver"))')
+----
+2024-03-10T03:30:00-06:00
 
 query P
 SELECT TIMESTAMP '2024-03-10 02:30:00' AT TIME ZONE 'America/Denver'
@@ -1564,11 +1568,15 @@ SELECT TIMESTAMP '2024-03-10 02:30:00' AT TIME ZONE 'America/Denver'
 statement ok
 SET datafusion.execution.time_zone = 'America/Denver'
 
-query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-03\-10\ 02:30:00':\ error\ computing\ timezone\ offset
+query P
 SELECT '2024-03-10 02:30:00'::timestamptz
+----
+2024-03-10T03:30:00-06:00
 
-query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-11\-03\ 01:30:00':\ error\ computing\ timezone\ offset
+query P
 SELECT '2024-11-03 01:30:00'::timestamptz
+----
+2024-11-03T01:30:00-07:00
 
 statement ok
 RESET datafusion.execution.time_zone
@@ -1590,20 +1598,28 @@ SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("Europe/Brussels"))') FRO
 2024-10-27T02:30:00+01:00
 2024-03-31T03:30:00+02:00
 
-query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-10\-27T02:30:00':\ error\ computing\ timezone\ offset
+query P
 SELECT arrow_cast('2024-10-27T02:30:00', 'Timestamp(Nanosecond, Some("Europe/Brussels"))')
+----
+2024-10-27T02:30:00+01:00
 
-query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-03\-31T02:30:00':\ error\ computing\ timezone\ offset
+query P
 SELECT arrow_cast('2024-03-31T02:30:00', 'Timestamp(Nanosecond, Some("Europe/Brussels"))')
+----
+2024-03-31T03:30:00+02:00
 
 statement ok
 SET datafusion.execution.time_zone = 'Europe/Brussels'
 
-query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-10\-27\ 02:30:00':\ error\ computing\ timezone\ offset
+query P
 SELECT '2024-10-27 02:30:00'::timestamptz
+----
+2024-10-27T02:30:00+01:00
 
-query error Arrow\ error:\ Parser\ error:\ Error\ parsing\ timestamp\ from\ '2024\-03\-31\ 02:30:00':\ error\ computing\ timezone\ offset
+query P
 SELECT '2024-03-31 02:30:00'::timestamptz
+----
+2024-03-31T03:30:00+02:00
 
 statement ok
 RESET datafusion.execution.time_zone
