@@ -20,7 +20,10 @@ def main():
         raise ValueError(f"Unknown stage: {stage}")
     if backend not in {"rust-cache", "sccache", "hybrid"}:
         raise ValueError(f"Unknown backend: {backend}")
-    wrapper = os.environ.get("RUSTC_WRAPPER", "")
+    coverage_wrapper = os.environ.get("RUSTC_WRAPPER", "")
+    wrapper = coverage_wrapper
+    if Path(coverage_wrapper).name == "cargo-llvm-cov":
+        wrapper = os.environ.get("__CARGO_LLVM_COV_RUSTC_WRAPPER_PRE_EXISTING", "")
     if (backend == "rust-cache" and wrapper) or (
         backend != "rust-cache" and Path(wrapper).name != "sccache"
     ):
@@ -71,6 +74,7 @@ def main():
         "command": command,
         "rustflags": os.environ.get("RUSTFLAGS"),
         "rustc_wrapper": wrapper,
+        "coverage_wrapper": coverage_wrapper,
         "sccache_prefix": os.environ.get("SCCACHE_S3_KEY_PREFIX"),
         "target_dir": os.environ.get("CARGO_TARGET_DIR"),
         "fresh_units": sum(item["fresh"] for item in artifacts),

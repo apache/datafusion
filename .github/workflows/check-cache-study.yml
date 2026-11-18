@@ -91,7 +91,7 @@ jobs:
       - name: Compile coverage tests
         shell: bash
         run: |
-          eval "$(cargo llvm-cov show-env --export-prefix)"
+          eval "$(cargo llvm-cov show-env --sh)"
           python3 ci/scripts/cache_study.py
       - name: Compiler cache statistics
         if: always() && matrix.cache != 'rust-cache'
