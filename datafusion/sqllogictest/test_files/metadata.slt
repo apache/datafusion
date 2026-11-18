@@ -900,10 +900,19 @@ NULL
 bar
 baz
 
-# The CASE operand and WHEN conditions are only tested; their metadata does not leak.
+# Metadata on the CASE operand does not transfer to the output
 query T
 select arrow_metadata(
   case with_metadata(id, 'ARROW:extension:name', 'test.type') when 1 then name else l_name end,
+  'ARROW:extension:name')
+from table_with_metadata limit 1;
+----
+NULL
+
+# Metadata on the WHEN conditions does not transfer to the output.
+query T
+select arrow_metadata(
+  case id when with_metadata(id, 'ARROW:extension:name', 'test.type') then name else l_name end,
   'ARROW:extension:name')
 from table_with_metadata limit 1;
 ----
