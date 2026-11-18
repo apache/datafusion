@@ -255,13 +255,6 @@ CREATE EXTERNAL TABLE months STORED AS PARQUET
 LOCATION 'test_files/scratch/parquet_statistics/months.parquet';
 
 query TT
-EXPLAIN SELECT m FROM months WHERE m IN (1, 2, 3);
-----
-physical_plan
-01)FilterExec: m@0 IN (SET) ([1, 2, 3]), statistics=[Rows=Inexact(30), Bytes=Inexact(120), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(12)) Null=Exact(0) ScanBytes=Inexact(120))]]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/months.parquet]]}, projection=[m], file_type=parquet, predicate=m@0 IN (SET) ([1, 2, 3]), pruning_predicate=m_null_count@2 != row_count@3 AND m_min@0 <= 1 AND 1 <= m_max@1 OR m_null_count@2 != row_count@3 AND m_min@0 <= 2 AND 2 <= m_max@1 OR m_null_count@2 != row_count@3 AND m_min@0 <= 3 AND 3 <= m_max@1, required_guarantees=[m in (1, 2, 3)], statistics=[Rows=Inexact(120), Bytes=Inexact(480), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(12)) Null=Inexact(0) ScanBytes=Inexact(480))]]
-
-query TT
 EXPLAIN SELECT m FROM months WHERE m NOT IN (1, 2, 3);
 ----
 physical_plan

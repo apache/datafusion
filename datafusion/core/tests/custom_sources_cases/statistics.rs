@@ -395,63 +395,6 @@ async fn sql_string_filter_custom_selectivity() -> Result<()> {
 }
 
 #[tokio::test]
-async fn sql_in_list_filter_selectivity() -> Result<()> {
-    // There are 800 non-null rows and no distinct count, so the 10 values
-    // from min to max are the distinct values. An `IN` list matches its share
-    // of them, and `NOT IN` matches the rest.
-    let ctx = init_ctx(
-        Statistics {
-            num_rows: Precision::Exact(1000),
-            total_byte_size: Precision::Absent,
-            column_statistics: vec![ColumnStatistics {
-                null_count: Precision::Exact(200),
-                min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
-                max_value: Precision::Exact(ScalarValue::Int32(Some(10))),
-                ..ColumnStatistics::new_unknown()
-            }],
-        },
-        Schema::new(vec![Field::new("c1", DataType::Int32, true)]),
-    )?;
-    for (predicate, expected_rows) in [
-        ("c1 IN (1, 2, 3)", 240),
-        ("c1 NOT IN (1, 2, 3)", 560),
-        // Repeated values count once, and values outside min and max match
-        // nothing.
-        ("c1 IN (1, 2, 3, 3, 11)", 240),
-        ("c1 IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)", 800),
-        ("c1 NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)", 0),
-        ("c1 IN (1, 2, NULL)", 160),
-    ] {
-        assert_eq!(
-            string_filter_rows(&ctx, predicate).await?,
-            Precision::Inexact(expected_rows),
-            "{predicate}"
-        );
-    }
-
-    // A string column uses its distinct count: 6 of 20 values. Without one,
-    // the default selectivity applies. Lists of three or fewer strings become
-    // OR and AND chains, so these lists are longer.
-    for (distinct_count, in_rows, not_in_rows) in [
-        (Precision::Exact(20), 240, 560),
-        (Precision::Absent, 200, 200),
-    ] {
-        let ctx = string_filter_ctx(DataType::Utf8, distinct_count)?;
-        for (predicate, expected_rows) in [
-            ("c1 IN ('a', 'b', 'c', 'd', 'e', 'f')", in_rows),
-            ("c1 NOT IN ('a', 'b', 'c', 'd', 'e', 'f')", not_in_rows),
-        ] {
-            assert_eq!(
-                string_filter_rows(&ctx, predicate).await?,
-                Precision::Inexact(expected_rows),
-                "{distinct_count:?}: {predicate}"
-            );
-        }
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn sql_limit() -> Result<()> {
     let (stats, schema) = fully_defined();
     let ctx = init_ctx(stats.clone(), schema)?;

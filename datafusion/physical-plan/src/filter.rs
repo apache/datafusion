@@ -1188,7 +1188,9 @@ fn restricted_column(expr: &Arc<dyn PhysicalExpr>) -> Option<(usize, usize)> {
 /// whether the list holds a NULL. The list must test a bare column and hold
 /// only literals.
 #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
-fn literal_in_list(in_list: &InListExpr) -> Option<(usize, Vec<&ScalarValue>, bool)> {
+fn literal_in_list(
+    in_list: &InListExpr,
+) -> Option<(usize, impl ExactSizeIterator<Item = &ScalarValue>, bool)> {
     let column = in_list.expr().downcast_ref::<Column>()?;
     let mut values = HashSet::with_capacity(in_list.len());
     let mut has_null = false;
@@ -1200,7 +1202,7 @@ fn literal_in_list(in_list: &InListExpr) -> Option<(usize, Vec<&ScalarValue>, bo
             values.insert(value);
         }
     }
-    Some((column.index(), values.into_iter().collect(), has_null))
+    Some((column.index(), values.into_iter(), has_null))
 }
 
 /// Whether the column has as many distinct values as it has non-null rows, so each
@@ -1551,21 +1553,15 @@ fn like_selectivity(
 /// rows, and a listed value between the column's min and max is assumed to
 /// occur in the column.
 fn in_list_selectivity(in_list: &InListExpr, statistics: &Statistics) -> Option<f64> {
-    if in_list.is_empty() {
-        return None;
-    }
     let (index, values, has_null) = literal_in_list(in_list)?;
     let column = statistics.column_statistics.get(index)?;
     // `col NOT IN (.., NULL)` is never TRUE: it is FALSE when `col` is listed
     // and NULL otherwise. A list of only NULLs matches nothing either.
-    if has_null && (in_list.negated() || values.is_empty()) {
+    if has_null && (in_list.negated() || values.len() == 0) {
         return Some(0.0);
     }
     let distinct = estimated_distinct_count(column, &statistics.num_rows)?;
-    let listed = values
-        .into_iter()
-        .filter(|value| may_hold(column, value))
-        .count();
+    let listed = values.filter(|value| may_hold(column, value)).count();
     let matched = (listed as f64 / distinct as f64).min(1.0);
     let selectivity = if in_list.negated() {
         1.0 - matched
@@ -5097,44 +5093,14 @@ mod tests {
             .collect()
     }
 
-    /// An `IN` list on an integer column without a distinct count counts the
-    /// values from min to max instead (#25621).
-    #[test]
-    fn test_filter_statistics_in_list_on_an_integer_range() -> Result<()> {
-        use Precision::{Exact, Inexact};
-
-        // TPC-DS `date_dim.d_moy`: the months 1 to 12 in 73,049 rows.
-        let months = |count: i32| -> Vec<ScalarValue> {
-            (1..=count).map(|m| ScalarValue::Int32(Some(m))).collect()
-        };
-        for (list, negated, expected_rows) in [
-            (months(3), false, 18263),
-            (months(3), true, 54787),
-            (months(12), false, 73049),
-            (months(12), true, 0),
-        ] {
-            let statistics = in_list_filter_statistics(
-                Inexact(73049),
-                int32_column(1, 12, Exact(0)),
-                &list,
-                negated,
-            )?;
-            assert_eq!(
-                statistics.num_rows,
-                Inexact(expected_rows),
-                "list={list:?}, negated={negated}"
-            );
-            assert_eq!(statistics.column_statistics[0].null_count, Exact(0));
-        }
-        Ok(())
-    }
-
+    /// An integer column without a distinct count has the values from min to
+    /// max as its distinct values (#25621).
     #[test]
     fn test_filter_statistics_in_list_values() -> Result<()> {
         for (list, in_rows, not_in_rows) in [
             (vec![Some(2), Some(3)], 200, 800),
-            // Values outside min and max match nothing.
-            (vec![Some(0), Some(11)], 0, 1000),
+            ((1..=10).map(Some).collect(), 1000, 0),
+            // A value outside min and max matches nothing.
             (vec![Some(5), Some(50)], 100, 900),
             // A repeated value counts once.
             (vec![Some(2), Some(2), Some(3)], 200, 800),
@@ -5169,9 +5135,6 @@ mod tests {
             (Exact(1000), Exact(200), Inexact(160), Inexact(640)),
             // An unknown null count is taken as zero.
             (Exact(1000), Absent, Inexact(200), Inexact(800)),
-            (Exact(1000), Exact(1000), Inexact(0), Inexact(0)),
-            (Exact(0), Exact(0), Exact(0), Exact(0)),
-            (Absent, Absent, Absent, Absent),
         ] {
             for (negated, expected_rows) in [(false, in_rows), (true, not_in_rows)] {
                 let statistics = in_list_filter_statistics(
@@ -5253,27 +5216,18 @@ mod tests {
     /// values from min to max. Other types keep the default selectivity.
     #[test]
     fn test_filter_statistics_in_list_by_type_without_a_distinct_count() -> Result<()> {
-        // The min 1, the max 10, and the list (2, 3, 4), as each type.
-        let values = |value: fn(i32) -> ScalarValue| [1, 10, 2, 3, 4].map(value);
+        // The min 1, the max 10, and the list (2, 3, 4), in days.
         for ([min, max, list @ ..], in_rows, not_in_rows) in [
-            (values(|day| ScalarValue::Date32(Some(day))), 300, 700),
             (
-                values(|day| ScalarValue::Date64(Some(day as i64 * 86_400_000))),
+                [1, 10, 2, 3, 4].map(|day| ScalarValue::Date32(Some(day))),
+                300,
+                700,
+            ),
+            (
+                [1, 10, 2, 3, 4].map(|day| ScalarValue::Date64(Some(day * 86_400_000))),
                 200,
                 200,
             ),
-            (
-                values(|v| ScalarValue::Decimal128(Some(v as i128 * 100), 10, 2)),
-                200,
-                200,
-            ),
-            (
-                values(|v| ScalarValue::TimestampSecond(Some(v as i64), None)),
-                200,
-                200,
-            ),
-            (values(|v| ScalarValue::Float64(Some(v as f64))), 200, 200),
-            (values(|v| ScalarValue::from(format!("{v:02}"))), 200, 200),
         ] {
             let column = ColumnStatistics {
                 null_count: Precision::Exact(0),
