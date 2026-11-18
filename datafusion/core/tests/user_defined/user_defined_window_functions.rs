@@ -187,6 +187,9 @@ async fn test_udwf_bounded_window_ignores_frame() {
 async fn test_udwf_bounded_window() {
     let test_state = TestState::new().with_uses_window_frame();
     let TestContext { ctx, test_state } = TestContext::new(test_state);
+    execute(&ctx, "SET datafusion.execution.target_partitions = 1")
+        .await
+        .unwrap();
 
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
@@ -210,6 +213,9 @@ async fn test_udwf_bounded_window() {
     // Evaluate is called for each input rows
     assert_eq!(test_state.evaluate_called(), 10);
     assert_eq!(test_state.evaluate_all_called(), 0);
+    // Without `evaluates_frames_independently`, each call sees one partition,
+    // and x = 2 has 7 of the 10 rows
+    assert_eq!(test_state.max_values_len(), 7);
 }
 
 /// Basic stateful user defined window function
@@ -369,8 +375,9 @@ async fn test_udwf_bounded_window_returns_null() {
     assert_eq!(test_state.evaluate_all_called(), 0);
 }
 
-/// A partition that starts and ends inside an input batch is evaluated with
-/// the same calls as one that is buffered
+/// A window function that is neither an aggregate nor sets
+/// `evaluates_frames_independently` gets the same calls for a partition that
+/// starts and ends inside an input batch as for a buffered one
 #[tokio::test]
 async fn test_udwf_bounded_window_complete_partition() {
     let test_state = TestState::new().with_supports_bounded_execution();
@@ -466,6 +473,8 @@ struct TestState {
     evaluate_called: AtomicUsize,
     /// How many times was `evaluate_all_with_rank` called?
     evaluate_all_with_rank_called: AtomicUsize,
+    /// The most rows that `evaluate` saw in `values`
+    max_values_len: AtomicUsize,
     /// should the functions say they use the window frame?
     uses_window_frame: bool,
     /// should the functions say they support bounded execution
@@ -534,6 +543,11 @@ impl TestState {
     fn inc_evaluate_all_with_rank_called(&self) {
         self.evaluate_all_with_rank_called
             .fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// return the most rows that `evaluate` saw in `values`
+    fn max_values_len(&self) -> usize {
+        self.max_values_len.load(Ordering::SeqCst)
     }
 }
 
@@ -610,6 +624,9 @@ impl PartitionEvaluator for OddCounter {
         println!("evaluate, values: {values:#?}, range: {range:?}");
 
         self.test_state.inc_evaluate_called();
+        self.test_state
+            .max_values_len
+            .fetch_max(values[0].len(), Ordering::SeqCst);
         let values: &Int64Array = values[0].as_primitive();
         let values = values.slice(range.start, range.len());
         let scalar = ScalarValue::Int64(

@@ -8169,6 +8169,31 @@ ORDER BY k, o;
 8 1 80 80 161 80 80 81 80
 8 2 81 161 81 80 81 81 81
 
+# The query runs in `BoundedWindowAggExec` in `Sorted` mode
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT k, o, v,
+  sum(v) OVER (PARTITION BY k ORDER BY o),
+  sum(v) OVER (PARTITION BY k ORDER BY o ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING),
+  first_value(v) OVER (PARTITION BY k ORDER BY o),
+  last_value(v) IGNORE NULLS OVER (PARTITION BY k ORDER BY o),
+  nth_value(v, 2) OVER (PARTITION BY k ORDER BY o ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),
+  last_value(v) OVER (PARTITION BY k ORDER BY o GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM complete_partitions
+ORDER BY k, o;
+----
+physical_plan
+01)ProjectionExec: expr=[k@1 as k, o@2 as o, v@3 as v, sum(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as sum(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING@5 as sum(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING, first_value(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@6 as first_value(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, last_value(complete_partitions.v) IGNORE NULLS PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@7 as last_value(complete_partitions.v) IGNORE NULLS PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(complete_partitions.v,Int64(2)) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING@8 as nth_value(complete_partitions.v,Int64(2)) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, last_value(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW@9 as last_value(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW]
+02)--BoundedWindowAggExec: wdw=[sum(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, sum(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING: Field { "sum(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING": nullable Int64 }, frame: ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING, first_value(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "first_value(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, last_value(complete_partitions.v) IGNORE NULLS PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "last_value(complete_partitions.v) IGNORE NULLS PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int32 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(complete_partitions.v,Int64(2)) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING: Field { "nth_value(complete_partitions.v,Int64(2)) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING": nullable Int32 }, frame: ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING, last_value(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW: Field { "last_value(complete_partitions.v) PARTITION BY [complete_partitions.k] ORDER BY [complete_partitions.o ASC NULLS LAST] GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW": nullable Int32 }, frame: GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[k@1 ASC NULLS LAST, o@2 ASC NULLS LAST], preserve_partitioning=[false]
+04)------ProjectionExec: expr=[CAST(v@2 AS Int64) as __common_expr_1, k@0 as k, o@1 as o, v@2 as v]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
 statement ok
 reset datafusion.execution.batch_size;
 

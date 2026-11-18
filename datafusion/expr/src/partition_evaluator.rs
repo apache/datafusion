@@ -215,9 +215,9 @@ pub trait PartitionEvaluator: Debug + Send + std::any::Any {
     }
 
     /// Returns `true` if, until [`Self::memoize`] is called, the result of
-    /// [`Self::evaluate_ranges`] for a frame depends only on `values` and that
-    /// frame. A new evaluator can then evaluate the frames of several small
-    /// partitions in one call.
+    /// [`Self::evaluate_ranges`] for a frame depends only on the rows of
+    /// `values` inside that frame. A new evaluator can then evaluate the
+    /// frames of several partitions, concatenated in `values`, in one call.
     fn evaluates_frames_independently(&self) -> bool {
         false
     }

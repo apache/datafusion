@@ -100,7 +100,9 @@ impl StandardWindowExpr {
                     .iter()
                     .map(|column| column.slice(start, partition.len())),
             );
-            // Only the state of a GROUPS frame is specific to a partition
+            // A GROUPS frame keeps the group boundaries of the previous partition.
+            // A RANGE frame caches only a comparator keyed by the ORDER BY arrays,
+            // which are new slices for each partition.
             if let WindowFrameContext::Groups { state, .. } = &mut window_frame_ctx {
                 state.group_end_indices.clear();
                 state.current_group_idx = 0;

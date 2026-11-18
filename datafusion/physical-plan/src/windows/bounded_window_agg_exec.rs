@@ -1073,9 +1073,10 @@ pub struct SortedSearch {
     can_evaluate_complete: bool,
     /// Results of the complete partitions of the latest input batch, one array
     /// per window expression, or empty. Set by `evaluate_partition_batches`
-    /// and taken by the `calculate_out_columns` call that follows. Their rows
-    /// come after every buffered partition but the last, all of which have
-    /// ended and have all their results.
+    /// and taken by the `calculate_out_columns` call that the stream makes for
+    /// the same batch. Their rows go before the batch's last partition, the
+    /// last entry of `partition_buffers` and of every state map, and after the
+    /// other buffered partitions, which have ended and have all their results.
     complete_out: Vec<ArrayRef>,
 }
 
@@ -1089,6 +1090,14 @@ impl PartitionSearcher for SortedSearch {
         _window_expr: &[Arc<dyn WindowExpr>],
     ) -> Result<Option<Vec<ArrayRef>>> {
         let complete_out = std::mem::take(&mut self.complete_out);
+        debug_assert!(
+            complete_out.is_empty()
+                || window_agg_states.iter().all(|states| {
+                    states.last().map(|(key, _)| key)
+                        == partition_buffers.last().map(|(key, _)| key)
+                }),
+            "every window state map must end with the last buffered partition"
+        );
         let n_complete = complete_out.first().map_or(0, |out| out.len());
         let n_out =
             self.calculate_n_out_row(window_agg_states, partition_buffers) + n_complete;
@@ -1132,11 +1141,17 @@ impl PartitionSearcher for SortedSearch {
         // last, which may continue in the next batch, need to be buffered.
         let n_partitions = partition_points.len();
         if self.can_evaluate_complete && n_partitions > 2 {
+            debug_assert!(
+                self.complete_out.is_empty(),
+                "the complete partitions of the previous batch must be emitted"
+            );
             let complete = 1..n_partitions - 1;
+            // One run, since these partitions are inside one input batch
             self.complete_out = compute_window_aggregates(
                 window_expr,
                 record_batch,
                 &partition_points[complete.clone()],
+                num_rows,
             )?;
             partition_points.drain(complete);
         }

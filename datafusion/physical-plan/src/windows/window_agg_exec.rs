@@ -292,6 +292,7 @@ impl ExecutionPlan for WindowAggExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, context)?;
         let stream = Box::pin(WindowAggStream::new(
             Arc::clone(&self.schema),
@@ -300,6 +301,7 @@ impl ExecutionPlan for WindowAggExec {
             BaselineMetrics::new(&self.metrics, partition),
             self.partition_by_sort_keys()?,
             self.ordered_partition_by_indices.clone(),
+            batch_size,
         )?);
         Ok(stream)
     }
@@ -482,6 +484,7 @@ pub struct WindowAggStream {
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
     ordered_partition_by_indices: Vec<usize>,
+    batch_size: usize,
 }
 
 impl WindowAggStream {
@@ -493,6 +496,7 @@ impl WindowAggStream {
         baseline_metrics: BaselineMetrics,
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
         ordered_partition_by_indices: Vec<usize>,
+        batch_size: usize,
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.
         assert_eq_or_internal_err!(
@@ -509,6 +513,7 @@ impl WindowAggStream {
             baseline_metrics,
             partition_by_sort_keys,
             ordered_partition_by_indices,
+            batch_size,
         })
     }
 
@@ -528,8 +533,12 @@ impl WindowAggStream {
             .collect::<Result<Vec<_>>>()?;
         let partition_points =
             evaluate_partition_ranges(batch.num_rows(), &partition_by_sort_keys)?;
-        let columns =
-            compute_window_aggregates(&self.window_expr, &batch, &partition_points)?;
+        let columns = compute_window_aggregates(
+            &self.window_expr,
+            &batch,
+            &partition_points,
+            self.batch_size,
+        )?;
 
         // combine with the original cols
         // note the setup of window aggregates is that they newly calculated window
