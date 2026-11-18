@@ -2540,19 +2540,23 @@ mod tests {
             None,
         )?;
 
-        match &expr.eval_method {
-            EvalMethod::NoExpression(projected) => {
-                let projected = projected.project(&expr.body, &plan_schema)?;
-                assert_eq!(projected.precomputed, vec![s_a, s_b]);
-            }
-            method => panic!("expected NoExpression, got {method:?}"),
-        }
-
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         assert_eq!(
             as_int32_array(&result)?,
             &Int32Array::from(vec![Some(10), Some(0), None])
         );
+
+        // The projection is derived on evaluation, against the schema of the batch
+        match &expr.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                let projected = projected
+                    .projected
+                    .get()
+                    .expect("projection derived on evaluation");
+                assert_eq!(projected.precomputed, vec![s_a, s_b]);
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
         Ok(())
     }
 
