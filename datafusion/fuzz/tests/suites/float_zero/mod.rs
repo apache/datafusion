@@ -14,20 +14,19 @@
 //! - `data.rs` builds the two tables.
 //! - `queries.rs` holds the query templates and the known failures.
 //! - `settings.rs` holds the settings each query runs under.
-//!
-//! To reproduce a run of the random test, set `FLOAT_ZERO_FUZZ_SEED` to the
-//! seed it prints.
+
+use std::future::Future;
 
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::prelude::SessionContext;
-use datafusion_common::ScalarValue;
 use datafusion_common::float_semantics::normalize;
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
 use datafusion_common_runtime::JoinSet;
+use rand::SeedableRng;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
-
-use crate::fuzz_cases::aggregation_fuzzer::run_sql;
+use rand::seq::IndexedRandom;
+use test_utils::fuzz::FuzzTest;
 
 mod data;
 mod queries;
@@ -36,8 +35,58 @@ mod settings;
 use queries::{KNOWN_FAILURES, KnownFailure, TEMPLATES, Template};
 use settings::Setting;
 
-/// Number of rows in each round of the random test.
-const ROUND_SIZES: &[usize] = &[8, 16, 32, 64, 128];
+/// Number of rows a random table may have.
+const TABLE_SIZES: &[usize] = &[8, 16, 32, 64, 128];
+
+/// Each dataset is a random table registered under every setting. Each case
+/// checks one random (template, setting) pair that is not a known failure.
+pub(crate) struct FloatZeroFuzzer;
+
+impl FuzzTest for FloatZeroFuzzer {
+    type Dataset = Vec<(Setting, SessionContext)>;
+
+    fn name(&self) -> &str {
+        "float_zero"
+    }
+
+    fn prepare_dataset(&self, seed: u64) -> impl Future<Output = Result<Self::Dataset>> {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let num_rows = *TABLE_SIZES.choose(&mut rng).unwrap();
+        let data = data::random(&mut rng, num_rows);
+        std::future::ready(
+            Setting::all()
+                .into_iter()
+                .map(|setting| Ok((setting, setting.context(&data)?)))
+                .collect(),
+        )
+    }
+
+    async fn run_case(&self, contexts: &Self::Dataset, seed: u64) -> Result<()> {
+        let pairs: Vec<_> = contexts
+            .iter()
+            .flat_map(|(setting, ctx)| {
+                TEMPLATES
+                    .iter()
+                    .filter(|t| {
+                        runs(t, setting) && KnownFailure::matches(t, setting).is_none()
+                    })
+                    .map(move |t| (t, setting, ctx))
+            })
+            .collect();
+        let (template, setting, ctx) = *pairs
+            .choose(&mut StdRng::seed_from_u64(seed))
+            .expect("some pair is not a known failure");
+        check(ctx, template, setting)
+            .await
+            .map_err(|failure| exec_datafusion_err!("{failure}"))
+    }
+}
+
+/// Templates without a zero literal skip the `negative_literals` settings,
+/// which would run the same queries again.
+fn runs(template: &Template, setting: &Setting) -> bool {
+    !setting.negative_literals || template.sql.contains("{z}")
+}
 
 /// Every listed (template, setting) pair must fail on the fixed data and
 /// every other pair must pass.
@@ -46,7 +95,7 @@ async fn float_zero_fixed() {
     let mut errors = vec![];
     // Which KNOWN_FAILURES entries apply to some pair that ran.
     let mut used = vec![false; KNOWN_FAILURES.len()];
-    for (template, setting, result) in check_all(&data::fixed(), |_, _| false).await {
+    for (template, setting, result) in check_all(&data::fixed()).await {
         let applying: Vec<usize> = (0..KNOWN_FAILURES.len())
             .filter(|&i| {
                 let known = &KNOWN_FAILURES[i];
@@ -89,29 +138,6 @@ async fn float_zero_fixed() {
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
 }
 
-/// Every pair that is not listed must pass on random data.
-#[tokio::test(flavor = "multi_thread")]
-async fn float_zero_fuzz() {
-    let seed = match std::env::var("FLOAT_ZERO_FUZZ_SEED") {
-        Ok(seed) => seed.parse().expect("FLOAT_ZERO_FUZZ_SEED must be a u64"),
-        Err(_) => rand::rng().random(),
-    };
-    println!("float_zero_fuzz seed: {seed}");
-    let mut rng = StdRng::seed_from_u64(seed);
-
-    let mut errors = vec![];
-    for &num_rows in ROUND_SIZES {
-        let data = data::random(&mut rng, num_rows);
-        let known = |t: &Template, s: &Setting| KnownFailure::matches(t, s).is_some();
-        for (_, _, result) in check_all(&data, known).await {
-            if let Err(failure) = result {
-                errors.push(format!("seed {seed}, {num_rows} rows: {failure}"));
-            }
-        }
-    }
-    assert!(errors.is_empty(), "{}", errors.join("\n\n"));
-}
-
 /// The `{z}` literal must reach the plan as a Float64 `-0.0`, or the
 /// `negative_literals` setting tests nothing.
 #[tokio::test]
@@ -142,24 +168,19 @@ impl std::fmt::Display for Failure {
     }
 }
 
-/// Runs every template under every setting on `data`, except the pairs
-/// `skip` returns true for, and returns the results in a fixed order. Each
+/// Runs every template under every setting on `data` and returns the
+/// results in a fixed order. Each
 /// pair runs in its own task: the queries are tiny, so planning dominates and
-/// running them in parallel is what makes the test fast. Templates without a
-/// zero literal skip the `negative_literals` settings, which would run the
-/// same queries again.
+/// running them in parallel is what makes the test fast.
 async fn check_all(
     data: &data::Dataset,
-    skip: impl Fn(&Template, &Setting) -> bool,
 ) -> Vec<(&'static Template, Setting, Result<(), Failure>)> {
     let mut join_set = JoinSet::new();
     let mut num_pairs = 0;
     for setting in Setting::all() {
         let ctx = setting.context(data).unwrap();
         for template in TEMPLATES {
-            if (setting.negative_literals && !template.sql.contains("{z}"))
-                || skip(template, &setting)
-            {
+            if !runs(template, &setting) {
                 continue;
             }
             let ctx = ctx.clone();
@@ -253,4 +274,8 @@ fn format_rows(batches: &[RecordBatch]) -> Vec<String> {
         }
     }
     rows
+}
+
+async fn run_sql(sql: &str, ctx: &SessionContext) -> Result<Vec<RecordBatch>> {
+    ctx.sql(sql).await?.collect().await
 }

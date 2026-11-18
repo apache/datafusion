@@ -5,7 +5,6 @@
 #[expect(clippy::needless_pass_by_value)]
 mod aggregate_fuzz;
 mod distinct_count_string_fuzz;
-mod float_zero_fuzz;
 #[expect(clippy::needless_pass_by_value)]
 mod join_fuzz;
 mod merge_fuzz;

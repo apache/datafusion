@@ -21,8 +21,9 @@ extended_tests = []
 [dev-dependencies]
 arrow = { workspace = true }
 bytes = { workspace = true }
-datafusion = { workspace = true }
+datafusion = { workspace = true, default-features = true }
 datafusion-common = { workspace = true }
+datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
