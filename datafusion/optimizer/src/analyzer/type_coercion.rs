@@ -128,21 +128,24 @@ fn coerce_plan_and_subqueries(
             // of a `NULL` column of a `UNION`. Coerce the body first, and give
             // its new schema to the scans before the continuation is coerced.
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+                let (id, name) = (cte.id(), cte.name().to_string());
+                let (body, continuation) = cte.into_inputs();
                 let body =
-                    coerce_plan_and_subqueries(Arc::unwrap_or_clone(cte.cte), config)?;
+                    coerce_plan_and_subqueries(Arc::unwrap_or_clone(body), config)?;
                 let continuation = with_materialized_cte_scan_schema(
-                    Arc::unwrap_or_clone(cte.continuation),
-                    cte.id,
+                    Arc::unwrap_or_clone(continuation),
+                    id,
                     body.schema(),
                 )?;
                 let continuation = coerce_plan_and_subqueries(continuation, config)?;
                 Ok(Transformed::new(
                     LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-                        MaterializedCte {
-                            cte: Arc::new(body),
-                            continuation: Arc::new(continuation),
-                            ..cte
-                        },
+                        MaterializedCte::try_new(
+                            id,
+                            name,
+                            Arc::new(body),
+                            Arc::new(continuation),
+                        )?,
                     )),
                     true,
                     TreeNodeRecursion::Jump,
@@ -173,7 +176,7 @@ fn with_materialized_cte_scan_schema(
         .transform_down_with_subqueries(|node| match node {
             // A nested occurrence of the same CTE owns the scans below it.
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref nested))
-                if nested.id == id =>
+                if nested.id() == id =>
             {
                 Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
             }

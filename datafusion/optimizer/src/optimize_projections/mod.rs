@@ -528,12 +528,8 @@ fn optimize_materialized_cte(
     config: &dyn OptimizerConfig,
     indices: RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
-    let MaterializedCte {
-        id,
-        name,
-        cte: body,
-        continuation,
-    } = cte;
+    let (id, name) = (cte.id(), cte.name().to_string());
+    let (body, continuation) = cte.into_inputs();
     // The output is the output of the continuation, so the continuation
     // needs what the parent needs.
     let continuation =
@@ -578,7 +574,7 @@ fn optimize_materialized_cte(
                 // A nested occurrence of the same CTE has its own body and
                 // owns the scans below it.
                 LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref nested))
-                    if nested.id == id =>
+                    if nested.id() == id =>
                 {
                     Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
                 }

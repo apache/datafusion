@@ -1403,9 +1403,10 @@ impl OptimizerRule for PushDownFilter {
                 // The output is the output of the continuation, so the filter
                 // moves onto the continuation. The body is shared by every scan
                 // of the CTE and is never filtered for one of them.
-                cte.continuation = Arc::new(LogicalPlan::Filter(Filter::new(
+                let (_, continuation) = cte.inputs_mut();
+                *continuation = Arc::new(LogicalPlan::Filter(Filter::new(
                     filter.predicate,
-                    cte.continuation,
+                    Arc::clone(continuation),
                 )));
                 Ok(Transformed::yes(LogicalPlan::MaterializedCte(
                     MaterializedCtePlan::Cte(cte),

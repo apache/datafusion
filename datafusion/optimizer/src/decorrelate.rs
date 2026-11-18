@@ -215,7 +215,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
             }
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref cte))
-                if !cte.cte.all_out_ref_exprs().is_empty() =>
+                if !cte.body().all_out_ref_exprs().is_empty() =>
             {
                 // A correlated body would have to run once per outer row.
                 Ok(self.stop_pull_up(plan))
@@ -223,14 +223,17 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
                 // Only the continuation can hold correlated expressions. Rewrite
                 // it alone, so that the body shared by every scan keeps its schema.
-                let continuation =
-                    Arc::unwrap_or_clone(cte.continuation).rewrite(self)?;
+                let (id, name) = (cte.id(), cte.name().to_string());
+                let (body, continuation) = cte.into_inputs();
+                let continuation = Arc::unwrap_or_clone(continuation).rewrite(self)?;
                 Ok(Transformed::new(
                     LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-                        MaterializedCte {
-                            continuation: Arc::new(continuation.data),
-                            ..cte
-                        },
+                        MaterializedCte::try_new(
+                            id,
+                            name,
+                            body,
+                            Arc::new(continuation.data),
+                        )?,
                     )),
                     continuation.transformed,
                     TreeNodeRecursion::Jump,
