@@ -314,7 +314,7 @@ impl BatchedJoinProcessor {
         Ok(())
     }
 
-    /// Return a materialized joined batch in the output schema for one probe chunk.
+    /// Look up, filter, and materialize the next chunk of the current probe batch.
     ///
     /// For an INNER JOIN on `t1.c1 = t2.c1 AND t1.c2 > t2.c2`, with
     /// `batch_size = 8192`:
@@ -323,9 +323,12 @@ impl BatchedJoinProcessor {
     /// 2. Evaluate the residual filter `t1.c2 > t2.c2`; suppose only 100 pairs pass.
     /// 3. Materialize those 100 pairs in the final output schema and return the batch.
     ///
-    /// For non-inner joins, matched rows will be tracked for final output.
+    /// Left and full joins record the surviving build rows for the final unmatched
+    /// output. Right and full joins also emit the probe rows this chunk proves
+    /// unmatched.
     ///
-    /// For small output batches, the caller will coalesce them for final output.
+    /// Returns an empty batch when no row survives, and `None` once the current
+    /// probe batch is drained. The caller coalesces small batches.
     fn probe_chunk(&mut self) -> Result<Option<RecordBatch>> {
         let Some(probe) = &mut self.probe else {
             return Ok(None);
