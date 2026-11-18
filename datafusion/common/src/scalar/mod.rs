@@ -6,6 +6,7 @@
 
 mod cache;
 mod consts;
+mod null_struct;
 mod struct_builder;
 
 use std::borrow::Borrow;
@@ -1423,12 +1424,9 @@ impl ScalarValue {
             DataType::LargeListView(field_ref) => ScalarValue::LargeListView(Arc::new(
                 GenericListViewArray::new_null(Arc::clone(field_ref), 1),
             )),
-            DataType::Struct(fields) => ScalarValue::Struct(
-                new_null_array(&DataType::Struct(fields.to_owned()), 1)
-                    .as_struct()
-                    .to_owned()
-                    .into(),
-            ),
+            DataType::Struct(fields) => {
+                ScalarValue::Struct(Arc::new(null_struct::new_null_struct(fields)?))
+            }
             DataType::Map(fields, sorted) => ScalarValue::Map(
                 new_null_array(&DataType::Map(fields.to_owned(), sorted.to_owned()), 1)
                     .as_map()
