@@ -82,13 +82,13 @@ pub enum MaterializedCtePlan {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MaterializedCte {
     /// Binds the scans in `continuation` to this node
-    pub id: MaterializedCteId,
+    pub(crate) id: MaterializedCteId,
     /// Name of the CTE, used for display and error messages only
-    pub name: String,
+    pub(crate) name: String,
     /// The body of the CTE
-    pub cte: Arc<LogicalPlan>,
+    pub(crate) cte: Arc<LogicalPlan>,
     /// The query that declared the CTE and reads it
-    pub continuation: Arc<LogicalPlan>,
+    pub(crate) continuation: Arc<LogicalPlan>,
 }
 
 impl MaterializedCte {
@@ -151,19 +151,46 @@ impl MaterializedCte {
         MaterializedCteScan::find_in(&self.continuation, self.id)
     }
 
-    /// Return a node with the same id and name, and new inputs. The schemas
-    /// of the scans are not checked again.
+    /// Call `f` with the body and the continuation, in this order, so that a
+    /// rule can change them in place. Return the result of `f`.
+    ///
+    /// The schemas of the scans are not checked again. The signature lets a
+    /// later version validate the new inputs and return an error.
+    pub fn try_map_inputs_mut<R>(
+        &mut self,
+        f: impl FnOnce(&mut Arc<LogicalPlan>, &mut Arc<LogicalPlan>) -> Result<R>,
+    ) -> Result<R> {
+        f(&mut self.cte, &mut self.continuation)
+    }
+
+    /// The id, the name, the body and the continuation, in this order. Build
+    /// a node again with [`Self::try_new`].
+    pub fn into_parts(
+        self,
+    ) -> (
+        MaterializedCteId,
+        String,
+        Arc<LogicalPlan>,
+        Arc<LogicalPlan>,
+    ) {
+        (self.id, self.name, self.cte, self.continuation)
+    }
+
+    /// Return a new node with the same id and name, and new inputs.
+    ///
+    /// The schemas of the scans are not checked again. The signature lets a
+    /// later version validate the new inputs and return an error.
     pub fn with_new_inputs(
         &self,
         cte: Arc<LogicalPlan>,
         continuation: Arc<LogicalPlan>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        Ok(Self {
             id: self.id,
             name: self.name.clone(),
             cte,
             continuation,
-        }
+        })
     }
 }
 
@@ -746,7 +773,7 @@ mod tests {
         // `with_new_inputs` does not check the scans, so a rule can build
         // this plan. The invariant check rejects it.
         let invalid = cte
-            .with_new_inputs(body(DataType::Int32), Arc::new(scan(id, DataType::Utf8)));
+            .with_new_inputs(body(DataType::Int32), Arc::new(scan(id, DataType::Utf8)))?;
         let invalid = LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(invalid));
         let err = invalid
             .check_invariants(InvariantLevel::Executable)

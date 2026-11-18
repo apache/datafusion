@@ -274,15 +274,15 @@ fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>>
             let LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) = node else {
                 return Ok(Transformed::no(node));
             };
-            let old_id = cte.id;
             let new_id = MaterializedCteId::next();
-            let continuation = Arc::unwrap_or_clone(cte.continuation)
+            let (old_id, name, body, continuation) = cte.into_parts();
+            let continuation = Arc::unwrap_or_clone(continuation)
                 .transform_down_with_subqueries(|node| match node {
                     // A nested occurrence of the same CTE owns the scans below
                     // it, and is renumbered on its own.
                     LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
                         ref nested,
-                    )) if nested.id == old_id => {
+                    )) if nested.id() == old_id => {
                         Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
                     }
                     LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(mut scan))
@@ -297,11 +297,12 @@ fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>>
                 })?
                 .data;
             Ok(Transformed::yes(LogicalPlan::MaterializedCte(
-                MaterializedCtePlan::Cte(MaterializedCte {
-                    id: new_id,
-                    continuation: Arc::new(continuation),
-                    ..cte
-                }),
+                MaterializedCtePlan::Cte(MaterializedCte::try_new(
+                    new_id,
+                    name,
+                    body,
+                    Arc::new(continuation),
+                )?),
             )))
         })
         .map(|t| Some(t.data))
@@ -2044,11 +2045,11 @@ impl DefaultPhysicalPlanner {
                 if body.boundedness().is_unbounded() {
                     return plan_err!(
                         "MATERIALIZED CTE {} reads an unbounded source, which cannot be materialized",
-                        cte.name
+                        cte.name()
                     );
                 }
                 let buffer =
-                    Arc::new(MaterializedCteBuffer::new(cte.id.as_u64(), &cte.name));
+                    Arc::new(MaterializedCteBuffer::new(cte.id().as_u64(), cte.name()));
                 Arc::new(MaterializedCteExec::new(body, continuation, buffer))
             }
 
