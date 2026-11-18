@@ -5011,28 +5011,29 @@ WHERE EXISTS (
   LIMIT 1
 );
 
-# The same table twice without a shared alias still decorrelates.
+# After a first pass keeps the subquery, the filters move below each `s`, so
+# the two `s` differ and the equal scans below them collide instead.
+query error Unsupported correlated subquery: correlated column x\.a has the same name as an earlier column of the subquery output
+SELECT t.a FROM t26692 t
+WHERE EXISTS (
+  SELECT 1 FROM (SELECT * FROM t26692_2 AS s WHERE s.a = t.a) x
+  CROSS JOIN t26692_2 AS s WHERE s.b = 30
+);
+
+# Two equal `t26692_2 AS s` without correlated columns of their own still
+# decorrelate.
 query I
 SELECT t.a FROM t26692 t
 WHERE EXISTS (
-  SELECT 1 FROM (SELECT * FROM t26692_2 WHERE t26692_2.a = t.a) x
-  CROSS JOIN t26692_2
+  SELECT 1 FROM (SELECT * FROM t26692_2 AS s) p
+  CROSS JOIN (SELECT * FROM t26692_2 AS s) q
+  WHERE p.a = t.a
 )
 ORDER BY 1;
 ----
 1
 2
 3
-
-query I
-SELECT t.a FROM t26692 t
-WHERE EXISTS (
-  SELECT 1 FROM (SELECT * FROM t26692_2 WHERE t26692_2.a = t.a) x
-  CROSS JOIN (SELECT * FROM t26692_2 WHERE t26692_2.b = t.b) y
-)
-ORDER BY 1;
-----
-1
 
 query I
 SELECT t.a FROM t26692 t, t26692_2 AS s
