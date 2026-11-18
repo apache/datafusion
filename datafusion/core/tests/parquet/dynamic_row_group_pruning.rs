@@ -24,10 +24,11 @@ use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 
 use datafusion::physical_plan::collect;
+use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion_common::ScalarValue;
 use parquet::arrow::ArrowWriter;
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataWriter};
+use parquet::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataWriter};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use parquet::file::statistics::Statistics;
 use parquet::file::writer::TrackedWrite;
@@ -87,8 +88,11 @@ fn file_with_missing_null_count(descending: bool, has_null: bool) -> NamedTempFi
             .unwrap();
     }
     let metadata = ParquetMetaData::new(metadata.file_metadata().clone(), groups);
+    replace_footer(bytes, &metadata)
+}
 
-    // Replace the footer, leaving the encoded rows and their offsets intact.
+/// Replace the footer of an encoded file, leaving the rows & offsets intact.
+fn replace_footer(mut bytes: Vec<u8>, metadata: &ParquetMetaData) -> NamedTempFile {
     let footer_len =
         u32::from_le_bytes(bytes[bytes.len() - 8..bytes.len() - 4].try_into().unwrap());
     bytes.truncate(bytes.len() - 8 - footer_len as usize);
@@ -98,10 +102,130 @@ fn file_with_missing_null_count(descending: bool, has_null: bool) -> NamedTempFi
         .unwrap();
     let mut output = TrackedWrite::new(file.as_file_mut());
     output.write_all(&bytes).unwrap();
-    ParquetMetaDataWriter::new_with_tracked(output, &metadata)
+    ParquetMetaDataWriter::new_with_tracked(output, metadata)
         .finish()
         .unwrap();
     file
+}
+
+fn file_without_zero_null_counts(created_by: &str) -> NamedTempFile {
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)]));
+    let props = WriterProperties::builder()
+        .set_statistics_enabled(EnabledStatistics::Chunk)
+        .build();
+    let mut bytes = Vec::new();
+    let mut writer =
+        ArrowWriter::try_new(&mut bytes, schema.clone(), Some(props)).unwrap();
+    for values in [
+        vec![Some(0), Some(1), Some(2)],
+        vec![None, Some(100), Some(101)],
+        vec![Some(200), Some(201), Some(202)],
+    ] {
+        let values: Int64Array = values.into_iter().collect();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)]).unwrap();
+        writer.write(&batch).unwrap();
+        writer.flush().unwrap();
+    }
+    let metadata = writer.close().unwrap();
+    let groups = metadata
+        .row_groups()
+        .iter()
+        .map(|group| {
+            let column = group.column(0).clone();
+            let Statistics::Int64(stats) = column.statistics().unwrap() else {
+                panic!("expected Int64 statistics");
+            };
+            let null_count = stats.null_count_opt().filter(|&count| count > 0);
+            let stats = Statistics::int64(
+                stats.min_opt().copied(),
+                stats.max_opt().copied(),
+                None,
+                null_count,
+                false,
+            );
+            let column = column.into_builder().set_statistics(stats).build().unwrap();
+            group
+                .clone()
+                .into_builder()
+                .set_column_metadata(vec![column])
+                .build()
+                .unwrap()
+        })
+        .collect();
+    let file_metadata = metadata.file_metadata();
+    let file_metadata = FileMetaData::new(
+        file_metadata.version(),
+        file_metadata.num_rows(),
+        Some(created_by.to_owned()),
+        file_metadata.key_value_metadata().cloned(),
+        file_metadata.schema_descr_ptr(),
+        file_metadata.column_orders().cloned(),
+    );
+    replace_footer(bytes, &ParquetMetaData::new(file_metadata, groups))
+}
+
+/// A zero `null_count` omitted by parquet-rs before 53.1.0 is zero, so
+/// `IS NULL` can skip the row groups without nulls. For any other writer the
+/// same footer is unknown and no row group may be skipped. The results are
+/// the same either way.
+#[tokio::test]
+async fn missing_null_count_is_zero_for_legacy_writers() {
+    for (created_by, expected_pruned) in [
+        ("parquet-rs version 53.0.0", 2),
+        ("datafusion version 42.0.0", 2),
+        ("parquet-rs version 53.1.0", 0),
+        ("parquet-mr version 1.13.1", 0),
+    ] {
+        let file = file_without_zero_null_counts(created_by);
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new()
+                .with_target_partitions(1)
+                .with_parquet_page_index_pruning(false),
+        );
+        ctx.register_parquet(
+            "t",
+            file.path().to_str().unwrap(),
+            ParquetReadOptions::default(),
+        )
+        .await
+        .unwrap();
+
+        let plan = ctx
+            .sql("SELECT v FROM t WHERE v IS NULL")
+            .await
+            .unwrap()
+            .create_physical_plan()
+            .await
+            .unwrap();
+        let batches = collect(plan.clone(), ctx.task_ctx()).await.unwrap();
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 1, "{created_by}");
+
+        let metrics = MetricsFinder::find_metrics(plan.as_ref()).unwrap();
+        let pruned = match metrics
+            .sum(|m| m.value().name() == "row_groups_pruned_statistics")
+            .unwrap()
+        {
+            MetricValue::PruningMetrics {
+                pruning_metrics, ..
+            } => pruning_metrics.pruned(),
+            other => panic!("unexpected metric {other:?}"),
+        };
+        assert_eq!(pruned, expected_pruned, "{created_by}\n{metrics}");
+
+        let batches = ctx
+            .sql("SELECT COUNT(v) FROM t")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            ScalarValue::try_from_array(batches[0].column(0), 0).unwrap(),
+            ScalarValue::Int64(Some(8)),
+            "{created_by}",
+        );
+    }
 }
 
 #[tokio::test]
