@@ -114,15 +114,12 @@ impl HigherOrderUDFImpl for ArrayTransform {
             return plan_err!("{} expects a value followed by a lambda", self.name());
         };
 
-        //TODO: should metadata be copied into the transformed array?
-
-        // lambda is the resulting field of executing the lambda body
-        // with the parameters returned in lambda_parameters
-        let field = Arc::new(Field::new(
-            Field::LIST_FIELD_DEFAULT_NAME,
-            lambda.data_type().clone(),
-            lambda.is_nullable(),
-        ));
+        let field = Arc::new(
+            lambda
+                .as_ref()
+                .clone()
+                .with_name(Field::LIST_FIELD_DEFAULT_NAME),
+        );
 
         let return_type = match list.data_type() {
             DataType::List(_) => DataType::List(field),
