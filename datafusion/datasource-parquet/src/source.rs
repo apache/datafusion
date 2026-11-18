@@ -14,6 +14,7 @@ use crate::opener::ParquetMorselizer;
 use crate::opener::build_pruning_predicates;
 use crate::opener::build_virtual_columns_state;
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
+use crate::schema_coercion::dictionary_reads_enabled;
 use arrow_schema::Fields;
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{DataType, Field};
@@ -647,15 +648,12 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             max_in_list_size: self.max_in_list_size(),
-            enable_rle_to_dictionary: self
-                .table_parquet_options
-                .global
-                .enable_rle_to_dictionary
-                || self
-                    .table_parquet_options
+            enable_rle_to_dictionary: dictionary_reads_enabled(
+                self.table_parquet_options.global.enable_rle_to_dictionary,
+                self.table_parquet_options
                     .global
-                    .dictionary_read_max_distinct_values
-                    .is_some(),
+                    .dictionary_read_max_distinct_values,
+            ),
             row_group_range_assignment: self
                 .table_parquet_options
                 .global

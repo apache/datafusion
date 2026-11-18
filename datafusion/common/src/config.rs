@@ -1447,18 +1447,32 @@ config_namespace! {
         /// dictionary pages are inferred and scanned as
         /// `Dictionary<Int32, Utf8>` / `Dictionary<Int32, Binary>` instead of
         /// their plain value type.
+        ///
         /// This applies only when DataFusion infers the table schema. Tables with
         /// a user-supplied schema are not promoted because the Parquet footer is
         /// not read at DDL time, so dictionary pages cannot be detected per column.
+        ///
         /// Setting `dictionary_read_max_distinct_values` also enables dictionary
-        /// reads using its cardinality estimate.
+        /// reads. When both options are set, the cap controls which plain columns
+        /// are promoted.
         /// See <https://github.com/apache/datafusion/issues/24112>
         pub enable_rle_to_dictionary: bool, default = false
 
-        /// (reading) If set, infer top-level string and binary columns as dictionaries
-        /// when every nonempty row group has a dictionary page and the per-file sum
-        /// of row-group NDVs is within this cap. Missing NDVs use the row count, so
-        /// the estimate intentionally overcounts. Computed during schema inference.
+        /// (reading) If set, promote top-level plain string and binary columns to
+        /// dictionaries when every nonempty row group has a dictionary page and the
+        /// per-file sum of row-group cardinality upper bounds is within this cap.
+        /// Missing NDVs use the non-null row count when available and the row count
+        /// otherwise. Values repeated across row groups may be counted more than once.
+        /// The cap does not demote a dictionary declared by the same file; mixed
+        /// dictionary/plain schemas across files still merge as plain. Computed during
+        /// schema inference.
+        ///
+        /// Large row-group dictionaries can be slower because each output batch can
+        /// retain the whole dictionary. The crossover is workload-dependent: in one
+        /// 20-million-row group-by benchmark with 40-byte strings, the case with about
+        /// 100,000 distinct values per row group was faster than plain reads, while the
+        /// case with about 295,000 was slower. Use a conservative cap and benchmark
+        /// representative queries.
         pub dictionary_read_max_distinct_values: Option<usize>, default = None
 
         /// (reading) Which byte range of a split file reads each row group.

@@ -122,6 +122,26 @@ set datafusion.execution.parquet.dictionary_read_max_distinct_values = 2;
 statement ok
 set datafusion.execution.parquet.write_row_group_number_distinct_values = true;
 
+# A column without dictionary pages stays plain even when its row count is
+# within the cap.
+query I
+COPY (SELECT column1 AS no_dict_page FROM (VALUES ('x'), ('x')))
+TO 'test_files/scratch/parquet_rle_to_dictionary/threshold_no_dict_page/p.parquet'
+STORED AS PARQUET OPTIONS ('format.dictionary_enabled' false);
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE threshold_no_dict_page STORED AS PARQUET LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold_no_dict_page/';
+
+query T
+SELECT DISTINCT arrow_typeof(no_dict_page) FROM threshold_no_dict_page;
+----
+Utf8View
+
+statement ok
+DROP TABLE threshold_no_dict_page;
+
 # The exact-cap column stays dictionary encoded across files. mixed_card is
 # demoted because one file's row-group NDV sum exceeds the cap.
 query I
@@ -145,6 +165,28 @@ query TT
 SELECT DISTINCT arrow_typeof(exact_cap), arrow_typeof(mixed_card) FROM thresholded;
 ----
 Dictionary(Int32, Utf8) Utf8View
+
+# A dictionary type from the file's Arrow schema is kept above the cap.
+query I
+COPY (
+  SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS declared_dict
+  FROM (VALUES ('a'), ('b'), ('c'))
+)
+TO 'test_files/scratch/parquet_rle_to_dictionary/threshold_declared/d.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE threshold_declared STORED AS PARQUET LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold_declared/';
+
+query T
+SELECT DISTINCT arrow_typeof(declared_dict) FROM threshold_declared;
+----
+Dictionary(Int32, Utf8)
+
+statement ok
+DROP TABLE threshold_declared;
 
 statement ok
 reset datafusion.execution.parquet.write_row_group_number_distinct_values;

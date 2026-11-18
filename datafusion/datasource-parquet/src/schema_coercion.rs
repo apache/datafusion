@@ -427,37 +427,57 @@ pub(crate) fn uniform_dict_schemas(schemas: Vec<Schema>) -> Vec<Schema> {
         .collect()
 }
 
-/// Make the listed string/binary fields dictionaries and demote all other
-/// string/binary dictionaries to their value type.
-pub(crate) fn set_dictionary_columns(
+pub(crate) fn dictionary_reads_enabled(
+    enable_rle_to_dictionary: bool,
+    dictionary_read_max_distinct_values: Option<usize>,
+) -> bool {
+    enable_rle_to_dictionary || dictionary_read_max_distinct_values.is_some()
+}
+
+/// Read the listed top-level string/binary fields as `Dictionary(Int32, _)`.
+pub(crate) fn promote_dictionary_columns(
     schema: &Schema,
     dictionary_columns: &HashSet<String>,
 ) -> Option<Schema> {
     let fields = coerce_fields(schema.fields(), |_, field| {
-        let listed = dictionary_columns.contains(field.name());
-        let new_type = match (listed, field.data_type()) {
-            (true, value_type)
-                if matches!(
-                    value_type,
-                    DataType::Utf8
-                        | DataType::LargeUtf8
-                        | DataType::Binary
-                        | DataType::LargeBinary
-                ) =>
-            {
-                Some(DataType::Dictionary(
+        if !dictionary_columns.contains(field.name()) {
+            return None;
+        }
+        let value_type = field.data_type();
+        matches!(
+            value_type,
+            DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary
+        )
+        .then(|| {
+            field_with_new_type(
+                field,
+                DataType::Dictionary(
                     Box::new(DataType::Int32),
                     Box::new(value_type.clone()),
-                ))
-            }
-            (false, DataType::Dictionary(_, value_type))
-                if value_type.is_string() || value_type.is_binary() =>
-            {
-                Some(value_type.as_ref().clone())
-            }
-            _ => None,
-        };
-        new_type.map(|ty| field_with_new_type(field, ty))
+                ),
+            )
+        })
+    })?;
+    Some(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+/// Read top-level string/binary dictionaries named in `plain_columns` as their
+/// value type.
+pub(crate) fn demote_dictionary_columns(
+    schema: &Schema,
+    plain_columns: &HashSet<String>,
+) -> Option<Schema> {
+    let fields = coerce_fields(schema.fields(), |_, field| match field.data_type() {
+        DataType::Dictionary(_, value_type)
+            if plain_columns.contains(field.name())
+                && (value_type.is_string() || value_type.is_binary()) =>
+        {
+            Some(field_with_new_type(field, value_type.as_ref().clone()))
+        }
+        _ => None,
     })?;
     Some(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
@@ -2035,7 +2055,9 @@ mod tests {
         assert_eq!(result.field(0).data_type(), &DataType::Utf8);
         assert_eq!(result.field(1).data_type(), &DataType::Utf8);
 
-        let demoted = set_dictionary_columns(&table_schema, &HashSet::new()).unwrap();
+        let demoted =
+            demote_dictionary_columns(&table_schema, &HashSet::from(["dict_col".into()]))
+                .unwrap();
         assert_eq!(demoted.field(0).data_type(), &DataType::Utf8);
     }
 

@@ -52,6 +52,7 @@ use datafusion_session::Session;
 
 use crate::metadata::{DFParquetMetadata, lex_ordering_to_sorting_columns};
 use crate::reader::CachedParquetFileReaderFactory;
+use crate::schema_coercion::{demote_dictionary_columns, dictionary_reads_enabled};
 use crate::source::ParquetSource;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -463,8 +464,10 @@ impl FileFormat for ParquetFormat {
             .map(|tz| Arc::<str>::from(tz.as_str()));
         let dictionary_read_max_distinct_values =
             self.options.global.dictionary_read_max_distinct_values;
-        let enable_rle_to_dictionary = self.options.global.enable_rle_to_dictionary
-            || dictionary_read_max_distinct_values.is_some();
+        let dictionary_reads_are_enabled = dictionary_reads_enabled(
+            self.options.global.enable_rle_to_dictionary,
+            dictionary_read_max_distinct_values,
+        );
 
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
@@ -483,7 +486,6 @@ impl FileFormat for ParquetFormat {
                     .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
                     .with_coerce_int96(coerce_int96)
                     .with_coerce_int96_tz(coerce_int96_tz.clone())
-                    // The cap independently enables dictionary inference.
                     .with_enable_rle_to_dictionary(
                         self.options.global.enable_rle_to_dictionary,
                     )
@@ -528,9 +530,9 @@ impl FileFormat for ParquetFormat {
         // Normalize dict-promoted schemas before merging so mixed dict/plain files merge cleanly.
         let mut schemas: Vec<Schema> =
             schemas.into_iter().map(|(_, schema)| schema).collect();
-        if enable_rle_to_dictionary {
+        if dictionary_reads_are_enabled {
             if dictionary_read_max_distinct_values.is_some() {
-                let (mut dictionary_columns, plain_columns) = schemas
+                let (dictionary_columns, plain_columns) = schemas
                     .iter()
                     .flat_map(|schema| schema.fields())
                     .fold((HashSet::new(), HashSet::new()), |mut columns, field| {
@@ -541,15 +543,14 @@ impl FileFormat for ParquetFormat {
                         .insert(field.name().clone());
                         columns
                     });
-                dictionary_columns.retain(|name| !plain_columns.contains(name));
+                let mixed: HashSet<String> = dictionary_columns
+                    .intersection(&plain_columns)
+                    .cloned()
+                    .collect();
                 schemas = schemas
                     .into_iter()
                     .map(|schema| {
-                        crate::schema_coercion::set_dictionary_columns(
-                            &schema,
-                            &dictionary_columns,
-                        )
-                        .unwrap_or(schema)
+                        demote_dictionary_columns(&schema, &mixed).unwrap_or(schema)
                     })
                     .collect();
             }
