@@ -15,17 +15,17 @@
 //! `datafusion.execution.parquet.pushdown_filters` on and off, with the leaf
 //! rules on in both runs.
 //!
-//! Every case is derived from a seed. To reproduce a reported failure, run:
+//! Each test passes the current time as the starting seed to [`run`]. To
+//! reproduce a failure, pass `cases = 1` and `seed0 = <reported seed>` to [`run`]
+//! in the failing test, then rerun it:
 //!
 //! ```text
-//! LEAF_PUSHDOWN_FUZZ_SEED=<seed> LEAF_PUSHDOWN_FUZZ_CASES=1 \
-//!   cargo test --profile ci -p datafusion --features extended_tests \
+//! cargo test --profile ci -p datafusion --features extended_tests \
 //!   --test extended_tests -- leaf_pushdown --nocapture
 //! ```
-//!
-//! `LEAF_PUSHDOWN_FUZZ_CASES` also raises the case count of a normal run.
 
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::array::{
     Array, ArrayRef, AsArray, Int32Array, Int64Array, RecordBatch, StringArray,
@@ -60,11 +60,8 @@ const INCLUDE_SWAP_ALIAS_SHAPES: bool = false;
 /// <https://github.com/apache/datafusion/pull/25412>
 const INCLUDE_FALSE_BRANCH_UNION_SHAPES: bool = false;
 
-/// Cases of the short run. Keep this low: the whole test must stay in a few
-/// seconds.
-const DEFAULT_CASES: usize = 250;
-/// Cases of the long run.
-const EXTENDED_CASES: usize = 5000;
+/// In-memory case count. Keep each test within a few seconds.
+const CASES: usize = 250;
 /// Highest share of cases that may fail to plan on both sides. A higher share
 /// means the generator makes junk.
 const MAX_SKIP_RATIO: f64 = 0.30;
@@ -625,9 +622,9 @@ async fn check_case(
     }
 }
 
-/// Runs `cases` seeded cases against the two contexts. `left` and `right` name
-/// the two settings in the failure report. Every case runs, so the report holds
-/// the share of the seeds that fail, not only the first one.
+/// Runs `cases` cases starting at `seed0` against the two contexts. `left` and
+/// `right` name the two settings in the failure report. Every case runs, so the
+/// report holds the share of the seeds that fail, not only the first one.
 async fn run(
     ctx_left: &SessionContext,
     ctx_right: &SessionContext,
@@ -636,10 +633,15 @@ async fn run(
     cases: usize,
     seed0: u64,
 ) {
+    // Printed before execution so an unexpected panic also leaves a replay seed.
+    println!(
+        "leaf pushdown fuzz: {left} vs {right}, starting seed {seed0}, cases {cases}"
+    );
     let mut skipped = 0;
     let mut failed = 0;
     let mut first: Option<String> = None;
-    for seed in seed0..seed0 + cases as u64 {
+    for i in 0..cases {
+        let seed = seed0.wrapping_add(i as u64);
         let case = gen_case(&mut SmallRng::seed_from_u64(seed));
         let Some(detail) =
             check_case(ctx_left, ctx_right, left, right, &case, &mut skipped).await
@@ -649,17 +651,16 @@ async fn run(
         failed += 1;
         first.get_or_insert_with(|| {
             format!(
-                "  seed: {seed}\n  sql: {}\n  {detail}\n  reproduce with \
-                 LEAF_PUSHDOWN_FUZZ_SEED={seed} LEAF_PUSHDOWN_FUZZ_CASES=1",
+                "  seed: {seed}\n  sql: {}\n  {detail}\n  reproduce by passing \
+                 cases = 1 and seed0 = {seed} to run() in this test",
                 case.sql
             )
         });
     }
     let ratio = skipped as f64 / cases as f64;
     println!(
-        "leaf pushdown fuzz: {left} vs {right}, seeds {seed0}..{}, ok {}, \
+        "leaf pushdown fuzz: {left} vs {right}, starting seed {seed0}, cases {cases}, ok {}, \
          skipped {skipped} ({:.1}%), failed {failed}",
-        seed0 + cases as u64,
         cases - skipped - failed,
         ratio * 100.0
     );
@@ -670,26 +671,10 @@ async fn run(
     );
     assert!(
         ratio <= MAX_SKIP_RATIO,
-        "{:.1}% of the cases failed to plan on both sides, the generator makes junk",
+        "{:.1}% of the cases failed to plan on both sides, the generator makes junk; \
+         reproduce by passing cases = {cases} and seed0 = {seed0} to run() in this test",
         ratio * 100.0
     );
-}
-
-fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
-}
-
-fn seed() -> u64 {
-    env_usize("LEAF_PUSHDOWN_FUZZ_SEED", 0) as u64
-}
-
-async fn run_memory(cases: usize) {
-    let on = memory_ctx(true);
-    let off = memory_ctx(false);
-    run(&on, &off, "pushdown on", "pushdown off", cases, seed()).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -735,7 +720,34 @@ async fn parquet_ctx(dir: &TempDir, parquet_pushdown: bool) -> SessionContext {
     ctx
 }
 
-async fn run_parquet(cases: usize) {
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+fn current_time_seed() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn leaf_pushdown_fuzz() {
+    let on = memory_ctx(true);
+    let off = memory_ctx(false);
+    run(
+        &on,
+        &off,
+        "pushdown on",
+        "pushdown off",
+        CASES,
+        current_time_seed(),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn leaf_pushdown_parquet_fuzz() {
     let dir = TempDir::new().unwrap();
     let on = parquet_ctx(&dir, true).await;
     let off = parquet_ctx(&dir, false).await;
@@ -744,30 +756,10 @@ async fn run_parquet(cases: usize) {
         &off,
         "parquet pushdown on",
         "parquet pushdown off",
-        cases,
-        seed(),
+        CASES / 2,
+        current_time_seed(),
     )
     .await;
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[tokio::test(flavor = "multi_thread")]
-async fn leaf_pushdown_fuzz() {
-    run_memory(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", DEFAULT_CASES)).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn leaf_pushdown_parquet_fuzz() {
-    run_parquet(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", DEFAULT_CASES / 2)).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn leaf_pushdown_fuzz_extended() {
-    run_memory(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_CASES)).await;
-    run_parquet(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_CASES / 5)).await;
 }
 
 /// Two Parquet files of one table, one of which stores a column with a type
@@ -811,8 +803,8 @@ async fn leaf_pushdown_parquet_schema_evolution() {
         &contexts[1],
         "parquet pushdown on",
         "parquet pushdown off",
-        DEFAULT_CASES / 5,
-        seed(),
+        CASES / 5,
+        current_time_seed(),
     )
     .await;
 }
