@@ -95,8 +95,12 @@ The maximum supported precision for `DECIMAL` types is 76.
 | SQL DataType                                                  | Arrow DataType                                             |
 | ------------------------------------------------------------- | :--------------------------------------------------------- |
 | `DATE`                                                        | `Date32`                                                   |
-| `TIME`                                                        | `Time64(Nanosecond)`                                       |
+| `TIME`, `TIME(9)`                                             | `Time64(Nanosecond)`                                       |
+| `TIME(0)`                                                     | `Time32(Second)`                                           |
+| `TIME(3)`                                                     | `Time32(Millisecond)`                                      |
+| `TIME(6)`                                                     | `Time64(Microsecond)`                                      |
 | `TIMESTAMP`, `TIMESTAMP(p)`, `TIMESTAMP(p) WITHOUT TIME ZONE` | `Timestamp(unit, None)`                                    |
+| `DATETIME`, `DATETIME(p)`                                     | `Timestamp(unit, None)`                                    |
 | `TIMESTAMPTZ(p)`, `TIMESTAMP(p) WITH TIME ZONE`               | `Timestamp(unit, None)` by default — see the warning below |
 | `INTERVAL`                                                    | `Interval(MonthDayNano)`                                   |
 
@@ -119,12 +123,15 @@ Set `datafusion.execution.time_zone` to make these types aware. `'UTC'` is a
 good value.
 :::
 
-`unit` comes from the optional precision `p` on the two `TIMESTAMP` rows. Use
+`unit` comes from the optional precision `p` on the `TIMESTAMP` and `DATETIME`
+rows. Use
 `0`, `3`, `6` or `9` for `Second`, `Millisecond`, `Microsecond` or `Nanosecond`.
 DataFusion rejects each other value of `p`. If you omit `p`, the unit is
 `Nanosecond`. The precision goes after `TIMESTAMPTZ`, but before
 `WITH TIME ZONE`: use `TIMESTAMPTZ(3)` or `TIMESTAMP(3) WITH TIME ZONE`.
-`DATE`, `TIME` and `INTERVAL` do not accept a precision.
+`TIME` accepts the same precisions and an optional `WITHOUT TIME ZONE` clause.
+`TIME WITH TIME ZONE` and `TIMETZ` are unsupported.
+`DATE` and `INTERVAL` do not accept a precision.
 
 [`datafusion.execution.time_zone`]: ../configs.md
 [issue #25166]: https://github.com/apache/datafusion/issues/25166
@@ -173,4 +180,3 @@ set to `c0`, `c1`, ..., `cn`.
 | `CUSTOM`      | _Not yet supported_ |
 | `ENUM`        | _Not yet supported_ |
 | `SET`         | _Not yet supported_ |
-| `DATETIME`    | _Not yet supported_ |

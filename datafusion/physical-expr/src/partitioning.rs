@@ -153,9 +153,10 @@ impl Display for Partitioning {
 ///   stored separately.
 ///
 /// Comparisons use the lexicographic order defined by `ordering`, including
-/// `ASC`/`DESC` and null ordering. Samples must be strictly ordered according
-/// to that ordering, and each sample must have one value per ordering
-/// expression. See [`SplitPoint`] for the shared boundary convention.
+/// `ASC`/`DESC` and null ordering. Samples must be non-decreasing according to
+/// that ordering, and each sample must have one value per ordering expression.
+/// Equal adjacent split points describe empty partitions. See [`SplitPoint`]
+/// for the shared boundary convention.
 ///
 /// When `partition_count` is smaller than [`Self::max_partition_count`], the
 /// samples are evenly down-sampled to derive the effective split points. This
@@ -1383,23 +1384,31 @@ mod tests {
         ))
     }
 
-    /// Builds `date_bin(stride, timestamp)` with a nanosecond-only literal stride
-    /// and the default epoch origin. This constructs the expression without evaluating it.
+    /// Builds `date_bin` with a nanosecond-only literal stride and optional
+    /// timezone-less nanosecond literal origin, without evaluating it.
     fn date_bin_of(
         timestamp: Arc<dyn PhysicalExpr>,
         stride_nanos: i64,
+        origin_nanos: Option<i64>,
     ) -> Arc<dyn PhysicalExpr> {
+        let mut arguments: Vec<Arc<dyn PhysicalExpr>> = vec![
+            Arc::new(Literal::new(ScalarValue::new_interval_mdn(
+                0,
+                0,
+                stride_nanos,
+            ))),
+            timestamp,
+        ];
+        if let Some(origin_nanos) = origin_nanos {
+            arguments.push(Arc::new(Literal::new(ScalarValue::TimestampNanosecond(
+                Some(origin_nanos),
+                None,
+            ))));
+        }
         Arc::new(ScalarFunctionExpr::new(
             "date_bin",
             datafusion_functions::datetime::date_bin(),
-            vec![
-                Arc::new(Literal::new(ScalarValue::new_interval_mdn(
-                    0,
-                    0,
-                    stride_nanos,
-                ))),
-                timestamp,
-            ],
+            arguments,
             Field::new(
                 "date_bin",
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
@@ -1417,7 +1426,7 @@ mod tests {
             DataType::Timestamp(TimeUnit::Nanosecond, None),
         )])?;
         let hour = 3_600_000_000_000;
-        let function = date_bin_of(fixture.col(0), hour);
+        let function = date_bin_of(fixture.col(0), hour, None);
         // Ascending compares split - 1 ns with split. Descending compares split
         // with split + 1 ns, so aligned descending splits end a bin rather than start it.
         let cases = [
@@ -1471,7 +1480,7 @@ mod tests {
         let before_split =
             ScalarValue::TimestampNanosecond(Some(first_representable_hour - 1), None);
         let timestamp = fixture.col(0);
-        let function = date_bin_of(Arc::clone(&timestamp), hour);
+        let function = date_bin_of(Arc::clone(&timestamp), hour, None);
 
         let bin_at_split = evaluate_with_range_value(&function, &timestamp, &at_split);
         assert_eq!(bin_at_split, Some(at_split));
@@ -1491,6 +1500,102 @@ mod tests {
             !range.keeps_keys_local(&[function], &fixture.eq_properties, false),
             "a boundary evaluation error must reject the optimization",
         );
+        Ok(())
+    }
+
+    #[test]
+    fn date_bin_literal_origin_requires_aligned_ascending_splits() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let hour = 3_600_000_000_000;
+        let half_hour = hour / 2;
+        let time_bin = date_bin_of(fixture.col(0), hour, Some(half_hour));
+
+        let aligned_range =
+            fixture.range_partitioning([0], vec![timestamp_split(Some(half_hour), None)]);
+        assert!(aligned_range.keeps_keys_local(
+            &[Arc::clone(&time_bin)],
+            &fixture.eq_properties,
+            false,
+        ));
+
+        let crossing_range =
+            fixture.range_partitioning([0], vec![timestamp_split(Some(hour), None)]);
+        assert!(!crossing_range.keeps_keys_local(
+            &[time_bin],
+            &fixture.eq_properties,
+            false,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn date_bin_literal_origin_requires_aligned_descending_splits() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let hour = 3_600_000_000_000;
+        let half_hour = hour / 2;
+        let time_bin = date_bin_of(fixture.col(0), hour, Some(half_hour));
+        let descending_ordering = LexOrdering::from([fixture.range_sort_expr(
+            0,
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        )]);
+
+        // A descending split belongs to the lower timestamp range. To separate
+        // bins at 00:30, put the split at the last nanosecond before 00:30.
+        let last_timestamp_before_half_hour = half_hour - 1;
+        let aligned_range = fixture.range_partitioning_with_ordering(
+            descending_ordering.clone(),
+            vec![timestamp_split(Some(last_timestamp_before_half_hour), None)],
+        );
+        assert!(aligned_range.keeps_keys_local(
+            &[Arc::clone(&time_bin)],
+            &fixture.eq_properties,
+            false,
+        ));
+
+        let last_timestamp_before_hour = hour - 1;
+        let crossing_range = fixture.range_partitioning_with_ordering(
+            descending_ordering,
+            vec![timestamp_split(Some(last_timestamp_before_hour), None)],
+        );
+        assert!(!crossing_range.keeps_keys_local(
+            &[time_bin],
+            &fixture.eq_properties,
+            false,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn date_bin_literal_origin_rejects_boundary_binning_errors() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let timestamp = fixture.col(0);
+        let function = date_bin_of(Arc::clone(&timestamp), 2, Some(1));
+        // A 2 ns stride with origin 1 bins to odd timestamps. i64::MIN is
+        // even, so its bin is out of range, but i64::MIN + 1 is representable.
+        let split = ScalarValue::TimestampNanosecond(Some(i64::MIN + 1), None);
+        let before_split = ScalarValue::TimestampNanosecond(Some(i64::MIN), None);
+        assert_eq!(
+            evaluate_with_range_value(&function, &timestamp, &split),
+            Some(split.clone()),
+        );
+        assert!(
+            evaluate_with_range_value(&function, &timestamp, &before_split).is_none()
+        );
+
+        let range = fixture.range_partitioning([0], vec![SplitPoint::new(vec![split])]);
+        assert!(!range.keeps_keys_local(&[function], &fixture.eq_properties, false));
         Ok(())
     }
 
@@ -1828,7 +1933,7 @@ mod tests {
         deprecated,
         reason = "test intentionally constructs malformed range splits"
     )]
-    fn range_transform_rejects_malformed_split_points() -> Result<()> {
+    fn range_transform_validates_split_points() -> Result<()> {
         let fixture = PartitioningTestFixture::new(vec![(
             "timestamp",
             DataType::Timestamp(TimeUnit::Nanosecond, None),
@@ -1837,33 +1942,38 @@ mod tests {
         let hour = 3_600_000_000_000;
         let timestamp = |value| ScalarValue::TimestampNanosecond(Some(value), None);
 
-        for (description, descending, splits) in [
+        for (description, descending, splits, expected) in [
             (
                 "reversed ascending splits",
                 false,
                 vec![vec![timestamp(2 * hour)], vec![timestamp(hour)]],
+                false,
             ),
             (
                 "reversed descending splits",
                 true,
                 vec![vec![timestamp(hour - 1)], vec![timestamp(2 * hour - 1)]],
+                false,
             ),
             (
                 "duplicate ascending splits",
                 false,
                 vec![vec![timestamp(hour)], vec![timestamp(hour)]],
+                true,
             ),
             (
                 "duplicate descending splits",
                 true,
                 vec![vec![timestamp(hour - 1)], vec![timestamp(hour - 1)]],
+                true,
             ),
             (
                 "overwide split tuple",
                 false,
                 vec![vec![timestamp(hour), ScalarValue::Int64(Some(0))]],
+                false,
             ),
-            ("empty split tuple", false, vec![vec![]]),
+            ("empty split tuple", false, vec![vec![]], false),
         ] {
             let range = Partitioning::Range(RangePartitioning::new(
                 [PhysicalSortExpr::new(
@@ -1878,8 +1988,8 @@ mod tests {
                 &range,
                 &required,
                 &fixture.eq_properties,
-                false,
-                false,
+                expected,
+                expected,
             );
         }
         Ok(())
@@ -2490,7 +2600,7 @@ mod tests {
         assert_range_try_new_error(
             asc_a,
             vec![int_split_point([20]), int_split_point([10])],
-            "split points must be strictly ordered",
+            "split points must be ordered",
         );
 
         assert_range_try_new_error(
@@ -2499,18 +2609,23 @@ mod tests {
                 SplitPoint::new(vec![ScalarValue::Int64(None)]),
                 int_split_point([10]),
             ],
-            "split points must be strictly ordered",
+            "split points must be ordered",
         );
 
-        RangePartitioning::try_new(
+        let range = RangePartitioning::try_new(
             ordering_ab.clone(),
-            vec![int_split_point([10, 20]), int_split_point([10, 30])],
+            vec![
+                int_split_point([10, 20]),
+                int_split_point([10, 20]),
+                int_split_point([10, 30]),
+            ],
         )?;
+        assert_eq!(range.partition_count(), 4);
 
         assert_range_try_new_error(
             ordering_ab,
             vec![int_split_point([10, 30]), int_split_point([10, 20])],
-            "split points must be strictly ordered",
+            "split points must be ordered",
         );
 
         Ok(())

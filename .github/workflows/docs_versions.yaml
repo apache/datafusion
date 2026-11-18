@@ -5,7 +5,9 @@
 # Publishes the documentation for released versions to
 # https://datafusion.apache.org/versions/<version>/
 #
-# The list of versions is in docs/source/_static/versions.json
+# The list of versions is in
+# 1. docs/source/_static/versions.json (in version picker)
+# 2. docs/source/_static/old_versions.json (older versions)
 #
 # The current development docs are published from `main` by docs.yaml.
 
@@ -18,6 +20,7 @@ on:
       - docs/scripts/build_versions.sh
       - docs/scripts/release/conf.py
       - docs/source/_static/versions.json
+      - docs/source/_static/old_versions.json
       - docs/pyproject.toml
       - uv.lock
 
@@ -56,7 +59,8 @@ jobs:
         run: |
           set -x
           cd asf-site/
-          # versions/ mirrors the releases in versions.json; the current docs
+          # versions/ mirrors the releases in versions.json and
+          # old_versions.json; the current docs
           # at the site root are published by docs.yaml
           mkdir -p versions
           # remove any old versions and replace with newly built ones

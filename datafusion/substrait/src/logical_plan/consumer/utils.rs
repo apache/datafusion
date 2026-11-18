@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UnionFields};
 use datafusion::common::{
     Column, DFSchema, DFSchemaRef, TableReference, exec_err, not_impl_err,
@@ -497,11 +497,12 @@ pub async fn from_substrait_sorts(
     consumer: &impl SubstraitConsumer,
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Vec<Sort>> {
     let mut sorts: Vec<Sort> = Vec::with_capacity(substrait_sorts.len());
     for s in substrait_sorts {
         let expr = consumer
-            .consume_expression(s.expr.as_ref().unwrap(), input_schema)
+            .consume_expression(s.expr.as_ref().unwrap(), input_schema, context)
             .await?;
         let asc_nullfirst = match &s.sort_kind {
             Some(k) => match k {
