@@ -165,6 +165,33 @@ CREATE TABLE t4 (k1 INT, k2 INT, k3 INT, v VARCHAR) AS VALUES
   (2, 30, 100, 'y'),
   (3, 10, 200, 'z');
 
+query TT
+EXPLAIN SELECT g.a1, g.a2, t4.v
+FROM (SELECT t1.a AS a1, t2.a AS a2 FROM t1 CROSS JOIN t2 GROUP BY t1.a, t2.a) g
+JOIN t4 ON g.a2 = t4.k2 AND g.a1 = t4.k1;
+----
+logical_plan
+01)Projection: g.a1, g.a2, t4.v
+02)--Inner Join: g.a2 = t4.k2, g.a1 = t4.k1
+03)----SubqueryAlias: g
+04)------Projection: t1.a AS a1, t2.a AS a2
+05)--------Aggregate: groupBy=[[t1.a, t2.a]], aggr=[[]]
+06)----------Cross Join:
+07)------------TableScan: t1 projection=[a]
+08)------------TableScan: t2 projection=[a]
+09)----TableScan: t4 projection=[k1, k2, v]
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a2@1, k2@1), (a1@0, k1@0)], projection=[a1@0, a2@1, v@4]
+02)--ProjectionExec: expr=[a@1 as a1, a@0 as a2]
+03)----AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, a@1 as a], aggr=[]
+04)------RepartitionExec: partitioning=Hash([a@0, a@1], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[a@1 as a, a@0 as a], aggr=[]
+06)----------CrossJoinExec
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)--RepartitionExec: partitioning=Hash([k2@1, k1@0], 4), input_partitions=1
+10)----DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Two keys swapped
 query IIT
 SELECT g.a1, g.a2, t4.v
