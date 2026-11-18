@@ -187,7 +187,6 @@ const fn known(
 }
 
 const FLOAT_SEMANTICS: &str = "https://github.com/apache/datafusion/issues/26138";
-const IN_LIST: &str = "https://github.com/apache/datafusion/issues/25186";
 const WINDOW: &str = "https://github.com/apache/datafusion/issues/25766";
 const SORT_MERGE_JOIN: &str = "https://github.com/apache/datafusion/issues/26115";
 
@@ -207,9 +206,6 @@ pub const KNOWN_FAILURES: &[KnownFailure] = &[
     known("count_distinct_two", always, FLOAT_SEMANTICS),
     known("count_distinct_window", always, FLOAT_SEMANTICS),
     // Expressions
-    known("in_list", always, IN_LIST),
-    known("in_list_f32", always, IN_LIST),
-    known("in_list_long", always, IN_LIST),
     known("case_when", always, FLOAT_SEMANTICS),
     known("nullif", always, FLOAT_SEMANTICS),
     known("array_has_make_array", always, FLOAT_SEMANTICS),

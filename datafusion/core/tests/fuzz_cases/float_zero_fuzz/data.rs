@@ -3,7 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! The `raw` and `canon` tables. `raw` has some `-0.0` values; `canon` is
-//! `raw` with every float normalized by `normalize_floats`, so it has none.
+//! `raw` with every float normalized by `normalize`, so it has none.
 
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use arrow::array::{
     ArrayRef, AsArray, Float32Array, Float64Array, Int64Array, ListArray, RecordBatch,
 };
 use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Schema, SchemaRef};
-use datafusion_common::float_semantics::normalize_floats;
+use datafusion_common::float_semantics::normalize;
 use rand::Rng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -59,13 +59,13 @@ impl Columns {
 
 /// `raw` with every `-0.0`, also nested ones, replaced by `0.0`.
 fn canon_of(raw: &RecordBatch) -> RecordBatch {
-    let columns = raw.columns().iter().map(normalize_floats).collect();
+    let columns = raw.columns().iter().cloned().map(normalize).collect();
     RecordBatch::try_new(raw.schema(), columns).unwrap()
 }
 
 /// Whether `array`, one of the float or list columns of `raw`, has a `-0.0`
 /// at any depth. Checks the values directly rather than asking
-/// `normalize_floats`, which may change more than `-0.0`. A list is checked
+/// `normalize`, which may change more than `-0.0`. A list is checked
 /// through all of its child values, so `array` must not be a slice.
 fn has_negative_zero(array: &ArrayRef) -> bool {
     match array.data_type() {

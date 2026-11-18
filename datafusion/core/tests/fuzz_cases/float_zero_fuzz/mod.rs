@@ -22,7 +22,7 @@ use arrow::array::{ArrayRef, RecordBatch};
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::prelude::SessionContext;
 use datafusion_common::ScalarValue;
-use datafusion_common::float_semantics::normalize_floats;
+use datafusion_common::float_semantics::normalize;
 use datafusion_common_runtime::JoinSet;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -238,7 +238,7 @@ fn format_rows(batches: &[RecordBatch]) -> Vec<String> {
     let mut rows = vec![];
     for batch in batches {
         let columns: Vec<ArrayRef> =
-            batch.columns().iter().map(normalize_floats).collect();
+            batch.columns().iter().cloned().map(normalize).collect();
         let formatters = columns
             .iter()
             .map(|c| ArrayFormatter::try_new(c.as_ref(), &options))
