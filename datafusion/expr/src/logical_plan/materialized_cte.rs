@@ -300,6 +300,26 @@ impl MaterializedCteScan {
         })
     }
 
+    /// Return this scan with the fields that it reads from a CTE body with
+    /// the schema `body`. The scan keeps its qualifiers and its projection.
+    pub fn with_body_schema(&self, body: &DFSchema) -> Result<Self> {
+        let body = match &self.projection {
+            Some(projection) => {
+                self.check_body_schema(body)?;
+                project_schema(body, projection)?
+            }
+            None => body.clone(),
+        };
+        let qualifiers = self.schema.iter().map(|(q, _)| q.cloned()).collect();
+        let schema =
+            DFSchema::from_field_specific_qualified_schema(qualifiers, body.inner())?
+                .with_functional_dependencies(body.functional_dependencies().clone())?;
+        Ok(Self {
+            schema: Arc::new(schema),
+            ..self.clone()
+        })
+    }
+
     /// Check that this scan has the names and types of the columns that it
     /// reads from a CTE body with the schema `body`.
     pub fn check_body_schema(&self, body: &DFSchema) -> Result<()> {

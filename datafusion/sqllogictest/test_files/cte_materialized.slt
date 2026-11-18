@@ -1475,6 +1475,21 @@ SELECT 1
 ----
 1
 
+# `CREATE TABLE AS` optimizes the plan, then plans it again. The analyzer
+# gives a pruned scan the fields of its projection only.
+statement ok
+CREATE TABLE pruned AS
+WITH w AS MATERIALIZED (SELECT a, b, c FROM wide)
+SELECT c AS x FROM w UNION ALL SELECT b FROM w
+
+query I
+SELECT count(*) FROM pruned
+----
+6
+
+statement ok
+DROP TABLE pruned;
+
 statement ok
 DROP TABLE wide;
 
