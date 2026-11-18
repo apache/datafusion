@@ -82,10 +82,6 @@ jobs:
             run: |
               sudo apt-get update
               sudo apt-get install -y protobuf-compiler
-      - name: Configure compiler cache
-        id: sccache
-        if: vars.USE_RUNS_ON == 'true'
-        uses: ./.github/actions/setup-sccache
       - &runner-details
         name: Show runner and Rust details
         if: github.event_name == 'workflow_dispatch'
@@ -139,9 +135,6 @@ jobs:
       - name: Run unmigrated fuzzers with more iterations
         if: vars.USE_RUNS_ON != 'true'
         run: cargo xtask ci step test fuzz-legacy
-      - name: Report compiler cache statistics
-        if: ${{ always() && steps.sccache.outcome == 'success' }}
-        run: sccache --show-stats
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code
@@ -166,9 +159,6 @@ jobs:
         uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-      - name: Configure compiler cache
-        if: vars.USE_RUNS_ON == 'true'
-        uses: ./.github/actions/setup-sccache
       - name: Run tests
         run: |
           cargo xtask ci step test hash-collisions
@@ -194,9 +184,6 @@ jobs:
           - name: Install protobuf compiler
             run: |
               apt-get update && apt-get install -y protobuf-compiler
-      - name: Configure compiler cache
-        if: vars.USE_RUNS_ON == 'true'
-        uses: ./.github/actions/setup-sccache
       - *runner-details
       - name: Run sqllogictest
         run: cargo xtask ci step test sqlite
