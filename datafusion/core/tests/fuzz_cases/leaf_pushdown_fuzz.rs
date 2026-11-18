@@ -66,6 +66,7 @@ const INCLUDE_FALSE_BRANCH_UNION_SHAPES: bool = false;
 const DEFAULT_CASES: usize = 250;
 /// Cases of the long run.
 const EXTENDED_CASES: usize = 5000;
+// Keep in sync with the #[case] lists on both extended fuzz tests.
 const EXTENDED_PARTITIONS: usize = 4;
 /// Highest share of cases that may fail to plan on both sides. A higher share
 /// means the generator makes junk.
@@ -689,6 +690,7 @@ fn seed() -> u64 {
 }
 
 fn partition_cases(cases: usize, seed0: u64, partition: usize) -> (usize, u64) {
+    assert!(partition < EXTENDED_PARTITIONS);
     let per_partition = cases / EXTENDED_PARTITIONS;
     let remainder = cases % EXTENDED_PARTITIONS;
     let offset = partition * per_partition + partition.min(remainder);
@@ -785,10 +787,10 @@ async fn leaf_pushdown_parquet_fuzz() {
 }
 
 #[rstest]
-#[case(0)]
-#[case(1)]
-#[case(2)]
-#[case(3)]
+#[case::p0(0)]
+#[case::p1(1)]
+#[case::p2(2)]
+#[case::p3(3)]
 #[tokio::test(flavor = "multi_thread")]
 async fn leaf_pushdown_fuzz_extended_memory(#[case] partition: usize) {
     let (cases, seed0) = partition_cases(
@@ -800,10 +802,10 @@ async fn leaf_pushdown_fuzz_extended_memory(#[case] partition: usize) {
 }
 
 #[rstest]
-#[case(0)]
-#[case(1)]
-#[case(2)]
-#[case(3)]
+#[case::p0(0)]
+#[case::p1(1)]
+#[case::p2(2)]
+#[case::p3(3)]
 #[tokio::test(flavor = "multi_thread")]
 async fn leaf_pushdown_fuzz_extended_parquet(#[case] partition: usize) {
     let (cases, seed0) = partition_cases(
