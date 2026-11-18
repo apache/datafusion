@@ -110,7 +110,11 @@ impl ScalarUDFImpl for CeilFunc {
         let is_scalar = matches!(arg, ColumnarValue::Scalar(_));
 
         // Array path (also handles decimal scalars converted to size-1 arrays)
-        let value = arg.to_array(args.number_rows)?;
+        let value = if is_scalar {
+            arg.to_array(1)?
+        } else {
+            arg.to_array(args.number_rows)?
+        };
 
         let result: ArrayRef = match value.data_type() {
             DataType::Float64 => Arc::new(
@@ -209,5 +213,45 @@ impl ScalarUDFImpl for CeilFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::Field;
+    use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::{
+        ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    };
+
+    use crate::math::ceil::CeilFunc;
+
+    #[test]
+    fn test_ceil_decimal_scalar_zero_rows() {
+        let udf = CeilFunc::new();
+        let arg = ScalarValue::Decimal32(Some(150), 9, 2);
+        let arg_fields = vec![Arc::new(Field::new("a", arg.data_type(), true))];
+        let return_field = udf
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &[Some(&arg)],
+            })
+            .unwrap();
+        let result = udf
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Scalar(arg)],
+                arg_fields,
+                number_rows: 0,
+                return_field,
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+        let ColumnarValue::Scalar(result) = result else {
+            panic!("expected a scalar result, got {result:?}");
+        };
+        assert_eq!(result, ScalarValue::Decimal32(Some(2), 8, 0));
     }
 }

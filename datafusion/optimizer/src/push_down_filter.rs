@@ -58,7 +58,8 @@ use crate::extract_leaf_expressions::is_pure_extraction_projection;
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::{reorder_predicates, simplify_predicates};
 use crate::utils::{
-    ColumnReference, has_all_column_refs, is_restrict_null_predicate, schema_columns,
+    ColumnReference, aggregate_emits_on_empty_input, has_all_column_refs,
+    is_restrict_null_predicate, schema_columns,
 };
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_expr::ExpressionPlacement;
@@ -278,12 +279,9 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::HigherOrderFunction(_)
         | Expr::Lambda(_)
         | Expr::LambdaVariable(_) => Ok(false),
-        // TODO: remove the next line after `Expr::Wildcard` is removed
-        #[expect(deprecated)]
-        Expr::AggregateFunction(_)
-        | Expr::WindowFunction(_)
-        | Expr::Wildcard { .. }
-        | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
+        Expr::AggregateFunction(_) | Expr::WindowFunction(_) | Expr::GroupingSet(_) => {
+            internal_err!("Unsupported predicate type")
+        }
     })?)
 }
 
@@ -1112,6 +1110,7 @@ impl OptimizerRule for PushDownFilter {
                     .cloned()
                     .collect();
                 let group_expr_columns = expr_columns(&non_volatile_group_exprs);
+                let emits_on_empty = aggregate_emits_on_empty_input(&agg.group_expr);
 
                 // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
                 // After push, we need to replace `a+b` with Column(a)+Column(b)
@@ -1132,7 +1131,9 @@ impl OptimizerRule for PushDownFilter {
                 let mut push_predicates = vec![];
                 for expr in predicates {
                     let cols = expr.column_refs();
+                    // A grand total emits a row even when the predicate empties its input.
                     if !expr.is_volatile()
+                        && !emits_on_empty
                         && cols.iter().all(|c| group_expr_columns.contains(c))
                     {
                         push_predicates.push(replace_cols_by_column(expr, &replace_map)?);
@@ -4919,7 +4920,7 @@ mod tests {
             .aggregate(vec![col("user")], vec![count(lit(1))])?
             .project(vec![
                 leaf_udf_expr(col("user")).is_not_null().alias("has_name"),
-                col("COUNT(Int32(1))"),
+                col("count(Int32(1))"),
             ])?
             .build()?;
 
