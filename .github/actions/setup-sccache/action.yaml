@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+name: Configure Rust compiler cache
+description: Cache crate downloads and use sccache for compiler outputs.
+runs:
+  using: composite
+  steps:
+    - name: Locate Cargo home
+      id: cargo
+      shell: bash
+      run: printf 'home=%s\n' "${CARGO_HOME:-$HOME/.cargo}" >> "$GITHUB_OUTPUT"
+    - name: Cache crate downloads
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      with:
+        path: |
+          ${{ steps.cargo.outputs.home }}/registry/index
+          ${{ steps.cargo.outputs.home }}/registry/cache
+          ${{ steps.cargo.outputs.home }}/registry/src
+          ${{ steps.cargo.outputs.home }}/git/db
+        key: cargo-downloads-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: cargo-downloads-${{ runner.os }}-
+    - name: Install sccache
+      uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
+      with:
+        tool: sccache@0.19.0
+    - name: Configure compiler cache
+      id: cache
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+      with:
+        script: |
+          core.exportVariable('CARGO_INCREMENTAL', '0');
+          core.exportVariable('RUSTC_WRAPPER', 'sccache');
+          const runsOn = Boolean(process.env.RUNS_ON_S3_BUCKET_CACHE);
+          core.setOutput('backend', runsOn ? 's3' : 'gha');
+          if (!runsOn) {
+            core.exportVariable('SCCACHE_GHA_ENABLED', 'true');
+            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', 'on');
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+          }
+    - name: Configure RunsOn S3 cache
+      if: steps.cache.outputs.backend == 's3'
+      uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
+      with:
+        sccache: s3
+    - name: Start compiler cache
+      shell: bash
+      run: sccache --start-server

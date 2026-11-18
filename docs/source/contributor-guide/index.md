@@ -256,8 +256,8 @@ identified them among its largest GitHub Actions users in
 [#25148](https://github.com/apache/datafusion/issues/25148). Fork CI reduces
 duplicate work on ASF's shared runners.
 
-A pull request from a fork to `main` runs the Rust workflow on your fork, with
-your own GitHub Actions runners. The main repository runs only the fast lint jobs for
+For a pull request from a fork to `main`, run the Rust workflow manually on your fork,
+with your own GitHub Actions runners. The main repository runs only the fast lint jobs for
 such a pull request and adds a `Rust (fork)` check that links to the run on
 your fork. The merge queue runs the full workflow on the merged result before
 a pull request merges, so a green fork run does not replace it.
@@ -274,6 +274,9 @@ To make this work:
    synced fork builds much faster.
 3. Rebase your branch before you push. The fork run tests your branch as it
    is, while the merge queue tests it merged with `main`.
+4. After pushing, select **Actions → Rust → Run workflow** on your fork and
+   choose your PR branch. Pushes start the Rust workflow automatically only on
+   `main` and `branch-*`; feature branches require a manual run.
 
 #### Obsolete Merge Queue Runs
 
