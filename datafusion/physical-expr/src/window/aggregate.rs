@@ -112,6 +112,23 @@ impl PlainAggregateWindowExpr {
         &self.aggregate
     }
 
+    /// Whether this window aggregate has a FILTER predicate.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    pub fn has_filter(&self) -> bool {
+        self.filter.is_some()
+    }
+
+    /// Adds set-monotonic orderings without checking the window frame bounds.
+    #[deprecated(
+        since = "57.0.0",
+        note = "Window execution plans derive orderings using the frame bounds and FILTER predicate. Inspect their equivalence properties instead."
+    )]
     pub fn add_equal_orderings(
         &self,
         eq_properties: &mut EquivalenceProperties,

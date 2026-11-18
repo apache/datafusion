@@ -1281,6 +1281,31 @@ impl Unparser<'_> {
         }
     }
 
+    /// Renders a non-finite float as `CAST('NaN' | 'Infinity' | '-Infinity' AS <type>)`.
+    ///
+    /// A bare `inf` or `NaN` number token parses back as an identifier. The sign
+    /// stays inside the string, so the cast folds to one negative literal and not
+    /// to a negation of a cast.
+    fn non_finite_float_to_sql(&self, f: f64, data_type: DataType) -> Result<ast::Expr> {
+        if let Some(expr) = self.dialect.non_finite_float_to_sql(f)? {
+            return Ok(expr);
+        }
+        let value = if f.is_nan() {
+            "NaN"
+        } else if f.is_sign_positive() {
+            "Infinity"
+        } else {
+            "-Infinity"
+        };
+        Ok(ast::Expr::Cast {
+            kind: ast::CastKind::Cast,
+            expr: Box::new(ast::Expr::value(SingleQuotedString(value.to_string()))),
+            data_type: self
+                .arrow_dtype_to_ast_dtype(&data_type.into_nullable_field_ref())?,
+            format: None,
+        })
+    }
+
     /// DataFusion ScalarValues sometimes require a ast::Expr to construct.
     /// For example ScalarValue::Date32(d) corresponds to the ast::Expr CAST('datestr' as DATE)
     fn scalar_to_sql(&self, v: &ScalarValue) -> Result<ast::Expr> {
@@ -1290,10 +1315,17 @@ impl Unparser<'_> {
                 Ok(ast::Expr::value(ast::Value::Boolean(b.to_owned())))
             }
             ScalarValue::Boolean(None) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Float16(Some(f)) if !f.is_finite() => {
+                // `arrow_dtype_to_ast_dtype` has no SQL type for `Float16`.
+                self.non_finite_float_to_sql(f.to_f64(), DataType::Float32)
+            }
             ScalarValue::Float16(Some(f)) => {
                 Ok(ast::Expr::value(ast::Value::Number(f.to_string(), false)))
             }
             ScalarValue::Float16(None) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Float32(Some(f)) if !f.is_finite() => {
+                self.non_finite_float_to_sql(f64::from(*f), DataType::Float32)
+            }
             ScalarValue::Float32(Some(f)) => {
                 let f_val = match f.fract() {
                     0.0 => format!("{f:.1}"),
@@ -1302,6 +1334,9 @@ impl Unparser<'_> {
                 Ok(ast::Expr::value(ast::Value::Number(f_val, false)))
             }
             ScalarValue::Float32(None) => Ok(ast::Expr::value(ast::Value::Null)),
+            ScalarValue::Float64(Some(f)) if !f.is_finite() => {
+                self.non_finite_float_to_sql(*f, DataType::Float64)
+            }
             ScalarValue::Float64(Some(f)) => {
                 let f_val = match f.fract() {
                     0.0 => format!("{f:.1}"),
@@ -2778,6 +2813,48 @@ mod tests {
     }
 
     #[test]
+    fn test_sqlite_non_finite_float_scalar_to_expr() -> Result<()> {
+        let unparser = Unparser::new(&SqliteDialect {});
+        for (value, expected) in [(f64::INFINITY, "9e999"), (f64::NEG_INFINITY, "-9e999")]
+        {
+            let ast = unparser.expr_to_sql(&lit(value))?;
+            assert_eq!(ast.to_string(), expected);
+        }
+        let ast = unparser.expr_to_sql(&lit(f32::INFINITY))?;
+        assert_eq!(ast.to_string(), "9e999");
+
+        let err = unparser.expr_to_sql(&lit(f64::NAN)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("SQLite has no literal for a NaN float"),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_mysql_non_finite_float_scalar_to_expr_is_not_supported() {
+        let unparser = Unparser::new(&MySqlDialect {});
+        for (value, name) in [
+            (lit(f64::INFINITY), "inf"),
+            (lit(f64::NEG_INFINITY), "-inf"),
+            (lit(f64::NAN), "NaN"),
+            (lit(f32::INFINITY), "inf"),
+        ] {
+            let err = unparser.expr_to_sql(&value).unwrap_err().to_string();
+            assert!(
+                err.contains(&format!("MySQL has no literal for the float {name}")),
+                "{err}"
+            );
+        }
+        // A finite float still unparses as a number.
+        assert_eq!(
+            unparser.expr_to_sql(&lit(1.5_f64)).unwrap().to_string(),
+            "1.5"
+        );
+    }
+
+    #[test]
     fn test_float_scalar_to_expr() {
         let tests = [
             (Expr::Literal(ScalarValue::Float64(Some(3f64)), None), "3.0"),
@@ -2792,6 +2869,57 @@ mod tests {
             (
                 Expr::Literal(ScalarValue::Float32(Some(-2.989f32)), None),
                 "-2.989",
+            ),
+            (
+                Expr::Literal(ScalarValue::Float64(Some(f64::INFINITY)), None),
+                "CAST('Infinity' AS DOUBLE)",
+            ),
+            (
+                Expr::Literal(ScalarValue::Float64(Some(f64::NEG_INFINITY)), None),
+                "CAST('-Infinity' AS DOUBLE)",
+            ),
+            (
+                Expr::Literal(ScalarValue::Float64(Some(f64::NAN)), None),
+                "CAST('NaN' AS DOUBLE)",
+            ),
+            (
+                Expr::Literal(ScalarValue::Float32(Some(f32::INFINITY)), None),
+                "CAST('Infinity' AS FLOAT)",
+            ),
+            (
+                Expr::Literal(ScalarValue::Float32(Some(f32::NEG_INFINITY)), None),
+                "CAST('-Infinity' AS FLOAT)",
+            ),
+            (
+                Expr::Literal(ScalarValue::Float32(Some(f32::NAN)), None),
+                "CAST('NaN' AS FLOAT)",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::Float32(Some(f32::INFINITY))
+                        .cast_to(&DataType::Float16)
+                        .unwrap(),
+                    None,
+                ),
+                "CAST('Infinity' AS FLOAT)",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::Float32(Some(f32::NEG_INFINITY))
+                        .cast_to(&DataType::Float16)
+                        .unwrap(),
+                    None,
+                ),
+                "CAST('-Infinity' AS FLOAT)",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::Float32(Some(f32::NAN))
+                        .cast_to(&DataType::Float16)
+                        .unwrap(),
+                    None,
+                ),
+                "CAST('NaN' AS FLOAT)",
             ),
         ];
         for (value, expected) in tests {

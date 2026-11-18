@@ -24,12 +24,12 @@ concurrency:
 
 jobs:
   license-header-check:
-    runs-on: ubuntu-slim
+    runs-on: &small-runner ${{ github.event_name == 'merge_group' && vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=2,image=ubuntu24-full-x64,tag=datafusion', github.run_id) || 'ubuntu-slim' }}
     name: Check License Header
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install HawkEye
-        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
+        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21  # v2.90.4
         with:
           tool: hawkeye@7.3.0
       - name: Run license header check
@@ -37,7 +37,7 @@ jobs:
 
   prettier:
     name: Use prettier to check formatting of documents
-    runs-on: ubuntu-slim
+    runs-on: *small-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
@@ -49,7 +49,7 @@ jobs:
 
   markdown-link-check:
     name: Check Markdown Links
-    runs-on: ubuntu-slim
+    runs-on: *small-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Load tool versions
@@ -57,7 +57,7 @@ jobs:
           source ci/scripts/utils/tool_versions.sh
           echo "LYCHEE_VERSION=${LYCHEE_VERSION}" >> "$GITHUB_ENV"
       - name: Install lychee
-        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
+        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21  # v2.90.4
         with:
           tool: lychee@${{ env.LYCHEE_VERSION }}
       - name: Run markdown link check
@@ -65,7 +65,7 @@ jobs:
 
   asf-yaml-check:
     name: Validate required_status_checks in .asf.yaml
-    runs-on: ubuntu-slim
+    runs-on: *small-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - run: pip install pyyaml
@@ -79,7 +79,7 @@ jobs:
 
   typos:
     name: Spell Check with Typos
-    runs-on: ubuntu-slim
+    runs-on: *small-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -88,7 +88,7 @@ jobs:
       # it may cause checks to fail more often.
       # We can upgrade it manually once a while.
       - name: Install typos
-        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
+        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21  # v2.90.4
         with:
           tool: typos@1.52.2
       - name: Run typos check

@@ -1567,6 +1567,96 @@ fn test_collect_left_join_keeps_hash_partitioned_build_side_coalesce() -> Result
 }
 
 // ========================================================================
+// Hash joins still in `Auto` mode
+// ========================================================================
+
+/// Runs `EnsureRequirements` on a hash join in `PartitionMode::Auto` over two
+/// 4-partition inputs, and checks the result with `SanityCheckPlan`. A join is
+/// still in `Auto` when `JoinSelection` hasn't run before enforcement.
+///
+/// An `Auto` join declares no distribution requirement, so without picking a mode
+/// first, enforcement would leave both inputs as they are and the join in `Auto`.
+fn ensure_requirements_on_auto_hash_join(
+    join_type: JoinType,
+    null_aware: bool,
+    config: &ConfigOptions,
+) -> Result<String> {
+    let on = vec![(
+        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+        Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+    )];
+    let join: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
+        Arc::new(MockMultiPartitionExec::new(4)),
+        Arc::new(MockMultiPartitionExec::new(4)),
+        on,
+        None,
+        &join_type,
+        None,
+        PartitionMode::Auto,
+        NullEquality::NullEqualsNothing,
+        null_aware,
+    )?);
+    let optimized = EnsureRequirements::new().optimize(join, config)?;
+    check_plan_tree_sanity(&optimized, &config.optimizer)?;
+    Ok(plan_string(&optimized))
+}
+
+/// When the join may repartition its inputs, enforcement picks `Partitioned` and
+/// hash-partitions both inputs on the join key.
+#[test]
+fn test_auto_hash_join_becomes_partitioned() -> Result<()> {
+    let plan =
+        ensure_requirements_on_auto_hash_join(JoinType::Inner, false, &test_config())?;
+
+    assert_snapshot!(plan, @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
+      RepartitionExec: partitioning=Hash([a@0], 8), input_partitions=4
+        MockMultiPartitionExec
+      RepartitionExec: partitioning=Hash([a@0], 8), input_partitions=4, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+        MockMultiPartitionExec
+    ");
+
+    Ok(())
+}
+
+/// With `repartition_joins` off, enforcement picks `CollectLeft` and merges the
+/// build side into one partition.
+#[test]
+fn test_auto_hash_join_becomes_collect_left_without_join_repartitioning() -> Result<()> {
+    let mut config = test_config();
+    config.optimizer.repartition_joins = false;
+    let plan = ensure_requirements_on_auto_hash_join(JoinType::Inner, false, &config)?;
+
+    assert_snapshot!(plan, @r"
+    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+      CoalescePartitionsExec
+        MockMultiPartitionExec
+      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST
+        MockMultiPartitionExec
+    ");
+
+    Ok(())
+}
+
+/// A null-aware join tracks NULLs across the whole build side, so enforcement
+/// picks `CollectLeft` even when joins may repartition.
+#[test]
+fn test_null_aware_auto_hash_join_becomes_collect_left() -> Result<()> {
+    let plan =
+        ensure_requirements_on_auto_hash_join(JoinType::LeftAnti, true, &test_config())?;
+
+    assert_snapshot!(plan, @r"
+    HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(a@0, a@0)], null_aware
+      CoalescePartitionsExec
+        MockMultiPartitionExec
+      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=4
+        MockMultiPartitionExec
+    ");
+
+    Ok(())
+}
+
+// ========================================================================
 // Sort pushdown through limits
 // ========================================================================
 
