@@ -16,13 +16,19 @@
 //! - `settings.rs` holds the settings each query runs under.
 
 use std::future::Future;
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::util::display::{ArrayFormatter, FormatOptions};
+use datafusion::physical_expr::expressions::Literal;
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::{ExecutionPlan, displayable};
 use datafusion::prelude::SessionContext;
 use datafusion_common::float_semantics::normalize;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_common_runtime::JoinSet;
+use futures::future::join;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::IndexedRandom;
@@ -39,11 +45,13 @@ use settings::Setting;
 const TABLE_SIZES: &[usize] = &[8, 16, 32, 64, 128];
 
 /// Each dataset is a random table registered under every setting. Each case
-/// checks one random (template, setting) pair that is not a known failure.
+/// runs one random (template, setting) pair. A known failure may give a wrong
+/// result on random data too, but it must not error or panic.
 pub(crate) struct FloatZeroFuzzer;
 
 impl FuzzTest for FloatZeroFuzzer {
-    type Dataset = Vec<(Setting, SessionContext)>;
+    /// Every pair that runs, with a context that has the random table.
+    type Dataset = Vec<(&'static Template, Setting, SessionContext)>;
 
     fn name(&self) -> &str {
         "float_zero"
@@ -53,33 +61,40 @@ impl FuzzTest for FloatZeroFuzzer {
         let mut rng = StdRng::seed_from_u64(seed);
         let num_rows = *TABLE_SIZES.choose(&mut rng).unwrap();
         let data = data::random(&mut rng, num_rows);
-        std::future::ready(
-            Setting::all()
-                .into_iter()
-                .map(|setting| Ok((setting, setting.context(&data)?)))
-                .collect(),
-        )
+        std::future::ready(pairs(&data))
     }
 
-    async fn run_case(&self, contexts: &Self::Dataset, seed: u64) -> Result<()> {
-        let pairs: Vec<_> = contexts
-            .iter()
-            .flat_map(|(setting, ctx)| {
-                TEMPLATES
-                    .iter()
-                    .filter(|t| {
-                        runs(t, setting) && KnownFailure::matches(t, setting).is_none()
-                    })
-                    .map(move |t| (t, setting, ctx))
-            })
-            .collect();
-        let (template, setting, ctx) = *pairs
+    async fn run_case(&self, pairs: &Self::Dataset, seed: u64) -> Result<()> {
+        let (template, setting, ctx) = pairs
             .choose(&mut StdRng::seed_from_u64(seed))
-            .expect("some pair is not a known failure");
-        check(ctx, template, setting)
-            .await
-            .map_err(|failure| exec_datafusion_err!("{failure}"))
+            .ok_or_else(|| exec_datafusion_err!("no (template, setting) pair runs"))?;
+        match (
+            check(ctx, template, setting).await,
+            KnownFailure::matches(template, setting),
+        ) {
+            (Ok(()), _) | (Err(Failure::Mismatch(_)), Some(_)) => Ok(()),
+            (Err(failure), None) => exec_err!("{failure}"),
+            (Err(failure), Some(known)) => exec_err!(
+                "{failure}\nknown to give a wrong result, but now fails ({})",
+                known.issue
+            ),
+        }
     }
+}
+
+/// Every (template, setting) pair that runs, each with a context that has
+/// `data` registered under that setting.
+fn pairs(
+    data: &data::Dataset,
+) -> Result<Vec<(&'static Template, Setting, SessionContext)>> {
+    let mut pairs = vec![];
+    for setting in Setting::all() {
+        let ctx = setting.context(data)?;
+        for template in TEMPLATES.iter().filter(|t| runs(t, &setting)) {
+            pairs.push((template, setting, ctx.clone()));
+        }
+    }
+    Ok(pairs)
 }
 
 /// Templates without a zero literal skip the `negative_literals` settings,
@@ -138,17 +153,60 @@ async fn float_zero_fixed() {
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
 }
 
-/// The `{z}` literal must reach the plan as a Float64 `-0.0`, or the
-/// `negative_literals` setting tests nothing.
+/// A `-0.0` literal in a `raw` query must reach the physical plan with its
+/// sign, or the `negative_literals` settings test nothing.
 #[tokio::test]
 async fn float_zero_negative_literal() {
-    let ctx = SessionContext::new();
-    let batches = run_sql("SELECT -0.0", &ctx).await.unwrap();
-    let value = ScalarValue::try_from_array(batches[0].column(0), 0).unwrap();
-    let ScalarValue::Float64(Some(v)) = value else {
-        panic!("expected a Float64, got {value:?}");
-    };
-    assert!(v == 0.0 && v.is_sign_negative(), "expected -0.0, got {v}");
+    let mut errors = vec![];
+    for (template, setting, ctx) in pairs(&data::fixed()).unwrap() {
+        if !setting.negative_literals {
+            continue;
+        }
+        let sql = template.render("raw", setting.raw_zero());
+        let plan = ctx.sql(&sql).await.unwrap();
+        let plan = plan.create_physical_plan().await.unwrap();
+        if !has_negative_zero_literal(&plan) {
+            errors.push(format!(
+                "{} under {setting:?}: no `-0.0` literal in the plan of {sql}\n{}",
+                template.name,
+                displayable(plan.as_ref()).indent(true)
+            ));
+        }
+    }
+    assert!(errors.is_empty(), "{}", errors.join("\n\n"));
+}
+
+/// Whether a literal in a projection of `plan` is `-0.0` or a list that
+/// holds one.
+fn has_negative_zero_literal(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let mut found = false;
+    plan.apply(|node| {
+        let Some(projection) = node.downcast_ref::<ProjectionExec>() else {
+            return Ok(TreeNodeRecursion::Continue);
+        };
+        for projected in projection.expr() {
+            projected.expr.apply(|expr| {
+                found |= expr
+                    .downcast_ref::<Literal>()
+                    .is_some_and(|literal| is_negative_zero(literal.value()));
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .unwrap();
+    found
+}
+
+fn is_negative_zero(value: &ScalarValue) -> bool {
+    match value {
+        ScalarValue::Float64(Some(v)) => *v == 0.0 && v.is_sign_negative(),
+        ScalarValue::Float32(Some(v)) => *v == 0.0 && v.is_sign_negative(),
+        ScalarValue::List(list) => {
+            data::has_negative_zero(&(Arc::clone(list) as ArrayRef))
+        }
+        _ => false,
+    }
 }
 
 /// Why a (template, setting) pair failed.
@@ -169,28 +227,20 @@ impl std::fmt::Display for Failure {
 }
 
 /// Runs every template under every setting on `data` and returns the
-/// results in a fixed order. Each
-/// pair runs in its own task: the queries are tiny, so planning dominates and
-/// running them in parallel is what makes the test fast.
+/// results in a fixed order. Each pair runs in its own task: the queries are
+/// tiny, so planning dominates and running them in parallel is what makes the
+/// test fast.
 async fn check_all(
     data: &data::Dataset,
 ) -> Vec<(&'static Template, Setting, Result<(), Failure>)> {
     let mut join_set = JoinSet::new();
-    let mut num_pairs = 0;
-    for setting in Setting::all() {
-        let ctx = setting.context(data).unwrap();
-        for template in TEMPLATES {
-            if !runs(template, &setting) {
-                continue;
-            }
-            let ctx = ctx.clone();
-            let index = num_pairs;
-            num_pairs += 1;
-            join_set.spawn(async move {
-                let result = check(&ctx, template, &setting).await;
-                (index, (template, setting, result))
-            });
-        }
+    let pairs = pairs(data).unwrap();
+    let num_pairs = pairs.len();
+    for (index, (template, setting, ctx)) in pairs.into_iter().enumerate() {
+        join_set.spawn(async move {
+            let result = check(&ctx, template, &setting).await;
+            (index, (template, setting, result))
+        });
     }
     let mut results = Vec::with_capacity(num_pairs);
     while let Some(joined) = join_set.join_next().await {
@@ -219,8 +269,7 @@ async fn check(
             template.name
         )
     };
-    let canon = run_sql(&canon_sql, ctx).await;
-    let raw = run_sql(&raw_sql, ctx).await;
+    let (canon, raw) = join(run_sql(&canon_sql, ctx), run_sql(&raw_sql, ctx)).await;
     let (mut canon, mut raw) = match (canon, raw) {
         (Ok(canon), Ok(raw)) => (format_rows(&canon), format_rows(&raw)),
         (Err(canon), Err(raw)) => {
@@ -247,7 +296,14 @@ async fn check(
         .iter()
         .zip(&raw)
         .position(|(c, r)| c != r)
-        .map(|i| format!("row {i}: raw {}, canon {}", raw[i], canon[i]))
+        .map(|i| {
+            let row = if template.ordered {
+                "row"
+            } else {
+                "sorted row"
+            };
+            format!("{row} {i}: raw {}, canon {}", raw[i], canon[i])
+        })
         .unwrap_or_else(|| format!("raw {} rows, canon {} rows", raw.len(), canon.len()));
     Err(Failure::Mismatch(format!("{}\n{diff}", describe())))
 }

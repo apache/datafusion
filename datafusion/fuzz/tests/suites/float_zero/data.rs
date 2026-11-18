@@ -67,7 +67,7 @@ fn canon_of(raw: &RecordBatch) -> RecordBatch {
 /// at any depth. Checks the values directly rather than asking
 /// `normalize`, which may change more than `-0.0`. A list is checked
 /// through all of its child values, so `array` must not be a slice.
-fn has_negative_zero(array: &ArrayRef) -> bool {
+pub fn has_negative_zero(array: &ArrayRef) -> bool {
     match array.data_type() {
         DataType::Float64 => array
             .as_primitive::<Float64Type>()
