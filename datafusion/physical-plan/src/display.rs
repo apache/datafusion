@@ -1183,6 +1183,17 @@ impl TreeRenderVisitor<'_, '_> {
                     extra_info_item,
                     Self::MAX_EXTRA_LINES,
                 );
+                if let Some(facts) = &node.facts {
+                    let facts_map = HashMap::from([("facts".to_string(), facts.clone())]);
+                    let mut facts_lines = Vec::new();
+                    Self::split_up_extra_info(
+                        &facts_map,
+                        &mut facts_lines,
+                        Self::MAX_EXTRA_LINES,
+                    );
+                    extra_info_item.push(String::new());
+                    extra_info_item.extend(facts_lines);
+                }
                 if extra_info_item.len() > extra_height {
                     extra_height = extra_info_item.len();
                 }

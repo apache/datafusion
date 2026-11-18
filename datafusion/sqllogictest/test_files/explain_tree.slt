@@ -2065,26 +2065,126 @@ physical_plan
 01)┌───────────────────────────┐
 02)│          SortExec         │
 03)│    --------------------   │
-04)│           facts:          │
-05)│   order: [int_col@0 ASC   │
-06)│         NULLS LAST]       │
-07)│                           │
-08)│  int_col@0 ASC NULLS LAST │
-09)└─────────────┬─────────────┘
-10)┌─────────────┴─────────────┐
-11)│       DataSourceExec      │
-12)│    --------------------   │
-13)│          bytes: 0         │
-14)│        facts: none        │
+04)│  int_col@0 ASC NULLS LAST │
+05)│                           │
+06)│    --------------------   │
+07)│           facts:          │
+08)│   order: [int_col@0 ASC   │
+09)│         NULLS LAST]       │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│       DataSourceExec      │
+13)│    --------------------   │
+14)│          bytes: 0         │
 15)│       format: memory      │
 16)│          rows: 0          │
-17)└───────────────────────────┘
+17)│                           │
+18)│    --------------------   │
+19)│        facts: none        │
+20)└───────────────────────────┘
 
 statement ok
 set datafusion.explain.show_equivalences = false;
 
 statement ok
 DROP TABLE facts_t;
+
+# Equivalence facts do not hide operator entries in the box
+statement ok
+CREATE TABLE t1 (a INT, b INT, c INT, d INT) AS VALUES (1,2,3,4);
+
+statement ok
+set datafusion.explain.show_equivalences = true;
+
+query TT
+EXPLAIN SELECT * FROM (SELECT a, b, c, d, ROW_NUMBER() OVER (PARTITION BY a, b ORDER BY c DESC, d) as rn FROM t1) WHERE rn <= 1;
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│            a: a           │
+05)│            b: b           │
+06)│            c: c           │
+07)│            d: d           │
+08)│                           │
+09)│            rn:            │
+10)│ row_number() PARTITION BY │
+11)│ [t1.a, t1.b] ORDER BY [t1 │
+12)│ .c DESC NULLS FIRST, t1.d │
+13)│    ASC NULLS LAST] RANGE  │
+14)│      BETWEEN UNBOUNDED    │
+15)│        PRECEDING AND      │
+16)│         CURRENT ROW       │
+17)│                           │
+18)│    --------------------   │
+19)│           facts:          │
+20)│   order: [a@0 ASC NULLS   │
+21)│       FIRST, b@1 ASC      │
+22)│      NULLS FIRST, rn@4    │
+23)│   ASC NULLS LAST] | [a@0  │
+24)│  ASC NULLS FIRST, b@1 ASC │
+25)│    NULLS FIRST, c@2 DESC  │
+26)│    NULLS FIRST, d@3 ASC   │
+27)│         NULLS LAST]       │
+28)└─────────────┬─────────────┘
+29)┌─────────────┴─────────────┐
+30)│    PartitionedTopKExec    │
+31)│    --------------------   │
+32)│           emit:           │
+33)│ [row_number() PARTITION BY│
+34)│   [t1.a, t1.b] ORDER BY   │
+35)│  [t1.c DESC NULLS FIRST,  │
+36)│    t1.d ASC NULLS LAST]   │
+37)│        RANGE BETWEEN      │
+38)│          UNBOUNDED        │
+39)│        PRECEDING AND      │
+40)│        CURRENT ROW]       │
+41)│                           │
+42)│          fetch: 1         │
+43)│       fn: row_number      │
+44)│                           │
+45)│           order:          │
+46)│  [c@2 DESC, d@3 ASC NULLS │
+47)│            LAST]          │
+48)│                           │
+49)│   partition: [a@0, b@1]   │
+50)│                           │
+51)│    --------------------   │
+52)│           facts:          │
+53)│   order: [a@0 ASC NULLS   │
+54)│       FIRST, b@1 ASC      │
+55)│      NULLS FIRST, c@2     │
+56)│    DESC NULLS FIRST, d@3  │
+57)│   ASC NULLS LAST] | [a@0  │
+58)│    ASC NULLS FIRST, b@1   │
+59)│      ASC NULLS FIRST,     │
+60)│        row_number()       │
+61)│     PARTITION BY [t1.a    │
+62)│   , t1.b] ORDER BY [t1.c  │
+63)│    DESC NULLS FIRST, t1   │
+64)│  .d ASC NULLS LAST] RANGE │
+65)│      BETWEEN UNBOUNDED    │
+66)│        PRECEDING AND      │
+67)│      CURRENT ROW@4 ASC    │
+68)│         NULLS LAST]       │
+69)└─────────────┬─────────────┘
+70)┌─────────────┴─────────────┐
+71)│       DataSourceExec      │
+72)│    --------------------   │
+73)│         bytes: 448        │
+74)│       format: memory      │
+75)│          rows: 1          │
+76)│                           │
+77)│    --------------------   │
+78)│        facts: none        │
+79)└───────────────────────────┘
+
+statement ok
+set datafusion.explain.show_equivalences = false;
+
+statement ok
+DROP TABLE t1;
 
 # Config reset
 statement ok

@@ -40,6 +40,8 @@ pub struct RenderTreeNode {
     pub name: String,
     /// Execution info collected from `ExecutionPlan`.
     pub extra_text: HashMap<String, String>,
+    /// Equivalence properties of the node, rendered separately from `extra_text`.
+    pub facts: Option<String>,
     /// Positions of child nodes in the rendered tree.
     pub child_positions: Vec<Coordinate>,
 }
@@ -49,6 +51,7 @@ impl RenderTreeNode {
         RenderTreeNode {
             name,
             extra_text,
+            facts: None,
             child_positions: vec![],
         }
     }
@@ -196,14 +199,11 @@ fn create_tree_recursive(
         }
     }
 
-    if show_equivalences {
-        extra_info.insert(
-            "facts".to_string(),
-            plan.equivalence_properties().to_string(),
-        );
-    }
-
     let mut node = RenderTreeNode::new(plan.name().to_string(), extra_info);
+
+    if show_equivalences {
+        node.facts = Some(plan.equivalence_properties().to_string());
+    }
 
     let children = plan.children();
 
