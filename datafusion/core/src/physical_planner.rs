@@ -25,6 +25,7 @@ use crate::physical_expr::{
 };
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
+use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
@@ -36,7 +37,7 @@ use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::materialized_cte::{
     MaterializedCteBuffer, MaterializedCteExec, MaterializedCteScanExec,
 };
-use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr, update_expr};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
@@ -1047,13 +1048,15 @@ impl DefaultPhysicalPlanner {
                 // Preserve the explicit sort order as an input ordering requirement,
                 // otherwise it might be lost during optimization.
                 //
-                // Use the explicit ordering from SortExec rather than the child's inferred
-                // output ordering, which may be incorrect at this stage. The plan may still
-                // require a `CoalescePartitionsExec`, inserted later by `EnsureRequirements`,
-                // which can change the inferred output ordering.
-                let ordering = input_exec
-                    .downcast_ref::<SortExec>()
-                    .map(|sort| sort.expr().clone());
+                // Only preserve ordering when the query has an explicit sort order (e.g. ORDER BY),
+                // rather than an inferred order from an unsorted query reading pre-sorted inputs.
+                // When inner plans are complex (e.g. SortExec is wrapped by ProjectionExec),
+                // project the explicit sort order through the intermediate operators.
+                let ordering = if has_explicit_sort(input.as_ref()) {
+                    find_explicit_sort(&input_exec)
+                } else {
+                    None
+                };
 
                 sink_format
                     .create_writer_physical_plan(
@@ -3931,6 +3934,67 @@ impl InvariantChecker {
     }
 }
 
+/// Traverses the top-level logical plan to check if an explicit sort ([`LogicalPlan::Sort`])
+/// is present.
+///
+/// Top-level ORDER BY clauses may be wrapped by [`LogicalPlan::Projection`] (e.g. when
+/// sort expressions are not in the projection list), [`LogicalPlan::Limit`], or [`LogicalPlan::SubqueryAlias`].
+fn has_explicit_sort(mut plan: &LogicalPlan) -> bool {
+    loop {
+        match plan {
+            LogicalPlan::Sort(_) => return true,
+            LogicalPlan::Projection(p) => plan = p.input.as_ref(),
+            LogicalPlan::Limit(l) => plan = l.input.as_ref(),
+            LogicalPlan::SubqueryAlias(a) => plan = a.input.as_ref(),
+            _ => return false,
+        }
+    }
+}
+
+/// Projects a lexicographic ordering through a list of projection expressions,
+/// keeping the longest valid prefix of sort expressions that can be represented
+/// in the projected output schema.
+fn project_ordering(
+    ordering: &LexOrdering,
+    projected_exprs: &[ProjectionExpr],
+) -> Option<LexOrdering> {
+    let mut updated_exprs = Vec::with_capacity(ordering.len());
+    for sort_expr in ordering.iter() {
+        if let Ok(Some(updated_expr)) =
+            update_expr(&sort_expr.expr, projected_exprs, false)
+        {
+            updated_exprs.push(PhysicalSortExpr {
+                expr: updated_expr,
+                options: sort_expr.options,
+            });
+        } else {
+            // As soon as a leading sort expression cannot be projected,
+            // subsequent expressions cannot maintain the sort order.
+            break;
+        }
+    }
+    LexOrdering::new(updated_exprs)
+}
+
+/// Traverses down the physical execution plan to find an explicit sort ([`SortExec`])
+/// and projects its sort expressions up to the root schema.
+fn find_explicit_sort(plan: &Arc<dyn ExecutionPlan>) -> Option<LexOrdering> {
+    if let Some(sort) = plan.downcast_ref::<SortExec>() {
+        Some(sort.expr().clone())
+    } else if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
+        let child_ordering = find_explicit_sort(proj.input())?;
+        project_ordering(&child_ordering, proj.expr())
+    } else if let Some(limit) = plan.downcast_ref::<GlobalLimitExec>() {
+        find_explicit_sort(limit.input())
+    } else if let Some(limit) = plan.downcast_ref::<LocalLimitExec>() {
+        find_explicit_sort(limit.input())
+    } else if let Some(coalesce) = plan.downcast_ref::<CoalescePartitionsExec>() {
+        find_explicit_sort(coalesce.input())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
@@ -6496,5 +6560,115 @@ digraph {
 
         assert_eq!(plan.schema(), schema);
         assert!(plan.is::<EmptyExec>());
+    }
+
+    #[test]
+    fn test_has_explicit_sort() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let scan = scan_empty(Some("t"), &schema, None)?.build()?;
+
+        // No sort
+        assert!(!has_explicit_sort(&scan));
+
+        // Sort directly at top
+        let sort_plan = LogicalPlanBuilder::from(scan.clone())
+            .sort(vec![col("a").sort(true, false)])?
+            .build()?;
+        assert!(has_explicit_sort(&sort_plan));
+
+        // Projection over sort
+        let proj_over_sort = LogicalPlanBuilder::from(sort_plan.clone())
+            .project(vec![col("a")])?
+            .build()?;
+        assert!(has_explicit_sort(&proj_over_sort));
+
+        // Limit over sort
+        let limit_over_sort = LogicalPlanBuilder::from(sort_plan.clone())
+            .limit(0, Some(10))?
+            .build()?;
+        assert!(has_explicit_sort(&limit_over_sort));
+
+        // Limit over projection over sort
+        let limit_over_proj_over_sort = LogicalPlanBuilder::from(proj_over_sort)
+            .limit(0, Some(10))?
+            .build()?;
+        assert!(has_explicit_sort(&limit_over_proj_over_sort));
+
+        // Projection over scan (no sort)
+        let proj_no_sort = LogicalPlanBuilder::from(scan)
+            .project(vec![col("a")])?
+            .build()?;
+        assert!(!has_explicit_sort(&proj_no_sort));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_ordering_and_find_explicit_sort() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let empty_exec: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        // Sort on a ASC, b ASC
+        let sort_exprs = LexOrdering::new(vec![
+            PhysicalSortExpr::new_default(expressions::col("a", &schema)?),
+            PhysicalSortExpr::new_default(expressions::col("b", &schema)?),
+        ])
+        .unwrap();
+        let sort_exec: Arc<dyn ExecutionPlan> =
+            Arc::new(SortExec::new(sort_exprs.clone(), empty_exec));
+
+        // Direct SortExec
+        assert_eq!(find_explicit_sort(&sort_exec), Some(sort_exprs.clone()));
+
+        // Projection projecting [a, b] - all sort keys preserved
+        let proj_all = Arc::new(ProjectionExec::try_new(
+            vec![
+                (expressions::col("a", &schema)?, "a".to_string()),
+                (expressions::col("b", &schema)?, "b".to_string()),
+            ],
+            Arc::clone(&sort_exec),
+        )?) as Arc<dyn ExecutionPlan>;
+        let expected_all = LexOrdering::new(vec![
+            PhysicalSortExpr::new_default(expressions::col("a", &proj_all.schema())?),
+            PhysicalSortExpr::new_default(expressions::col("b", &proj_all.schema())?),
+        ])
+        .unwrap();
+        assert_eq!(find_explicit_sort(&proj_all), Some(expected_all));
+
+        // Projection projecting [a] only - leading sort key preserved, non-projected dropped
+        let proj_prefix = Arc::new(ProjectionExec::try_new(
+            vec![(expressions::col("a", &schema)?, "a".to_string())],
+            Arc::clone(&sort_exec),
+        )?) as Arc<dyn ExecutionPlan>;
+        let expected_prefix = LexOrdering::new(vec![PhysicalSortExpr::new_default(
+            expressions::col("a", &proj_prefix.schema())?,
+        )])
+        .unwrap();
+        assert_eq!(
+            find_explicit_sort(&proj_prefix),
+            Some(expected_prefix.clone())
+        );
+
+        // Projection projecting [b] only - leading sort key missing, ordering lost
+        let proj_non_leading = Arc::new(ProjectionExec::try_new(
+            vec![(expressions::col("b", &schema)?, "b".to_string())],
+            Arc::clone(&sort_exec),
+        )?) as Arc<dyn ExecutionPlan>;
+        assert_eq!(find_explicit_sort(&proj_non_leading), None);
+
+        // Limit over Projection over Sort
+        let limit_exec = Arc::new(GlobalLimitExec::new(proj_prefix, 0, Some(10)))
+            as Arc<dyn ExecutionPlan>;
+        assert_eq!(find_explicit_sort(&limit_exec), Some(expected_prefix));
+
+        Ok(())
     }
 }

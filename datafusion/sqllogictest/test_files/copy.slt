@@ -924,6 +924,92 @@ SELECT ts FROM copy_with_order ORDER BY ts;
 2
 3
 
+# Explicit ORDER BY with complex plan (SortExec not direct child, wrapped in Projection)
+query I
+COPY (
+  SELECT id FROM (
+    SELECT 'b' AS id, ts, x FROM union_const_src
+    UNION ALL
+    SELECT 'a' AS id, ts, x FROM union_const_src
+  ) ORDER BY id, ts
+) TO 'test_files/scratch/copy/union_const_order/out_projected_2.parquet';
+----
+6
+
+statement ok
+CREATE EXTERNAL TABLE copy_with_order_2 STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/union_const_order/out_projected_2.parquet';
+
+# Physical plan has optimized away the SortExec
+query TT
+EXPLAIN SELECT * FROM copy_with_order_2 ORDER BY id;
+----
+logical_plan
+01)Sort: copy_with_order_2.id ASC NULLS LAST
+02)--TableScan: copy_with_order_2 projection=[id]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/union_const_order/out_projected_2.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+statement ok
+DROP TABLE copy_with_order_2;
+
+# When the leading sort column is not projected, ordering cannot be preserved
+query I
+COPY (
+  SELECT ts FROM (
+    SELECT 'b' AS id, ts, x FROM union_const_src
+    UNION ALL
+    SELECT 'a' AS id, ts, x FROM union_const_src
+  ) ORDER BY id, ts
+) TO 'test_files/scratch/copy/union_const_order/out_projected_non_leading.parquet';
+----
+6
+
+statement ok
+CREATE EXTERNAL TABLE copy_non_leading STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/union_const_order/out_projected_non_leading.parquet';
+
+# Read-back requires SortExec because leading sort key 'id' was discarded
+query TT
+EXPLAIN SELECT * FROM copy_non_leading ORDER BY ts;
+----
+logical_plan
+01)Sort: copy_non_leading.ts ASC NULLS LAST
+02)--TableScan: copy_non_leading projection=[ts]
+physical_plan
+01)SortExec: expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/union_const_order/out_projected_non_leading.parquet]]}, projection=[ts], file_type=parquet, sort_order_for_reorder=[ts@0 ASC NULLS LAST]
+
+statement ok
+DROP TABLE copy_non_leading;
+
+# Explicit ORDER BY with Projection preserving multiple sort keys with reordering and aliasing
+query I
+COPY (
+  SELECT ts AS time_stamp, id AS user_id FROM (
+    SELECT 'b' AS id, ts, x FROM union_const_src
+    UNION ALL
+    SELECT 'a' AS id, ts, x FROM union_const_src
+  ) ORDER BY id, ts
+) TO 'test_files/scratch/copy/union_const_order/out_projected_reordered.parquet';
+----
+6
+
+statement ok
+CREATE EXTERNAL TABLE copy_reordered STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/union_const_order/out_projected_reordered.parquet';
+
+# Physical plan optimizes away SortExec because both keys were preserved (user_id ASC, time_stamp ASC)
+query TT
+EXPLAIN SELECT * FROM copy_reordered ORDER BY user_id, time_stamp;
+----
+logical_plan
+01)Sort: copy_reordered.user_id ASC NULLS LAST, copy_reordered.time_stamp ASC NULLS LAST
+02)--TableScan: copy_reordered projection=[time_stamp, user_id]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/union_const_order/out_projected_reordered.parquet]]}, projection=[time_stamp, user_id], output_ordering=[user_id@1 ASC NULLS LAST, time_stamp@0 ASC NULLS LAST], file_type=parquet
+
+statement ok
+DROP TABLE copy_reordered;
+
 statement ok
 DROP TABLE copy_without_order;
 
