@@ -38,6 +38,7 @@ datafusion-ffi = { workspace = true }
 [dev-dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
+async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = false, features = ["sql"] }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
