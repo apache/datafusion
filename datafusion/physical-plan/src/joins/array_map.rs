@@ -9,7 +9,7 @@ use std::mem::size_of;
 use crate::joins::chain::traverse_chain;
 use crate::joins::join_hash_map::ProbeOffset;
 use crate::joins::join_hash_map::ProbeOffset::{AtRow, MidChain};
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, UInt32Array};
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::ArrowNumericType;
 use datafusion_common::{Result, ScalarValue, internal_err};
@@ -223,6 +223,15 @@ impl ArrayMap {
         Ok(())
     }
 
+    /// The index of one build row for each distinct key.
+    pub(crate) fn distinct_rows(&self) -> UInt32Array {
+        self.data
+            .iter()
+            .filter(|&&row| row != 0)
+            .map(|&row| row - 1)
+            .collect()
+    }
+
     pub fn num_of_distinct_key(&self) -> usize {
         self.num_of_distinct_key
     }
@@ -420,6 +429,21 @@ mod tests {
     use arrow::array::Int64Array;
     use arrow::array::UInt64Array;
     use std::sync::Arc;
+
+    #[test]
+    fn distinct_rows_has_one_row_per_key() -> Result<()> {
+        let build: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(3),
+            Some(1),
+            None,
+            Some(3),
+            Some(1),
+        ]));
+        let map = ArrayMap::try_new(&build, 1, 3)?;
+        // Each key keeps its first row, in key order.
+        assert_eq!(map.distinct_rows().values(), &[1, 0]);
+        Ok(())
+    }
 
     #[test]
     fn test_array_map_limit_offset_duplicate_elements() -> Result<()> {

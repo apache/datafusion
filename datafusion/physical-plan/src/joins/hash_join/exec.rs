@@ -67,7 +67,7 @@ use crate::{
 use parquet::bloom_filter::Sbbf;
 
 use arrow::array::{Array, ArrayData, ArrayRef, BooleanBufferBuilder};
-use arrow::compute::concat_batches;
+use arrow::compute::{concat_batches, take};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
@@ -3541,13 +3541,35 @@ fn build_in_memory(
     {
         None
     } else {
-        let filter = bloom_filter::partition_filter(
-            &left_values,
-            map.num_of_distinct_key()
-                .saturating_mul(num_build_partitions),
-            GlobalFilterOptions::new(config).bloom_filter,
-            &reservation,
-        )?;
+        let num_distinct = map
+            .num_of_distinct_key()
+            .saturating_mul(num_build_partitions);
+        let options = GlobalFilterOptions::new(config).bloom_filter;
+        // Insert one hash per distinct key, not one per build row.
+        let filter = match &**map {
+            // The map hashes the keys with `random_state`, which is
+            // `HASH_JOIN_SEED`, the seed the filter is probed with. Keys whose
+            // hashes collide share an entry, and also share their filter bits.
+            Map::HashMap(hash_map) => bloom_filter::partition_filter_from_hashes(
+                |f| hash_map.for_each_entry_hash(f),
+                num_distinct,
+                options,
+                &reservation,
+            ),
+            Map::ArrayMap(array_map) => {
+                let rows = array_map.distinct_rows();
+                let keys = left_values
+                    .iter()
+                    .map(|values| take(values.as_ref(), &rows, None))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                bloom_filter::partition_filter(
+                    &keys,
+                    num_distinct,
+                    options,
+                    &reservation,
+                )?
+            }
+        };
         if let Some(filter) = &filter {
             metrics.build_mem_used.add(filter.num_blocks() * 32);
         }

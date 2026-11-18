@@ -106,17 +106,10 @@ pub(crate) fn partition_filter(
     options: BloomFilterOptions,
     reservation: &MemoryReservation,
 ) -> Result<Option<Sbbf>> {
-    let Some(bytes) = options.bytes(num_distinct) else {
+    let Some(mut filter) = new_partition_filter(num_distinct, options, reservation)
+    else {
         return Ok(None);
     };
-    // The size that `Sbbf::new_with_num_of_bytes` allocates
-    if reservation
-        .try_grow(bytes.max(32).next_power_of_two())
-        .is_err()
-    {
-        return Ok(None);
-    }
-    let mut filter = Sbbf::new_with_num_of_bytes(bytes);
     for_each_hash_batch(keys, |hashes| {
         for &hash in hashes {
             filter.insert_hash(hash);
@@ -124,6 +117,34 @@ pub(crate) fn partition_filter(
         Ok(())
     })?;
     Ok(Some(filter))
+}
+
+/// Like [`partition_filter`], but fills the filter from key hashes that the
+/// caller already computed with `HASH_JOIN_SEED`.
+pub(crate) fn partition_filter_from_hashes(
+    for_each_hash: impl FnOnce(&mut dyn FnMut(u64)),
+    num_distinct: usize,
+    options: BloomFilterOptions,
+    reservation: &MemoryReservation,
+) -> Option<Sbbf> {
+    let mut filter = new_partition_filter(num_distinct, options, reservation)?;
+    for_each_hash(&mut |hash| filter.insert_hash(hash));
+    Some(filter)
+}
+
+/// An empty filter sized for `num_distinct` keys, with its memory charged to
+/// `reservation`.
+fn new_partition_filter(
+    num_distinct: usize,
+    options: BloomFilterOptions,
+    reservation: &MemoryReservation,
+) -> Option<Sbbf> {
+    let bytes = options.bytes(num_distinct)?;
+    // The size that `Sbbf::new_with_num_of_bytes` allocates
+    reservation
+        .try_grow(bytes.max(32).next_power_of_two())
+        .ok()?;
+    Some(Sbbf::new_with_num_of_bytes(bytes))
 }
 
 /// The bloom filter of a [`BloomFilterExpr`] and the reservation for its
