@@ -21,6 +21,7 @@ use arrow::array::{ArrayRef, BinaryArray, BooleanArray};
 use arrow::datatypes::DataType;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, internal_err};
+use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
 use parquet::basic::{Encoding, Type};
 use parquet::file::metadata::ColumnChunkMetaData;
 
@@ -127,6 +128,70 @@ pub(crate) fn eligible_dictionary_page(col_meta: &ColumnChunkMetaData) -> bool {
                 .checked_sub(start)
                 .is_some_and(|size| (0..=MAX_DICTIONARY_PAGE_BYTES).contains(&size))
         })
+}
+
+/// Returns false if `col_meta`'s min/max statistics prove that its dictionary
+/// cannot prune the row group for any of `guarantees`, the predicate's literal
+/// guarantees on that column, so reading the dictionary would be wasted I/O.
+///
+/// An `In` guarantee prunes when the dictionary holds none of its values. A row
+/// group that reaches dictionary pruning has min/max statistics that do not rule
+/// those values out, so only the dictionary can tell.
+///
+/// A `NotIn` guarantee prunes only when every value in the row group is
+/// excluded. A minimum or maximum outside the excluded set disproves that: for
+/// `s != ''`, any row group whose minimum and maximum are not both `''`.
+/// Skipping a read can only forgo pruning, never change query results.
+pub(crate) fn dictionary_may_prune<'a>(
+    guarantees: impl IntoIterator<Item = &'a LiteralGuarantee>,
+    col_meta: &ColumnChunkMetaData,
+) -> bool {
+    guarantees
+        .into_iter()
+        .any(|guarantee| match guarantee.guarantee {
+            Guarantee::In => true,
+            Guarantee::NotIn => !holds_value_outside(&guarantee.literals, col_meta),
+        })
+}
+
+/// Returns true if `col_meta`'s min/max statistics prove that the column chunk
+/// holds a value outside `excluded`.
+///
+/// An inexact bound is assumed to be truncated the way writers truncate
+/// statistics: a minimum to a prefix of the true minimum, a maximum to a value
+/// shorter than the true maximum. Parquet readers report bounds from writers
+/// that predate the exactness flags as inexact, such as parquet-cpp 1.x.
+fn holds_value_outside<'a>(
+    excluded: impl IntoIterator<Item = &'a ScalarValue>,
+    col_meta: &ColumnChunkMetaData,
+) -> bool {
+    let Some(statistics) = col_meta.statistics() else {
+        return false;
+    };
+    let Some(excluded) = excluded
+        .into_iter()
+        .map(normalize_literal)
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    let min_outside = statistics.min_bytes_opt().is_some_and(|min| {
+        let exact = statistics.min_is_exact();
+        !excluded.iter().any(|value| {
+            if exact {
+                *value == min
+            } else {
+                value.starts_with(min)
+            }
+        })
+    });
+    let max_outside = statistics.max_bytes_opt().is_some_and(|max| {
+        let exact = statistics.max_is_exact();
+        !excluded
+            .iter()
+            .any(|value| *value == max || (!exact && value.len() > max.len()))
+    });
+    min_outside || max_outside
 }
 
 /// Returns `value` normalized to its raw byte representation, if `value` is
@@ -256,8 +321,10 @@ mod tests {
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
     use parquet::arrow::parquet_column;
     use parquet::basic::EncodingMask;
+    use parquet::data_type::ByteArray;
     use parquet::file::metadata::ColumnChunkMetaData;
     use parquet::file::properties::WriterProperties;
+    use parquet::file::statistics::{Statistics, ValueStatistics};
     use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
 
     #[test]
@@ -362,6 +429,67 @@ mod tests {
             .build()
             .unwrap();
         assert!(!is_fully_dictionary_encoded(&no_stats));
+    }
+
+    #[test]
+    fn dictionary_may_prune_unless_statistics_show_a_kept_value() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("s", DataType::Utf8, false)]);
+        let schema_descr = SchemaDescriptor::new(Arc::new(
+            SchemaType::group_type_builder("schema")
+                .with_fields(vec![Arc::new(
+                    SchemaType::primitive_type_builder("s", Type::BYTE_ARRAY).build()?,
+                )])
+                .build()?,
+        ));
+        let chunk = |min: &str, max: &str, exact: bool| {
+            let statistics = Statistics::ByteArray(
+                ValueStatistics::new(
+                    Some(ByteArray::from(min)),
+                    Some(ByteArray::from(max)),
+                    None,
+                    Some(0),
+                    false,
+                )
+                .with_min_is_exact(exact)
+                .with_max_is_exact(exact),
+            );
+            ColumnChunkMetaData::builder(schema_descr.column(0))
+                .set_statistics(statistics)
+                .build()
+        };
+        let may_prune = |expr: Expr, chunk: &ColumnChunkMetaData| {
+            let guarantees = LiteralGuarantee::analyze(&logical2physical(
+                &expr,
+                &Arc::new(schema.clone()),
+            ));
+            dictionary_may_prune(&guarantees, chunk)
+        };
+
+        let not_empty = col("s").not_eq(lit(""));
+        assert!(!may_prune(not_empty.clone(), &chunk("", "zebra", true)?));
+        // A maximum cannot be truncated from a shorter value, so even an
+        // inexact "zebra" proves a non-empty value is present.
+        assert!(!may_prune(not_empty.clone(), &chunk("", "zebra", false)?));
+        assert!(may_prune(not_empty, &chunk("", "", true)?));
+
+        let not_in = col("s").in_list(vec![lit("a"), lit("z")], true);
+        assert!(may_prune(not_in.clone(), &chunk("a", "z", true)?));
+        assert!(!may_prune(not_in, &chunk("a", "m", true)?));
+
+        // Truncated bounds of a row group holding only "abcdef": its
+        // dictionary can still prune it.
+        let not_abcdef = col("s").not_eq(lit("abcdef"));
+        assert!(may_prune(not_abcdef.clone(), &chunk("abc", "abd", false)?));
+        assert!(!may_prune(not_abcdef, &chunk("abc", "abd", true)?));
+
+        // Min/max pruning has already kept this row group for `=`, and only
+        // the dictionary can tell whether "m" is among its values.
+        assert!(may_prune(col("s").eq(lit("m")), &chunk("a", "z", true)?));
+
+        let no_statistics =
+            ColumnChunkMetaData::builder(schema_descr.column(0)).build()?;
+        assert!(may_prune(col("s").not_eq(lit("a")), &no_statistics));
+        Ok(())
     }
 
     struct DictionaryFilterTest {
@@ -497,7 +625,13 @@ mod tests {
                 DictionaryStatistics::with_capacity(parquet_columns.len());
             for (column_name, column_idx) in &parquet_columns {
                 let col_meta = metadata.row_group(idx).column(*column_idx);
-                if !is_fully_dictionary_encoded(col_meta) {
+                let guarantees = pruning_predicate
+                    .literal_guarantees()
+                    .iter()
+                    .filter(|guarantee| guarantee.column.name == *column_name);
+                if !is_fully_dictionary_encoded(col_meta)
+                    || !dictionary_may_prune(guarantees, col_meta)
+                {
                     continue;
                 }
                 let dict =

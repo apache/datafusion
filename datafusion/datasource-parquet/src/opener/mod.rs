@@ -13,7 +13,9 @@ use self::early_stop::EarlyStoppingStream;
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
-use crate::dictionary_filter::{DICTIONARY_READ_CONCURRENCY, eligible_dictionary_page};
+use crate::dictionary_filter::{
+    DICTIONARY_READ_CONCURRENCY, dictionary_may_prune, eligible_dictionary_page,
+};
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
@@ -1712,10 +1714,14 @@ impl RowGroupsPrunedParquetOpen {
                 .filter_map(|idx| {
                     let columns: Vec<_> = parquet_columns
                         .iter()
-                        .filter(|(_, column_idx)| {
-                            eligible_dictionary_page(
-                                metadata.row_group(idx).column(*column_idx),
-                            )
+                        .filter(|(column_name, column_idx)| {
+                            let col_meta = metadata.row_group(idx).column(*column_idx);
+                            let guarantees =
+                                predicate.literal_guarantees().iter().filter(
+                                    |guarantee| guarantee.column.name == *column_name,
+                                );
+                            eligible_dictionary_page(col_meta)
+                                && dictionary_may_prune(guarantees, col_meta)
                         })
                         .cloned()
                         .collect();
@@ -4618,6 +4624,106 @@ mod test {
                 counter_metric_value(&metrics, "predicate_evaluation_errors"),
                 case.expected_errors,
                 "predicate_evaluation_errors, case {case_idx}"
+            );
+        }
+        Ok(())
+    }
+
+    /// A `!=` or `NOT IN` predicate is pruned by a dictionary only when the
+    /// row group holds nothing but excluded values, so no dictionary reader is
+    /// requested when min/max statistics show a value the predicate keeps.
+    #[tokio::test]
+    async fn dictionary_not_read_when_statistics_show_a_kept_value() -> Result<()> {
+        use arrow::array::StringArray;
+
+        struct Case {
+            statistics: EnabledStatistics,
+            predicate: Expr,
+            expected_calls: usize,
+            expected_rows: usize,
+            expected_pruned: usize,
+        }
+        // Four row groups of 16 rows holding only "a" and "z".
+        let cases = [
+            Case {
+                statistics: EnabledStatistics::Chunk,
+                predicate: col("s").not_eq(lit("a")),
+                expected_calls: 1,
+                expected_rows: 64,
+                expected_pruned: 0,
+            },
+            Case {
+                statistics: EnabledStatistics::None,
+                predicate: col("s").not_eq(lit("a")),
+                expected_calls: 5,
+                expected_rows: 64,
+                expected_pruned: 0,
+            },
+            Case {
+                statistics: EnabledStatistics::Chunk,
+                predicate: col("s").in_list(vec![lit("a"), lit("z")], true),
+                expected_calls: 5,
+                expected_rows: 0,
+                expected_pruned: 4,
+            },
+        ];
+
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        for (case_idx, case) in cases.into_iter().enumerate() {
+            let values = (0..64)
+                .map(|i| if i % 2 == 0 { "a" } else { "z" })
+                .collect::<Vec<_>>();
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(StringArray::from(values))],
+            )?;
+            let properties = WriterProperties::builder()
+                .set_max_row_group_row_count(Some(16))
+                .set_dictionary_enabled(true)
+                .set_statistics_enabled(case.statistics)
+                .build();
+            let mut out = BytesMut::new().writer();
+            let mut writer =
+                ArrowWriter::try_new(&mut out, Arc::clone(&schema), Some(properties))?;
+            writer.write(&batch)?;
+            writer.close()?;
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let path = Path::from("dictionary.parquet");
+            store.put(&path, out.into_inner().freeze().into()).await?;
+            let file = PartitionedFile::from(store.head(&path).await?);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let factory = Arc::new(CountingDictionaryReaderFactory {
+                inner: DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
+                calls: Arc::clone(&calls),
+                fail_create_from: usize::MAX,
+                fail_reads: false,
+            });
+            let metrics = ExecutionPlanMetricsSet::new();
+            let predicate = logical2physical(&case.predicate, &schema);
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(store)
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(predicate)
+                .with_dictionary_filter(true)
+                .with_metrics(metrics.clone())
+                .with_parquet_file_reader_factory(factory)
+                .build();
+            let batches = open_file(&morselizer, file)
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+
+            let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+            assert_eq!(rows, case.expected_rows, "rows, case {case_idx}");
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                case.expected_calls,
+                "reader calls, case {case_idx}"
+            );
+            assert_eq!(
+                dictionary_pruning_metrics(&metrics),
+                (case.expected_pruned, 4 - case.expected_pruned),
+                "dictionary pruning metrics, case {case_idx}"
             );
         }
         Ok(())
