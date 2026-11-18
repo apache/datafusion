@@ -2054,6 +2054,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 TableConstraint::Check { .. } => {
                     _plan_err!("Check constraints are not currently supported")
                 }
+                TableConstraint::NotNull(_) => {
+                    _plan_err!(
+                        "Table-level NOT NULL constraints are not currently supported"
+                    )
+                }
                 TableConstraint::Index { .. } => {
                     _plan_err!("Indexes are not currently supported")
                 }
