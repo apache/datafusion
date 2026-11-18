@@ -258,8 +258,8 @@ select a, p from null_part_write order by a;
 statement ok
 set datafusion.execution.listing_table_hive_default_partition_name = '__HIVE_DEFAULT_PARTITION__';
 
-# A root filename cannot supply an integer partition value. Previously this
-# attempted to cast "2025.parquet" to INT and failed the query; it is now skipped.
+# A root filename cannot supply an integer partition value, so the stray
+# year=2025.parquet below is skipped instead of being cast to INT.
 query I
 copy (values(7))
 to 'test_files/scratch/listing_table_partitions/filename_partition_int/year=2024/data.parquet';
@@ -319,9 +319,6 @@ to 'test_files/scratch/listing_table_partitions/filename_partition/year=2024/mon
 ----
 1
 
-statement ok
-set datafusion.runtime.list_files_cache_limit = '0K';
-
 query ITT
 select column1, year, month from filename_partition order by column1;
 ----
@@ -332,6 +329,9 @@ query I
 select count(*) from filename_partition where month = '01';
 ----
 2
+
+statement ok
+RESET datafusion.runtime.list_files_cache_limit;
 
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema;

@@ -578,6 +578,18 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_partitions_for_path_with_too_few_directories() {
+        assert_eq!(
+            None,
+            parse_partitions_for_path(
+                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
+                &Path::from("bucket/mytable/mypartition=v1/otherpartition=v2.csv"),
+                vec!["mypartition", "otherpartition", "thirdpartition"]
+            )
+        );
+    }
+
+    #[test]
     fn test_parse_partitions_for_path() {
         assert_eq!(
             Some(vec![] as Vec<Cow<'_, str>>),
