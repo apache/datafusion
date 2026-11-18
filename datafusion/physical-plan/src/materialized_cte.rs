@@ -1188,6 +1188,86 @@ mod tests {
         Ok(())
     }
 
+    /// Scans with different projections, one of them reordered, read a
+    /// multi-column body whose prefix is spilled. Each scan returns its
+    /// columns, with its own schema, for every row in order.
+    #[tokio::test]
+    async fn spill_replay_with_scan_projections() -> Result<()> {
+        let memory_limit = 60_000;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let rows = 10_000;
+        let batches = (0..10)
+            .map(|i| {
+                let range = || i * 1000..(i + 1) * 1000;
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from_iter_values(range())),
+                        Arc::new(Int32Array::from_iter_values(range().map(|v| -v))),
+                        Arc::new(Int32Array::from_iter_values(range().map(|v| 2 * v))),
+                    ],
+                )
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let body = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
+        let _exec = MaterializedCteExec::new(
+            body,
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+            Arc::clone(&buffer),
+        );
+        let scan = |projection: Vec<usize>| {
+            let projected = Arc::new(schema.project(&projection).unwrap());
+            let scan = MaterializedCteScanExec::new(0, "c", Arc::clone(&projected), 1)
+                .with_projection(Some(projection));
+            scan.check_body_schema(&schema).unwrap();
+            (projected, scan.bind(Arc::clone(&buffer)))
+        };
+        let scans = [scan(vec![2, 0]), scan(vec![1]), scan(vec![0, 1, 2])];
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(memory_limit, 1.0)
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        let mut once = buffer.materialize(Arc::clone(&context))?;
+        let output = std::future::poll_fn(|cx| once.get_shared(cx)).await?;
+        assert!(
+            !output.partitions[0].spill_files.is_empty(),
+            "the prefix was not spilled"
+        );
+        drop((once, output));
+
+        let expected = |column: &str| -> Vec<i32> {
+            match column {
+                "a" => (0..rows).collect(),
+                "b" => (0..rows).map(|v| -v).collect(),
+                "c" => (0..rows).map(|v| 2 * v).collect(),
+                _ => unreachable!(),
+            }
+        };
+        for (projected, scan) in scans {
+            let batches = collect(scan.execute(0, Arc::clone(&context))?).await?;
+            assert!(batches.iter().all(|b| b.schema() == projected));
+            let num_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(num_rows, rows as usize);
+            for (i, field) in projected.fields().iter().enumerate() {
+                let values: Vec<i32> = batches
+                    .iter()
+                    .flat_map(|b| {
+                        let array = b.column(i).as_any().downcast_ref::<Int32Array>();
+                        array.unwrap().values().to_vec()
+                    })
+                    .collect();
+                assert_eq!(values, expected(field.name()), "column {}", field.name());
+            }
+        }
+        Ok(())
+    }
+
     /// The first batch is larger than the batches on disk. To move it to disk
     /// whole would raise the memory that each scan needs to decode a batch
     /// above the memory limit, so it is written in pieces.

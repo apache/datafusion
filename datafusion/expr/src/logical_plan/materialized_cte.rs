@@ -382,7 +382,8 @@ mod tests {
     use crate::logical_plan::builder::LogicalPlanBuilder;
     use crate::{EmptyRelation, exists};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::DFSchema;
+    use datafusion_common::{Constraint, Constraints, DFSchema, FunctionalDependencies};
+    use std::collections::HashMap;
 
     fn empty(produce_one_row: bool) -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -545,6 +546,74 @@ mod tests {
         // A scan cannot lose a column that it reads.
         assert!(all.with_body_columns(&kept).is_err());
         assert!(bd.with_body_columns(&[1, 2]).is_err());
+        Ok(())
+    }
+
+    /// A schema with field and schema metadata, mixed nullability, and a
+    /// primary key on `c`, which is at index 2.
+    fn attributed_schema() -> DFSchemaRef {
+        let field = |name: &str, data_type, nullable| {
+            Field::new(name, data_type, nullable)
+                .with_metadata(HashMap::from([("k".to_string(), name.to_string())]))
+        };
+        let schema = Schema::new_with_metadata(
+            vec![
+                field("a", DataType::Int32, true),
+                field("b", DataType::Utf8, false),
+                field("c", DataType::Float64, false),
+                field("d", DataType::Boolean, true),
+            ],
+            HashMap::from([("s".to_string(), "v".to_string())]),
+        );
+        let dependencies = FunctionalDependencies::new_from_constraints(
+            Some(&Constraints::new_unverified(vec![Constraint::PrimaryKey(
+                vec![2],
+            )])),
+            4,
+        );
+        Arc::new(
+            DFSchema::try_from_qualified_schema("c", &schema)
+                .unwrap()
+                .with_functional_dependencies(dependencies)
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn scan_projection_keeps_schema_attributes() -> Result<()> {
+        let id = MaterializedCteId::next();
+        let body = attributed_schema();
+        let all = MaterializedCteScan::new(id, "c", Arc::clone(&body));
+
+        // `[3, 2, 1]` then `[1, 2]` selects `c` and `b`, in that order.
+        let cb = all.with_projection(&[3, 2, 1])?.with_projection(&[1, 2])?;
+        assert_eq!(cb.projection(), Some([2, 1].as_slice()));
+        let expected = Schema::new_with_metadata(
+            vec![
+                body.field(2).as_ref().clone(),
+                body.field(1).as_ref().clone(),
+            ],
+            body.metadata().clone(),
+        );
+        assert_eq!(cb.schema().as_arrow(), &expected);
+        assert!(!cb.schema().field(0).is_nullable());
+        assert_eq!(cb.schema().field(0).metadata()["k"], "c");
+        // The primary key moves from index 2 to index 0.
+        let dependencies = cb.schema().functional_dependencies();
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies.iter().next().unwrap().source_indices, vec![0]);
+
+        // The body keeps `b`, `c` and `d`. The scan schema does not change.
+        let kept = [1, 2, 3];
+        let new_body = project_schema(&body, &kept)?;
+        let new_cb = cb.with_body_columns(&kept)?;
+        assert_eq!(new_cb.projection(), Some([1, 0].as_slice()));
+        assert_eq!(new_cb.schema(), cb.schema());
+        assert_eq!(
+            new_cb.schema().functional_dependencies(),
+            cb.schema().functional_dependencies()
+        );
+        new_cb.check_body_schema(&new_body)?;
         Ok(())
     }
 
