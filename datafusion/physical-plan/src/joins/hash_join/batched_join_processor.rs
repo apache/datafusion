@@ -389,7 +389,9 @@ impl BatchedJoinProcessor {
             }
         };
 
-        // Update metrics `probe_hit_rate` and `avg_fanout``
+        // Pairs are ordered by probe row. A probe row whose matches span a chunk
+        // boundary is the last row of the previous chunk and the first row of this
+        // one, so `probe_hit_rate` and `avg_fanout` count it only once.
         let mut matched_probe_rows = count_distinct_sorted_indices(&probe_indices);
         if let (Some(&first), Some(&last)) = (
             probe_indices.values().first(),
