@@ -12,6 +12,7 @@ use self::early_stop::EarlyStoppingStream;
 #[cfg(feature = "parquet_encryption")]
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
+use crate::bloom_filter::BloomFilterStatistics;
 use crate::decoder_projection::DecoderProjection;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::page_filter::PagePruningAccessPlanFilter;
@@ -1523,12 +1524,23 @@ impl RowGroupsPrunedParquetOpen {
                 reader_metadata,
             );
 
-            let parquet_columns =
-                RowGroupAccessPlanFilter::prepare_bloom_column_guarantees(
-                    predicate,
-                    builder.parquet_schema(),
-                    &prepared.physical_file_schema,
-                );
+            let parquet_columns = predicate
+                .literal_columns()
+                .into_iter()
+                .filter_map(|column_name| {
+                    let (column_idx, _) = parquet_column(
+                        builder.parquet_schema(),
+                        &prepared.physical_file_schema,
+                        &column_name,
+                    )?;
+                    Some((
+                        column_name,
+                        column_idx,
+                        builder.parquet_schema().column(column_idx).physical_type(),
+                        builder.parquet_schema().column(column_idx).type_length(),
+                    ))
+                })
+                .collect::<Vec<_>>();
 
             let row_group_indexes: Vec<usize> =
                 self.row_groups.row_group_indexes().collect();
@@ -1538,11 +1550,15 @@ impl RowGroupsPrunedParquetOpen {
                 if self.row_groups.access_plan().is_fully_matched(idx) {
                     continue;
                 }
-                let mut any_filter_loaded = false;
+                let mut bloom_filter_stats =
+                    BloomFilterStatistics::with_capacity(parquet_columns.len());
+                let mut pruned = false;
 
-                for col_guarantee in &parquet_columns {
+                for (column_name, column_idx, physical_type, type_length) in
+                    &parquet_columns
+                {
                     let bf: Sbbf = match builder
-                        .get_row_group_column_bloom_filter(idx, col_guarantee.column_idx)
+                        .get_row_group_column_bloom_filter(idx, *column_idx)
                         .await
                     {
                         Ok(Some(bf)) => bf,
@@ -1553,19 +1569,29 @@ impl RowGroupsPrunedParquetOpen {
                             continue;
                         }
                     };
-                    any_filter_loaded = true;
 
-                    if self.row_groups.prune_row_group_with_bloom_filter(
+                    bloom_filter_stats.insert(
+                        column_name.clone(),
+                        bf,
+                        *physical_type,
+                        *type_length,
+                    );
+
+                    if self.row_groups.prune_row_group_with_bloom_filters(
                         idx,
-                        col_guarantee,
-                        &bf,
+                        predicate,
+                        &bloom_filter_stats,
                         &prepared.file_metrics,
                     ) {
+                        pruned = true;
                         break;
                     }
                 }
 
-                if any_filter_loaded && self.row_groups.access_plan().should_scan(idx) {
+                if !pruned
+                    && !bloom_filter_stats.is_empty()
+                    && self.row_groups.access_plan().should_scan(idx)
+                {
                     prepared
                         .file_metrics
                         .row_groups_pruned_bloom_filter
