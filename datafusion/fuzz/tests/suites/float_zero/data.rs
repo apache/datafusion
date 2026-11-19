@@ -2,7 +2,13 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! The `raw` and `canon` tables.
+//! The two tables each query runs on:
+//!
+//! - `raw` has some `-0.0` values.
+//! - `canon`, short for "canonical", is the same table with every `-0.0`
+//!   replaced by `0.0`, so each zero is written the same way.
+//!
+//! A query must give the same result on both.
 
 use std::sync::Arc;
 

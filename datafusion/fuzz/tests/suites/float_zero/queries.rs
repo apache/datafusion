@@ -8,7 +8,7 @@ use super::settings::Setting;
 
 /// A query. `{t}` is replaced by the table name and `{z}` by a zero.
 #[derive(Debug)]
-pub struct Template {
+pub struct Query {
     pub name: &'static str,
     pub sql: &'static str,
     /// Whether the ORDER BY fixes the order of every row. If not, rows are
@@ -25,7 +25,7 @@ pub struct KnownFailure {
     pub issue: &'static str,
 }
 
-impl Template {
+impl Query {
     /// The query for `table`, with each zero written as `zero`.
     pub fn render(&self, table: &str, zero: &str) -> String {
         self.sql.replace("{t}", table).replace("{z}", zero)
@@ -39,19 +39,34 @@ impl Template {
             .map(|known| known.issue)
     }
 
-    const fn fails(self, applies: fn(&Setting) -> bool, issue: &'static str) -> Self {
-        Template {
+    const fn ordered(self) -> Self {
+        Query {
+            ordered: true,
+            ..self
+        }
+    }
+
+    const fn fails(self, issue: &'static str) -> Self {
+        self.fails_when(always, issue)
+    }
+
+    const fn fails_when(
+        self,
+        applies: fn(&Setting) -> bool,
+        issue: &'static str,
+    ) -> Self {
+        Query {
             known_failure: Some(KnownFailure { applies, issue }),
             ..self
         }
     }
 }
 
-const fn template(name: &'static str, sql: &'static str, ordered: bool) -> Template {
-    Template {
+const fn query(name: &'static str, sql: &'static str) -> Query {
+    Query {
         name,
         sql,
-        ordered,
+        ordered: false,
         known_failure: None,
     }
 }
@@ -76,131 +91,83 @@ const SORT_MERGE_JOIN: &str = "https://github.com/apache/datafusion/issues/26115
 ///   to break ties. `rank` and RANGE frames keep their ties on purpose.
 /// - No math on float columns, which can turn `0.0` into `-0.0`, and no
 ///   functions that can tell the two apart, like `1 / a`.
-/// - `ordered` only when the ORDER BY fixes the order of every row.
-pub const TEMPLATES: &[Template] = &[
+/// - `.ordered()` only when the ORDER BY fixes the order of every row.
+pub const QUERIES: &[Query] = &[
     // Sort
-    template("order_by_a_b", "SELECT a, b FROM {t} ORDER BY a, b", true)
-        .fails(always, FLOAT_SEMANTICS),
-    template(
-        "order_by_a_b_limit",
-        "SELECT a, b FROM {t} ORDER BY a, b LIMIT 1",
-        true,
-    )
-    .fails(always, FLOAT_SEMANTICS),
-    template("order_by_k", "SELECT id FROM {t} ORDER BY k, id", true)
-        .fails(always, FLOAT_SEMANTICS),
+    query("order_by_a_b", "SELECT a, b FROM {t} ORDER BY a, b")
+        .ordered()
+        .fails(FLOAT_SEMANTICS),
+    query("order_by_a_b_limit", "SELECT a, b FROM {t} ORDER BY a, b LIMIT 1")
+        .ordered()
+        .fails(FLOAT_SEMANTICS),
+    query("order_by_k", "SELECT id FROM {t} ORDER BY k, id")
+        .ordered()
+        .fails(FLOAT_SEMANTICS),
     // Window
-    template(
-        "rank",
-        "SELECT id, rank() OVER (ORDER BY a) FROM {t}",
-        false,
-    )
-    .fails(always, WINDOW),
-    template(
+    query("rank", "SELECT id, rank() OVER (ORDER BY a) FROM {t}").fails(WINDOW),
+    query(
         "range_frame",
         "SELECT id, sum(b) OVER (ORDER BY a RANGE BETWEEN CURRENT ROW AND CURRENT ROW) FROM {t}",
-        false,
     )
-    .fails(always, WINDOW),
-    template(
+    .fails(WINDOW),
+    query(
         "row_number_partition",
         "SELECT id, row_number() OVER (PARTITION BY a ORDER BY id) FROM {t}",
-        false,
     )
-    .fails(always, WINDOW),
-    template(
-        "first_value",
-        "SELECT first_value(b ORDER BY a, b) FROM {t}",
-        false,
-    )
-    .fails(always, FLOAT_SEMANTICS),
-    template(
+    .fails(WINDOW),
+    query("first_value", "SELECT first_value(b ORDER BY a, b) FROM {t}")
+        .fails(FLOAT_SEMANTICS),
+    query(
         "count_distinct_window",
         "SELECT DISTINCT count(DISTINCT a) OVER () FROM {t}",
-        false,
     )
-    .fails(always, FLOAT_SEMANTICS),
+    .fails(FLOAT_SEMANTICS),
     // Aggregate
-    template("group_by_a", "SELECT count(*) FROM {t} GROUP BY a", false),
-    template("count_distinct", "SELECT count(DISTINCT a) FROM {t}", false),
-    template(
+    query("group_by_a", "SELECT count(*) FROM {t} GROUP BY a"),
+    query("count_distinct", "SELECT count(DISTINCT a) FROM {t}"),
+    query(
         "count_distinct_two",
         "SELECT count(DISTINCT a), count(DISTINCT b) FROM {t}",
-        false,
     )
-    .fails(always, FLOAT_SEMANTICS),
-    template(
+    .fails(FLOAT_SEMANTICS),
+    query(
         "distinct_on",
         "SELECT DISTINCT ON (g) g, b FROM {t} ORDER BY g, a, b",
-        true,
     )
-    .fails(always, FLOAT_SEMANTICS),
-    template("min_max_k", "SELECT min(k), max(k) FROM {t}", false)
-        .fails(always, FLOAT_SEMANTICS),
+    .ordered()
+    .fails(FLOAT_SEMANTICS),
+    query("min_max_k", "SELECT min(k), max(k) FROM {t}").fails(FLOAT_SEMANTICS),
     // Join
-    template(
-        "join_a",
-        "SELECT count(*) FROM {t} x JOIN {t} y ON x.a = y.a",
-        false,
-    ),
-    template(
-        "join_k",
-        "SELECT count(*) FROM {t} x JOIN {t} y ON x.k = y.k",
-        false,
-    )
-    .fails(sort_merge_join, SORT_MERGE_JOIN),
+    query("join_a", "SELECT count(*) FROM {t} x JOIN {t} y ON x.a = y.a"),
+    query("join_k", "SELECT count(*) FROM {t} x JOIN {t} y ON x.k = y.k")
+        .fails_when(sort_merge_join, SORT_MERGE_JOIN),
     // Expression
-    template("in_list", "SELECT id, a IN ({z}, 1.0) FROM {t}", false),
-    template(
-        "in_list_f32",
-        "SELECT id, a32 IN ({z}, 1.0) FROM {t}",
-        false,
-    ),
-    template(
+    query("in_list", "SELECT id, a IN ({z}, 1.0) FROM {t}"),
+    query("in_list_f32", "SELECT id, a32 IN ({z}, 1.0) FROM {t}"),
+    query(
         "in_list_long",
         "SELECT id, a IN ({z}, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, \
          11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0, \
          23.0, 24.0, 25.0) FROM {t}",
-        false,
     ),
-    template(
+    query(
         "case_when",
         "SELECT id, CASE a WHEN {z} THEN 'eq' ELSE 'ne' END FROM {t}",
-        false,
     )
-    .fails(always, FLOAT_SEMANTICS),
-    template("nullif", "SELECT id, nullif(a, {z}) FROM {t}", false)
-        .fails(always, FLOAT_SEMANTICS),
-    template(
+    .fails(FLOAT_SEMANTICS),
+    query("nullif", "SELECT id, nullif(a, {z}) FROM {t}").fails(FLOAT_SEMANTICS),
+    query(
         "array_has_make_array",
         "SELECT id, array_has(make_array(a), {z}), \
          array_has_any(make_array(a), make_array({z})), \
          array_has_all(make_array(a), make_array({z})) FROM {t}",
-        false,
     )
-    .fails(always, FLOAT_SEMANTICS),
-    template(
-        "array_has_k",
-        "SELECT id, array_has(k, {z}) FROM {t}",
-        false,
-    )
-    .fails(always, FLOAT_SEMANTICS),
-    template(
-        "array_position",
-        "SELECT id, array_position(k, {z}) FROM {t}",
-        false,
-    )
-    .fails(always, FLOAT_SEMANTICS),
-    template(
-        "array_replace",
-        "SELECT id, array_replace(k, {z}, 9.0) FROM {t}",
-        false,
-    )
-    .fails(always, FLOAT_SEMANTICS),
-    template(
-        "array_remove",
-        "SELECT id, array_remove(k, {z}) FROM {t}",
-        false,
-    )
-    .fails(always, FLOAT_SEMANTICS),
+    .fails(FLOAT_SEMANTICS),
+    query("array_has_k", "SELECT id, array_has(k, {z}) FROM {t}").fails(FLOAT_SEMANTICS),
+    query("array_position", "SELECT id, array_position(k, {z}) FROM {t}")
+        .fails(FLOAT_SEMANTICS),
+    query("array_replace", "SELECT id, array_replace(k, {z}, 9.0) FROM {t}")
+        .fails(FLOAT_SEMANTICS),
+    query("array_remove", "SELECT id, array_remove(k, {z}) FROM {t}")
+        .fails(FLOAT_SEMANTICS),
 ];

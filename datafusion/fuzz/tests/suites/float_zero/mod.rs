@@ -32,12 +32,12 @@ mod data;
 mod queries;
 mod settings;
 
-use queries::{TEMPLATES, Template};
+use queries::{QUERIES, Query};
 use settings::Setting;
 
 /// One query under one setting.
 pub(crate) struct Pair {
-    template: &'static Template,
+    query: &'static Query,
     setting: Setting,
     ctx: SessionContext,
 }
@@ -47,9 +47,9 @@ fn pairs(data: &data::Dataset) -> Result<Vec<Pair>> {
     let mut pairs = vec![];
     for setting in Setting::all() {
         let ctx = setting.context(data)?;
-        for template in TEMPLATES.iter().filter(|t| runs(t, &setting)) {
+        for query in QUERIES.iter().filter(|q| runs(q, &setting)) {
             pairs.push(Pair {
-                template,
+                query,
                 setting,
                 ctx: ctx.clone(),
             });
@@ -60,8 +60,8 @@ fn pairs(data: &data::Dataset) -> Result<Vec<Pair>> {
 
 /// A query without a zero in it would only repeat itself under the
 /// `negative_literals` settings.
-fn runs(template: &Template, setting: &Setting) -> bool {
-    !setting.negative_literals || template.sql.contains("{z}")
+fn runs(query: &Query, setting: &Setting) -> bool {
+    !setting.negative_literals || query.sql.contains("{z}")
 }
 
 /// Why a pair failed.
@@ -83,23 +83,23 @@ impl std::fmt::Display for Failure {
 /// Runs the query on both tables and compares the results.
 async fn check(pair: &Pair) -> Result<(), Failure> {
     let Pair {
-        template,
+        query,
         setting,
         ctx,
     } = pair;
-    let raw_sql = template.render("raw", setting.raw_zero());
-    let canon_sql = template.render("canon", "0.0");
+    let raw_sql = query.render("raw", setting.raw_zero());
+    let canon_sql = query.render("canon", "0.0");
     let describe = || {
         format!(
             "{} under {setting:?}\n  raw:   {raw_sql}\n  canon: {canon_sql}",
-            template.name
+            query.name
         )
     };
 
-    let (canon, raw) = join(run_sql(&canon_sql, ctx), run_sql(&raw_sql, ctx)).await;
-    let (mut canon, mut raw) = match (canon, raw) {
-        (Ok(canon), Ok(raw)) => (format_rows(&canon), format_rows(&raw)),
-        (canon, raw) => {
+    let (raw, canon) = join(run_sql(&raw_sql, ctx), run_sql(&canon_sql, ctx)).await;
+    let (mut raw, mut canon) = match (raw, canon) {
+        (Ok(raw), Ok(canon)) => (format_rows(&raw), format_rows(&canon)),
+        (raw, canon) => {
             let outcome = |r: &Result<_>| match r {
                 Ok(_) => "ok".to_string(),
                 Err(e) => format!("fails: {e}"),
@@ -113,14 +113,14 @@ async fn check(pair: &Pair) -> Result<(), Failure> {
         }
     };
 
-    if !template.ordered {
-        canon.sort_unstable();
+    if !query.ordered {
         raw.sort_unstable();
+        canon.sort_unstable();
     }
-    if canon == raw {
+    if raw == canon {
         return Ok(());
     }
-    let diff = first_difference(&raw, &canon, template.ordered);
+    let diff = first_difference(&raw, &canon, query.ordered);
     Err(Failure::Mismatch(format!("{}\n{diff}", describe())))
 }
 
@@ -185,7 +185,7 @@ impl FuzzTest for FloatZeroFuzzer {
         let pair = pairs
             .choose(&mut StdRng::seed_from_u64(seed))
             .ok_or_else(|| exec_datafusion_err!("no pair runs"))?;
-        match (check(pair).await, pair.template.known_issue(&pair.setting)) {
+        match (check(pair).await, pair.query.known_issue(&pair.setting)) {
             (Ok(()), _) | (Err(Failure::Mismatch(_)), Some(_)) => Ok(()),
             (Err(failure), None) => exec_err!("{failure}"),
             (Err(failure), Some(issue)) => exec_err!(
@@ -201,10 +201,8 @@ impl FuzzTest for FloatZeroFuzzer {
 async fn float_zero_fixed() {
     let mut errors = vec![];
     for (pair, result) in check_all(&data::fixed()).await {
-        let Pair {
-            template, setting, ..
-        } = pair;
-        match (result, template.known_issue(&setting)) {
+        let Pair { query, setting, .. } = pair;
+        match (result, query.known_issue(&setting)) {
             (Ok(()), None) | (Err(Failure::Mismatch(_)), Some(_)) => {}
             (Err(failure), None) => errors.push(failure.to_string()),
             (Err(Failure::Error(e)), Some(issue)) => errors.push(format!(
@@ -212,7 +210,7 @@ async fn float_zero_fixed() {
             )),
             (Ok(()), Some(issue)) => errors.push(format!(
                 "{} under {setting:?} now passes, remove its known failure ({issue})",
-                template.name
+                query.name
             )),
         }
     }
@@ -238,14 +236,14 @@ async fn check_all(data: &data::Dataset) -> Vec<(Pair, Result<(), Failure>)> {
 /// A known failure that matches no setting would never be checked.
 #[test]
 fn known_failures_apply() {
-    for template in TEMPLATES {
+    for query in QUERIES {
         let applies = Setting::all()
             .iter()
-            .any(|s| runs(template, s) && template.known_issue(s).is_some());
+            .any(|s| runs(query, s) && query.known_issue(s).is_some());
         assert!(
-            template.known_failure.is_none() || applies,
+            query.known_failure.is_none() || applies,
             "the known failure of {} applies to no setting that runs",
-            template.name
+            query.name
         );
     }
 }
@@ -256,7 +254,7 @@ fn known_failures_apply() {
 async fn float_zero_negative_literal() {
     let mut errors = vec![];
     for Pair {
-        template,
+        query,
         setting,
         ctx,
     } in pairs(&data::fixed()).unwrap()
@@ -264,13 +262,13 @@ async fn float_zero_negative_literal() {
         if !setting.negative_literals {
             continue;
         }
-        let sql = template.render("raw", setting.raw_zero());
+        let sql = query.render("raw", setting.raw_zero());
         let plan = ctx.sql(&sql).await.unwrap();
         let plan = plan.create_physical_plan().await.unwrap();
         if !has_negative_zero_literal(&plan) {
             errors.push(format!(
                 "{} under {setting:?}: no `-0.0` literal in the plan of {sql}\n{}",
-                template.name,
+                query.name,
                 displayable(plan.as_ref()).indent(true)
             ));
         }
