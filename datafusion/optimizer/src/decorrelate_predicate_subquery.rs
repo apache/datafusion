@@ -1310,7 +1310,6 @@ fn build_join_with_count_bug(
                 .data()
         })
         .transpose()?;
-    let pull_up_having_expr = pull_up_having_expr.as_ref();
 
     let joined = LogicalPlanBuilder::from(left.clone())
         .join_on(sub_query_alias, JoinType::Left, join_filter_opt)?
@@ -1325,7 +1324,9 @@ fn build_join_with_count_bug(
 
     let indicator_col = Expr::Column(Column::new(Some(alias), UN_MATCHED_ROW_INDICATOR));
 
-    let having_arm = pull_up_having_expr.map(|f| f.clone().is_not_true());
+    let having_arm = pull_up_having_expr
+        .as_ref()
+        .map(|f| f.clone().is_not_true());
 
     let mut expr_rewrite = TypeCoercionRewriter::new(joined.schema());
 
@@ -1335,7 +1336,6 @@ fn build_join_with_count_bug(
     // into it, so it cannot be assumed.
     let unmatched_having_default = match pull_up_having_expr {
         Some(f) => f
-            .clone()
             .transform_up(|e| {
                 if let Expr::Column(Column { name, .. }) = &e
                     && let Some(default_value) = expr_map.get(name)
@@ -1350,7 +1350,7 @@ fn build_join_with_count_bug(
     };
 
     // EXISTS is true by default (the groupless aggregate always
-    // produces a row), unless one of three cases holds:
+    // produces a row), unless one of two cases holds:
     // (1) the outer row joined against an inner group whose HAVING
     //     predicate failed,
     // (2) an unmatched outer row's own default aggregate values fail

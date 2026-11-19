@@ -105,23 +105,25 @@ fn build_set_comparison_subquery(
         Box::new(right_expr),
     ));
 
-    let true_exists =
-        exists_subquery(&subquery, Expr::IsTrue(Box::new(comparison.clone())))?;
     let null_exists =
         exists_subquery(&subquery, Expr::IsNull(Box::new(comparison.clone())))?;
 
     let result_expr = match quantifier {
-        SetQuantifier::Any => Expr::Case(expr::Case {
-            expr: None,
-            when_then_expr: vec![
-                (Box::new(true_exists), Box::new(lit(true))),
-                (
-                    Box::new(null_exists),
-                    Box::new(Expr::Literal(ScalarValue::Boolean(None), None)),
-                ),
-            ],
-            else_expr: Some(Box::new(lit(false))),
-        }),
+        SetQuantifier::Any => {
+            let true_exists =
+                exists_subquery(&subquery, Expr::IsTrue(Box::new(comparison)))?;
+            Expr::Case(expr::Case {
+                expr: None,
+                when_then_expr: vec![
+                    (Box::new(true_exists), Box::new(lit(true))),
+                    (
+                        Box::new(null_exists),
+                        Box::new(Expr::Literal(ScalarValue::Boolean(None), None)),
+                    ),
+                ],
+                else_expr: Some(Box::new(lit(false))),
+            })
+        }
         SetQuantifier::All => {
             let false_exists =
                 exists_subquery(&subquery, Expr::IsFalse(Box::new(comparison)))?;
