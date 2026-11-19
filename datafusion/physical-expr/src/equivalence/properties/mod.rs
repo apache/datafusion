@@ -1577,15 +1577,24 @@ impl EquivalenceProperties {
     /// Returns an optional `Constraints` object containing only the constraints
     /// that are valid for the projected columns (if any exists).
     fn projected_constraints(&self, mapping: &ProjectionMapping) -> Option<Constraints> {
-        let indices = mapping
-            .iter()
-            .flat_map(|(_, targets)| {
-                targets.iter().filter_map(|(target, _)| {
-                    target.downcast_ref::<Column>().map(|c| c.index())
-                })
-            })
-            .collect::<Vec<_>>();
-        self.constraints.project(&indices)
+        // Source column index of each output column, `usize::MAX` if the
+        // output is not a plain column
+        let mut source_indices = vec![];
+        for (source, targets) in mapping.iter() {
+            let Some(source) = source.downcast_ref::<Column>() else {
+                continue;
+            };
+            for (target, _) in targets.iter() {
+                if let Some(target) = target.downcast_ref::<Column>() {
+                    let index = target.index();
+                    if source_indices.len() <= index {
+                        source_indices.resize(index + 1, usize::MAX);
+                    }
+                    source_indices[index] = source.index();
+                }
+            }
+        }
+        self.constraints.project(&source_indices)
     }
 
     /// Projects these equivalence properties onto `output_schema` according to
