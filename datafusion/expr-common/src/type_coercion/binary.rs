@@ -21,7 +21,8 @@ use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType, Field, FieldRef, Fields,
     TimeUnit,
 };
-use datafusion_common::metadata::{coerced_fields_metadata, strip_extension_type};
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{
     Diagnostic, Result, Span, Spans, exec_datafusion_err, internal_datafusion_err,
     not_impl_err, plan_datafusion_err, plan_err,
@@ -997,7 +998,8 @@ fn merge_struct_fields(structs: &[&Fields], common_fields: &Fields) -> Result<Fi
                     } else {
                         let mut field =
                             (*field).clone().with_data_type(data_type.clone());
-                        strip_extension_type(field.metadata_mut());
+                        field.metadata_mut().remove(EXTENSION_TYPE_NAME_KEY);
+                        field.metadata_mut().remove(EXTENSION_TYPE_METADATA_KEY);
                         Cow::Owned(field)
                     }
                 })
