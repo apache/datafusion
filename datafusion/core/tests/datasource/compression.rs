@@ -5,42 +5,24 @@
 //! Tests for reading compressed CSV and JSON files
 
 use std::fmt::Write as _;
-use std::io::Write;
 use std::sync::Arc;
 
 use arrow::array::AsArray;
 use arrow::datatypes::Int64Type;
+use bytes::Bytes;
+use datafusion::common::file_options::file_type::{
+    DEFAULT_CSV_EXTENSION, DEFAULT_JSON_EXTENSION, GetExt,
+};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::error::Result;
 use datafusion::functions_aggregate::expr_fn::{count, sum};
 use datafusion::prelude::*;
+use futures::{StreamExt, TryStreamExt};
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
 use tempfile::TempDir;
 use url::Url;
-
-fn gzip(data: &[u8]) -> Vec<u8> {
-    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
-}
-
-fn bzip2(data: &[u8]) -> Vec<u8> {
-    let mut e = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
-}
-
-fn xz(data: &[u8]) -> Vec<u8> {
-    let mut e = liblzma::write::XzEncoder::new(Vec::new(), 6);
-    e.write_all(data).unwrap();
-    e.finish().unwrap()
-}
-
-fn zstd(data: &[u8]) -> Vec<u8> {
-    zstd::encode_all(data, 0).unwrap()
-}
 
 #[derive(Debug, Clone, Copy)]
 enum Format {
@@ -65,13 +47,6 @@ async fn concatenated_members_read_in_full() -> Result<()> {
     );
     let dir = TempDir::new()?;
 
-    type Compress = fn(&[u8]) -> Vec<u8>;
-    let codecs: [(&str, FileCompressionType, Compress); 4] = [
-        ("gz", FileCompressionType::GZIP, gzip),
-        ("bz2", FileCompressionType::BZIP2, bzip2),
-        ("xz", FileCompressionType::XZ, xz),
-        ("zst", FileCompressionType::ZSTD, zstd),
-    ];
     let mut wrong = Vec::new();
     for format in [Format::Csv, Format::NdJson, Format::JsonArray] {
         let (text, ext) = match format {
@@ -80,14 +55,14 @@ async fn concatenated_members_read_in_full() -> Result<()> {
                 for i in 0..ROWS {
                     writeln!(text, "{i}").unwrap();
                 }
-                (text, "csv")
+                (text, DEFAULT_CSV_EXTENSION)
             }
             Format::NdJson => {
                 let mut text = String::new();
                 for i in 0..ROWS {
                     writeln!(text, "{{\"a\":{i}}}").unwrap();
                 }
-                (text, "json")
+                (text, DEFAULT_JSON_EXTENSION)
             }
             Format::JsonArray => (
                 format!(
@@ -97,7 +72,7 @@ async fn concatenated_members_read_in_full() -> Result<()> {
                         .collect::<Vec<_>>()
                         .join(",\n")
                 ),
-                "json",
+                DEFAULT_JSON_EXTENSION,
             ),
         };
         // Split inside a row, so that one row spans both members.
@@ -105,10 +80,24 @@ async fn concatenated_members_read_in_full() -> Result<()> {
         assert!(!text[..split].ends_with('\n'));
         let (first, second) = text.as_bytes().split_at(split);
 
-        for (codec_ext, codec, compress) in codecs {
-            let file_ext = format!(".{ext}.{codec_ext}");
+        for codec in [
+            FileCompressionType::GZIP,
+            FileCompressionType::BZIP2,
+            FileCompressionType::XZ,
+            FileCompressionType::ZSTD,
+        ] {
+            let mut bytes = Vec::new();
+            for member in [first, second] {
+                let input = futures::stream::iter([Ok(Bytes::copy_from_slice(member))]);
+                let compressed: Vec<Bytes> = codec
+                    .convert_to_compress_stream(input.boxed())?
+                    .try_collect()
+                    .await?;
+                bytes.extend(compressed.concat());
+            }
+
+            let file_ext = format!("{ext}{}", codec.get_ext());
             let name = format!("{format:?}{file_ext}");
-            let bytes = [compress(first), compress(second)].concat();
             let local = dir.path().join(&name);
             std::fs::write(&local, &bytes)?;
             store.put(&Path::from(name.as_str()), bytes.into()).await?;
