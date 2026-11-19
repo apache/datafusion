@@ -15,35 +15,18 @@ use datafusion_common::assert_contains;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::sync::Arc;
-use test_utils::fuzz::{FuzzTest, RunConfig};
+use test_utils::fuzz::FuzzTest;
 use test_utils::stagger_batch;
 
-const SIZES: [usize; 4] = [10, 1_0000, 10_000, 100_000];
-
-/// Runs TopK on random data of one type. Case seed `k` selects the input size
-/// `SIZES[k % SIZES.len()]` and the data seed `k / SIZES.len()`.
-pub(crate) struct LimitFuzzer {
-    name: &'static str,
-    make_data: fn(usize, &mut StdRng) -> SortedData,
-}
-
-impl LimitFuzzer {
-    /// Runs each input size once. Each run uses a new random run seed.
-    pub(crate) fn run_config(&self) -> RunConfig {
-        RunConfig {
-            run_seed: None,
-            max_cases: Some(SIZES.len()),
-            time_limit: None,
-            cases_per_dataset: SIZES.len(),
-        }
-    }
-}
+/// Runs TopK on random data. Each case picks a data type, an input size, and
+/// a limit from its case seed.
+pub(crate) struct LimitFuzzer;
 
 impl FuzzTest for LimitFuzzer {
     type Dataset = ();
 
     fn name(&self) -> &str {
-        self.name
+        "sort_topk"
     }
 
     fn prepare_dataset(&self, _: u64) -> impl Future<Output = Result<()>> {
@@ -51,37 +34,22 @@ impl FuzzTest for LimitFuzzer {
     }
 
     async fn run_case(&self, _: &(), case_seed: u64) -> Result<()> {
-        let n_sizes = SIZES.len() as u64;
-        let size = SIZES[(case_seed % n_sizes) as usize];
-        let mut rng = StdRng::seed_from_u64(case_seed / n_sizes);
-        let data = (self.make_data)(size, &mut rng);
-        // test various limits including some random ones
-        for limit in [1, 3, 7, 17, 10000, rng.random_range(1..size * 2)] {
-            //  limit can be larger than the number of rows in the input
-            run_limit_test(limit, &data).await;
-        }
+        let mut rng = StdRng::seed_from_u64(case_seed);
+        let make_data = match rng.random_range(0..4) {
+            0 => SortedData::new_i32,
+            1 => SortedData::new_f64,
+            2 => SortedData::new_str,
+            _ => SortedData::new_i64str,
+        };
+        let size = [10, 1_000, 10_000, 100_000][rng.random_range(0..4)];
+        // The limit can be larger than the number of input rows.
+        let limit =
+            [1, 3, 7, 17, 10_000, rng.random_range(1..size * 2)][rng.random_range(0..6)];
+        let data = make_data(size, &mut rng);
+        run_limit_test(limit, &data).await;
         Ok(())
     }
 }
-
-pub(crate) static FUZZERS: [LimitFuzzer; 4] = [
-    LimitFuzzer {
-        name: "test_sort_topk_i32",
-        make_data: SortedData::new_i32,
-    },
-    LimitFuzzer {
-        name: "test_sort_topk_f64",
-        make_data: SortedData::new_f64,
-    },
-    LimitFuzzer {
-        name: "test_sort_topk_str",
-        make_data: SortedData::new_str,
-    },
-    LimitFuzzer {
-        name: "test_sort_topk_i64str",
-        make_data: SortedData::new_i64str,
-    },
-];
 
 /// The data column(s) to use for the TopK test
 ///
