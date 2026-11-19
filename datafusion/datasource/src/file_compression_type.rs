@@ -204,6 +204,9 @@ impl FileCompressionType {
     }
 
     /// Given a `Stream`, create a `Stream` which data are decompressed with `FileCompressionType`.
+    ///
+    /// Input made of several concatenated members (streams or frames) is
+    /// decoded in full, the same as by [`Self::convert_read`].
     pub fn convert_stream<'a>(
         &self,
         s: BoxStream<'a, Result<Bytes>>,
@@ -219,17 +222,32 @@ impl FileCompressionType {
                     .boxed()
             }
             #[cfg(feature = "compression")]
-            BZIP2 => ReaderStream::new(AsyncBzDecoder::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
-                .boxed(),
+            BZIP2 => {
+                let mut decoder = AsyncBzDecoder::new(StreamReader::new(s));
+                decoder.multiple_members(true);
+
+                ReaderStream::new(decoder)
+                    .map_err(DataFusionError::from)
+                    .boxed()
+            }
             #[cfg(feature = "compression")]
-            XZ => ReaderStream::new(AsyncXzDecoder::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
-                .boxed(),
+            XZ => {
+                let mut decoder = AsyncXzDecoder::new(StreamReader::new(s));
+                decoder.multiple_members(true);
+
+                ReaderStream::new(decoder)
+                    .map_err(DataFusionError::from)
+                    .boxed()
+            }
             #[cfg(feature = "compression")]
-            ZSTD => ReaderStream::new(AsyncZstdDecoer::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
-                .boxed(),
+            ZSTD => {
+                let mut decoder = AsyncZstdDecoer::new(StreamReader::new(s));
+                decoder.multiple_members(true);
+
+                ReaderStream::new(decoder)
+                    .map_err(DataFusionError::from)
+                    .boxed()
+            }
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
                 return Err(DataFusionError::NotImplemented(
@@ -354,5 +372,143 @@ mod tests {
         assert_eq!(string_value, "42\n42\n");
 
         Ok(())
+    }
+
+    #[cfg(feature = "compression")]
+    const CODECS: [FileCompressionType; 4] = [
+        FileCompressionType::GZIP,
+        FileCompressionType::BZIP2,
+        FileCompressionType::XZ,
+        FileCompressionType::ZSTD,
+    ];
+
+    /// Compresses `data` as one member, with the codec's reference encoder.
+    #[cfg(feature = "compression")]
+    fn compress(codec: FileCompressionType, data: &[u8]) -> Vec<u8> {
+        use datafusion_common::parsers::CompressionTypeVariant::*;
+        use std::io::Write;
+
+        match codec.variant {
+            GZIP => {
+                let mut e = flate2::write::GzEncoder::new(
+                    Vec::new(),
+                    flate2::Compression::default(),
+                );
+                e.write_all(data).unwrap();
+                e.finish().unwrap()
+            }
+            BZIP2 => {
+                let mut e = bzip2::write::BzEncoder::new(
+                    Vec::new(),
+                    bzip2::Compression::default(),
+                );
+                e.write_all(data).unwrap();
+                e.finish().unwrap()
+            }
+            XZ => {
+                let mut e = liblzma::write::XzEncoder::new(Vec::new(), 6);
+                e.write_all(data).unwrap();
+                e.finish().unwrap()
+            }
+            ZSTD => zstd::encode_all(data, 0).unwrap(),
+            UNCOMPRESSED => data.to_vec(),
+        }
+    }
+
+    #[cfg(feature = "compression")]
+    fn decode_read(
+        codec: FileCompressionType,
+        file: &[u8],
+    ) -> Result<Vec<u8>, DataFusionError> {
+        use std::io::Read;
+
+        let mut decoded = Vec::new();
+        codec
+            .convert_read(std::io::Cursor::new(file.to_vec()))?
+            .read_to_end(&mut decoded)?;
+        Ok(decoded)
+    }
+
+    #[cfg(feature = "compression")]
+    async fn decode_stream(
+        codec: FileCompressionType,
+        chunks: Vec<Vec<u8>>,
+    ) -> Result<Vec<u8>, DataFusionError> {
+        let input = futures::stream::iter(chunks.into_iter().map(|c| Ok(Bytes::from(c))));
+        let mut output = codec.convert_stream(input.boxed())?;
+        let mut decoded = Vec::new();
+        while let Some(chunk) = output.next().await {
+            decoded.extend_from_slice(&chunk?);
+        }
+        Ok(decoded)
+    }
+
+    /// A file of concatenated members, such as `cat a.zst b.zst` produces,
+    /// decodes to every member through both `convert_read` and
+    /// `convert_stream`, wherever the stream's chunks split the members.
+    #[cfg(feature = "compression")]
+    #[tokio::test]
+    async fn concatenated_members_decode_in_full() -> Result<(), DataFusionError> {
+        let lines = |range: std::ops::Range<u32>| -> Vec<u8> {
+            range.flat_map(|i| format!("{i}\n").into_bytes()).collect()
+        };
+        let members = [lines(0..5_000), vec![], lines(5_000..7_000)];
+        let expected = members.concat();
+
+        let mut wrong = Vec::new();
+        for codec in CODECS {
+            let compressed: Vec<Vec<u8>> =
+                members.iter().map(|m| compress(codec, m)).collect();
+            let file = compressed.concat();
+
+            let read = decode_read(codec, &file)?;
+            if read != expected {
+                wrong.push(format!("{codec:?} convert_read: {} bytes", read.len()));
+            }
+
+            let mut chunkings = vec![
+                ("one chunk", vec![file.clone()]),
+                ("one chunk per member", compressed),
+            ];
+            for size in [1, 13] {
+                let chunks = file.chunks(size).map(<[u8]>::to_vec).collect();
+                chunkings.push(("fixed-size chunks", chunks));
+            }
+            for (chunking, chunks) in chunkings {
+                let chunk_count = chunks.len();
+                let streamed = decode_stream(codec, chunks).await?;
+                if streamed != expected {
+                    wrong.push(format!(
+                        "{codec:?} convert_stream, {chunking} ({chunk_count}): {} bytes",
+                        streamed.len()
+                    ));
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "expected {} bytes, decoded: {wrong:#?}",
+            expected.len()
+        );
+
+        Ok(())
+    }
+
+    /// Bytes after the last member that do not start another member are an
+    /// error through both `convert_read` and `convert_stream`.
+    #[cfg(feature = "compression")]
+    #[tokio::test]
+    async fn bytes_after_the_last_member_are_an_error() {
+        let mut wrong = Vec::new();
+        for codec in CODECS {
+            let file = [compress(codec, b"a\n"), b"garbage".to_vec()].concat();
+            if let Ok(decoded) = decode_read(codec, &file) {
+                wrong.push(format!("{codec:?} convert_read: {decoded:?}"));
+            }
+            if let Ok(decoded) = decode_stream(codec, vec![file]).await {
+                wrong.push(format!("{codec:?} convert_stream: {decoded:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "decoded without an error: {wrong:#?}");
     }
 }
