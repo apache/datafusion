@@ -48,10 +48,13 @@ impl SessionContext {
     /// Registers a CSV file as a table which can be referenced from SQL
     /// statements executed against this context.
     ///
-    /// Table names passed as strings (e.g. `"Example"`) are parsed as
-    /// unquoted SQL identifiers and normalized to lowercase. To preserve
-    /// exact casing and match case-sensitive quoted queries like
-    /// `SELECT * FROM "Example"`, use [`TableReference::bare`].
+    /// Table names passed as strings are parsed as SQL identifiers: dots (`.`)
+    /// separate components, unquoted components are lowercased, and quoted
+    /// components preserve case.
+    ///
+    /// To preserve exact casing and avoid identifier parsing, [`TableReference::bare`]
+    /// is recommended for unqualified names, and [`TableReference::partial`]
+    /// for schema-qualified names.
     ///
     /// # Example
     ///
@@ -70,6 +73,7 @@ impl SessionContext {
     /// )
     /// .await?;
     ///
+    /// # #[cfg(feature = "sql")]
     /// let df = ctx.sql(r#"SELECT * FROM "Example""#).await?;
     /// # Ok(())
     /// # }
