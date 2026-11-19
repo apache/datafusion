@@ -751,7 +751,7 @@ jobs:
     name: Verify Vendored Code
     if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: &small-runner ${{ github.event_name == 'merge_group' && vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=2,image=ubuntu24-full-x64,tag=datafusion', github.run_id) || 'ubuntu-slim' }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
