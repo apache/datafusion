@@ -303,22 +303,12 @@ impl MaterializedCteScan {
     /// Return this scan with the fields that it reads from a CTE body with
     /// the schema `body`. The scan keeps its qualifiers and its projection.
     pub fn with_body_schema(&self, body: &DFSchema) -> Result<Self> {
+        // The analyzer can change the types of the body, so only the indexes
+        // and the names are checked here.
+        self.check_body_names(body)?;
         let body = match &self.projection {
-            Some(projection) => {
-                self.check_body_schema(body)?;
-                project_schema(body, projection)?
-            }
-            None => {
-                let len = self.schema.fields().len();
-                if body.fields().len() != len {
-                    return internal_err!(
-                        "A scan of the materialized CTE {} reads all its {len} columns, but the CTE has {} columns",
-                        self.name,
-                        body.fields().len()
-                    );
-                }
-                body.clone()
-            }
+            Some(projection) => project_schema(body, projection)?,
+            None => body.clone(),
         };
         let qualifiers = self.schema.iter().map(|(q, _)| q.cloned()).collect();
         let schema =
@@ -328,6 +318,41 @@ impl MaterializedCteScan {
             schema: Arc::new(schema),
             ..self.clone()
         })
+    }
+
+    /// Check that the columns that this scan reads exist in a CTE body with
+    /// the schema `body`, and have the names of the columns of this scan.
+    fn check_body_names(&self, body: &DFSchema) -> Result<()> {
+        let len = body.fields().len();
+        let indices: Vec<usize> = match &self.projection {
+            Some(projection) => projection.clone(),
+            None => (0..len).collect(),
+        };
+        if indices.len() != self.schema.fields().len() {
+            return internal_err!(
+                "A scan of the materialized CTE {} has {} columns, but reads {} columns of the CTE",
+                self.name,
+                self.schema.fields().len(),
+                indices.len()
+            );
+        }
+        for (index, field) in indices.iter().zip(self.schema.fields()) {
+            let Some(body_field) = body.fields().get(*index) else {
+                return internal_err!(
+                    "A scan of the materialized CTE {} reads the column {index}, but the CTE has {len} columns",
+                    self.name
+                );
+            };
+            if body_field.name() != field.name() {
+                return internal_err!(
+                    "A scan of the materialized CTE {} reads the column {index} as {}, but the CTE names it {}",
+                    self.name,
+                    field.name(),
+                    body_field.name()
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Check that this scan has the names and types of the columns that it
@@ -657,7 +682,49 @@ mod tests {
         let err = all.with_body_schema(&wide_schema()).unwrap_err();
         assert!(
             err.to_string()
-                .contains("reads all its 1 columns, but the CTE has 4 columns"),
+                .contains("has 1 columns, but reads 4 columns of the CTE"),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn with_body_schema_accepts_new_types_and_rejects_new_names() -> Result<()> {
+        let id = MaterializedCteId::next();
+        // The scan reads `c` and `a`.
+        let ca =
+            MaterializedCteScan::new(id, "c", wide_schema()).with_projection(&[2, 0])?;
+        let field = |name: &str, data_type: DataType| Field::new(name, data_type, true);
+        let qualified = |fields: Vec<Field>| {
+            DFSchema::try_from_qualified_schema("c", &Schema::new(fields)).unwrap()
+        };
+
+        // The analyzer changes the type of `c` from Float64 to Int64.
+        let coerced = qualified(vec![
+            field("a", DataType::Int32),
+            field("b", DataType::Utf8),
+            field("c", DataType::Int64),
+            field("d", DataType::Boolean),
+        ]);
+        let new_ca = ca.with_body_schema(&coerced)?;
+        assert_eq!(new_ca.projection(), Some([2, 0].as_slice()));
+        assert_eq!(new_ca.schema().field(0).data_type(), &DataType::Int64);
+        assert_eq!(new_ca.schema().field(1).data_type(), &DataType::Int32);
+        new_ca.check_body_schema(&coerced)?;
+        // The strict check still rejects the old scan against the new body.
+        assert!(ca.check_body_schema(&coerced).is_err());
+
+        // A body that names the column `c` differently is rejected.
+        let renamed = qualified(vec![
+            field("a", DataType::Int32),
+            field("b", DataType::Utf8),
+            field("z", DataType::Float64),
+            field("d", DataType::Boolean),
+        ]);
+        let err = ca.with_body_schema(&renamed).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("reads the column 2 as c, but the CTE names it z"),
             "{err}"
         );
         Ok(())
