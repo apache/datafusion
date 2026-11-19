@@ -31,14 +31,12 @@ mod settings;
 use queries::{QUERIES, Query};
 use settings::Setting;
 
-/// One query under one setting.
 pub(crate) struct Pair {
     query: &'static Query,
     setting: Setting,
     ctx: SessionContext,
 }
 
-/// Every pair to run on `data`.
 fn pairs(data: &data::Dataset) -> Result<Vec<Pair>> {
     let mut pairs = vec![];
     for setting in Setting::all() {
@@ -60,11 +58,8 @@ fn runs(query: &Query, setting: &Setting) -> bool {
     !setting.negative_literals || query.sql.contains("{z}")
 }
 
-/// Why a pair failed.
 enum Failure {
-    /// The results differ.
     Mismatch(String),
-    /// A query returned an error.
     Error(String),
 }
 
@@ -148,7 +143,6 @@ fn format_rows(batches: &[RecordBatch]) -> Vec<String> {
     rows
 }
 
-/// The first row where the results differ.
 fn first_difference(raw: &[String], canonical: &[String], ordered: bool) -> String {
     let row = if ordered { "row" } else { "sorted row" };
     match raw.iter().zip(canonical).position(|(r, c)| r != c) {

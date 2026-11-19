@@ -52,14 +52,12 @@ impl Columns {
     }
 }
 
-/// `raw` with every `-0.0` replaced by `0.0`.
 fn canonical_of(raw: &RecordBatch) -> RecordBatch {
     let columns = raw.columns().iter().cloned().map(normalize).collect();
     RecordBatch::try_new(raw.schema(), columns).unwrap()
 }
 
-/// Whether `array` holds a `-0.0`, also inside lists. A list must not be a
-/// slice, since all of its values are looked at.
+/// Whether `array` holds a `-0.0`, also inside lists.
 fn has_negative_zero(array: &ArrayRef) -> bool {
     match array.data_type() {
         DataType::Float64 => array
@@ -72,7 +70,11 @@ fn has_negative_zero(array: &ArrayRef) -> bool {
             .iter()
             .flatten()
             .any(|v| v == 0.0 && v.is_sign_negative()),
-        DataType::List(_) => has_negative_zero(array.as_list::<i32>().values()),
+        DataType::List(_) => array
+            .as_list::<i32>()
+            .iter()
+            .flatten()
+            .any(|l| has_negative_zero(&l)),
         other => panic!("has_negative_zero does not support {other}"),
     }
 }
@@ -159,7 +161,6 @@ pub fn random(rng: &mut StdRng) -> Dataset {
     }
 }
 
-/// Cuts both tables at the same random places.
 fn split(
     rng: &mut StdRng,
     canonical: &RecordBatch,

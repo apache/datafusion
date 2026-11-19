@@ -22,7 +22,6 @@ pub struct Setting {
 }
 
 impl Setting {
-    /// Every combination.
     pub fn all() -> Vec<Setting> {
         let mut settings = vec![];
         for target_partitions in [1, 4] {
@@ -42,7 +41,6 @@ impl Setting {
         settings
     }
 
-    /// How a zero is written in the `raw` query.
     pub fn raw_zero(&self) -> &'static str {
         if self.negative_literals {
             "-0.0"
@@ -51,7 +49,6 @@ impl Setting {
         }
     }
 
-    /// A session with both tables.
     pub fn context(&self, data: &Dataset) -> Result<SessionContext> {
         let mut config = SessionConfig::new()
             .with_target_partitions(self.target_partitions)

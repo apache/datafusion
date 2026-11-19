@@ -26,12 +26,10 @@ pub struct KnownFailure {
 }
 
 impl Query {
-    /// The query for `table`, with each zero written as `zero`.
     pub fn render(&self, table: &str, zero: &str) -> String {
         self.sql.replace("{t}", table).replace("{z}", zero)
     }
 
-    /// The issue of the known failure under `setting`, if any.
     pub fn known_issue(&self, setting: &Setting) -> Option<&'static str> {
         self.known_failure
             .as_ref()
