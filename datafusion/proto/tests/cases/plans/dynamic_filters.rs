@@ -1111,3 +1111,36 @@ fn extension_codec_expr_participates_in_deduplication() -> Result<()> {
 
     Ok(())
 }
+
+/// <https://github.com/apache/datafusion/issues/27543>
+#[tokio::test]
+async fn test_dynamic_filter_roundtrip_after_execution_and_reset() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().to_str().unwrap();
+    let ctx = SessionContext::new();
+    for (name, end) in [("big", 201), ("small", 4)] {
+        ctx.sql(&format!("COPY (SELECT value AS id FROM range(1, {end})) TO '{path}/{name}/t.parquet' STORED AS PARQUET"))
+            .await?
+            .collect()
+            .await?;
+        ctx.register_parquet(name, format!("{path}/{name}"), Default::default())
+            .await?;
+    }
+
+    for (sql, expected) in [
+        ("SELECT * FROM big ORDER BY id LIMIT 1", 1),
+        ("SELECT * FROM big ORDER BY id DESC LIMIT 3", 3),
+        ("SELECT big.id FROM small JOIN big ON small.id = big.id", 3),
+    ] {
+        let plan = ctx.sql(sql).await?.create_physical_plan().await?;
+        datafusion::physical_plan::collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+        let plan = datafusion::physical_plan::execution_plan::reset_plan_states(plan)?;
+        let bytes = datafusion_proto::bytes::physical_plan_to_bytes(plan)?;
+        let decoded =
+            datafusion_proto::bytes::physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+        let batches = datafusion::physical_plan::collect(decoded, ctx.task_ctx()).await?;
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, expected, "{sql}");
+    }
+    Ok(())
+}
