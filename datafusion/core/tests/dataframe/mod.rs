@@ -7613,8 +7613,12 @@ async fn test_dataframe_read_columns_uses_session() -> Result<()> {
 )]
 async fn test_dataframe_from_columns_deprecated() -> Result<()> {
     let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-    let df = DataFrame::from_columns([("id", id)])?;
-    assert_eq!(df.schema().fields().len(), 1);
+    let name: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), None, Some("c")]));
+    let df = DataFrame::from_columns([("id", id), ("name", name)])?;
+    assert_eq!(df.schema().fields().len(), 2);
+    // nullability follows the arrays, as for `read_columns`
+    assert!(!df.schema().field_with_unqualified_name("id")?.is_nullable());
+    assert!(df.schema().field_with_unqualified_name("name")?.is_nullable());
     assert_eq!(df.count().await?, 3);
     Ok(())
 }
@@ -7668,26 +7672,30 @@ async fn test_dataframe_macro() -> Result<()> {
     assert_eq!(df.schema().fields().len(), 13);
     assert_eq!(df.clone().count().await?, 3);
 
-    let expected_types = [
-        ("bool", DataType::Boolean),
-        ("i8", DataType::Int8),
-        ("i16", DataType::Int16),
-        ("i32", DataType::Int32),
-        ("i64", DataType::Int64),
-        ("u8", DataType::UInt8),
-        ("u16", DataType::UInt16),
-        ("u32", DataType::UInt32),
-        ("u64", DataType::UInt64),
-        ("f16", DataType::Float16),
-        ("f32", DataType::Float32),
-        ("f64", DataType::Float64),
-        ("str", DataType::Utf8),
+    // (name, type, nullable): a column is nullable only when its input
+    // contained a `None`
+    let expected_fields = [
+        ("bool", DataType::Boolean, false),
+        ("i8", DataType::Int8, false),
+        ("i16", DataType::Int16, false),
+        ("i32", DataType::Int32, false),
+        ("i64", DataType::Int64, true),
+        ("u8", DataType::UInt8, true),
+        ("u16", DataType::UInt16, true),
+        ("u32", DataType::UInt32, false),
+        ("u64", DataType::UInt64, false),
+        ("f16", DataType::Float16, false),
+        ("f32", DataType::Float32, true),
+        ("f64", DataType::Float64, true),
+        ("str", DataType::Utf8, true),
     ];
 
     let schema = df.schema();
 
-    for (name, data_type) in expected_types {
-        assert_eq!(schema.field_with_name(None, name)?.data_type(), &data_type);
+    for (name, data_type, nullable) in expected_fields {
+        let field = schema.field_with_name(None, name)?;
+        assert_eq!(field.data_type(), &data_type);
+        assert_eq!(field.is_nullable(), nullable, "column {name}");
     }
 
     let rows = df.sort(vec![col("i32").sort(true, true)])?;

@@ -2854,7 +2854,8 @@ impl DataFrame {
     }
 
     /// Create a `DataFrame` from named Arrow arrays in a new, default
-    /// [`SessionContext`].
+    /// [`SessionContext`]. Field nullability is derived from the arrays, see
+    /// [`SessionContext::read_columns`].
     ///
     /// # Deprecated
     ///
@@ -2892,6 +2893,10 @@ impl DataFrame {
 }
 
 /// Create a DataFrame from column names and values.
+///
+/// A column is nullable only when its values may contain nulls: `"a" => [1, 2]`
+/// gives a non-nullable column, `"b" => [Some(1), None]` a nullable one. See
+/// [`SessionContext::read_columns`] for the exact rule.
 ///
 /// # Example
 ///
