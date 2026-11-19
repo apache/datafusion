@@ -428,7 +428,6 @@ impl HashJoinExecBuilder {
     /// Set optional filter.
     pub fn with_filter(mut self, filter: Option<JoinFilter>) -> Self {
         self.exec.filter = filter;
-        self.preserve_properties = false;
         self
     }
 
@@ -449,7 +448,6 @@ impl HashJoinExecBuilder {
     /// Set null equality property.
     pub fn with_null_equality(mut self, null_equality: NullEquality) -> Self {
         self.exec.null_equality = null_equality;
-        self.preserve_properties = false;
         self
     }
 
@@ -588,8 +586,6 @@ impl HashJoinExecBuilder {
             &on,
             mode,
             projection.as_deref(),
-            filter.is_some(),
-            null_equality,
         )?;
 
         Ok(HashJoinExec {
@@ -1296,7 +1292,6 @@ impl HashJoinExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    #[expect(clippy::too_many_arguments)]
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
@@ -1305,8 +1300,6 @@ impl HashJoinExec {
         on: JoinOnRef,
         mode: PartitionMode,
         projection: Option<&[usize]>,
-        has_filter: bool,
-        null_equality: NullEquality,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let mut eq_properties = join_equivalence_properties(
@@ -1317,8 +1310,6 @@ impl HashJoinExec {
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side()),
             on,
-            has_filter,
-            null_equality,
         )?;
 
         let mut output_partitioning = match mode {

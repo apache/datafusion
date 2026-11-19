@@ -9,9 +9,7 @@ use arrow::{
 };
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{
-    JoinSide, NullEquality, Result, internal_datafusion_err, internal_err,
-};
+use datafusion_common::{JoinSide, Result, internal_datafusion_err, internal_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{
     SendableRecordBatchStream,
@@ -444,9 +442,6 @@ impl PiecewiseMergeJoinExec {
             // required sort and return wrongly ordered results. Range joins add
             // no column equivalences, so pass none.
             &[],
-            // The range predicate always filters matches beyond the equijoin keys.
-            true,
-            NullEquality::NullEqualsNothing,
         )?;
 
         let output_partitioning =

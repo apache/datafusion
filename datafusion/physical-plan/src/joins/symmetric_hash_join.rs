@@ -228,15 +228,7 @@ impl SymmetricHashJoinExec {
         // Initialize the random state for the join operation:
         let random_state = RandomState::with_seed(0);
         let schema = Arc::new(schema);
-        let cache = Self::compute_properties(
-            &left,
-            &right,
-            schema,
-            *join_type,
-            &on,
-            filter.is_some(),
-            null_equality,
-        )?;
+        let cache = Self::compute_properties(&left, &right, schema, *join_type, &on)?;
         Ok(SymmetricHashJoinExec {
             left,
             right,
@@ -261,8 +253,6 @@ impl SymmetricHashJoinExec {
         schema: SchemaRef,
         join_type: JoinType,
         join_on: JoinOnRef,
-        has_filter: bool,
-        null_equality: NullEquality,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let eq_properties = join_equivalence_properties(
@@ -274,8 +264,6 @@ impl SymmetricHashJoinExec {
             // Has alternating probe side
             None,
             join_on,
-            has_filter,
-            null_equality,
         )?;
 
         let output_partitioning =
