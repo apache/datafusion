@@ -2,13 +2,18 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::array::{Array, ArrayRef, Int32Array, Int32Builder, StringArray};
-use arrow::compute::cast;
-use arrow::datatypes::{ArrowNativeTypeOp, DataType, Field, Schema};
+use arrow::array::{
+    Array, ArrayRef, AsArray, Int32Array, Int32Builder, PrimitiveArray, StringArray,
+    UInt32Array,
+};
+use arrow::compute::{cast, take};
+use arrow::datatypes::{
+    ArrowNativeTypeOp, ArrowPrimitiveType, DataType, Field, Int32Type, Int64Type, Schema,
+};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
-use datafusion_expr::Operator;
+use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr::expressions::{BinaryExpr, case, col, lit};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use itertools::Itertools;
@@ -88,6 +93,12 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     benchmark_lookup_table_case_when(c, 8192);
     benchmark_lookup_table_by_number_of_entries(c, 8192);
+    benchmark_dense_integer_case::<Int32Type>(c, 8192, |key, start| {
+        u64::from((key as u32).wrapping_sub(start as u32))
+    });
+    benchmark_dense_integer_case::<Int64Type>(c, 8192, |key, start| {
+        (key as u64).wrapping_sub(start as u64)
+    });
     benchmark_divide_by_zero_protection(c, 8192);
 }
 
@@ -580,6 +591,102 @@ fn benchmark_lookup_table_by_number_of_entries(c: &mut Criterion, batch_size: us
         }
     }
 
+    group.finish();
+}
+
+/// Compare direct indexing with production CASE on the same keys and outputs.
+/// CASE currently uses linear lookup through 32 Int32 or 16 Int64 literals,
+/// and hashes above those limits.
+fn benchmark_dense_integer_case<T>(
+    c: &mut Criterion,
+    batch_size: usize,
+    offset: impl Fn(T::Native, T::Native) -> u64,
+) where
+    T: ArrowPrimitiveType,
+    T::Native: From<i32> + Into<ScalarValue>,
+{
+    const START: i32 = -101;
+    let mut group =
+        c.benchmark_group(format!("dense_integer_case_when/{}", T::DATA_TYPE));
+
+    for count in [4, 16, 32, 64] {
+        let when_thens = (0..count)
+            .map(|i| (lit(T::Native::from(START + i).into()), lit(i)))
+            .collect();
+        let schema = Arc::new(Schema::new(vec![Field::new("key", T::DATA_TYPE, true)]));
+        let key = col("key", &schema).unwrap();
+        let case = case(Some(Arc::clone(&key)), when_thens, Some(lit(-1))).unwrap();
+        let table = Int32Array::from_iter_values((0..count).chain([-1]));
+        let misses = [
+            T::Native::from(START - 1),
+            T::Native::from(START + count),
+            T::Native::MIN_TOTAL_ORDER,
+            T::Native::MAX_TOTAL_ORDER,
+        ];
+
+        // Hit rate is conditional on the row being non-null.
+        for (hit_percent, null_percent) in [(100, 0), (50, 0), (50, 10), (90, 50)] {
+            let mut rng = seedable_rng();
+            let (keys, expected): (Vec<_>, Vec<_>) = (0..batch_size)
+                .map(|_| {
+                    if rng.random_ratio(null_percent, 100) {
+                        (None, -1)
+                    } else if rng.random_ratio(hit_percent, 100) {
+                        let index = rng.random_range(0..count);
+                        (Some(T::Native::from(START + index)), index)
+                    } else {
+                        (Some(misses[rng.random_range(0..misses.len())]), -1)
+                    }
+                })
+                .unzip();
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(keys.into_iter().collect::<PrimitiveArray<T>>())],
+            )
+            .unwrap();
+
+            let direct_index = |batch: &RecordBatch| {
+                let keys = key
+                    .evaluate(batch)
+                    .unwrap()
+                    .into_array(batch.num_rows())
+                    .unwrap();
+                let start = T::Native::from(START);
+                let else_index = count as u32;
+                let indices: Vec<_> = keys
+                    .as_primitive::<T>()
+                    .iter()
+                    .map(|key| {
+                        let index = key.map_or(u64::MAX, |key| offset(key, start));
+                        if index < u64::from(else_index) {
+                            index as u32
+                        } else {
+                            else_index
+                        }
+                    })
+                    .collect();
+                ColumnarValue::Array(
+                    take(&table, &UInt32Array::from(indices), None).unwrap(),
+                )
+            };
+
+            let label = format!(
+                "{count} literals, {hit_percent}% non-null hits, {null_percent}% nulls"
+            );
+            let expected = Int32Array::from(expected);
+            for actual in [case.evaluate(&batch).unwrap(), direct_index(&batch)] {
+                let actual = actual.into_array(batch_size).unwrap();
+                assert_eq!(actual.as_primitive::<Int32Type>(), &expected, "{label}");
+            }
+
+            group.bench_function(BenchmarkId::new("case", &label), |b| {
+                b.iter(|| black_box(case.evaluate(black_box(&batch)).unwrap()))
+            });
+            group.bench_function(BenchmarkId::new("direct_index", &label), |b| {
+                b.iter(|| black_box(direct_index(black_box(&batch))))
+            });
+        }
+    }
     group.finish();
 }
 
