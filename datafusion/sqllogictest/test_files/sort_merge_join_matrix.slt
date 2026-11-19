@@ -5,6 +5,7 @@
 # Sort-merge-join correctness across a config matrix. Every equijoin runs on
 # SortMergeJoin (prefer_hash_join=false) and HashJoin (true), so sweeping
 # {true,false} x batch_size {1,2,100,8192} requires them to agree row-for-row.
+# Run both hash join implementations with enable_migration_hash_join=true,false.
 # batch_size=1 forces equal-key runs to span single-row batches (historically
 # bug-prone). SMJ needs target_partitions>1 and repartition_joins, set below (not
 # swept). Null-aware NOT IN always uses HashJoin, so it is out of scope (see
@@ -13,6 +14,7 @@
 
 # configMatrix: datafusion.optimizer.prefer_hash_join=true,false
 # configMatrix: datafusion.execution.batch_size=1,2,100,8192
+# configMatrix: datafusion.execution.enable_migration_hash_join=true,false
 
 statement ok
 set datafusion.execution.target_partitions = 4;
