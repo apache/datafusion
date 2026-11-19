@@ -12,8 +12,8 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::internal_datafusion_err;
-use datafusion_common::metadata::strip_extension_type;
 use datafusion_common::types::LogicalType;
 use datafusion_common::utils::{
     ListCoercion, base_type, coerced_fixed_size_list_to_list,
@@ -142,7 +142,8 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
             // An implicit storage conversion has the metadata semantics of a
             // type-only cast, including when a literal is materialized early.
             let mut field = current_field.as_ref().clone().with_data_type(new_type);
-            strip_extension_type(field.metadata_mut());
+            field.metadata_mut().remove(EXTENSION_TYPE_NAME_KEY);
+            field.metadata_mut().remove(EXTENSION_TYPE_METADATA_KEY);
             Arc::new(field)
         })
         .collect())

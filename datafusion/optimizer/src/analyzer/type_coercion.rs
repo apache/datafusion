@@ -14,10 +14,9 @@ use crate::utils::{NamePreserver, merge_into_schema};
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::metadata::{
-    FieldMetadata, merge_metadata_for_union, strip_extension_type,
-};
+use datafusion_common::metadata::{FieldMetadata, merge_metadata_for_union};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -1496,7 +1495,8 @@ fn coerce_scalar_function_argument(
     {
         let metadata = metadata.map(|metadata| {
             let mut metadata = metadata.into_inner();
-            strip_extension_type(&mut metadata);
+            metadata.remove(EXTENSION_TYPE_NAME_KEY);
+            metadata.remove(EXTENSION_TYPE_METADATA_KEY);
             FieldMetadata::from(metadata)
         });
         return Ok(Expr::Literal(value, metadata));
