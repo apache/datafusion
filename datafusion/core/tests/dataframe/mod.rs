@@ -7618,7 +7618,11 @@ async fn test_dataframe_from_columns_deprecated() -> Result<()> {
     assert_eq!(df.schema().fields().len(), 2);
     // nullability follows the arrays, as for `read_columns`
     assert!(!df.schema().field_with_unqualified_name("id")?.is_nullable());
-    assert!(df.schema().field_with_unqualified_name("name")?.is_nullable());
+    assert!(
+        df.schema()
+            .field_with_unqualified_name("name")?
+            .is_nullable()
+    );
     assert_eq!(df.count().await?, 3);
     Ok(())
 }
@@ -7717,6 +7721,23 @@ async fn test_dataframe_macro() -> Result<()> {
     assert_eq!(df_empty.schema().fields().len(), 0);
     assert_eq!(df_empty.count().await?, 0);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_macro_does_not_shadow_caller_items() -> Result<()> {
+    // A caller type named like one the macro uses internally, referenced by
+    // path inside a macro argument. If the macro imported `SessionContext`
+    // by name, this would resolve to the wrong type and fail to compile.
+    struct SessionContext;
+    impl SessionContext {
+        fn ids() -> Vec<i32> {
+            vec![1, 2, 3]
+        }
+    }
+
+    let df = dataframe!("id" => SessionContext::ids())?;
+    assert_eq!(df.count().await?, 3);
     Ok(())
 }
 

@@ -2929,20 +2929,16 @@ impl DataFrame {
 #[macro_export]
 macro_rules! dataframe {
     () => {{
-        use std::sync::Arc;
-
-        use datafusion::prelude::SessionContext;
-        use datafusion::arrow::array::RecordBatch;
-        use datafusion::arrow::datatypes::Schema;
-
-        let ctx = SessionContext::new();
-        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
-        ctx.read_batch(batch)
+        let batch = $crate::arrow::array::RecordBatch::new_empty(
+            ::std::sync::Arc::new($crate::arrow::datatypes::Schema::empty()),
+        );
+        $crate::prelude::SessionContext::new().read_batch(batch)
     }};
 
     ($($name:expr => $data:expr),+ $(,)?) => {{
-        use datafusion::prelude::SessionContext;
-        use datafusion::common::test_util::IntoArrayRef;
+        // Imported anonymously so the macro does not shadow any name in the
+        // caller's code.
+        use $crate::common::test_util::IntoArrayRef as _;
 
         let columns = [
             $(
@@ -2950,8 +2946,7 @@ macro_rules! dataframe {
             )+
         ];
 
-        let ctx = SessionContext::new();
-        ctx.read_columns(columns)
+        $crate::prelude::SessionContext::new().read_columns(columns)
     }};
 }
 
