@@ -730,7 +730,8 @@ impl MaterializedCteScanExec {
     }
 
     /// Check that this scan can read a body with the schema `body`: the
-    /// columns that it reads must exist and have the types of its schema.
+    /// columns that it reads must exist and have the names and types of its
+    /// schema.
     pub fn check_body_schema(&self, body: &Schema) -> Result<()> {
         let indices: Vec<usize> = match &self.projection {
             Some(projection) => projection.clone(),
@@ -741,9 +742,9 @@ impl MaterializedCteScanExec {
                 .iter()
                 .zip(self.schema.fields())
                 .all(|(index, field)| {
-                    body.fields()
-                        .get(*index)
-                        .is_some_and(|b| b.data_type() == field.data_type())
+                    body.fields().get(*index).is_some_and(|b| {
+                        b.name() == field.name() && b.data_type() == field.data_type()
+                    })
                 });
         if !matches {
             return internal_err!(
@@ -783,15 +784,38 @@ impl MaterializedCteScanExec {
             id: self.id,
             name: self.name.clone(),
             schema: Arc::clone(&self.schema),
-            // The body statistics have a column for each column of the body.
-            statistics: Some(Arc::new(
-                Arc::unwrap_or_clone(statistics).project(self.projection.as_ref()),
-            )),
+            statistics: Some(Arc::new(self.project_statistics(statistics))),
             projection: self.projection.clone(),
             buffer: self.buffer.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             cache: Arc::clone(&self.cache),
         }
+    }
+
+    /// The statistics of the columns that this scan reads, from the
+    /// statistics of the body. `Statistics::project` keeps the byte size of
+    /// the body, so the byte size is computed again for the projected columns.
+    fn project_statistics(&self, statistics: Arc<Statistics>) -> Statistics {
+        let statistics = Arc::unwrap_or_clone(statistics);
+        if self.projection.is_none() {
+            return statistics;
+        }
+        let mut statistics = statistics.project(self.projection.as_ref());
+        statistics.calculate_total_byte_size(&self.schema);
+        statistics
+    }
+
+    /// The names of the columns that this scan outputs, if it has a
+    /// projection.
+    fn projected_names(&self) -> Option<String> {
+        self.projection.as_ref()?;
+        let names: Vec<&str> = self
+            .schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
+        Some(names.join(", "))
     }
 
     /// The id of the [`MaterializedCteBuffer`] this scan reads.
@@ -810,19 +834,18 @@ impl DisplayAs for MaterializedCteScanExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "MaterializedCteScanExec: name={}", self.name)?;
-                if self.projection.is_some() {
-                    let names: Vec<&str> = self
-                        .schema
-                        .fields()
-                        .iter()
-                        .map(|field| field.name().as_str())
-                        .collect();
-                    write!(f, ", projection=[{}]", names.join(", "))?;
+                if let Some(names) = self.projected_names() {
+                    write!(f, ", projection=[{names}]")?;
                 }
-                Ok(())
             }
-            DisplayFormatType::TreeRender => write!(f, "name={}", self.name),
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "name={}", self.name)?;
+                if let Some(names) = self.projected_names() {
+                    writeln!(f, "projection=[{names}]")?;
+                }
+            }
         }
+        Ok(())
     }
 }
 
@@ -1024,7 +1047,13 @@ mod tests {
             .bind(buffer)
             .with_body_statistics(Arc::new(body_statistics.clone()));
         let statistics = context.compute(&scan, &StatisticsArgs::new())?;
-        assert_eq!(*statistics, body_statistics.project(Some(&vec![1])));
+        // The scan reads 1 of the 2 Int32 columns of the 100 rows.
+        assert_eq!(statistics.total_byte_size, Precision::Exact(400));
+        assert_eq!(statistics.num_rows, Precision::Exact(100));
+        assert_eq!(
+            statistics.column_statistics,
+            vec![body_statistics.column_statistics[1].clone()]
+        );
         Ok(())
     }
 
@@ -1101,9 +1130,26 @@ mod tests {
         let short = MaterializedCteScanExec::new(0, "c", Arc::clone(&ca_schema), 1)
             .with_body_projection(vec![2]);
         assert!(short.is_err());
+        // The columns must also have the names of the scan schema.
+        let renamed = Arc::new(Schema::new(vec![
+            Field::new("x", ca_schema.field(0).data_type().clone(), true),
+            ca_schema.field(1).as_ref().clone(),
+        ]));
+        let renamed = MaterializedCteScanExec::new(0, "c", renamed, 1)
+            .with_body_projection(vec![2, 0])?;
+        assert!(renamed.check_body_schema(&schema).is_err());
         assert_eq!(
             crate::displayable(&ca).one_line().to_string().trim(),
             "MaterializedCteScanExec: name=c, projection=[c, a]"
+        );
+        assert_eq!(
+            crate::displayable(&ca).tree_render().to_string(),
+            "┌───────────────────────────┐\n\
+             │  MaterializedCteScanExec  │\n\
+             │    --------------------   │\n\
+             │          name: c          │\n\
+             │     projection: [c, a]    │\n\
+             └───────────────────────────┘\n"
         );
 
         let ca = ca.bind(Arc::clone(&buffer));
