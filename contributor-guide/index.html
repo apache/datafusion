@@ -663,6 +663,16 @@ The automatic draft notification also counts as activity and restarts this timer
 </section>
 <section id="ci-runners">
 <h2>CI Runners<a class="headerlink" href="#ci-runners" title="Link to this heading">#</a></h2>
+<section id="job-timeouts">
+<h3>Job Timeouts<a class="headerlink" href="#job-timeouts" title="Link to this heading">#</a></h3>
+<p>Set <code class="docutils literal notranslate"><span class="pre">timeout-minutes</span></code> on every workflow job that runs on a runner. An explicit
+limit stops a hung job before GitHub Actions’ six-hour default.</p>
+<p>Use recent successful runs to choose a limit. Allow extra time for cold caches
+and slower runners, including those used by forks. If a change increases a job’s
+expected runtime, adjust its limit in the same pull request.</p>
+<p>For reusable workflows, set the limit on jobs in the called workflow. The merge
+queue has a separate deadline for required checks.</p>
+</section>
 <section id="runs-on">
 <h3>Runs-On<a class="headerlink" href="#runs-on" title="Link to this heading">#</a></h3>
 <p>We use <a class="reference external" href="https://runs-on.com/">Runs-On</a> for some actions in the main repository, which run in the ASF AWS account to speed up CI. In forks, these actions run on the default GitHub runners since forks do not have access to ASF infrastructure.</p>
@@ -798,6 +808,7 @@ to <code class="docutils literal notranslate"><span class="pre">dry_run</span></
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#major-and-minor-prs">“Major” and “Minor” PRs</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#stale-prs">Stale PRs</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-runners">CI Runners</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#job-timeouts">Job Timeouts</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#runs-on">Runs-On</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#spot-instances">Spot Instances</a></li>
 </ul>
