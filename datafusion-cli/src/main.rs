@@ -30,7 +30,7 @@ use datafusion_cli::{
     DATAFUSION_CLI_VERSION, exec,
     pool_type::PoolType,
     print_format::PrintFormat,
-    print_options::{MaxRows, PrintOptions},
+    print_options::{MaxRows, PrintOptions, TargetWidth},
 };
 
 use clap::Parser;
@@ -127,6 +127,13 @@ struct Args {
         default_value = "40"
     )]
     maxrows: MaxRows,
+
+    #[clap(
+        long,
+        help = "Target output width in terminal columns (auto, 1..65535, 0 or inf for no limit). A wide character or TREE node may exceed this width.",
+        default_value = "auto"
+    )]
+    target_width: TargetWidth,
 
     #[clap(long, help = "Enables console syntax highlighting")]
     color: bool,
@@ -279,6 +286,7 @@ async fn main_inner() -> Result<()> {
         format: args.format,
         quiet: args.quiet,
         maxrows: args.maxrows,
+        target_width: args.target_width,
         color: args.color,
         instrumented_registry: Arc::clone(&instrumented_registry),
     };
