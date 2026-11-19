@@ -1276,26 +1276,6 @@ mod tests {
                 true,
             )])
         };
-        for (table_type, file_types) in [
-            (
-                DataType::Utf8View,
-                vec![DataType::Utf8, DataType::LargeUtf8],
-            ),
-            (
-                DataType::BinaryView,
-                vec![DataType::Binary, DataType::LargeBinary],
-            ),
-        ] {
-            for file_type in file_types {
-                let file_schema = nested_schema(file_type);
-                let table_schema = nested_schema(table_type.clone());
-                assert_eq!(
-                    apply_file_schema_type_coercions(&table_schema, &file_schema),
-                    Some(table_schema)
-                );
-            }
-        }
-        // Nested binary fields are never read as strings
         let list_schema = |data_type| {
             Schema::new(vec![Field::new_list(
                 "list",
@@ -1303,19 +1283,54 @@ mod tests {
                 true,
             )])
         };
-        for table_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
-            for file_type in [
-                DataType::Binary,
-                DataType::LargeBinary,
+        // The view coercions apply to nested fields, but nested binary fields
+        // are never read as strings (see module docs)
+        for (table_type, file_types, coerced) in [
+            (
+                DataType::Utf8,
+                vec![
+                    DataType::Binary,
+                    DataType::LargeBinary,
+                    DataType::BinaryView,
+                ],
+                false,
+            ),
+            (
+                DataType::LargeUtf8,
+                vec![
+                    DataType::Binary,
+                    DataType::LargeBinary,
+                    DataType::BinaryView,
+                ],
+                false,
+            ),
+            (
+                DataType::Utf8View,
+                vec![
+                    DataType::Binary,
+                    DataType::LargeBinary,
+                    DataType::BinaryView,
+                ],
+                false,
+            ),
+            (
+                DataType::Utf8View,
+                vec![DataType::Utf8, DataType::LargeUtf8],
+                true,
+            ),
+            (
                 DataType::BinaryView,
-            ] {
+                vec![DataType::Binary, DataType::LargeBinary],
+                true,
+            ),
+        ] {
+            for file_type in file_types {
                 for schema in [nested_schema, list_schema] {
+                    let file_schema = schema(file_type.clone());
+                    let table_schema = schema(table_type.clone());
                     assert_eq!(
-                        apply_file_schema_type_coercions(
-                            &schema(table_type.clone()),
-                            &schema(file_type.clone())
-                        ),
-                        None
+                        apply_file_schema_type_coercions(&table_schema, &file_schema),
+                        coerced.then_some(table_schema)
                     );
                 }
             }
