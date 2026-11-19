@@ -20,7 +20,9 @@ use chrono::Utc;
 use datafusion::{
     common::{HashMap, instant::Instant},
     error::DataFusionError,
-    execution::object_store::{DefaultObjectStoreRegistry, ObjectStoreRegistry},
+    execution::object_store::{
+        DefaultObjectStoreRegistry, ObjectStoreRegistry, ObjectStoreUrl,
+    },
 };
 use futures::stream::{BoxStream, Stream};
 use futures::{StreamExt, TryStreamExt};
@@ -816,6 +818,10 @@ impl ObjectStoreRegistry for InstrumentedObjectStoreRegistry {
 
     fn get_store(&self, url: &Url) -> datafusion::common::Result<Arc<dyn ObjectStore>> {
         self.inner.get_store(url)
+    }
+
+    fn get_store_url(&self, store: &Arc<dyn ObjectStore>) -> Option<ObjectStoreUrl> {
+        self.inner.get_store_url(store)
     }
 }
 

@@ -292,12 +292,15 @@ mod tests {
     use crate::cache::cache_manager::{
         CachedFileMetadata, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
     };
-    use crate::cache::cache_manager::{CachedFileMetadataEntry, FileMetadata};
+    use crate::cache::cache_manager::{
+        CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
+    };
     use crate::cache::default_cache::DefaultCache;
     use crate::cache::default_cache::TimeProvider;
     use crate::cache::{Cache, CacheEntryInfo};
     use crate::cache::{CacheKey, CacheValue};
-    use crate::cache::{SchemaFingerprint, TableScopedPath};
+    use crate::cache::{FileMetadataCacheKey, SchemaFingerprint, TableScopedPath};
+    use crate::object_store::ObjectStoreUrl;
     use arrow::array::{Int32Array, ListArray, RecordBatch};
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -413,6 +416,82 @@ mod tests {
         assert_eq!(cache.len(), 2);
         cache.clear();
         assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn test_file_metadata_cache_key_includes_object_store() {
+        let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024 * 1024));
+
+        // Same path, size and last modified time in two different stores
+        let object_meta = create_test_object_meta("t/x.parquet", 1024);
+        let url_a = ObjectStoreUrl::parse("s3://bucket-a").unwrap();
+        let url_b = ObjectStoreUrl::parse("s3://bucket-b").unwrap();
+        let key_a = FileMetadataCacheKey::new(&url_a, object_meta.location.clone());
+        let key_b = FileMetadataCacheKey::new(&url_b, object_meta.location.clone());
+        assert_ne!(key_a, key_b);
+
+        let metadata_a: Arc<dyn FileMetadata> = Arc::new(TestFileMetadata {
+            metadata: "metadata_a".to_owned(),
+        });
+        let metadata_b: Arc<dyn FileMetadata> = Arc::new(TestFileMetadata {
+            metadata: "metadata_b".to_owned(),
+        });
+
+        // An entry for store A is not visible through store B
+        cache.put(
+            &key_a,
+            CachedFileMetadataEntry::new(object_meta.clone(), metadata_a),
+        );
+        assert!(cache.get(&key_b).is_none());
+
+        cache.put(
+            &key_b,
+            CachedFileMetadataEntry::new(object_meta.clone(), metadata_b),
+        );
+        assert_eq!(cache.len(), 2);
+
+        let cached_metadata = |key: &FileMetadataCacheKey| {
+            let entry = cache.get(key).unwrap();
+            assert!(entry.is_valid_for(&object_meta));
+            Arc::downcast::<TestFileMetadata>(entry.file_metadata)
+                .unwrap()
+                .metadata
+                .clone()
+        };
+        assert_eq!(cached_metadata(&key_a), "metadata_a");
+        assert_eq!(cached_metadata(&key_b), "metadata_b");
+
+        // The same store, through an equal but separately built URL, still hits
+        let key_a_again = FileMetadataCacheKey::new(
+            &ObjectStoreUrl::parse("s3://bucket-a/").unwrap(),
+            Path::from("t/x.parquet"),
+        );
+        assert_eq!(cached_metadata(&key_a_again), "metadata_a");
+
+        // Credentials do not select a different store and are not kept
+        let key_a_with_credentials = FileMetadataCacheKey::new(
+            &ObjectStoreUrl::parse("s3://user:secret@bucket-a").unwrap(),
+            Path::from("t/x.parquet"),
+        );
+        assert_eq!(key_a_with_credentials, key_a);
+        assert_eq!(cached_metadata(&key_a_with_credentials), "metadata_a");
+
+        // Keys list and display with their object store
+        let mut listed: Vec<String> = cache
+            .list_entries()
+            .keys()
+            .map(|key| key.to_string())
+            .collect();
+        listed.sort();
+        assert_eq!(
+            listed,
+            vec!["s3://bucket-a/t/x.parquet", "s3://bucket-b/t/x.parquet"]
+        );
+
+        // Removing one store's entry leaves the other
+        cache.remove(&key_a);
+        assert!(cache.get(&key_a).is_none());
+        assert_eq!(cached_metadata(&key_b), "metadata_b");
     }
 
     fn generate_test_metadata_with_size(

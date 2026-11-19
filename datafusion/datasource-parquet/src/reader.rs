@@ -13,6 +13,7 @@ use datafusion_common::HashMap;
 use datafusion_datasource::PartitionedFile;
 use datafusion_execution::cache::cache_manager::FileMetadata;
 use datafusion_execution::cache::cache_manager::FileMetadataCache;
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::FutureExt;
 use futures::TryFutureExt;
@@ -142,16 +143,25 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
 #[derive(Debug)]
 pub struct CachedParquetFileReaderFactory {
     store: Arc<dyn ObjectStore>,
+    object_store_url: ObjectStoreUrl,
     metadata_cache: Arc<FileMetadataCache>,
 }
 
 impl CachedParquetFileReaderFactory {
+    /// Create a factory reading files from `store`, which is the object store
+    /// registered under `object_store_url`.
+    ///
+    /// `object_store_url` is part of the [`FileMetadataCache`] key, so that
+    /// files with the same path in different object stores are cached
+    /// separately.
     pub fn new(
         store: Arc<dyn ObjectStore>,
+        object_store_url: ObjectStoreUrl,
         metadata_cache: Arc<FileMetadataCache>,
     ) -> Self {
         Self {
             store,
+            object_store_url,
             metadata_cache,
         }
     }
@@ -177,6 +187,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
             partitioned_file,
         )
         .with_metadata_hint(metadata_size_hint)
+        .with_object_store_url(Some(self.object_store_url.clone()))
         .with_metadata_cache(Some(Arc::clone(&self.metadata_cache)));
 
         Ok(Box::new(reader))
@@ -202,6 +213,7 @@ pub struct ParquetFileReader {
     store: Arc<dyn ObjectStore>,
     partitioned_file: PartitionedFile,
     metadata_cache: Option<Arc<FileMetadataCache>>,
+    object_store_url: Option<ObjectStoreUrl>,
     metadata_size_hint: Option<usize>,
 }
 
@@ -224,6 +236,7 @@ impl ParquetFileReader {
             store,
             partitioned_file,
             metadata_cache: None,
+            object_store_url: None,
             metadata_size_hint: None,
         }
     }
@@ -239,11 +252,25 @@ impl ParquetFileReader {
     }
 
     /// Set the [`FileMetadataCache`] for this reader
+    ///
+    /// The cache is only used when the URL of the object store is also set
+    /// with [`Self::with_object_store_url`].
     pub fn with_metadata_cache(
         mut self,
         metadata_cache: Option<Arc<FileMetadataCache>>,
     ) -> Self {
         self.metadata_cache = metadata_cache;
+        self
+    }
+
+    /// Set the [`ObjectStoreUrl`] of the store this file is read from.
+    ///
+    /// See [`DFParquetMetadata::with_object_store_url`] for more details.
+    pub fn with_object_store_url(
+        mut self,
+        object_store_url: Option<ObjectStoreUrl>,
+    ) -> Self {
+        self.object_store_url = object_store_url;
         self
     }
 
@@ -293,6 +320,7 @@ impl AsyncFileReader for ParquetFileReader {
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         let object_meta = self.partitioned_file.object_meta.clone();
         let metadata_cache = self.metadata_cache.clone();
+        let object_store_url = self.object_store_url.clone();
 
         async move {
             #[cfg(feature = "parquet_encryption")]
@@ -308,6 +336,7 @@ impl AsyncFileReader for ParquetFileReader {
             DFParquetMetadata::new(&self.store, &object_meta)
                 .with_decryption_properties(file_decryption_properties)
                 .with_file_metadata_cache(metadata_cache)
+                .with_object_store_url(object_store_url)
                 .with_metadata_size_hint(self.metadata_size_hint)
                 .with_page_index_policy(page_index_policy)
                 .fetch_metadata()

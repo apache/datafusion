@@ -151,15 +151,15 @@ You can inspect the metadata cache by querying the `metadata_cache` function:
 
 ```sql
 > select * from metadata_cache();
-+----------------------------------------------------+---------------------+-----------------+---------------------------------------+---------+---------------------+------+------------------+
-| path                                               | file_modified       | file_size_bytes | e_tag                                 | version | metadata_size_bytes | hits | extra            |
-+----------------------------------------------------+---------------------+-----------------+---------------------------------------+---------+---------------------+------+------------------+
-| hits_compatible/athena_partitioned/hits_61.parquet | 2022-07-03T15:40:34 | 117270944       | "5db11cad1ca0d80d748fc92c914b010a-6"  | NULL    | 212949              | 0    | page_index=false |
-| hits_compatible/athena_partitioned/hits_32.parquet | 2022-07-03T15:37:17 | 94506004        | "2f7db49a9fe242179590b615b94a39d2-5"  | NULL    | 278157              | 0    | page_index=false |
-| hits_compatible/athena_partitioned/hits_40.parquet | 2022-07-03T15:38:07 | 142508647       | "9e5852b45a469d5a05bf270a286eab8a-8"  | NULL    | 212917              | 0    | page_index=false |
-| hits_compatible/athena_partitioned/hits_93.parquet | 2022-07-03T15:44:07 | 127987774       | "751100bf0dac7d489b9836abf3108b99-7"  | NULL    | 278318              | 0    | page_index=false |
-| .                                                                                                                                                                                            |
-+----------------------------------------------------+---------------------+-----------------+---------------------------------------+---------+---------------------+------+------------------+
++----------------------------------+----------------------------------------------------+---------------------+-----------------+---------------------------------------+---------+---------------------+------+------------------+
+| object_store_url                 | path                                               | file_modified       | file_size_bytes | e_tag                                 | version | metadata_size_bytes | hits | extra            |
++----------------------------------+----------------------------------------------------+---------------------+-----------------+---------------------------------------+---------+---------------------+------+------------------+
+| s3://clickhouse-public-datasets/ | hits_compatible/athena_partitioned/hits_61.parquet | 2022-07-03T15:40:34 | 117270944       | "5db11cad1ca0d80d748fc92c914b010a-6"  | NULL    | 212949              | 0    | page_index=false |
+| s3://clickhouse-public-datasets/ | hits_compatible/athena_partitioned/hits_32.parquet | 2022-07-03T15:37:17 | 94506004        | "2f7db49a9fe242179590b615b94a39d2-5"  | NULL    | 278157              | 0    | page_index=false |
+| s3://clickhouse-public-datasets/ | hits_compatible/athena_partitioned/hits_40.parquet | 2022-07-03T15:38:07 | 142508647       | "9e5852b45a469d5a05bf270a286eab8a-8"  | NULL    | 212917              | 0    | page_index=false |
+| s3://clickhouse-public-datasets/ | hits_compatible/athena_partitioned/hits_93.parquet | 2022-07-03T15:44:07 | 127987774       | "751100bf0dac7d489b9836abf3108b99-7"  | NULL    | 278318              | 0    | page_index=false |
+| .                                                                                                                                                                                                                               |
++----------------------------------+----------------------------------------------------+---------------------+-----------------+---------------------------------------+---------+---------------------+------+------------------+
 ```
 
 Since `metadata_cache` is a normal table function, you can use it in most places you can use
@@ -180,6 +180,7 @@ The columns of the returned table are:
 
 | column_name         | data_type | Description                                                                               |
 | ------------------- | --------- | ----------------------------------------------------------------------------------------- |
+| object_store_url    | Utf8      | URL of the object store holding the file (scheme and authority, e.g. `s3://bucket/`)      |
 | path                | Utf8      | File path relative to the object store / filesystem root                                  |
 | file_modified       | Timestamp | Last modified time of the file                                                            |
 | file_size_bytes     | UInt64    | Size of the file in bytes                                                                 |
