@@ -1909,6 +1909,10 @@ impl SessionContext {
     /// and sees its registered functions, tables, configuration and runtime,
     /// exactly like a `DataFrame` created with [`Self::read_batch`].
     ///
+    /// The session state is captured when the `DataFrame` is created: functions
+    /// and configuration registered later are not visible to it, while tables
+    /// and runtime state shared through the catalog and runtime are.
+    ///
     /// Returns an error if `columns` is empty or if the arrays have different
     /// lengths.
     ///
