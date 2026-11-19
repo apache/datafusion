@@ -2792,6 +2792,10 @@ pub struct PiecewiseMergeJoinExecNode {
     pub join_type: i32,
     #[prost(uint64, tag = "7")]
     pub num_partitions: u64,
+    /// Embedded projection over the join schema, encoded as for `NestedLoopJoinExecNode`:
+    /// empty = none, `\[u32::MAX\]` = zero columns.
+    #[prost(uint32, repeated, tag = "8")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsOfJoinExecNode {

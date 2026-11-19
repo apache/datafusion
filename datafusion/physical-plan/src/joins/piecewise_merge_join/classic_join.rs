@@ -95,8 +95,11 @@ pub(super) struct ClassicPWMJStream {
     pub operator: Operator,
     // Streamed batch
     pub streamed: SendableRecordBatchStream,
-    // Streamed schema
+    // Streamed schema, narrowed to `streamed_projection` when there is one
     streamed_schema: SchemaRef,
+    // Streamed columns kept in the output; each batch is narrowed to them once its join
+    // key has been evaluated
+    streamed_projection: Option<Vec<usize>>,
     // Buffered side data
     buffered_side: BufferedSide,
     // Tracks the state of the `PiecewiseMergeJoin`
@@ -140,24 +143,35 @@ impl ClassicPWMJStream {
         join_type: JoinType,
         operator: Operator,
         streamed: SendableRecordBatchStream,
+        streamed_projection: Option<(Vec<usize>, SchemaRef)>,
+        output_reorder: Option<Vec<usize>>,
         buffered_side: BufferedSide,
         state: PiecewiseMergeJoinStreamState,
         sort_option: SortOptions,
         join_metrics: BuildProbeJoinMetrics,
         batch_size: usize,
     ) -> Self {
+        let (streamed_projection, streamed_schema) = match streamed_projection {
+            Some((columns, schema)) => (Some(columns), schema),
+            None => (None, streamed.schema()),
+        };
         Self {
             schema: Arc::clone(&schema),
             on_streamed,
             join_type,
             operator,
-            streamed_schema: streamed.schema(),
+            streamed_schema,
+            streamed_projection,
             streamed,
             buffered_side,
             state,
             sort_option,
             join_metrics,
-            batch_process_state: BatchProcessState::new(schema, batch_size),
+            batch_process_state: BatchProcessState::new(
+                schema,
+                output_reorder,
+                batch_size,
+            ),
             buffered_extreme: None,
         }
     }
@@ -246,6 +260,10 @@ impl ClassicPWMJStream {
                     .on_streamed
                     .evaluate(&batch)?
                     .into_array(batch.num_rows())?;
+                let batch = match &self.streamed_projection {
+                    Some(columns) => batch.project(columns)?,
+                    None => batch,
+                };
 
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
@@ -424,9 +442,13 @@ struct BatchProcessState {
 }
 
 impl BatchProcessState {
-    pub(crate) fn new(schema: Arc<Schema>, batch_size: usize) -> Self {
+    pub(crate) fn new(
+        schema: Arc<Schema>,
+        reorder: Option<Vec<usize>>,
+        batch_size: usize,
+    ) -> Self {
         Self {
-            output_batches: OutputBuffer::new(schema, batch_size),
+            output_batches: OutputBuffer::new(schema, reorder, batch_size),
             start_buffer_idx: 0,
             start_stream_idx: 0,
             continue_process: true,
@@ -447,6 +469,9 @@ impl BatchProcessState {
 /// over all its runs and gathers each streamed column once.
 struct OutputBuffer {
     schema: SchemaRef,
+    // Maps the buffered-then-streamed columns a batch is built from onto `schema`, or
+    // `None` when they are already in its order
+    reorder: Option<Vec<usize>>,
     batch_size: usize,
     // The buffered batch's columns, set once the buffered side is ready. Held as
     // `ArrayData` so a flush doesn't convert them again.
@@ -459,9 +484,10 @@ struct OutputBuffer {
 }
 
 impl OutputBuffer {
-    fn new(schema: SchemaRef, batch_size: usize) -> Self {
+    fn new(schema: SchemaRef, reorder: Option<Vec<usize>>, batch_size: usize) -> Self {
         Self {
             schema,
+            reorder,
             batch_size,
             buffered_columns: vec![],
             buffered_runs: Vec::with_capacity(batch_size),
@@ -596,6 +622,10 @@ impl OutputBuffer {
     }
 
     fn push_columns(&mut self, columns: Vec<ArrayRef>, num_rows: usize) -> Result<()> {
+        let columns = match &self.reorder {
+            Some(reorder) => reorder.iter().map(|&i| Arc::clone(&columns[i])).collect(),
+            None => columns,
+        };
         let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
         self.completed.push_back(RecordBatch::try_new_with_options(
             Arc::clone(&self.schema),

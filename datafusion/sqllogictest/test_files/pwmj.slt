@@ -2244,5 +2244,174 @@ physical_plan
 08)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=3, batch_size=8192]
 
+# Embedded projection: the join emits only the columns its parent needs, instead of
+# every column followed by a ProjectionExec. These cases check the plan shape; results
+# for each join type and select list are checked in piecewise_merge_join_matrix.slt,
+# against NestedLoopJoin and across batch sizes.
+statement ok
+CREATE TABLE proj_l (a INT, p INT, s TEXT) AS VALUES
+  (1, 10, 'a'), (3, 30, 'c'), (5, 50, 'e'), (NULL, 70, 'n');
+
+statement ok
+CREATE TABLE proj_r (b INT, q INT, t TEXT) AS VALUES
+  (2, 200, 'x'), (4, 400, 'y'), (0, 0, 'z'), (NULL, 900, 'm');
+
+query TT
+EXPLAIN SELECT l.p, r.q FROM proj_l l INNER JOIN proj_r r ON l.a < r.b;
+----
+logical_plan
+01)Projection: l.p, r.q
+02)--Inner Join:  Filter: l.a < r.b
+03)----SubqueryAlias: l
+04)------TableScan: proj_l projection=[a, p]
+05)----SubqueryAlias: r
+06)------TableScan: proj_r projection=[b, q]
+physical_plan
+01)PiecewiseMergeJoin: operator=Lt, join_type=Inner, on=(a < b), projection=[p@1, q@3]
+02)--SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT l.p, r.q FROM proj_l l LEFT JOIN proj_r r ON l.a < r.b;
+----
+logical_plan
+01)Projection: l.p, r.q
+02)--Left Join:  Filter: l.a < r.b
+03)----SubqueryAlias: l
+04)------TableScan: proj_l projection=[a, p]
+05)----SubqueryAlias: r
+06)------TableScan: proj_r projection=[b, q]
+physical_plan
+01)PiecewiseMergeJoin: operator=Lt, join_type=Left, on=(a < b), projection=[p@1, q@3]
+02)--SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT l.p, r.q FROM proj_l l RIGHT JOIN proj_r r ON l.a < r.b;
+----
+logical_plan
+01)Projection: l.p, r.q
+02)--Right Join:  Filter: l.a < r.b
+03)----SubqueryAlias: l
+04)------TableScan: proj_l projection=[a, p]
+05)----SubqueryAlias: r
+06)------TableScan: proj_r projection=[b, q]
+physical_plan
+01)PiecewiseMergeJoin: operator=Lt, join_type=Right, on=(a < b), projection=[p@1, q@3]
+02)--SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT l.p, r.q FROM proj_l l FULL JOIN proj_r r ON l.a < r.b;
+----
+logical_plan
+01)Projection: l.p, r.q
+02)--Full Join:  Filter: l.a < r.b
+03)----SubqueryAlias: l
+04)------TableScan: proj_l projection=[a, p]
+05)----SubqueryAlias: r
+06)------TableScan: proj_r projection=[b, q]
+physical_plan
+01)PiecewiseMergeJoin: operator=Lt, join_type=Full, on=(a < b), projection=[p@1, q@3]
+02)--SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT count(*) FROM proj_l l FULL JOIN proj_r r ON l.a < r.b;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------Full Join:  Filter: l.a < r.b
+05)--------SubqueryAlias: l
+06)----------TableScan: proj_l projection=[a]
+07)--------SubqueryAlias: r
+08)----------TableScan: proj_r projection=[b]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------PiecewiseMergeJoin: operator=Lt, join_type=Full, on=(a < b), projection=[]
+07)------------SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A duplicated column is embedded once; the residual ProjectionExec duplicates it
+query TT
+EXPLAIN SELECT l.p, l.p AS p2 FROM proj_l l LEFT JOIN proj_r r ON l.a < r.b;
+----
+logical_plan
+01)Projection: l.p, l.p AS p2
+02)--Left Join:  Filter: l.a < r.b
+03)----SubqueryAlias: l
+04)------TableScan: proj_l projection=[a, p]
+05)----SubqueryAlias: r
+06)------TableScan: proj_r projection=[b]
+physical_plan
+01)ProjectionExec: expr=[p@0 as p, p@0 as p2]
+02)--PiecewiseMergeJoin: operator=Lt, join_type=Left, on=(a < b), projection=[p@1]
+03)----SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT l.p, l.p AS p2 FROM proj_l l LEFT JOIN proj_r r ON l.a < r.b ORDER BY 1;
+----
+10 10
+10 10
+30 30
+50 50
+70 70
+
+# An expression over both sides: the join embeds the columns the expression reads, and the
+# expression stays in a ProjectionExec above it. One partition, so that no RepartitionExec
+# sits between the two (an expression projection is not pushed below a RepartitionExec).
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query TT
+EXPLAIN SELECT l.p + r.q FROM proj_l l FULL JOIN proj_r r ON l.a < r.b;
+----
+logical_plan
+01)Projection: l.p + r.q
+02)--Full Join:  Filter: l.a < r.b
+03)----SubqueryAlias: l
+04)------TableScan: proj_l projection=[a, p]
+05)----SubqueryAlias: r
+06)------TableScan: proj_r projection=[b, q]
+physical_plan
+01)ProjectionExec: expr=[p@0 + q@1 as l.p + r.q]
+02)--PiecewiseMergeJoin: operator=Lt, join_type=Full, on=(a < b), projection=[p@1, q@3]
+03)----SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT l.p + r.q FROM proj_l l FULL JOIN proj_r r ON l.a < r.b ORDER BY 1;
+----
+210
+410
+430
+NULL
+NULL
+NULL
+NULL
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE proj_l;
+
+statement ok
+DROP TABLE proj_r;
+
 statement ok
 set datafusion.optimizer.enable_piecewise_merge_join = false;
