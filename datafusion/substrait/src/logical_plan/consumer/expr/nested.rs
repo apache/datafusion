@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use super::literal::name_struct_literals_like_first_struct_expr;
 use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::{DFSchema, not_impl_err, substrait_err};
 use datafusion::execution::FunctionRegistry;
@@ -41,6 +42,9 @@ pub async fn from_nested(
                         .await?,
                 );
             }
+            // the elements of a list share one type, so a struct literal element takes the
+            // field names of a struct column element, as in `[s, {c0: 1, c1: 'x'}]`
+            name_struct_literals_like_first_struct_expr(&mut args, input_schema);
 
             let make_array_udf = consumer.get_function_registry().udf("make_array")?;
             Ok(Expr::ScalarFunction(
@@ -63,6 +67,9 @@ pub async fn from_nested(
 mod tests {
     use super::*;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
+    use crate::logical_plan::producer::substrait_field_ref;
+    use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema};
+    use datafusion::logical_expr::ExprSchemable;
     use substrait::proto::expression::Literal;
     use substrait::proto::expression::nested::List;
     use substrait::proto::{self, Expression};
@@ -75,6 +82,56 @@ mod tests {
                 literal_type: Some(proto::expression::literal::LiteralType::I64(value)),
             })),
         }
+    }
+
+    #[tokio::test]
+    async fn nested_list_struct_literal_takes_column_names()
+    -> datafusion::common::Result<()> {
+        // `[s, {0}]` with `s: Struct{a}`: the literal element is `Struct{c0}` until renamed
+        let struct_type =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int64, true)]));
+        let schema = DFSchema::try_from(Schema::new(vec![Field::new(
+            "s",
+            struct_type.clone(),
+            true,
+        )]))?;
+        let struct_literal = Expression {
+            rex_type: Some(proto::expression::RexType::Literal(Literal {
+                nullable: false,
+                type_variation_reference: 0,
+                literal_type: Some(proto::expression::literal::LiteralType::Struct(
+                    proto::expression::literal::Struct {
+                        fields: vec![Literal {
+                            nullable: false,
+                            type_variation_reference: 0,
+                            literal_type: Some(
+                                proto::expression::literal::LiteralType::I64(0),
+                            ),
+                        }],
+                    },
+                )),
+            })),
+        };
+        let nested = Nested {
+            nullable: false,
+            type_variation_reference: 0,
+            nested_type: Some(NestedType::List(List {
+                values: vec![substrait_field_ref(0)?, struct_literal],
+            })),
+        };
+
+        let expr = from_nested(
+            &test_consumer(),
+            &nested,
+            &schema,
+            &SubstraitConsumerContext::default(),
+        )
+        .await?;
+        let Expr::ScalarFunction(make_array) = expr else {
+            panic!("expected a make_array call, got {expr}");
+        };
+        assert_eq!(make_array.args[1].get_type(&schema)?, struct_type);
+        Ok(())
     }
 
     #[tokio::test]
