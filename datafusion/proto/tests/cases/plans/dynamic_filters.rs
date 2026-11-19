@@ -9,6 +9,7 @@ use super::{roundtrip_test_and_return, roundtrip_test_sql_with_context};
 use arrow::array::RecordBatch;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -35,7 +36,7 @@ use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr,
-    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream,
+    PlanProperties, ReplaceChildrenOptions, SendableRecordBatchStream, displayable,
 };
 use datafusion::prelude::SessionContext;
 use datafusion_common::config::{ConfigOptions, TableParquetOptions};
@@ -1112,7 +1113,10 @@ fn extension_codec_expr_participates_in_deduplication() -> Result<()> {
     Ok(())
 }
 
-/// <https://github.com/apache/datafusion/issues/27543>
+/// Ensure that dynamic filters are reset by `reset_plan_states` so plans can be re-executed after
+/// serialization.
+///
+/// See <https://github.com/apache/datafusion/issues/27543>
 #[tokio::test]
 async fn test_dynamic_filter_roundtrip_after_execution_and_reset() -> Result<()> {
     let dir = tempfile::tempdir()?;
@@ -1127,20 +1131,28 @@ async fn test_dynamic_filter_roundtrip_after_execution_and_reset() -> Result<()>
             .await?;
     }
 
-    for (sql, expected) in [
-        ("SELECT * FROM big ORDER BY id LIMIT 1", 1),
-        ("SELECT * FROM big ORDER BY id DESC LIMIT 3", 3),
-        ("SELECT big.id FROM small JOIN big ON small.id = big.id", 3),
+    for sql in [
+        "SELECT * FROM big ORDER BY id LIMIT 1",
+        "SELECT * FROM big ORDER BY id DESC LIMIT 3",
+        "SELECT big.id FROM small JOIN big ON small.id = big.id",
+        "SELECT min(id), max(id) FROM big WHERE id % 2 = 0",
     ] {
         let plan = ctx.sql(sql).await?.create_physical_plan().await?;
-        datafusion::physical_plan::collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+        let expected =
+            datafusion::physical_plan::collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+        let display = displayable(plan.as_ref()).indent(true).to_string();
+        assert!(display.contains("DynamicFilter ["), "{sql}: {display}");
+
         let plan = datafusion::physical_plan::execution_plan::reset_plan_states(plan)?;
         let bytes = datafusion_proto::bytes::physical_plan_to_bytes(plan)?;
         let decoded =
             datafusion_proto::bytes::physical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
-        let batches = datafusion::physical_plan::collect(decoded, ctx.task_ctx()).await?;
-        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(rows, expected, "{sql}");
+        let actual = datafusion::physical_plan::collect(decoded, ctx.task_ctx()).await?;
+        assert_eq!(
+            pretty_format_batches(&actual)?.to_string(),
+            pretty_format_batches(&expected)?.to_string(),
+            "{sql}"
+        );
     }
     Ok(())
 }

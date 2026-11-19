@@ -2012,9 +2012,9 @@ pub fn check_not_null_constraints(
 ///
 /// # Serializing an executed plan
 ///
-/// Serialization (for example with `datafusion-proto`) keeps the current state of
-/// dynamic filters. To run a decoded plan from the start, call this function
-/// before you serialize a plan that already executed.
+/// Serialization (for example with `datafusion-proto`) keeps runtime state that is
+/// stored in the plan, such as dynamic filters. To run a decoded plan from the start,
+/// call this function before you serialize a plan that already executed.
 ///
 /// # Limitations
 ///
