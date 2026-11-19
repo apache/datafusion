@@ -58,7 +58,7 @@ impl Setting {
             .with_batch_size(self.batch_size);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
         let ctx = SessionContext::new_with_config(config);
-        for (name, partitions) in [("raw", &data.raw), ("canon", &data.canon)] {
+        for (name, partitions) in [("raw", &data.raw), ("canonical", &data.canonical)] {
             let table = MemTable::try_new(Arc::clone(&data.schema), partitions.clone())?;
             ctx.register_table(name, Arc::new(table))?;
         }

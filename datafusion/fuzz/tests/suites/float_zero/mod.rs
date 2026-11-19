@@ -5,7 +5,7 @@
 //! Checks that `-0.0` and `0.0` give the same query results.
 //!
 //! Each query runs on two copies of a table: `raw` has some `-0.0` values and
-//! `canon` has them replaced by `0.0`. The results must be the same, apart
+//! `canonical` has them replaced by `0.0`. The results must be the same, apart
 //! from how `-0.0` is printed. See
 //! <https://github.com/apache/datafusion/issues/26138>.
 
@@ -84,39 +84,40 @@ async fn check(pair: &Pair) -> Result<(), Failure> {
         ctx,
     } = pair;
     let raw_sql = query.render("raw", setting.raw_zero());
-    let canon_sql = query.render("canon", "0.0");
+    let canonical_sql = query.render("canonical", "0.0");
     let describe = || {
         format!(
-            "{} under {setting:?}\n  raw:   {raw_sql}\n  canon: {canon_sql}",
+            "{} under {setting:?}\n  raw:       {raw_sql}\n  canonical: {canonical_sql}",
             query.name
         )
     };
 
-    let (raw, canon) = join(run_sql(&raw_sql, ctx), run_sql(&canon_sql, ctx)).await;
-    let (mut raw, mut canon) = match (raw, canon) {
-        (Ok(raw), Ok(canon)) => (format_rows(&raw), format_rows(&canon)),
-        (raw, canon) => {
+    let (raw, canonical) =
+        join(run_sql(&raw_sql, ctx), run_sql(&canonical_sql, ctx)).await;
+    let (mut raw, mut canonical) = match (raw, canonical) {
+        (Ok(raw), Ok(canonical)) => (format_rows(&raw), format_rows(&canonical)),
+        (raw, canonical) => {
             let outcome = |r: &Result<_>| match r {
                 Ok(_) => "ok".to_string(),
                 Err(e) => format!("fails: {e}"),
             };
             return Err(Failure::Error(format!(
-                "{}\n  raw {}\n  canon {}",
+                "{}\n  raw {}\n  canonical {}",
                 describe(),
                 outcome(&raw),
-                outcome(&canon)
+                outcome(&canonical)
             )));
         }
     };
 
     if !query.ordered {
         raw.sort_unstable();
-        canon.sort_unstable();
+        canonical.sort_unstable();
     }
-    if raw == canon {
+    if raw == canonical {
         return Ok(());
     }
-    let diff = first_difference(&raw, &canon, query.ordered);
+    let diff = first_difference(&raw, &canonical, query.ordered);
     Err(Failure::Mismatch(format!("{}\n{diff}", describe())))
 }
 
@@ -148,11 +149,11 @@ fn format_rows(batches: &[RecordBatch]) -> Vec<String> {
 }
 
 /// The first row where the results differ.
-fn first_difference(raw: &[String], canon: &[String], ordered: bool) -> String {
+fn first_difference(raw: &[String], canonical: &[String], ordered: bool) -> String {
     let row = if ordered { "row" } else { "sorted row" };
-    match raw.iter().zip(canon).position(|(r, c)| r != c) {
-        Some(i) => format!("{row} {i}: raw {}, canon {}", raw[i], canon[i]),
-        None => format!("raw {} rows, canon {} rows", raw.len(), canon.len()),
+    match raw.iter().zip(canonical).position(|(r, c)| r != c) {
+        Some(i) => format!("{row} {i}: raw {}, canonical {}", raw[i], canonical[i]),
+        None => format!("raw {} rows, canonical {} rows", raw.len(), canonical.len()),
     }
 }
 

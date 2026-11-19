@@ -5,8 +5,8 @@
 //! The two tables each query runs on:
 //!
 //! - `raw` has some `-0.0` values.
-//! - `canon`, short for "canonical", is the same table with every `-0.0`
-//!   replaced by `0.0`, so each zero is written the same way.
+//! - `canonical` is the same table with every `-0.0` replaced by `0.0`, so
+//!   each zero is written the same way.
 //!
 //! A query must give the same result on both.
 
@@ -24,7 +24,7 @@ use rand::seq::SliceRandom;
 /// Both tables, split into the same pieces.
 pub struct Dataset {
     pub schema: SchemaRef,
-    pub canon: Vec<Vec<RecordBatch>>,
+    pub canonical: Vec<Vec<RecordBatch>>,
     pub raw: Vec<Vec<RecordBatch>>,
 }
 
@@ -53,7 +53,7 @@ impl Columns {
 }
 
 /// `raw` with every `-0.0` replaced by `0.0`.
-fn canon_of(raw: &RecordBatch) -> RecordBatch {
+fn canonical_of(raw: &RecordBatch) -> RecordBatch {
     let columns = raw.columns().iter().cloned().map(normalize).collect();
     RecordBatch::try_new(raw.schema(), columns).unwrap()
 }
@@ -98,7 +98,7 @@ pub fn fixed() -> Dataset {
     .into_batch();
     Dataset {
         schema: raw.schema(),
-        canon: vec![vec![canon_of(&raw)]],
+        canonical: vec![vec![canonical_of(&raw)]],
         raw: vec![vec![raw]],
     }
 }
@@ -151,28 +151,32 @@ pub fn random(rng: &mut StdRng) -> Dataset {
         }
     };
     let schema = raw.schema();
-    let (canon, raw) = split(rng, &canon_of(&raw), &raw);
-    Dataset { schema, canon, raw }
+    let (canonical, raw) = split(rng, &canonical_of(&raw), &raw);
+    Dataset {
+        schema,
+        canonical,
+        raw,
+    }
 }
 
 /// Cuts both tables at the same random places.
 fn split(
     rng: &mut StdRng,
-    canon: &RecordBatch,
+    canonical: &RecordBatch,
     raw: &RecordBatch,
 ) -> (Vec<Vec<RecordBatch>>, Vec<Vec<RecordBatch>>) {
     let num_partitions = rng.random_range(1..=3);
-    let mut canon_parts = vec![vec![]; num_partitions];
+    let mut canonical_parts = vec![vec![]; num_partitions];
     let mut raw_parts = vec![vec![]; num_partitions];
     let mut offset = 0;
-    while offset < canon.num_rows() {
-        let len = rng.random_range(1..=16).min(canon.num_rows() - offset);
+    while offset < canonical.num_rows() {
+        let len = rng.random_range(1..=16).min(canonical.num_rows() - offset);
         let partition = rng.random_range(0..num_partitions);
-        canon_parts[partition].push(canon.slice(offset, len));
+        canonical_parts[partition].push(canonical.slice(offset, len));
         raw_parts[partition].push(raw.slice(offset, len));
         offset += len;
     }
-    (canon_parts, raw_parts)
+    (canonical_parts, raw_parts)
 }
 
 /// `random` needs `has_negative_zero` to find `-0.0`, and only `-0.0`, in
