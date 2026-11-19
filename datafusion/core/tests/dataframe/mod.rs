@@ -7525,10 +7525,18 @@ async fn test_dataframe_read_columns() -> Result<()> {
 }
 
 #[test]
-fn test_dataframe_read_columns_empty() {
+fn test_dataframe_read_columns_invalid_input() {
     let ctx = SessionContext::new();
+
+    // no columns
     assert!(ctx.read_columns(vec![]).is_err());
     assert!(ctx.read_columns([]).is_err());
+
+    // columns of different lengths
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let b: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+    let err = ctx.read_columns([("a", a), ("b", b)]).unwrap_err();
+    assert_contains!(err.to_string(), "must have the same length");
 }
 
 #[tokio::test]
