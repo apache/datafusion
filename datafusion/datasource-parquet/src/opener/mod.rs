@@ -1533,6 +1533,8 @@ impl RowGroupsPrunedParquetOpen {
             let row_group_indexes: Vec<usize> =
                 self.row_groups.row_group_indexes().collect();
             for idx in row_group_indexes {
+                // Statistics have already proved that every row in this group
+                // matches the predicate, so its Bloom filters cannot prune it.
                 if self.row_groups.access_plan().is_fully_matched(idx) {
                     continue;
                 }
@@ -5158,124 +5160,6 @@ mod test {
         // Bloom reads and evaluation are skipped for an entirely fully matched file.
         assert_eq!(pruned, 0);
         assert_eq!(matched, 0);
-    }
-
-    #[tokio::test]
-    async fn incremental_bloom_filter_pruning_short_circuits_remaining_columns() {
-        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        // Two row groups, each with columns a and b:
-        //   RG-0: a = [99, 98, 97],  b = [900, 980, 970]  — no predicate values present
-        //   RG-1: a = [10, 20, 30],  b = [100, 200, 300]  — contains predicate match
-        //
-        // Statistics pruning is disabled throughout; Bloom filters are the only pruning
-        // mechanism.  Decoder-level filter push-down is enabled so matching rows are
-        // physically filtered out of RG-1 where possible.
-        let batch_rg0 = record_batch!(
-            ("a", Int32, vec![99_i32, 98, 97]),
-            ("b", Int32, vec![900_i32, 980, 970])
-        )
-        .unwrap();
-        let batch_rg1 = record_batch!(
-            ("a", Int32, vec![10_i32, 20, 30]),
-            ("b", Int32, vec![100_i32, 200, 300])
-        )
-        .unwrap();
-        let schema = batch_rg0.schema();
-        let props = WriterProperties::builder()
-            // Force each batch into its own row group.
-            .set_max_row_group_row_count(Some(3))
-            .set_bloom_filter_enabled(true)
-            .set_statistics_enabled(EnabledStatistics::None)
-            .build();
-        let data_size = write_parquet_batches(
-            Arc::clone(&store),
-            "multi_col_bloom.parquet",
-            vec![batch_rg0, batch_rg1],
-            Some(props),
-        )
-        .await;
-        let file =
-            PartitionedFile::new("multi_col_bloom.parquet".to_string(), data_size as u64);
-
-        // ── Query 1: a = 999 AND b = 100 ─────────────────────────────────────────────
-        // 'a' Bloom filter is checked first for each row group.  999 is absent from
-        // both, so both groups are pruned after reading only the 'a' filter — the 'b'
-        // filter is never fetched (short-circuit).
-        let pred1 =
-            logical2physical(&col("a").eq(lit(999)).and(col("b").eq(lit(100))), &schema);
-        let metrics1 = ExecutionPlanMetricsSet::new();
-        let morselizer1 = ParquetMorselizerBuilder::new()
-            .with_store(Arc::clone(&store))
-            .with_schema(Arc::clone(&schema))
-            .with_predicate(Arc::clone(&pred1))
-            .with_pushdown_filters(true)
-            .with_row_group_stats_pruning(false)
-            .with_enable_bloom_filter(true)
-            .with_metrics(metrics1.clone())
-            .build();
-        let stream1 = open_file(&morselizer1, file.clone()).await.unwrap();
-        let bytes_scanned1 = counter_metric_value(&metrics1, "bytes_scanned");
-        assert_eq!(collect_int32_values(stream1).await, Vec::<i32>::new());
-        let (pruned1, matched1) = bloom_filter_pruning_metrics(&metrics1);
-        // Both row groups pruned; no row group survived Bloom evaluation.
-        assert_eq!(pruned1, 2);
-        assert_eq!(matched1, 0);
-
-        // ── Query 2: a = 10 AND b = 999 ──────────────────────────────────────────────
-        // RG-0: 'a' filter doesn't contain 10 → pruned immediately (no 'b' read).
-        // RG-1: 'a' filter contains 10 → must read 'b'; 'b' filter doesn't contain 999
-        //        → pruned on the second column.
-        let pred2 =
-            logical2physical(&col("a").eq(lit(10)).and(col("b").eq(lit(999))), &schema);
-        let metrics2 = ExecutionPlanMetricsSet::new();
-        let morselizer2 = ParquetMorselizerBuilder::new()
-            .with_store(Arc::clone(&store))
-            .with_schema(Arc::clone(&schema))
-            .with_predicate(Arc::clone(&pred2))
-            .with_pushdown_filters(true)
-            .with_row_group_stats_pruning(false)
-            .with_enable_bloom_filter(true)
-            .with_metrics(metrics2.clone())
-            .build();
-        let stream2 = open_file(&morselizer2, file.clone()).await.unwrap();
-        let bytes_scanned2 = counter_metric_value(&metrics2, "bytes_scanned");
-        assert_eq!(collect_int32_values(stream2).await, Vec::<i32>::new());
-        let (pruned2, matched2) = bloom_filter_pruning_metrics(&metrics2);
-        assert_eq!(pruned2, 2);
-        assert_eq!(matched2, 0);
-
-        // Query 2 must read both 'a' and 'b' filters for RG-1, so it scans strictly
-        // more Bloom filter bytes than Query 1 (which short-circuits on 'a' alone).
-        assert!(bytes_scanned1 > 0, "expected non-zero bloom filter I/O");
-        assert!(
-            bytes_scanned2 > bytes_scanned1,
-            "query 2 should scan more bloom filter bytes due to loading 'b' filter for RG-1"
-        );
-
-        // ── Query 3: a = 10 (one row group pruned, one matched) ───────────────────────
-        // RG-0: 'a' filter doesn't contain 10 → pruned.
-        // RG-1: 'a' filter contains 10 → matched (not pruned); the actual matching
-        //        rows [10, 20, 30] are returned through decoder-level filtering.
-        let pred3 = logical2physical(&col("a").eq(lit(10)), &schema);
-        let metrics3 = ExecutionPlanMetricsSet::new();
-        let morselizer3 = ParquetMorselizerBuilder::new()
-            .with_store(Arc::clone(&store))
-            .with_schema(Arc::clone(&schema))
-            .with_predicate(Arc::clone(&pred3))
-            .with_pushdown_filters(true)
-            .with_row_group_stats_pruning(false)
-            .with_enable_bloom_filter(true)
-            .with_metrics(metrics3.clone())
-            .build();
-        let stream3 = open_file(&morselizer3, file.clone()).await.unwrap();
-        // The matching row (a=10) must be returned; decoder filtering removes a=20,30.
-        assert_eq!(collect_int32_values(stream3).await, vec![10_i32]);
-        let (pruned3, matched3) = bloom_filter_pruning_metrics(&metrics3);
-        assert_eq!(pruned3, 1, "RG-0 should be pruned by Bloom filter");
-        assert_eq!(
-            matched3, 1,
-            "RG-1 passed Bloom evaluation and must count as matched"
-        );
     }
 
     /// Verify that a Bloom filter available for only one predicate column is still

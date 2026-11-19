@@ -453,6 +453,10 @@ impl RowGroupAccessPlanFilter {
     ///
     /// # Panics
     /// if `row_group_bloom_filters` does not have the same number of row groups as this set
+    #[deprecated(
+        since = "57.0.0",
+        note = "Bloom filters are now evaluated incrementally during loading in the parquet opener"
+    )]
     pub fn prune_by_bloom_filters(
         &mut self,
         predicate: &PruningPredicate,
@@ -1695,6 +1699,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn bloom_filter_pruning_evaluates_row_groups_with_bloom_filters() {
         // c1 = 15
         let schema =
@@ -1729,6 +1734,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn bloom_filter_pruning_error_retains_row_group_without_match() {
         let schema =
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));

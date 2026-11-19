@@ -90,9 +90,9 @@ async fn test_parquet_bloom_filter_io_interleaved_multi_row_group() {
     // Row group 0: a in [10, 20], b in [100, 200]
     // Row group 1: a in [30, 40], b in [300, 400]
     // For query WHERE a = 30 AND b = 300:
-    // - Bloom filter on `a` is read for row groups 0 and 1
-    // - Evaluated against `a = 30`: row group 0 is pruned immediately
-    // - Bloom filter on `b` is subsequently read ONLY for row group 1 (rg 0 is skipped!)
+    // - Row group 0: `a`'s Bloom filter rules out 30, so the row group is
+    //   pruned and `b`'s Bloom filter is never read
+    // - Row group 1: `a`'s filter may contain 30, so `b`'s filter is read next
     // - Data pages are read only for row group 1
     assert_snapshot!(test.query("SELECT * FROM t WHERE a = 30 AND b = 300").await, @r"
     --- Query: SELECT * FROM t WHERE a = 30 AND b = 300 (1 rows) ---

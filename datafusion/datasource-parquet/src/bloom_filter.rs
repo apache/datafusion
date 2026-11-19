@@ -628,6 +628,7 @@ mod tests {
     }
 
     /// Evaluates the pruning predicate on the specified row groups and returns the row groups that are left
+    #[expect(deprecated)]
     async fn test_row_group_bloom_filter_pruning_predicate(
         file_name: &str,
         data: bytes::Bytes,
