@@ -409,6 +409,50 @@ FROM (SELECT 1 AS x, 2 AS y FROM literal_ndv_empty);
 statement ok
 DROP TABLE literal_ndv_empty;
 
+# The years of the date bounds limit the groups of the final aggregate. The
+# key is nullable and its NULL count is unknown, so one NULL group is added to
+# the 7 years. The partial aggregate keeps the input row count.
+statement ok
+COPY (SELECT d FROM unnest(range(DATE '1992-01-02', DATE '1998-12-02', INTERVAL '1' DAY)) AS t(d))
+TO 'test_files/scratch/parquet_statistics/dates.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE date_stats STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/dates.parquet';
+
+statement ok
+SET datafusion.explain.show_statistics = true;
+
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+query TT
+EXPLAIN SELECT date_part('year', d) AS y, COUNT(*) FROM date_stats GROUP BY y;
+----
+physical_plan
+01)ProjectionExec: expr=[date_part(Utf8("year"),date_stats.d)@0 as y, count(Int64(1))@1 as count(*)], statistics=[Rows=Inexact(8), Bytes=Inexact(96), [(Col[0]: Min=Inexact(Int32(1992)) Max=Inexact(Int32(1998))),(Col[1]:)]]
+02)--AggregateExec: mode=FinalPartitioned, gby=[date_part(Utf8("year"),date_stats.d)@0 as date_part(Utf8("year"),date_stats.d)], aggr=[count(Int64(1))], statistics=[Rows=Inexact(8), Bytes=Inexact(32), [(Col[0]: Min=Inexact(Int32(1992)) Max=Inexact(Int32(1998))),(Col[1]:)]]
+03)----RepartitionExec: partitioning=Hash([date_part(Utf8("year"),date_stats.d)@0], 2), input_partitions=1, statistics=[Rows=Inexact(2526), Bytes=Inexact(10104), [(Col[0]: Min=Inexact(Int32(1992)) Max=Inexact(Int32(1998))),(Col[1]:)]]
+04)------AggregateExec: mode=Partial, gby=[date_part(year, d@0) as date_part(Utf8("year"),date_stats.d)], aggr=[count(Int64(1))], statistics=[Rows=Inexact(2526), Bytes=Inexact(10104), [(Col[0]: Min=Inexact(Int32(1992)) Max=Inexact(Int32(1998))),(Col[1]:)]]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/dates.parquet]]}, projection=[d], file_type=parquet, statistics=[Rows=Exact(2526), Bytes=Exact(10104), [(Col[0]: Min=Exact(Date32("1992-01-02")) Max=Exact(Date32("1998-12-01")) Null=Exact(0) ScanBytes=Exact(10104))]]
+
+statement ok
+SET datafusion.explain.show_statistics = false;
+
+query II rowsort
+SELECT date_part('year', d) AS y, COUNT(*) FROM date_stats GROUP BY y;
+----
+1992 365
+1993 365
+1994 365
+1995 365
+1996 366
+1997 365
+1998 335
+
+statement ok
+DROP TABLE date_stats;
+
 statement ok
 SET datafusion.execution.target_partitions = 4;
 

@@ -894,7 +894,9 @@ mod test {
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
                 },
-                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Inexact(ScalarValue::Int32(Some(4))))
+                    .with_max_value(Precision::Inexact(ScalarValue::Int32(Some(5)))),
                 ColumnStatistics::new_unknown(),
             ],
         };
@@ -913,7 +915,9 @@ mod test {
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
                 },
-                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Inexact(ScalarValue::Int32(Some(2))))
+                    .with_max_value(Precision::Inexact(ScalarValue::Int32(Some(3)))),
                 ColumnStatistics::new_unknown(),
             ],
         };
