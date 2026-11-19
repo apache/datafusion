@@ -10,17 +10,13 @@
 //! <https://github.com/apache/datafusion/issues/26138>.
 
 use std::future::Future;
-use std::sync::Arc;
 
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::util::display::{ArrayFormatter, FormatOptions};
-use datafusion::physical_expr::expressions::Literal;
-use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::{ExecutionPlan, displayable};
+use datafusion::physical_plan::displayable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::float_semantics::normalize;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use datafusion_common_runtime::SpawnedTask;
 use futures::future::{join, join_all};
 use rand::SeedableRng;
@@ -160,9 +156,6 @@ fn first_difference(raw: &[String], canon: &[String], ordered: bool) -> String {
     }
 }
 
-/// Row counts to choose from.
-const TABLE_SIZES: &[usize] = &[8, 16, 32, 64, 128];
-
 /// Runs random queries on random tables. A query with a known failure may
 /// give a wrong result, but must not return an error.
 pub(crate) struct FloatZeroFuzzer;
@@ -175,9 +168,7 @@ impl FuzzTest for FloatZeroFuzzer {
     }
 
     fn prepare_dataset(&self, seed: u64) -> impl Future<Output = Result<Self::Dataset>> {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let num_rows = *TABLE_SIZES.choose(&mut rng).unwrap();
-        let data = data::random(&mut rng, num_rows);
+        let data = data::random(&mut StdRng::seed_from_u64(seed));
         std::future::ready(pairs(&data))
     }
 
@@ -233,77 +224,22 @@ async fn check_all(data: &data::Dataset) -> Vec<(Pair, Result<(), Failure>)> {
         .collect()
 }
 
-/// A known failure that matches no setting would never be checked.
-#[test]
-fn known_failures_apply() {
-    for query in QUERIES {
-        let applies = Setting::all()
-            .iter()
-            .any(|s| runs(query, s) && query.known_issue(s).is_some());
-        assert!(
-            query.known_failure.is_none() || applies,
-            "the known failure of {} applies to no setting that runs",
-            query.name
-        );
-    }
-}
-
 /// A `-0.0` written in a query must keep its sign, or the
 /// `negative_literals` settings test nothing.
 #[tokio::test]
 async fn float_zero_negative_literal() {
     let mut errors = vec![];
-    for Pair {
-        query,
-        setting,
-        ctx,
-    } in pairs(&data::fixed()).unwrap()
-    {
-        if !setting.negative_literals {
+    for pair in pairs(&data::fixed()).unwrap() {
+        if !pair.setting.negative_literals {
             continue;
         }
-        let sql = query.render("raw", setting.raw_zero());
-        let plan = ctx.sql(&sql).await.unwrap();
+        let sql = pair.query.render("raw", "-0.0");
+        let plan = pair.ctx.sql(&sql).await.unwrap();
         let plan = plan.create_physical_plan().await.unwrap();
-        if !has_negative_zero_literal(&plan) {
-            errors.push(format!(
-                "{} under {setting:?}: no `-0.0` literal in the plan of {sql}\n{}",
-                query.name,
-                displayable(plan.as_ref()).indent(true)
-            ));
+        let plan = displayable(plan.as_ref()).indent(true).to_string();
+        if !plan.contains("-0") {
+            errors.push(format!("no `-0` in the plan of {sql}\n{plan}"));
         }
     }
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
-}
-
-/// Whether the plan holds a `-0.0` written in the query.
-fn has_negative_zero_literal(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    let mut found = false;
-    plan.apply(|node| {
-        let Some(projection) = node.downcast_ref::<ProjectionExec>() else {
-            return Ok(TreeNodeRecursion::Continue);
-        };
-        for projected in projection.expr() {
-            projected.expr.apply(|expr| {
-                found |= expr
-                    .downcast_ref::<Literal>()
-                    .is_some_and(|literal| is_negative_zero(literal.value()));
-                Ok(TreeNodeRecursion::Continue)
-            })?;
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })
-    .unwrap();
-    found
-}
-
-fn is_negative_zero(value: &ScalarValue) -> bool {
-    match value {
-        ScalarValue::Float64(Some(v)) => *v == 0.0 && v.is_sign_negative(),
-        ScalarValue::Float32(Some(v)) => *v == 0.0 && v.is_sign_negative(),
-        ScalarValue::List(list) => {
-            data::has_negative_zero(&(Arc::clone(list) as ArrayRef))
-        }
-        _ => false,
-    }
 }

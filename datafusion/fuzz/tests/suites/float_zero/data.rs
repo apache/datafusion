@@ -15,7 +15,7 @@ use std::sync::Arc;
 use arrow::array::{
     ArrayRef, AsArray, Float32Array, Float64Array, Int64Array, ListArray, RecordBatch,
 };
-use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Float32Type, Float64Type, SchemaRef};
 use datafusion_common::float_semantics::normalize;
 use rand::Rng;
 use rand::rngs::StdRng;
@@ -28,17 +28,6 @@ pub struct Dataset {
     pub raw: Vec<Vec<RecordBatch>>,
 }
 
-fn schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int64, false),
-        Field::new("b", DataType::Int64, false),
-        Field::new("g", DataType::Int64, false),
-        Field::new("a", DataType::Float64, true),
-        Field::new("a32", DataType::Float32, true),
-        Field::new_list("k", Field::new_list_field(DataType::Float64, true), true),
-    ]))
-}
-
 struct Columns {
     id: Vec<i64>,
     b: Vec<i64>,
@@ -49,16 +38,17 @@ struct Columns {
 }
 
 impl Columns {
-    fn into_batch(self, schema: &SchemaRef) -> RecordBatch {
-        let columns: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(self.id)),
-            Arc::new(Int64Array::from(self.b)),
-            Arc::new(Int64Array::from(self.g)),
-            Arc::new(Float64Array::from(self.a)),
-            Arc::new(Float32Array::from(self.a32)),
-            Arc::new(ListArray::from_iter_primitive::<Float64Type, _, _>(self.k)),
-        ];
-        RecordBatch::try_new(Arc::clone(schema), columns).unwrap()
+    fn into_batch(self) -> RecordBatch {
+        let k = ListArray::from_iter_primitive::<Float64Type, _, _>(self.k);
+        RecordBatch::try_from_iter([
+            ("id", Arc::new(Int64Array::from(self.id)) as ArrayRef),
+            ("b", Arc::new(Int64Array::from(self.b))),
+            ("g", Arc::new(Int64Array::from(self.g))),
+            ("a", Arc::new(Float64Array::from(self.a))),
+            ("a32", Arc::new(Float32Array::from(self.a32))),
+            ("k", Arc::new(k)),
+        ])
+        .unwrap()
     }
 }
 
@@ -70,7 +60,7 @@ fn canon_of(raw: &RecordBatch) -> RecordBatch {
 
 /// Whether `array` holds a `-0.0`, also inside lists. A list must not be a
 /// slice, since all of its values are looked at.
-pub fn has_negative_zero(array: &ArrayRef) -> bool {
+fn has_negative_zero(array: &ArrayRef) -> bool {
     match array.data_type() {
         DataType::Float64 => array
             .as_primitive::<Float64Type>()
@@ -91,7 +81,6 @@ pub fn has_negative_zero(array: &ArrayRef) -> bool {
 /// <https://github.com/apache/datafusion/issues/26138#issuecomment-6497193637>.
 /// Every known failure shows up on it.
 pub fn fixed() -> Dataset {
-    let schema = schema();
     let z = -0.0;
     let raw = Columns {
         id: vec![1, 2, 3, 4],
@@ -106,11 +95,11 @@ pub fn fixed() -> Dataset {
             Some(vec![Some(0.0), Some(1.0)]),
         ],
     }
-    .into_batch(&schema);
+    .into_batch();
     Dataset {
+        schema: raw.schema(),
         canon: vec![vec![canon_of(&raw)]],
         raw: vec![vec![raw]],
-        schema,
     }
 }
 
@@ -130,10 +119,10 @@ fn pool_value(rng: &mut impl Rng) -> Option<f64> {
     }
 }
 
-/// A random table split into 1 to 3 partitions. Tries again until `a`,
-/// `a32` and `k` each hold a `-0.0`.
-pub fn random(rng: &mut StdRng, num_rows: usize) -> Dataset {
-    let schema = schema();
+/// A random table of 8 to 128 rows, split into 1 to 3 partitions. Tries
+/// again until `a`, `a32` and `k` each hold a `-0.0`.
+pub fn random(rng: &mut StdRng) -> Dataset {
+    let num_rows = rng.random_range(8..=128);
     let raw = loop {
         let mut b: Vec<i64> = (1..=num_rows as i64).collect();
         b.shuffle(rng);
@@ -153,7 +142,7 @@ pub fn random(rng: &mut StdRng, num_rows: usize) -> Dataset {
                 })
                 .collect(),
         }
-        .into_batch(&schema);
+        .into_batch();
         if ["a", "a32", "k"]
             .iter()
             .all(|name| has_negative_zero(raw.column_by_name(name).unwrap()))
@@ -161,6 +150,7 @@ pub fn random(rng: &mut StdRng, num_rows: usize) -> Dataset {
             break raw;
         }
     };
+    let schema = raw.schema();
     let (canon, raw) = split(rng, &canon_of(&raw), &raw);
     Dataset { schema, canon, raw }
 }
