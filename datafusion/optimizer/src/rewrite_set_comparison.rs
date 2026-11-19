@@ -9,7 +9,9 @@
 use crate::utils::{NamePreserver, merge_into_schema};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DFSchema, ExprSchema, Result, ScalarValue, plan_err};
+use datafusion_common::{
+    Column, DFSchema, ExprSchema, Result, ScalarValue, Spans, plan_err,
+};
 use datafusion_expr::expr::{self, Exists, SetComparison, SetQuantifier};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
@@ -105,14 +107,27 @@ fn build_set_comparison_subquery(
         Box::new(right_expr),
     ));
 
-    let null_exists =
-        exists_subquery(&subquery, Expr::IsNull(Box::new(comparison.clone())))?;
+    let Subquery {
+        subquery: plan,
+        spans,
+        ..
+    } = subquery;
+    let null_exists = exists_subquery(
+        plan.as_ref().clone(),
+        spans.clone(),
+        Expr::IsNull(Box::new(comparison.clone())),
+    )?;
 
     let (filter, found): (fn(Box<Expr>) -> Expr, bool) = match quantifier {
         SetQuantifier::Any => (Expr::IsTrue, true),
         SetQuantifier::All => (Expr::IsFalse, false),
     };
-    let found_exists = exists_subquery(&subquery, filter(Box::new(comparison)))?;
+    // The last use of the subquery, so move it instead of cloning.
+    let found_exists = exists_subquery(
+        Arc::unwrap_or_clone(plan),
+        spans,
+        filter(Box::new(comparison)),
+    )?;
 
     let result_expr = Expr::Case(expr::Case {
         expr: None,
@@ -129,16 +144,14 @@ fn build_set_comparison_subquery(
     Ok(result_expr)
 }
 
-fn exists_subquery(subquery: &Subquery, filter: Expr) -> Result<Expr> {
-    let plan = LogicalPlanBuilder::from(subquery.subquery.as_ref().clone())
-        .filter(filter)?
-        .build()?;
+fn exists_subquery(plan: LogicalPlan, spans: Spans, filter: Expr) -> Result<Expr> {
+    let plan = LogicalPlanBuilder::from(plan).filter(filter)?.build()?;
     let outer_ref_columns = plan.all_out_ref_exprs();
     Ok(Expr::Exists(Exists {
         subquery: Subquery {
             subquery: Arc::new(plan),
             outer_ref_columns,
-            spans: subquery.spans.clone(),
+            spans,
         },
         negated: false,
     }))
