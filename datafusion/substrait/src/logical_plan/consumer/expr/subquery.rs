@@ -35,6 +35,7 @@ pub async fn from_subquery(
     input_schema: &DFSchema,
     context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Expr> {
+    let empty_rel = Rel::default();
     match &subquery.subquery_type {
         Some(subquery_type) => match subquery_type {
             SubqueryType::InPredicate(in_predicate) => {
@@ -81,7 +82,7 @@ pub async fn from_subquery(
             SubqueryType::Scalar(query) => {
                 let plan = consume_subquery_rel(
                     consumer,
-                    &(query.input.clone()).unwrap_or_default(),
+                    query.input.as_deref().unwrap_or(&empty_rel),
                     input_schema,
                     context,
                 )
@@ -100,7 +101,7 @@ pub async fn from_subquery(
                         let relation = &predicate.tuples;
                         let plan = consume_subquery_rel(
                             consumer,
-                            &relation.clone().unwrap_or_default(),
+                            relation.as_deref().unwrap_or(&empty_rel),
                             input_schema,
                             context,
                         )

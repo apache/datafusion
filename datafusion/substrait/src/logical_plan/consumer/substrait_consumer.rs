@@ -292,8 +292,15 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     async fn consume_literal(
         &self,
         expr: &Literal,
-        _context: &SubstraitConsumerContext,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Expr> {
+        if let Some(resolved) =
+            context.get_extension::<super::type_resolution::ResolvedNames>()
+            && let Some(names) = resolved.literal(expr)
+        {
+            let scalar = super::from_substrait_literal(self, expr, names, &mut 0)?;
+            return Ok(Expr::Literal(scalar, None));
+        }
         from_literal(self, expr).await
     }
 

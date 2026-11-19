@@ -9,8 +9,8 @@ use datafusion::logical_expr::{
     Cast, Expr, LogicalPlan, LogicalPlanBuilder, requalify_sides_if_needed,
 };
 use std::sync::Arc;
+use substrait::proto::SetRel;
 use substrait::proto::set_rel::SetOp;
-use substrait::proto::{Rel, SetRel};
 
 pub async fn from_set_rel(
     consumer: &impl SubstraitConsumer,
@@ -18,68 +18,59 @@ pub async fn from_set_rel(
     context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
     if set.inputs.len() < 2 {
-        substrait_err!("Set operation requires at least two inputs")
-    } else {
-        match set.op() {
-            SetOp::UnionAll => union_rels(consumer, &set.inputs, true, context).await,
-            SetOp::UnionDistinct => {
-                union_rels(consumer, &set.inputs, false, context).await
-            }
-            SetOp::IntersectionPrimary => intersect_rel(
-                consumer.consume_rel(&set.inputs[0], context).await?,
-                union_rels(consumer, &set.inputs[1..], true, context).await?,
-                false,
-            ),
-            SetOp::IntersectionMultiset => {
-                intersect_rels(consumer, &set.inputs, false, context).await
-            }
-            SetOp::IntersectionMultisetAll => {
-                intersect_rels(consumer, &set.inputs, true, context).await
-            }
-            SetOp::MinusPrimary => {
-                except_rels(consumer, &set.inputs, false, context).await
-            }
-            SetOp::MinusPrimaryAll => {
-                except_rels(consumer, &set.inputs, true, context).await
-            }
-            set_op => not_impl_err!("Unsupported set operator: {set_op:?}"),
+        return substrait_err!("Set operation requires at least two inputs");
+    }
+    let mut inputs = Vec::with_capacity(set.inputs.len());
+    for input in &set.inputs {
+        inputs.push(consumer.consume_rel(input, context).await?);
+    }
+    let mut inputs = super::super::type_resolution::resolve_set_inputs(inputs)?;
+
+    match set.op() {
+        SetOp::UnionAll => union_plans(inputs, true),
+        SetOp::UnionDistinct => union_plans(inputs, false),
+        SetOp::IntersectionPrimary => {
+            let secondary = inputs.split_off(1);
+            intersect_rel(inputs.remove(0), union_plans(secondary, true)?, false)
         }
+        SetOp::IntersectionMultiset => intersect_plans(inputs, false),
+        SetOp::IntersectionMultisetAll => intersect_plans(inputs, true),
+        SetOp::MinusPrimary => except_plans(inputs, false),
+        SetOp::MinusPrimaryAll => except_plans(inputs, true),
+        set_op => not_impl_err!("Unsupported set operator: {set_op:?}"),
     }
 }
 
-async fn union_rels(
-    consumer: &impl SubstraitConsumer,
-    rels: &[Rel],
+fn union_plans(
+    inputs: Vec<LogicalPlan>,
     is_all: bool,
-    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
-    let mut union_builder = Ok(LogicalPlanBuilder::from(
-        consumer.consume_rel(&rels[0], context).await?,
-    ));
-    for input in &rels[1..] {
-        let rel_plan = consumer.consume_rel(input, context).await?;
-
+    let mut inputs = inputs.into_iter();
+    let Some(first) = inputs.next() else {
+        return substrait_err!("Set operation requires at least two inputs");
+    };
+    let mut union_builder = Ok(LogicalPlanBuilder::from(first));
+    for input in inputs {
         union_builder = if is_all {
-            union_builder?.union(rel_plan)
+            union_builder?.union(input)
         } else {
-            union_builder?.union_distinct(rel_plan)
+            union_builder?.union_distinct(input)
         };
     }
     union_builder?.build()
 }
 
-async fn intersect_rels(
-    consumer: &impl SubstraitConsumer,
-    rels: &[Rel],
+fn intersect_plans(
+    inputs: Vec<LogicalPlan>,
     is_all: bool,
-    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
-    let mut rel = consumer.consume_rel(&rels[0], context).await?;
-
-    for input in &rels[1..] {
-        rel = intersect_rel(rel, consumer.consume_rel(input, context).await?, is_all)?;
+    let mut inputs = inputs.into_iter();
+    let Some(mut rel) = inputs.next() else {
+        return substrait_err!("Set operation requires at least two inputs");
+    };
+    for input in inputs {
+        rel = intersect_rel(rel, input, is_all)?;
     }
-
     Ok(rel)
 }
 
@@ -208,21 +199,16 @@ fn intersect_rel(
     LogicalPlanBuilder::from(joined).project(exprs)?.build()
 }
 
-async fn except_rels(
-    consumer: &impl SubstraitConsumer,
-    rels: &[Rel],
+fn except_plans(
+    inputs: Vec<LogicalPlan>,
     is_all: bool,
-    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
-    let mut rel = consumer.consume_rel(&rels[0], context).await?;
-
-    for input in &rels[1..] {
-        rel = LogicalPlanBuilder::except(
-            rel,
-            consumer.consume_rel(input, context).await?,
-            is_all,
-        )?;
+    let mut inputs = inputs.into_iter();
+    let Some(mut rel) = inputs.next() else {
+        return substrait_err!("Set operation requires at least two inputs");
+    };
+    for input in inputs {
+        rel = LogicalPlanBuilder::except(rel, input, is_all)?;
     }
-
     Ok(rel)
 }

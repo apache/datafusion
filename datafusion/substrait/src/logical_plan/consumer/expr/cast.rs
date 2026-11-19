@@ -4,8 +4,9 @@
 
 use crate::logical_plan::consumer::SubstraitConsumerContext;
 
+use crate::logical_plan::consumer::type_resolution::ResolvedNames;
 use crate::logical_plan::consumer::{
-    SubstraitConsumer, field_from_substrait_type_without_names,
+    SubstraitConsumer, field_from_substrait_type, field_from_substrait_type_without_names,
 };
 use datafusion::common::{DFSchema, substrait_err};
 use datafusion::logical_expr::{Cast, Expr, TryCast};
@@ -29,7 +30,13 @@ pub async fn from_cast(
                     )
                     .await?,
             );
-            let field = field_from_substrait_type_without_names(consumer, output_type)?;
+            let resolved = context.get_extension::<ResolvedNames>();
+            let field = match resolved.as_ref().and_then(|resolved| resolved.cast(cast)) {
+                Some(names) => {
+                    field_from_substrait_type(consumer, output_type, names, &mut 0)?
+                }
+                None => field_from_substrait_type_without_names(consumer, output_type)?,
+            };
             if cast.failure_behavior() == ReturnNull {
                 Ok(Expr::TryCast(TryCast::new_from_field(input_expr, field)))
             } else {

@@ -24,6 +24,7 @@ pub use read_rel::*;
 pub use set_rel::*;
 pub use sort_rel::*;
 
+use crate::logical_plan::consumer::type_resolution::ResolvedNames;
 use crate::logical_plan::consumer::utils::NameTracker;
 use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use async_recursion::async_recursion;
@@ -42,6 +43,14 @@ pub async fn from_substrait_rel(
     relation: &Rel,
     context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
+    let resolution = context
+        .get_extension::<ResolvedNames>()
+        .is_none_or(|resolved| !resolved.is_active())
+        .then(|| ResolvedNames::for_rel(consumer, relation, context));
+    let context = resolution
+        .as_ref()
+        .map(|(context, _scope)| context)
+        .unwrap_or(context);
     let plan: datafusion::common::Result<LogicalPlan> = match &relation.rel_type {
         Some(rel_type) => match rel_type {
             RelType::Read(rel) => consumer.consume_read(rel, context).await,

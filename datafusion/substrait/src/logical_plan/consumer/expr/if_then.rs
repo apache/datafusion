@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::logical_plan::consumer::type_resolution::ResolvedNames;
 use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::DFSchema;
 use datafusion::logical_expr::{Case, Expr};
@@ -64,9 +65,15 @@ pub async fn from_if_then(
         )),
         None => None,
     };
-    Ok(Expr::Case(Case {
+    let consumed = Expr::Case(Case {
         expr,
         when_then_expr,
         else_expr,
-    }))
+    });
+    Ok(ResolvedNames::resolve_expression(
+        consumed,
+        if_then,
+        input_schema,
+        context,
+    ))
 }

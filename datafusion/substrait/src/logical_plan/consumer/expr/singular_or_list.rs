@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::SubstraitConsumerContext;
+use crate::logical_plan::consumer::type_resolution::ResolvedNames;
 
 use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_rex_vec};
 use datafusion::common::DFSchema;
@@ -18,7 +19,7 @@ pub async fn from_singular_or_list(
 ) -> datafusion::common::Result<Expr> {
     let substrait_expr = expr.value.as_ref().unwrap();
     let substrait_list = expr.options.as_ref();
-    Ok(Expr::InList(InList {
+    let consumed = Expr::InList(InList {
         expr: Box::new(
             consumer
                 .consume_expression(substrait_expr, input_schema, context)
@@ -27,5 +28,11 @@ pub async fn from_singular_or_list(
         list: from_substrait_rex_vec(consumer, substrait_list, input_schema, context)
             .await?,
         negated: false,
-    }))
+    });
+    Ok(ResolvedNames::resolve_expression(
+        consumed,
+        expr,
+        input_schema,
+        context,
+    ))
 }

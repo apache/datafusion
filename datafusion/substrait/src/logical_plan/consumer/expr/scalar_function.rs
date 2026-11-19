@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::SubstraitConsumerContext;
+use crate::logical_plan::consumer::type_resolution::ResolvedNames;
 
 use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
 use datafusion::common::Result;
@@ -60,7 +61,7 @@ pub async fn from_scalar_function(
 
     // try to first match the requested function into registered higher-order functions, then udfs, built-in ops
     // and finally built-in expressions
-    if let Ok(func) = higher_order_func {
+    let consumed = if let Ok(func) = higher_order_func {
         let expr = Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
             func.to_owned(),
             args,
@@ -97,7 +98,13 @@ pub async fn from_scalar_function(
         builder.build(consumer, f, args)
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
-    }
+    }?;
+    Ok(ResolvedNames::resolve_expression(
+        consumed,
+        f,
+        input_schema,
+        context,
+    ))
 }
 
 /// Checks whether `expr` uses a lambda parameter that comes from outside of it.

@@ -12,4 +12,5 @@ mod roundtrip_logical_plan;
 #[cfg(feature = "physical")]
 mod roundtrip_physical_plan;
 mod serialize;
+mod struct_type_resolution;
 mod substrait_validations;
