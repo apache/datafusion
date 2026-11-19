@@ -2,7 +2,8 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Query templates and the (template, setting) pairs known to be wrong.
+//! Query templates, each with the settings under which it is known to give a
+//! wrong result.
 
 use super::settings::Setting;
 
@@ -15,6 +16,17 @@ pub struct Template {
     /// Whether the outer ORDER BY decides the whole output order. If not, the
     /// results are compared as multisets of rows.
     pub ordered: bool,
+    pub known_failure: Option<KnownFailure>,
+}
+
+/// The settings under which a template is known to give a wrong result. The
+/// fixed-data test requires it to still give a wrong result there, not an
+/// error, so the PR that fixes the bug must remove it. The fuzzer accepts a
+/// wrong result there, but not an error.
+#[derive(Debug)]
+pub struct KnownFailure {
+    pub applies: fn(&Setting) -> bool,
+    pub issue: &'static str,
 }
 
 impl Template {
@@ -22,11 +34,44 @@ impl Template {
     pub fn render(&self, table: &str, zero: &str) -> String {
         self.sql.replace("{t}", table).replace("{z}", zero)
     }
+
+    /// The issue of the known failure under `setting`, if any.
+    pub fn known_issue(&self, setting: &Setting) -> Option<&'static str> {
+        self.known_failure
+            .as_ref()
+            .filter(|known| (known.applies)(setting))
+            .map(|known| known.issue)
+    }
+
+    const fn fails(self, applies: fn(&Setting) -> bool, issue: &'static str) -> Self {
+        Template {
+            known_failure: Some(KnownFailure { applies, issue }),
+            ..self
+        }
+    }
 }
 
 const fn template(name: &'static str, sql: &'static str, ordered: bool) -> Template {
-    Template { name, sql, ordered }
+    Template {
+        name,
+        sql,
+        ordered,
+        known_failure: None,
+    }
 }
+
+fn always(_: &Setting) -> bool {
+    true
+}
+
+/// The planner only picks a sort-merge join when the input is repartitioned.
+fn sort_merge_join(setting: &Setting) -> bool {
+    !setting.prefer_hash_join && setting.target_partitions > 1
+}
+
+const FLOAT_SEMANTICS: &str = "https://github.com/apache/datafusion/issues/26138";
+const WINDOW: &str = "https://github.com/apache/datafusion/issues/25766";
+const SORT_MERGE_JOIN: &str = "https://github.com/apache/datafusion/issues/26115";
 
 /// The templates. Rules for adding one:
 ///
@@ -38,41 +83,53 @@ const fn template(name: &'static str, sql: &'static str, ordered: bool) -> Templ
 ///   `-0.0` in `canon`, and no functions that can see the sign (`1 / a`,
 ///   `atan2`, casts to string).
 /// - `ordered` only when the outer ORDER BY decides the whole output order.
+///
+/// Sorting orders `-0.0` before `0.0`, which is behind most of the known
+/// failures of the sort, window and aggregate templates.
 pub const TEMPLATES: &[Template] = &[
     // Sort
-    template("order_by_a_b", "SELECT a, b FROM {t} ORDER BY a, b", true),
+    template("order_by_a_b", "SELECT a, b FROM {t} ORDER BY a, b", true)
+        .fails(always, FLOAT_SEMANTICS),
     template(
         "order_by_a_b_limit",
         "SELECT a, b FROM {t} ORDER BY a, b LIMIT 1",
         true,
-    ),
-    template("order_by_k", "SELECT id FROM {t} ORDER BY k, id", true),
+    )
+    .fails(always, FLOAT_SEMANTICS),
+    template("order_by_k", "SELECT id FROM {t} ORDER BY k, id", true)
+        .fails(always, FLOAT_SEMANTICS),
     // Window
     template(
         "rank",
         "SELECT id, rank() OVER (ORDER BY a) FROM {t}",
         false,
-    ),
+    )
+    .fails(always, WINDOW),
     template(
         "range_frame",
         "SELECT id, sum(b) OVER (ORDER BY a RANGE BETWEEN CURRENT ROW AND CURRENT ROW) FROM {t}",
         false,
-    ),
+    )
+    .fails(always, WINDOW),
     template(
         "row_number_partition",
         "SELECT id, row_number() OVER (PARTITION BY a ORDER BY id) FROM {t}",
         false,
-    ),
+    )
+    .fails(always, WINDOW),
     template(
         "first_value",
         "SELECT first_value(b ORDER BY a, b) FROM {t}",
         false,
-    ),
+    )
+    .fails(always, FLOAT_SEMANTICS),
+    // `count(DISTINCT)` fails when it is not planned as a GROUP BY.
     template(
         "count_distinct_window",
         "SELECT DISTINCT count(DISTINCT a) OVER () FROM {t}",
         false,
-    ),
+    )
+    .fails(always, FLOAT_SEMANTICS),
     // Aggregate
     template("group_by_a", "SELECT count(*) FROM {t} GROUP BY a", false),
     template("count_distinct", "SELECT count(DISTINCT a) FROM {t}", false),
@@ -80,13 +137,16 @@ pub const TEMPLATES: &[Template] = &[
         "count_distinct_two",
         "SELECT count(DISTINCT a), count(DISTINCT b) FROM {t}",
         false,
-    ),
+    )
+    .fails(always, FLOAT_SEMANTICS),
     template(
         "distinct_on",
         "SELECT DISTINCT ON (g) g, b FROM {t} ORDER BY g, a, b",
         true,
-    ),
-    template("min_max_k", "SELECT min(k), max(k) FROM {t}", false),
+    )
+    .fails(always, FLOAT_SEMANTICS),
+    template("min_max_k", "SELECT min(k), max(k) FROM {t}", false)
+        .fails(always, FLOAT_SEMANTICS),
     // Join
     template(
         "join_a",
@@ -97,7 +157,8 @@ pub const TEMPLATES: &[Template] = &[
         "join_k",
         "SELECT count(*) FROM {t} x JOIN {t} y ON x.k = y.k",
         false,
-    ),
+    )
+    .fails(sort_merge_join, SORT_MERGE_JOIN),
     // Expression
     template("in_list", "SELECT id, a IN ({z}, 1.0) FROM {t}", false),
     template(
@@ -116,103 +177,40 @@ pub const TEMPLATES: &[Template] = &[
         "case_when",
         "SELECT id, CASE a WHEN {z} THEN 'eq' ELSE 'ne' END FROM {t}",
         false,
-    ),
-    template("nullif", "SELECT id, nullif(a, {z}) FROM {t}", false),
+    )
+    .fails(always, FLOAT_SEMANTICS),
+    template("nullif", "SELECT id, nullif(a, {z}) FROM {t}", false)
+        .fails(always, FLOAT_SEMANTICS),
     template(
         "array_has_make_array",
         "SELECT id, array_has(make_array(a), {z}), \
          array_has_any(make_array(a), make_array({z})), \
          array_has_all(make_array(a), make_array({z})) FROM {t}",
         false,
-    ),
+    )
+    .fails(always, FLOAT_SEMANTICS),
     template(
         "array_has_k",
         "SELECT id, array_has(k, {z}) FROM {t}",
         false,
-    ),
+    )
+    .fails(always, FLOAT_SEMANTICS),
     template(
         "array_position",
         "SELECT id, array_position(k, {z}) FROM {t}",
         false,
-    ),
+    )
+    .fails(always, FLOAT_SEMANTICS),
     template(
         "array_replace",
         "SELECT id, array_replace(k, {z}, 9.0) FROM {t}",
         false,
-    ),
+    )
+    .fails(always, FLOAT_SEMANTICS),
     template(
         "array_remove",
         "SELECT id, array_remove(k, {z}) FROM {t}",
         false,
-    ),
-];
-
-/// A (template, setting) pair that is known to give a wrong result. The
-/// fixed-data test requires every listed pair to still give a wrong result,
-/// not an error, so the PR that fixes one must remove its entry. The fuzzer
-/// accepts a wrong result from a listed pair, but not an error.
-pub struct KnownFailure {
-    pub template: &'static str,
-    pub applies: fn(&Setting) -> bool,
-    pub issue: &'static str,
-}
-
-impl KnownFailure {
-    pub fn matches(template: &Template, setting: &Setting) -> Option<&'static Self> {
-        KNOWN_FAILURES
-            .iter()
-            .find(|f| f.template == template.name && (f.applies)(setting))
-    }
-}
-
-fn always(_: &Setting) -> bool {
-    true
-}
-
-/// The planner only picks a sort-merge join when the input is repartitioned.
-fn sort_merge_join(setting: &Setting) -> bool {
-    !setting.prefer_hash_join && setting.target_partitions > 1
-}
-
-const fn known(
-    template: &'static str,
-    applies: fn(&Setting) -> bool,
-    issue: &'static str,
-) -> KnownFailure {
-    KnownFailure {
-        template,
-        applies,
-        issue,
-    }
-}
-
-const FLOAT_SEMANTICS: &str = "https://github.com/apache/datafusion/issues/26138";
-const WINDOW: &str = "https://github.com/apache/datafusion/issues/25766";
-const SORT_MERGE_JOIN: &str = "https://github.com/apache/datafusion/issues/26115";
-
-pub const KNOWN_FAILURES: &[KnownFailure] = &[
-    // Sorting orders `-0.0` before `0.0`
-    known("order_by_a_b", always, FLOAT_SEMANTICS),
-    known("order_by_a_b_limit", always, FLOAT_SEMANTICS),
-    known("order_by_k", always, FLOAT_SEMANTICS),
-    known("first_value", always, FLOAT_SEMANTICS),
-    known("distinct_on", always, FLOAT_SEMANTICS),
-    known("min_max_k", always, FLOAT_SEMANTICS),
-    // Window partitions and peers
-    known("rank", always, WINDOW),
-    known("range_frame", always, WINDOW),
-    known("row_number_partition", always, WINDOW),
-    // `count(DISTINCT)` when not planned as a GROUP BY
-    known("count_distinct_two", always, FLOAT_SEMANTICS),
-    known("count_distinct_window", always, FLOAT_SEMANTICS),
-    // Expressions
-    known("case_when", always, FLOAT_SEMANTICS),
-    known("nullif", always, FLOAT_SEMANTICS),
-    known("array_has_make_array", always, FLOAT_SEMANTICS),
-    known("array_has_k", always, FLOAT_SEMANTICS),
-    known("array_position", always, FLOAT_SEMANTICS),
-    known("array_replace", always, FLOAT_SEMANTICS),
-    known("array_remove", always, FLOAT_SEMANTICS),
-    // Joins
-    known("join_k", sort_merge_join, SORT_MERGE_JOIN),
+    )
+    .fails(always, FLOAT_SEMANTICS),
 ];

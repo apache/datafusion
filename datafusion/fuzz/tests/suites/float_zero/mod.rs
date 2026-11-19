@@ -16,9 +16,9 @@
 //!
 //! - [`FloatZeroFuzzer`] checks random pairs on random tables.
 //! - [`float_zero_fixed`] checks every pair on a fixed table, on which every
-//!   entry of [`KNOWN_FAILURES`] reproduces.
-//! - [`known_failures_entries`] checks that the [`KNOWN_FAILURES`] entries
-//!   neither overlap nor go unused.
+//!   known failure reproduces.
+//! - [`known_failures_apply`] checks that every known failure applies to some
+//!   setting.
 //! - [`float_zero_negative_literal`] checks that `-0.0` literals keep their
 //!   sign.
 //!
@@ -51,7 +51,7 @@ mod data;
 mod queries;
 mod settings;
 
-use queries::{KNOWN_FAILURES, KnownFailure, TEMPLATES, Template};
+use queries::{TEMPLATES, Template};
 use settings::Setting;
 
 /// One template under one setting, with a context that has the `raw` and
@@ -209,15 +209,11 @@ impl FuzzTest for FloatZeroFuzzer {
         let pair = pairs
             .choose(&mut StdRng::seed_from_u64(seed))
             .ok_or_else(|| exec_datafusion_err!("no pair runs"))?;
-        match (
-            check(pair).await,
-            KnownFailure::matches(pair.template, &pair.setting),
-        ) {
+        match (check(pair).await, pair.template.known_issue(&pair.setting)) {
             (Ok(()), _) | (Err(Failure::Mismatch(_)), Some(_)) => Ok(()),
             (Err(failure), None) => exec_err!("{failure}"),
-            (Err(failure), Some(known)) => exec_err!(
-                "{failure}\nknown to give a wrong result, but now fails ({})",
-                known.issue
+            (Err(failure), Some(issue)) => exec_err!(
+                "{failure}\nknown to give a wrong result, but now fails ({issue})"
             ),
         }
     }
@@ -232,16 +228,15 @@ async fn float_zero_fixed() {
         let Pair {
             template, setting, ..
         } = pair;
-        match (result, KnownFailure::matches(template, &setting)) {
+        match (result, template.known_issue(&setting)) {
             (Ok(()), None) | (Err(Failure::Mismatch(_)), Some(_)) => {}
             (Err(failure), None) => errors.push(failure.to_string()),
-            (Err(Failure::Error(e)), Some(known)) => errors.push(format!(
-                "{e}\nknown to give a wrong result, but now fails ({})",
-                known.issue
+            (Err(Failure::Error(e)), Some(issue)) => errors.push(format!(
+                "{e}\nknown to give a wrong result, but now fails ({issue})"
             )),
-            (Ok(()), Some(known)) => errors.push(format!(
-                "{} under {setting:?} now passes, remove it from KNOWN_FAILURES ({})",
-                template.name, known.issue
+            (Ok(()), Some(issue)) => errors.push(format!(
+                "{} under {setting:?} now passes, remove its known failure ({issue})",
+                template.name
             )),
         }
     }
@@ -266,43 +261,20 @@ async fn check_all(data: &data::Dataset) -> Vec<(Pair, Result<(), Failure>)> {
         .collect()
 }
 
-/// Every [`KNOWN_FAILURES`] entry applies to some pair that runs, and no pair
-/// matches more than one entry.
+/// A known failure whose `applies` matches no setting that runs would never
+/// be checked.
 #[test]
-fn known_failures_entries() {
-    let mut errors = vec![];
-    let mut used = vec![false; KNOWN_FAILURES.len()];
-    for setting in Setting::all() {
-        for template in TEMPLATES.iter().filter(|t| runs(t, &setting)) {
-            let applying: Vec<usize> = (0..KNOWN_FAILURES.len())
-                .filter(|&i| {
-                    let known = &KNOWN_FAILURES[i];
-                    known.template == template.name && (known.applies)(&setting)
-                })
-                .collect();
-            if applying.len() > 1 {
-                errors.push(format!(
-                    "{} under {setting:?} matches {} KNOWN_FAILURES entries, \
-                     only the first one counts",
-                    template.name,
-                    applying.len()
-                ));
-            }
-            for i in applying {
-                used[i] = true;
-            }
-        }
+fn known_failures_apply() {
+    for template in TEMPLATES {
+        let applies = Setting::all()
+            .iter()
+            .any(|s| runs(template, s) && template.known_issue(s).is_some());
+        assert!(
+            template.known_failure.is_none() || applies,
+            "the known failure of {} applies to no setting that runs",
+            template.name
+        );
     }
-    for (known, used) in KNOWN_FAILURES.iter().zip(used) {
-        if !used {
-            errors.push(format!(
-                "KNOWN_FAILURES entry for {} applies to no pair that runs: \
-                 the template does not exist or `applies` matches no setting ({})",
-                known.template, known.issue
-            ));
-        }
-    }
-    assert!(errors.is_empty(), "{}", errors.join("\n\n"));
 }
 
 /// A `-0.0` literal in a `raw` query must reach the physical plan with its
