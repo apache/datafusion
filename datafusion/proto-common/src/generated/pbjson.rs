@@ -1755,6 +1755,9 @@ impl serde::Serialize for CsvOptions {
         if !self.ignore_trailing_whitespace.is_empty() {
             len += 1;
         }
+        if !self.match_columns_by_header.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvOptions", len)?;
         if !self.has_header.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -1850,6 +1853,11 @@ impl serde::Serialize for CsvOptions {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("ignoreTrailingWhitespace", pbjson::private::base64::encode(&self.ignore_trailing_whitespace).as_str())?;
         }
+        if !self.match_columns_by_header.is_empty() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("matchColumnsByHeader", pbjson::private::base64::encode(&self.match_columns_by_header).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -1898,6 +1906,8 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "ignoreLeadingWhitespace",
             "ignore_trailing_whitespace",
             "ignoreTrailingWhitespace",
+            "match_columns_by_header",
+            "matchColumnsByHeader",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1924,6 +1934,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             QuoteStyle,
             IgnoreLeadingWhitespace,
             IgnoreTrailingWhitespace,
+            MatchColumnsByHeader,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1967,6 +1978,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "quoteStyle" | "quote_style" => Ok(GeneratedField::QuoteStyle),
                             "ignoreLeadingWhitespace" | "ignore_leading_whitespace" => Ok(GeneratedField::IgnoreLeadingWhitespace),
                             "ignoreTrailingWhitespace" | "ignore_trailing_whitespace" => Ok(GeneratedField::IgnoreTrailingWhitespace),
+                            "matchColumnsByHeader" | "match_columns_by_header" => Ok(GeneratedField::MatchColumnsByHeader),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2008,6 +2020,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut quote_style__ = None;
                 let mut ignore_leading_whitespace__ = None;
                 let mut ignore_trailing_whitespace__ = None;
+                let mut match_columns_by_header__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::HasHeader => {
@@ -2168,6 +2181,14 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::MatchColumnsByHeader => {
+                            if match_columns_by_header__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("matchColumnsByHeader"));
+                            }
+                            match_columns_by_header__ = 
+                                Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(CsvOptions {
@@ -2193,6 +2214,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     quote_style: quote_style__.unwrap_or_default(),
                     ignore_leading_whitespace: ignore_leading_whitespace__.unwrap_or_default(),
                     ignore_trailing_whitespace: ignore_trailing_whitespace__.unwrap_or_default(),
+                    match_columns_by_header: match_columns_by_header__.unwrap_or_default(),
                 })
             }
         }
@@ -6463,6 +6485,9 @@ impl serde::Serialize for ParquetOptions {
         if self.force_filter_selections {
             len += 1;
         }
+        if self.enable_exact_reverse_scan {
+            len += 1;
+        }
         if self.data_pagesize_limit != 0 {
             len += 1;
         }
@@ -6580,6 +6605,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.force_filter_selections {
             struct_ser.serialize_field("forceFilterSelections", &self.force_filter_selections)?;
+        }
+        if self.enable_exact_reverse_scan {
+            struct_ser.serialize_field("enableExactReverseScan", &self.enable_exact_reverse_scan)?;
         }
         if self.data_pagesize_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -6781,6 +6809,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "reorderFilters",
             "force_filter_selections",
             "forceFilterSelections",
+            "enable_exact_reverse_scan",
+            "enableExactReverseScan",
             "data_pagesize_limit",
             "dataPagesizeLimit",
             "write_batch_size",
@@ -6855,6 +6885,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             PushdownFilters,
             ReorderFilters,
             ForceFilterSelections,
+            EnableExactReverseScan,
             DataPagesizeLimit,
             WriteBatchSize,
             WriterVersion,
@@ -6915,6 +6946,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "pushdownFilters" | "pushdown_filters" => Ok(GeneratedField::PushdownFilters),
                             "reorderFilters" | "reorder_filters" => Ok(GeneratedField::ReorderFilters),
                             "forceFilterSelections" | "force_filter_selections" => Ok(GeneratedField::ForceFilterSelections),
+                            "enableExactReverseScan" | "enable_exact_reverse_scan" => Ok(GeneratedField::EnableExactReverseScan),
                             "dataPagesizeLimit" | "data_pagesize_limit" => Ok(GeneratedField::DataPagesizeLimit),
                             "writeBatchSize" | "write_batch_size" => Ok(GeneratedField::WriteBatchSize),
                             "writerVersion" | "writer_version" => Ok(GeneratedField::WriterVersion),
@@ -6973,6 +7005,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut pushdown_filters__ = None;
                 let mut reorder_filters__ = None;
                 let mut force_filter_selections__ = None;
+                let mut enable_exact_reverse_scan__ = None;
                 let mut data_pagesize_limit__ = None;
                 let mut write_batch_size__ = None;
                 let mut writer_version__ = None;
@@ -7043,6 +7076,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 return Err(serde::de::Error::duplicate_field("forceFilterSelections"));
                             }
                             force_filter_selections__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::EnableExactReverseScan => {
+                            if enable_exact_reverse_scan__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("enableExactReverseScan"));
+                            }
+                            enable_exact_reverse_scan__ = Some(map_.next_value()?);
                         }
                         GeneratedField::DataPagesizeLimit => {
                             if data_pagesize_limit__.is_some() {
@@ -7267,6 +7306,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     pushdown_filters: pushdown_filters__.unwrap_or_default(),
                     reorder_filters: reorder_filters__.unwrap_or_default(),
                     force_filter_selections: force_filter_selections__.unwrap_or_default(),
+                    enable_exact_reverse_scan: enable_exact_reverse_scan__.unwrap_or_default(),
                     data_pagesize_limit: data_pagesize_limit__.unwrap_or_default(),
                     write_batch_size: write_batch_size__.unwrap_or_default(),
                     writer_version: writer_version__.unwrap_or_default(),

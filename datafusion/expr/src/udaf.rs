@@ -13,7 +13,10 @@ use std::vec;
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 
-use datafusion_common::{Result, ScalarValue, Statistics, exec_err, not_impl_err};
+use datafusion_common::{
+    Result, ScalarValue, Statistics, exec_err, internal_err, metadata::FieldMetadata,
+    not_impl_err,
+};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -1509,6 +1512,23 @@ pub fn udaf_default_return_field<F: AggregateUDFImpl + ?Sized>(
     )))
 }
 
+/// Returns the default field for `func` with metadata from its first argument.
+///
+/// This is useful for aggregate functions that return a value from their first
+/// argument, such as `min`, `max`, and `first_value`.
+pub fn udaf_return_field_preserving_arg_metadata<F: AggregateUDFImpl + ?Sized>(
+    func: &F,
+    arg_fields: &[FieldRef],
+) -> Result<FieldRef> {
+    let Some(arg_field) = arg_fields.first() else {
+        return internal_err!(
+            "udaf_return_field_preserving_arg_metadata requires at least one argument"
+        );
+    };
+    let field = udaf_default_return_field(func, arg_fields)?;
+    Ok(FieldMetadata::from(arg_field.as_ref()).add_to_field_ref(field))
+}
+
 pub enum ReversedUDAF {
     /// The expression is the same as the original expression, like SUM, COUNT
     Identical,
@@ -1716,6 +1736,11 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
 /// values always increase (or stay the same) as new values are seen. On
 /// the other hand, `MIN` is monotonically decreasing as its value always
 /// decreases or stays the same as new values are seen.
+///
+/// A set-monotonic aggregate may return NULL for an empty input or an input
+/// containing only NULLs. Once a non-NULL input is present, its result must be
+/// non-NULL. Adding inputs must never change a non-NULL result back to NULL,
+/// so growing window frames can only have a prefix of NULL results.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SetMonotonicity {
     /// Aggregate value increases or stays the same as the input set grows.

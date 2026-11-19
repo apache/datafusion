@@ -233,14 +233,15 @@ pub(super) fn prepared_copy_bytes(batches: &[RecordBatch]) -> Result<usize> {
         .ok_or_else(overflow)
 }
 
-/// Bound hashes and flat-key null masks for the largest input batch.
+/// Bound hashes and flat-key null masks for the largest slice the hash map is
+/// filled from.
 pub(super) fn prepared_scratch_bytes(
-    max_batch_rows: usize,
+    chunk_rows: usize,
     num_keys: usize,
     null_equality: NullEquality,
 ) -> Result<usize> {
     let overflow = || exec_datafusion_err!("Prepared hash-join scratch size overflow");
-    let hash_bytes = max_batch_rows
+    let hash_bytes = chunk_rows
         .checked_mul(size_of::<u64>())
         .ok_or_else(overflow)?;
     if null_equality == NullEquality::NullEqualsNull {
@@ -248,7 +249,7 @@ pub(super) fn prepared_scratch_bytes(
     }
     // Allow one logical null mask per key plus the combined mask.
     let masks = num_keys.checked_add(1).ok_or_else(overflow)?;
-    let mask_bytes = max_batch_rows
+    let mask_bytes = chunk_rows
         .div_ceil(8)
         .checked_add(64)
         .and_then(|bytes| bytes.checked_mul(masks))

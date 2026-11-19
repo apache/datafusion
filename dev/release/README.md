@@ -409,7 +409,6 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/core && cargo publish)
 (cd datafusion-cli && cargo publish)
 (cd datafusion/proto && cargo publish)
-(cd datafusion/spark && cargo publish)
 (cd datafusion/substrait && cargo publish)
 (cd datafusion/ffi && cargo publish)
 (cd datafusion/sqllogictest && cargo publish)
