@@ -83,6 +83,9 @@ use crate::metrics::SpillMetrics;
 use crate::spill::replayable_spill_input::ReplayableStreamSource;
 use crate::spill::spill_manager::SpillManager;
 
+/// Disable disk spilling introduced in apache/datafusion#21448 as it comes with bugs, see <https://github.com/apache/datafusion/pull/27562>
+const ENABLE_MEMORY_LIMITED_EXECUTION: bool = false;
+
 #[expect(rustdoc::private_intra_doc_links)]
 /// NestedLoopJoinExec is a build-probe join operator designed for joins that
 /// do not have equijoin keys in their `ON` clause.
@@ -167,6 +170,8 @@ use crate::spill::spill_manager::SpillManager;
 ///   1 batch, for better cache locality and memory efficiency.
 ///
 /// # Memory-limited Execution
+/// Disabled on `branch-55`, see [`ENABLE_MEMORY_LIMITED_EXECUTION`].
+///
 /// When the memory budget is exceeded during left-side buffering, the operator
 /// falls back to a multi-pass strategy:
 /// 1. Buffer as many left rows as fit in memory (one "chunk")
@@ -695,7 +700,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
         //    scope for this PR.
         let full_join_multi_partition =
             matches!(self.join_type, JoinType::Full) && right_partition_count > 1;
-        let spill_state = if context.runtime_env().disk_manager.tmp_files_enabled()
+        let spill_state = if ENABLE_MEMORY_LIMITED_EXECUTION
+            && context.runtime_env().disk_manager.tmp_files_enabled()
             && !full_join_multi_partition
         {
             SpillState::Pending {
@@ -3709,6 +3715,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "memory-limited execution is disabled on branch-55, see ENABLE_MEMORY_LIMITED_EXECUTION"]
     async fn test_overallocation() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
@@ -3829,6 +3836,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "memory-limited execution is disabled on branch-55, see ENABLE_MEMORY_LIMITED_EXECUTION"]
     async fn test_nlj_memory_limited_inner_join() -> Result<()> {
         // Use a very small memory limit to force OOM → fallback to spill.
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
@@ -3859,6 +3867,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "memory-limited execution is disabled on branch-55, see ENABLE_MEMORY_LIMITED_EXECUTION"]
     async fn test_nlj_memory_limited_left_join() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
         let left = build_left_table();
@@ -3919,6 +3928,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "memory-limited execution is disabled on branch-55, see ENABLE_MEMORY_LIMITED_EXECUTION"]
     async fn test_nlj_memory_limited_empty_inputs() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
 
@@ -3989,6 +3999,37 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn test_nlj_memory_limited_execution_is_disabled() -> Result<()> {
+        // Disk spilling is available, but a build side that does not fit in memory must still
+        // fail with ResourcesExhausted instead of falling back to memory-limited execution.
+        for join_type in [
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::LeftAnti,
+            JoinType::LeftMark,
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+            JoinType::RightMark,
+        ] {
+            let task_ctx = task_ctx_with_memory_limit(50, 16)?;
+            let left = build_left_table();
+            let right = build_right_table();
+            let filter = prepare_join_filter();
+
+            let err = join_collect(left, right, &join_type, Some(filter), task_ctx)
+                .await
+                .unwrap_err();
+
+            assert_contains!(err.to_string(), "Resources exhausted");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "memory-limited execution is disabled on branch-55, see ENABLE_MEMORY_LIMITED_EXECUTION"]
     async fn test_nlj_memory_limited_right_join() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
         let left = build_left_table();
@@ -4020,6 +4061,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "memory-limited execution is disabled on branch-55, see ENABLE_MEMORY_LIMITED_EXECUTION"]
     async fn test_nlj_memory_limited_full_join() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
         let left = build_left_table();
@@ -4053,6 +4095,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "memory-limited execution is disabled on branch-55, see ENABLE_MEMORY_LIMITED_EXECUTION"]
     async fn test_nlj_memory_limited_right_semi_join() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
         let left = build_left_table();
@@ -4082,6 +4125,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "memory-limited execution is disabled on branch-55, see ENABLE_MEMORY_LIMITED_EXECUTION"]
     async fn test_nlj_memory_limited_right_anti_join() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
         let left = build_left_table();
@@ -4112,6 +4156,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "memory-limited execution is disabled on branch-55, see ENABLE_MEMORY_LIMITED_EXECUTION"]
     async fn test_nlj_memory_limited_right_mark_join() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
         let left = build_left_table();
