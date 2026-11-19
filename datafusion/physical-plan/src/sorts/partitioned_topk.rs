@@ -347,7 +347,10 @@ impl PartitionedTopKExec {
             }
         };
         let partition_exprs = sort_exprs[..partition_prefix_len].to_vec();
-        eq_properties.reorder(sort_exprs)?;
+
+        eq_properties.clear_groupings();
+        eq_properties.clear_orderings();
+        eq_properties.add_ordering(sort_exprs);
 
         if let Some(field) = ranking_field {
             // The ranking column is the last one, appended by
