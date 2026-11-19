@@ -2,8 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! The settings each query runs under. `raw` and `canon` always run under the
-//! same setting.
+//! The settings each query runs under. Both tables always use the same one.
 
 use std::sync::Arc;
 
@@ -18,13 +17,12 @@ pub struct Setting {
     pub target_partitions: usize,
     pub batch_size: usize,
     pub prefer_hash_join: bool,
-    /// Whether the zero literals of the `raw` query are written as `-0.0`.
-    /// They are always `0.0` in the `canon` query.
+    /// Whether zeros in the `raw` query are written as `-0.0`.
     pub negative_literals: bool,
 }
 
 impl Setting {
-    /// Every combination of the settings.
+    /// Every combination.
     pub fn all() -> Vec<Setting> {
         let mut settings = vec![];
         for target_partitions in [1, 4] {
@@ -44,7 +42,7 @@ impl Setting {
         settings
     }
 
-    /// The zero literal in the `raw` query.
+    /// How a zero is written in the `raw` query.
     pub fn raw_zero(&self) -> &'static str {
         if self.negative_literals {
             "-0.0"
@@ -53,7 +51,7 @@ impl Setting {
         }
     }
 
-    /// A context with the `raw` and `canon` tables registered.
+    /// A session with both tables.
     pub fn context(&self, data: &Dataset) -> Result<SessionContext> {
         let mut config = SessionConfig::new()
             .with_target_partitions(self.target_partitions)

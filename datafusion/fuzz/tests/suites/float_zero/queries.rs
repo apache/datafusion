@@ -2,27 +2,23 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Query templates, each with the settings under which it is known to give a
-//! wrong result.
+//! The queries, and when each is known to give a wrong result.
 
 use super::settings::Setting;
 
-/// A query to run on both `raw` and `canon`. `{t}` is replaced by the table
-/// name and every `{z}` by a zero literal.
+/// A query. `{t}` is replaced by the table name and `{z}` by a zero.
 #[derive(Debug)]
 pub struct Template {
     pub name: &'static str,
     pub sql: &'static str,
-    /// Whether the outer ORDER BY decides the whole output order. If not, the
-    /// results are compared as multisets of rows.
+    /// Whether the ORDER BY fixes the order of every row. If not, rows are
+    /// compared in any order.
     pub ordered: bool,
     pub known_failure: Option<KnownFailure>,
 }
 
-/// The settings under which a template is known to give a wrong result. The
-/// fixed-data test requires it to still give a wrong result there, not an
-/// error, so the PR that fixes the bug must remove it. The fuzzer accepts a
-/// wrong result there, but not an error.
+/// When a query is known to give a wrong result. Remove it when the bug is
+/// fixed; the fixed-table test fails until then.
 #[derive(Debug)]
 pub struct KnownFailure {
     pub applies: fn(&Setting) -> bool,
@@ -30,7 +26,7 @@ pub struct KnownFailure {
 }
 
 impl Template {
-    /// The query for `table`, with every zero literal written as `zero`.
+    /// The query for `table`, with each zero written as `zero`.
     pub fn render(&self, table: &str, zero: &str) -> String {
         self.sql.replace("{t}", table).replace("{z}", zero)
     }
@@ -64,7 +60,7 @@ fn always(_: &Setting) -> bool {
     true
 }
 
-/// The planner only picks a sort-merge join when the input is repartitioned.
+/// A sort-merge join is only used when the data is split up.
 fn sort_merge_join(setting: &Setting) -> bool {
     !setting.prefer_hash_join && setting.target_partitions > 1
 }
@@ -73,19 +69,14 @@ const FLOAT_SEMANTICS: &str = "https://github.com/apache/datafusion/issues/26138
 const WINDOW: &str = "https://github.com/apache/datafusion/issues/25766";
 const SORT_MERGE_JOIN: &str = "https://github.com/apache/datafusion/issues/26115";
 
-/// The templates. Rules for adding one:
+/// Rules for adding a query:
 ///
-/// - It has exactly one correct answer. An ORDER BY that picks or numbers rows
-///   (LIMIT, `first_value`, DISTINCT ON, `row_number`, `lag`, ROWS frames)
-///   ends with a unique column (`id` or `b`). `rank` and RANGE frames don't,
-///   because their ties are what is being tested.
-/// - No arithmetic on float columns (`-a`, `a * a`), since it can create
-///   `-0.0` in `canon`, and no functions that can see the sign (`1 / a`,
-///   `atan2`, casts to string).
-/// - `ordered` only when the outer ORDER BY decides the whole output order.
-///
-/// Sorting orders `-0.0` before `0.0`, which is behind most of the known
-/// failures of the sort, window and aggregate templates.
+/// - It has exactly one right answer. An ORDER BY that picks or numbers rows
+///   (LIMIT, `first_value`, DISTINCT ON, `row_number`) ends with `id` or `b`
+///   to break ties. `rank` and RANGE frames keep their ties on purpose.
+/// - No math on float columns, which can turn `0.0` into `-0.0`, and no
+///   functions that can tell the two apart, like `1 / a`.
+/// - `ordered` only when the ORDER BY fixes the order of every row.
 pub const TEMPLATES: &[Template] = &[
     // Sort
     template("order_by_a_b", "SELECT a, b FROM {t} ORDER BY a, b", true)
@@ -123,7 +114,6 @@ pub const TEMPLATES: &[Template] = &[
         false,
     )
     .fails(always, FLOAT_SEMANTICS),
-    // `count(DISTINCT)` fails when it is not planned as a GROUP BY.
     template(
         "count_distinct_window",
         "SELECT DISTINCT count(DISTINCT a) OVER () FROM {t}",

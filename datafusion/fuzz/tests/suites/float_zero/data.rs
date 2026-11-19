@@ -2,8 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! The `raw` and `canon` tables. `raw` has some `-0.0` values; `canon` is
-//! `raw` with every float normalized by `normalize`, so it has none.
+//! The `raw` and `canon` tables.
 
 use std::sync::Arc;
 
@@ -16,7 +15,7 @@ use rand::Rng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 
-/// Both copies of the table, split into the same partitions and batches.
+/// Both tables, split into the same pieces.
 pub struct Dataset {
     pub schema: SchemaRef,
     pub canon: Vec<Vec<RecordBatch>>,
@@ -57,16 +56,14 @@ impl Columns {
     }
 }
 
-/// `raw` with every `-0.0`, also nested ones, replaced by `0.0`.
+/// `raw` with every `-0.0` replaced by `0.0`.
 fn canon_of(raw: &RecordBatch) -> RecordBatch {
     let columns = raw.columns().iter().cloned().map(normalize).collect();
     RecordBatch::try_new(raw.schema(), columns).unwrap()
 }
 
-/// Whether `array`, one of the float or list columns of `raw`, has a `-0.0`
-/// at any depth. Checks the values directly rather than asking
-/// `normalize`, which may change more than `-0.0`. A list is checked
-/// through all of its child values, so `array` must not be a slice.
+/// Whether `array` holds a `-0.0`, also inside lists. A list must not be a
+/// slice, since all of its values are looked at.
 pub fn has_negative_zero(array: &ArrayRef) -> bool {
     match array.data_type() {
         DataType::Float64 => array
@@ -84,9 +81,9 @@ pub fn has_negative_zero(array: &ArrayRef) -> bool {
     }
 }
 
-/// The 4-row `raw` table from
-/// <https://github.com/apache/datafusion/issues/26138#issuecomment-6497193637>,
-/// as a single batch. Every known failure reproduces on it.
+/// The 4-row table from
+/// <https://github.com/apache/datafusion/issues/26138#issuecomment-6497193637>.
+/// Every known failure shows up on it.
 pub fn fixed() -> Dataset {
     let schema = schema();
     let z = -0.0;
@@ -111,10 +108,10 @@ pub fn fixed() -> Dataset {
     }
 }
 
-/// A random float from a small pool, so that keys tie often.
+/// A random value from a small set, so that values often repeat.
 ///
-/// TODO(#26091): add NaN payloads other than the default one once it is
-/// decided whether all NaNs are equal.
+/// TODO(#26091): add other NaN values once it is decided whether all NaNs
+/// are equal.
 fn pool_value(rng: &mut impl Rng) -> Option<f64> {
     match rng.random_range(0..10) {
         0..2 => Some(0.0),
@@ -127,9 +124,8 @@ fn pool_value(rng: &mut impl Rng) -> Option<f64> {
     }
 }
 
-/// `num_rows` random rows, split into random batches over 1 to 3 partitions.
-/// Retries until every float column of `raw` (`a`, `a32` and the lists in
-/// `k`) has a `-0.0`.
+/// A random table split into 1 to 3 partitions. Tries again until `a`,
+/// `a32` and `k` each hold a `-0.0`.
 pub fn random(rng: &mut StdRng, num_rows: usize) -> Dataset {
     let schema = schema();
     let raw = loop {
@@ -163,7 +159,7 @@ pub fn random(rng: &mut StdRng, num_rows: usize) -> Dataset {
     Dataset { schema, canon, raw }
 }
 
-/// Splits both batches at the same random offsets into partitions of batches.
+/// Cuts both tables at the same random places.
 fn split(
     rng: &mut StdRng,
     canon: &RecordBatch,
@@ -183,8 +179,8 @@ fn split(
     (canon_parts, raw_parts)
 }
 
-/// `random` relies on `has_negative_zero` seeing a `-0.0` in every column
-/// type of `raw`, and only a `-0.0`.
+/// `random` needs `has_negative_zero` to find `-0.0`, and only `-0.0`, in
+/// every column type.
 #[test]
 fn has_negative_zero_column_types() {
     let f64s = |v: f64| -> ArrayRef { Arc::new(Float64Array::from(vec![None, Some(v)])) };

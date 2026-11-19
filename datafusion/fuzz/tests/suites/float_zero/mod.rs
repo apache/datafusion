@@ -2,31 +2,12 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Differential fuzz test for `-0.0`.
+//! Checks that `-0.0` and `0.0` give the same query results.
 //!
-//! DataFusion treats `-0.0` and `0.0` as equal, so changing a `-0.0` to
-//! `0.0` must not change any query result, apart from how `-0.0` prints. Each
-//! query runs on `raw`, a table with some `-0.0` values, and on `canon`, the
-//! same table with every `-0.0` replaced by `0.0`, under the same settings.
-//! The results must match once floats in the output are normalized. See
+//! Each query runs on two copies of a table: `raw` has some `-0.0` values and
+//! `canon` has them replaced by `0.0`. The results must be the same, apart
+//! from how `-0.0` is printed. See
 //! <https://github.com/apache/datafusion/issues/26138>.
-//!
-//! The unit of work is a [`Pair`]: one query template under one setting.
-//! [`check`] runs a pair on both tables and compares the results.
-//!
-//! - [`FloatZeroFuzzer`] checks random pairs on random tables.
-//! - [`float_zero_fixed`] checks every pair on a fixed table, on which every
-//!   known failure reproduces.
-//! - [`known_failures_apply`] checks that every known failure applies to some
-//!   setting.
-//! - [`float_zero_negative_literal`] checks that `-0.0` literals keep their
-//!   sign.
-//!
-//! The other files:
-//!
-//! - `data.rs` builds the two tables.
-//! - `queries.rs` holds the query templates and the known failures.
-//! - `settings.rs` holds the settings each query runs under.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -54,15 +35,14 @@ mod settings;
 use queries::{TEMPLATES, Template};
 use settings::Setting;
 
-/// One template under one setting, with a context that has the `raw` and
-/// `canon` tables registered under that setting.
+/// One query under one setting.
 pub(crate) struct Pair {
     template: &'static Template,
     setting: Setting,
     ctx: SessionContext,
 }
 
-/// Every pair that runs on `data`.
+/// Every pair to run on `data`.
 fn pairs(data: &data::Dataset) -> Result<Vec<Pair>> {
     let mut pairs = vec![];
     for setting in Setting::all() {
@@ -78,18 +58,17 @@ fn pairs(data: &data::Dataset) -> Result<Vec<Pair>> {
     Ok(pairs)
 }
 
-/// Templates without a zero literal skip the `negative_literals` settings,
-/// which would run the same queries again.
+/// A query without a zero in it would only repeat itself under the
+/// `negative_literals` settings.
 fn runs(template: &Template, setting: &Setting) -> bool {
     !setting.negative_literals || template.sql.contains("{z}")
 }
 
 /// Why a pair failed.
 enum Failure {
-    /// Both queries ran, but the results differ.
+    /// The results differ.
     Mismatch(String),
-    /// One or both of the queries failed. A failure on both tables usually
-    /// means the template itself is broken.
+    /// A query returned an error.
     Error(String),
 }
 
@@ -101,8 +80,7 @@ impl std::fmt::Display for Failure {
     }
 }
 
-/// Runs the pair's template on `raw` and `canon` and compares the results
-/// with all floats normalized.
+/// Runs the query on both tables and compares the results.
 async fn check(pair: &Pair) -> Result<(), Failure> {
     let Pair {
         template,
@@ -150,8 +128,7 @@ async fn run_sql(sql: &str, ctx: &SessionContext) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
 }
 
-/// One string per row, with every float, also nested ones, normalized so
-/// that `-0.0` prints as `0.0`.
+/// One line per row, with every `-0.0` shown as `0.0`.
 fn format_rows(batches: &[RecordBatch]) -> Vec<String> {
     let options = FormatOptions::default().with_null("NULL");
     let mut rows = vec![];
@@ -174,7 +151,7 @@ fn format_rows(batches: &[RecordBatch]) -> Vec<String> {
     rows
 }
 
-/// Describes the first row where `raw` and `canon` differ.
+/// The first row where the results differ.
 fn first_difference(raw: &[String], canon: &[String], ordered: bool) -> String {
     let row = if ordered { "row" } else { "sorted row" };
     match raw.iter().zip(canon).position(|(r, c)| r != c) {
@@ -183,12 +160,11 @@ fn first_difference(raw: &[String], canon: &[String], ordered: bool) -> String {
     }
 }
 
-/// Number of rows a random table may have.
+/// Row counts to choose from.
 const TABLE_SIZES: &[usize] = &[8, 16, 32, 64, 128];
 
-/// Each dataset is a random table registered under every setting. Each case
-/// runs one random pair. A known failure may give a wrong result on random
-/// data too, but it must not error or panic.
+/// Runs random queries on random tables. A query with a known failure may
+/// give a wrong result, but must not return an error.
 pub(crate) struct FloatZeroFuzzer;
 
 impl FuzzTest for FloatZeroFuzzer {
@@ -219,8 +195,8 @@ impl FuzzTest for FloatZeroFuzzer {
     }
 }
 
-/// Every listed pair must give a wrong result on the fixed data and every
-/// other pair must pass.
+/// On the fixed table, every query with a known failure must give a wrong
+/// result and every other query must pass.
 #[tokio::test(flavor = "multi_thread")]
 async fn float_zero_fixed() {
     let mut errors = vec![];
@@ -243,9 +219,7 @@ async fn float_zero_fixed() {
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
 }
 
-/// Checks every pair that runs on `data`. Each pair runs in its own task:
-/// the queries are tiny, so planning dominates and running them in parallel
-/// is what makes the test fast.
+/// Runs all pairs at the same time, which keeps the test fast.
 async fn check_all(data: &data::Dataset) -> Vec<(Pair, Result<(), Failure>)> {
     let tasks = pairs(data).unwrap().into_iter().map(|pair| {
         SpawnedTask::spawn(async move {
@@ -261,8 +235,7 @@ async fn check_all(data: &data::Dataset) -> Vec<(Pair, Result<(), Failure>)> {
         .collect()
 }
 
-/// A known failure whose `applies` matches no setting that runs would never
-/// be checked.
+/// A known failure that matches no setting would never be checked.
 #[test]
 fn known_failures_apply() {
     for template in TEMPLATES {
@@ -277,8 +250,8 @@ fn known_failures_apply() {
     }
 }
 
-/// A `-0.0` literal in a `raw` query must reach the physical plan with its
-/// sign, or the `negative_literals` settings test nothing.
+/// A `-0.0` written in a query must keep its sign, or the
+/// `negative_literals` settings test nothing.
 #[tokio::test]
 async fn float_zero_negative_literal() {
     let mut errors = vec![];
@@ -305,8 +278,7 @@ async fn float_zero_negative_literal() {
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
 }
 
-/// Whether a literal in a projection of `plan` is `-0.0` or a list that
-/// holds one.
+/// Whether the plan holds a `-0.0` written in the query.
 fn has_negative_zero_literal(plan: &Arc<dyn ExecutionPlan>) -> bool {
     let mut found = false;
     plan.apply(|node| {
