@@ -12,6 +12,35 @@ use half::f16;
 use std::fmt::Debug;
 use std::hash::Hash;
 
+/// The maximum total size in bytes of the literals that are looked up by comparing each
+/// value with all of them, rather than with a hash map.
+///
+/// The cost of the comparisons grows with the number of literals and with their size,
+/// as fewer wider values fit in a vector register.
+const MAX_LINEAR_LOOKUP_BYTES: usize = 128;
+
+/// [MAX_LINEAR_LOOKUP_BYTES] for values wider than 64 bits, which have no native
+/// vector comparisons, making each comparison several times more costly.
+const MAX_WIDE_LINEAR_LOOKUP_BYTES: usize = 64;
+
+/// The maximum number of literals that are looked up by comparing each value with all
+/// of them, for values narrow enough for many of them to fit [MAX_LINEAR_LOOKUP_BYTES].
+const MAX_LINEAR_LOOKUP_LITERALS: usize = 32;
+
+/// The maximum number of literals of type `K` that are looked up by comparing each
+/// value with all of them, rather than with a hash map.
+fn max_linear_lookup_literals<K>() -> usize {
+    let max_bytes = if size_of::<K>() > size_of::<u64>() {
+        MAX_WIDE_LINEAR_LOOKUP_BYTES
+    } else {
+        MAX_LINEAR_LOOKUP_BYTES
+    };
+    (max_bytes / size_of::<K>()).min(MAX_LINEAR_LOOKUP_LITERALS)
+}
+
+/// The number of values that are compared with all the literals at a time in a linear lookup.
+const LINEAR_LOOKUP_CHUNK_SIZE: usize = 256;
+
 #[derive(Clone)]
 pub(super) struct PrimitiveIndexMap<T>
 where
@@ -20,9 +49,17 @@ where
 {
     data_type: DataType,
     /// Literal value to map index
-    ///
-    /// If searching this map becomes a bottleneck consider using linear map implementations for small hashmaps
-    map: HashMap<<T::Native as ToHashableKey>::HashableKey, u32>,
+    lookup: PrimitiveLookup<<T::Native as ToHashableKey>::HashableKey>,
+}
+
+/// How literal values are mapped to their indices
+#[derive(Clone, Debug)]
+enum PrimitiveLookup<K> {
+    /// The literals, each mapped to its position. Comparing a value with a few literals
+    /// takes a fixed number of operations that vectorize well, while the cost of a hash
+    /// map lookup depends on how the literals happen to be placed in it.
+    Linear(Vec<K>),
+    Hash(HashMap<K, u32>),
 }
 
 impl<T> Debug for PrimitiveIndexMap<T>
@@ -32,7 +69,7 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PrimitiveIndexMap")
-            .field("map", &self.map)
+            .field("lookup", &self.lookup)
             .finish()
     }
 }
@@ -56,17 +93,31 @@ where
             return internal_err!("Literal values for WHEN clauses cannot contain nulls");
         }
 
-        let map = input
-            .as_primitive::<T>()
-            .values()
-            .iter()
-            .enumerate()
-            // Because literals are unique we can collect directly, and we can avoid only inserting the first occurrence
-            .map(|(map_index, value)| (value.into_hashable_key(), map_index as u32))
-            .collect();
+        let values = input.as_primitive::<T>().values();
+        let lookup = if values.len()
+            <= max_linear_lookup_literals::<<T::Native as ToHashableKey>::HashableKey>()
+        {
+            PrimitiveLookup::Linear(
+                values
+                    .iter()
+                    .map(|value| value.into_hashable_key())
+                    .collect(),
+            )
+        } else {
+            PrimitiveLookup::Hash(
+                values
+                    .iter()
+                    .enumerate()
+                    // Because literals are unique we can collect directly, and we can avoid only inserting the first occurrence
+                    .map(|(map_index, value)| {
+                        (value.into_hashable_key(), map_index as u32)
+                    })
+                    .collect(),
+            )
+        };
 
         Ok(Self {
-            map,
+            lookup,
             data_type: input.data_type().clone(),
         })
     }
@@ -76,20 +127,84 @@ where
         array: &PrimitiveArray<T>,
         else_index: u32,
     ) -> datafusion_common::Result<Vec<u32>> {
-        let indices = array
-            .into_iter()
-            .map(|value| match value {
-                Some(value) => self
-                    .map
-                    .get(&value.into_hashable_key())
-                    .copied()
-                    .unwrap_or(else_index),
+        let indices = match &self.lookup {
+            PrimitiveLookup::Linear(literals) => {
+                linear_lookup::<T>(literals, array, else_index)
+            }
+            PrimitiveLookup::Hash(map) => array
+                .into_iter()
+                .map(|value| match value {
+                    Some(value) => map
+                        .get(&value.into_hashable_key())
+                        .copied()
+                        .unwrap_or(else_index),
 
-                None => else_index,
-            })
-            .collect::<Vec<u32>>();
+                    None => else_index,
+                })
+                .collect::<Vec<u32>>(),
+        };
 
         Ok(indices)
+    }
+}
+
+/// Maps the values of `array` to the positions of the matching `literals`, or to
+/// `else_index` for values that match none and for nulls.
+///
+/// The values are compared with every literal a chunk at a time, selecting the position
+/// without branching, so that the comparisons vectorize across the values. The literals
+/// are unique, so a value matches at most one of them.
+fn linear_lookup<T>(
+    literals: &[<T::Native as ToHashableKey>::HashableKey],
+    array: &PrimitiveArray<T>,
+    else_index: u32,
+) -> Vec<u32>
+where
+    T: ArrowPrimitiveType,
+    T::Native: ToHashableKey,
+{
+    let values = array.values();
+    let mut indices = vec![else_index; values.len()];
+    for (values, indices) in values
+        .chunks(LINEAR_LOOKUP_CHUNK_SIZE)
+        .zip(indices.chunks_mut(LINEAR_LOOKUP_CHUNK_SIZE))
+    {
+        for (literal_index, literal) in literals.iter().enumerate() {
+            let literal_index = literal_index as u32;
+            for (value, index) in values.iter().zip(indices.iter_mut()) {
+                // Storing unconditionally vectorizes; storing only on a match branches per value
+                *index = if T::Native::keys_eq(value.into_hashable_key(), *literal) {
+                    literal_index
+                } else {
+                    *index
+                };
+            }
+        }
+    }
+    if let Some(nulls) = array.nulls().filter(|nulls| nulls.null_count() > 0) {
+        let valid_chunks = nulls.inner().bit_chunks();
+        let mut index_chunks = indices.chunks_mut(64);
+        for (valid_bits, indices) in valid_chunks.iter().zip(&mut index_chunks) {
+            if valid_bits != u64::MAX {
+                set_else_index_for_nulls(valid_bits, indices, else_index);
+            }
+        }
+        if let Some(indices) = index_chunks.next() {
+            set_else_index_for_nulls(valid_chunks.remainder_bits(), indices, else_index);
+        }
+    }
+    indices
+}
+
+/// Sets `else_index` for each of up to 64 `indices` whose bit in `valid_bits` is unset.
+#[inline]
+fn set_else_index_for_nulls(valid_bits: u64, indices: &mut [u32], else_index: u32) {
+    for (i, index) in indices.iter_mut().enumerate() {
+        *index = if valid_bits & (1 << i) != 0 {
+            *index
+        } else {
+            else_index
+        };
     }
 }
 
@@ -143,6 +258,13 @@ pub(super) trait ToHashableKey: ArrowNativeTypeOp {
     /// Converts self to a hashable key
     /// the result of this value can be used as the key in hash maps/sets
     fn into_hashable_key(self) -> Self::HashableKey;
+
+    /// Compares two keys, in a way that compiles to efficient code when comparing many
+    /// values with a key
+    #[inline]
+    fn keys_eq(a: Self::HashableKey, b: Self::HashableKey) -> bool {
+        a == b
+    }
 }
 
 macro_rules! impl_to_hashable_key {
@@ -173,15 +295,46 @@ macro_rules! impl_to_hashable_key {
     };
 }
 
-impl_to_hashable_key!(@already_hashable | i8, i16, i32, i64, i128, i256, u8, u16, u32, u64, IntervalDayTime, IntervalMonthDayNano);
+impl ToHashableKey for i128 {
+    type HashableKey = i128;
+
+    #[inline]
+    fn into_hashable_key(self) -> Self::HashableKey {
+        self
+    }
+
+    /// On x86-64-v3 and above, `a == b` is compiled to a per-value `sete`,
+    /// which prevents the compiler from sharing one vector compare and select
+    /// between several values. Comparing the 64-bit halves with XOR and OR
+    /// allows it to, which is measurably faster for a few literals.
+    #[inline]
+    fn keys_eq(a: i128, b: i128) -> bool {
+        let x = (a ^ b) as u128;
+        (x as u64 | (x >> 64) as u64) == 0
+    }
+}
+
+impl_to_hashable_key!(@already_hashable | i8, i16, i32, i64, i256, u8, u16, u32, u64, IntervalDayTime, IntervalMonthDayNano);
 impl_to_hashable_key!(@float | f16 => u16);
 impl_to_hashable_key!(@float | f32 => u32);
 impl_to_hashable_key!(@float | f64 => u64);
 
 #[cfg(test)]
 mod tests {
-    use super::ToHashableKey;
+    use super::{ToHashableKey, max_linear_lookup_literals};
     use arrow::array::downcast_primitive;
+    use arrow::datatypes::{IntervalMonthDayNano, i256};
+
+    #[test]
+    fn max_linear_lookup_literals_by_type() {
+        assert_eq!(max_linear_lookup_literals::<i8>(), 32);
+        assert_eq!(max_linear_lookup_literals::<u16>(), 32);
+        assert_eq!(max_linear_lookup_literals::<i32>(), 32);
+        assert_eq!(max_linear_lookup_literals::<i64>(), 16);
+        assert_eq!(max_linear_lookup_literals::<i128>(), 4);
+        assert_eq!(max_linear_lookup_literals::<IntervalMonthDayNano>(), 4);
+        assert_eq!(max_linear_lookup_literals::<i256>(), 2);
+    }
 
     // This test ensure that all arrow primitive types implement ToHashableKey
     // otherwise the code will not compile
