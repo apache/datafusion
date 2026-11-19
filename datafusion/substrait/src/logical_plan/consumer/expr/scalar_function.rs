@@ -11,7 +11,10 @@ use datafusion::common::{
     DFSchema, DataFusionError, ScalarValue, not_impl_err, plan_err, substrait_err,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::{Between, BinaryExpr, Expr, Like, Operator, expr};
+use datafusion::logical_expr::{
+    Between, BinaryExpr, Expr, Like, Operator, ScalarUDF, expr,
+};
+use std::sync::Arc;
 use std::vec::Drain;
 use substrait::proto::expression::ScalarFunction;
 
@@ -79,6 +82,12 @@ pub async fn from_scalar_function(
         } else {
             Ok(expr.resolve_lambda_variables(input_schema)?.data)
         }
+    } else if args.len() > 2
+        && let Some(func) = registered_power(consumer, fn_name)
+    {
+        // `power` is a binary UDF, so it never reaches `name_to_op`. Fold it
+        // before the generic UDF path, which would pass every argument at once.
+        left_fold_udf(func, args)
     } else if let Ok(func) = udf_func {
         Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             func.to_owned(),
@@ -91,8 +100,14 @@ pub async fn from_scalar_function(
                 f.arguments.len()
             );
         }
-        // In those cases we build a balanced tree of BinaryExprs
-        arg_list_to_binary_op_tree(op, args)
+        // `and` and `or` are associative, so a balanced tree keeps a wide call
+        // shallow. `+`, `-`, `*`, `/`, and `%` are not: SQL evaluates them left
+        // to right, and a balanced tree changes float results.
+        if is_left_associative_arithmetic(fn_name) {
+            left_fold_binary_op(op, args)
+        } else {
+            arg_list_to_binary_op_tree(op, args)
+        }
     } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
         builder.build(consumer, f, args)
     } else {
@@ -193,10 +208,61 @@ pub fn substrait_to_df_name(name: &str) -> Option<&str> {
     }
 }
 
+/// `add`, `subtract`, `multiply`, `divide`, `mod`, and `modulus` follow SQL's
+/// left-to-right evaluation. A balanced tree is a different expression for floats.
+fn is_left_associative_arithmetic(name: &str) -> bool {
+    matches!(
+        name,
+        "add" | "subtract" | "multiply" | "divide" | "mod" | "modulus"
+    )
+}
+
+fn registered_power(
+    consumer: &impl SubstraitConsumer,
+    fn_name: &str,
+) -> Option<Arc<ScalarUDF>> {
+    if !matches!(fn_name, "power" | "pow") {
+        return None;
+    }
+    consumer
+        .get_function_registry()
+        .udf("power")
+        .ok()
+        .or_else(|| consumer.get_function_registry().udf("pow").ok())
+}
+
+/// `(((a op b) op c) op d)`.
+fn left_fold_binary_op(op: Operator, args: Vec<Expr>) -> Result<Expr> {
+    let mut args = args.into_iter();
+    let Some(mut acc) = args.next() else {
+        return substrait_err!("binary operator {op:?} requires at least one argument");
+    };
+    for right in args {
+        acc = Expr::BinaryExpr(BinaryExpr::new(Box::new(acc), op, Box::new(right)));
+    }
+    Ok(acc)
+}
+
+/// `power(power(power(a, b), c), d)`.
+fn left_fold_udf(func: Arc<ScalarUDF>, args: Vec<Expr>) -> Result<Expr> {
+    let mut args = args.into_iter();
+    let Some(mut acc) = args.next() else {
+        return substrait_err!("power requires at least one argument");
+    };
+    for right in args {
+        acc = Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+            Arc::clone(&func),
+            vec![acc, right],
+        ));
+    }
+    Ok(acc)
+}
+
 /// Build a balanced tree of binary operations from a binary operator and a list of arguments.
 ///
 /// For example, `OR` `(a, b, c, d, e)` will be converted to: `OR(OR(a, OR(b, c)), OR(d, e))`.
 ///
+/// Callers use [`left_fold_binary_op`] for operators that are not associative.
 /// `args` must not be empty.
 fn arg_list_to_binary_op_tree(op: Operator, mut args: Vec<Expr>) -> Result<Expr> {
     let n_args = args.len();
@@ -537,6 +603,126 @@ mod tests {
         let expr =
             arg_list_to_binary_op_tree(Operator::Or, int64_literals(&[1, 2, 3, 4]))?;
         assert_snapshot!(expr.to_string(), @"Int64(1) OR Int64(2) OR Int64(3) OR Int64(4)");
+        Ok(())
+    }
+
+    fn i64_scalar_arg(value: i64) -> FunctionArgument {
+        FunctionArgument {
+            arg_type: Some(ArgType::Value(Expression {
+                rex_type: Some(RexType::Literal(Literal {
+                    nullable: false,
+                    type_variation_reference: 0,
+                    literal_type: Some(LiteralType::I64(value)),
+                })),
+            })),
+        }
+    }
+
+    async fn consume_named_call(name: &str, values: &[i64]) -> Result<Expr> {
+        let mut extensions = Extensions::default();
+        extensions.functions.insert(0, name.to_string());
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+        let func = ScalarFunction {
+            function_reference: 0,
+            arguments: values.iter().copied().map(i64_scalar_arg).collect(),
+            ..Default::default()
+        };
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+        let df_schema = DFSchema::try_from(schema).unwrap();
+        consumer
+            .consume_scalar_function(
+                &func,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
+            .await
+    }
+
+    fn literal_i64(expr: &Expr) -> Option<i64> {
+        match expr {
+            Expr::Literal(ScalarValue::Int64(Some(value)), _) => Some(*value),
+            _ => None,
+        }
+    }
+
+    /// Operands of a left-deep chain, left to right. Each right child is a literal.
+    fn left_deep_operands(expr: &Expr, op: Operator) -> Vec<i64> {
+        let mut operands = Vec::new();
+        let mut current = expr;
+        loop {
+            match current {
+                Expr::BinaryExpr(binary) if binary.op == op => {
+                    let Some(value) = literal_i64(&binary.right) else {
+                        panic!(
+                            "right child of {op:?} is not a literal: {}",
+                            binary.right
+                        );
+                    };
+                    operands.push(value);
+                    current = &binary.left;
+                }
+                Expr::Literal(ScalarValue::Int64(Some(value)), _) => {
+                    operands.push(*value);
+                    operands.reverse();
+                    return operands;
+                }
+                other => panic!("expected left-deep {op:?}, got {other}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn nary_arithmetic_is_left_folded() -> Result<()> {
+        for (name, op) in [
+            ("add:i64_i64", Operator::Plus),
+            ("subtract:i64_i64", Operator::Minus),
+            ("multiply:i64_i64", Operator::Multiply),
+            ("divide:i64_i64", Operator::Divide),
+            ("mod:i64_i64", Operator::Modulo),
+            ("modulus:i64_i64", Operator::Modulo),
+        ] {
+            let expr = consume_named_call(name, &[1, 2, 3, 4]).await?;
+            assert_eq!(
+                left_deep_operands(&expr, op),
+                vec![1, 2, 3, 4],
+                "{name} must fold left to right"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nary_or_stays_balanced() -> Result<()> {
+        let expr = consume_named_call("or:bool_bool", &[1, 2, 3, 4]).await?;
+        let Expr::BinaryExpr(root) = expr else {
+            panic!("or should be a binary expression");
+        };
+        assert_eq!(root.op, Operator::Or);
+        assert!(matches!(root.left.as_ref(), Expr::BinaryExpr(_)));
+        assert!(matches!(root.right.as_ref(), Expr::BinaryExpr(_)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nary_power_is_left_folded() -> Result<()> {
+        let expr = consume_named_call("power:fp64_fp64", &[1, 2, 3, 4]).await?;
+        let mut current = &expr;
+        let mut leaves = Vec::new();
+        for _ in 0..3 {
+            let Expr::ScalarFunction(call) = current else {
+                panic!("expected nested power, got {current}");
+            };
+            assert_eq!(call.name(), "power");
+            assert_eq!(call.args.len(), 2, "power stays binary");
+            let Some(value) = literal_i64(&call.args[1]) else {
+                panic!("power exponent is not a literal: {}", call.args[1]);
+            };
+            leaves.push(value);
+            current = &call.args[0];
+        }
+        leaves.push(literal_i64(current).expect("power base"));
+        leaves.reverse();
+        assert_eq!(leaves, vec![1, 2, 3, 4]);
         Ok(())
     }
 
