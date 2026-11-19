@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   license-header-check:
-    runs-on: ubuntu-slim
+    runs-on: &small-runner ${{ github.event_name == 'merge_group' && vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=2,image=ubuntu24-full-x64,tag=datafusion', github.run_id) || 'ubuntu-slim' }}
     name: Check License Header
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -37,7 +37,7 @@ jobs:
 
   prettier:
     name: Use prettier to check formatting of documents
-    runs-on: ubuntu-slim
+    runs-on: *small-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
@@ -49,7 +49,7 @@ jobs:
 
   markdown-link-check:
     name: Check Markdown Links
-    runs-on: ubuntu-slim
+    runs-on: *small-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Load tool versions
@@ -65,7 +65,7 @@ jobs:
 
   asf-yaml-check:
     name: Validate required_status_checks in .asf.yaml
-    runs-on: ubuntu-slim
+    runs-on: *small-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - run: pip install pyyaml
@@ -79,7 +79,7 @@ jobs:
 
   typos:
     name: Spell Check with Typos
-    runs-on: ubuntu-slim
+    runs-on: *small-runner
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

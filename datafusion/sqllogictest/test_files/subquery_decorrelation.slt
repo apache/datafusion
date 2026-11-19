@@ -391,11 +391,10 @@ statement ok
 CREATE TABLE test(k INT) AS VALUES (1), (2);
 
 # exists_same_named_columns_of_two_inner_relations
-# Wrong today. Expected (DuckDB):
+# Fails today. Expected (DuckDB):
 # 1
-query I
+query error Unsupported correlated subquery: correlated column two\.k has the same name as an earlier column of the subquery output
 SELECT outer_t.k FROM test outer_t WHERE EXISTS (SELECT 1 FROM test one, test two WHERE one.k = outer_t.k AND two.k = outer_t.k + 1) ORDER BY 1;
-----
 
 statement ok
 DROP TABLE test;
@@ -948,10 +947,10 @@ statement ok
 CREATE TABLE t3(a INT) AS VALUES (1);
 
 # exists_with_outer_column_in_inner_join_on
-query I
+# Fails today. Expected (DuckDB):
+# 1
+query error Unsupported correlated subquery: correlated column t3\.a has the same name as an earlier column of the subquery output
 SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 JOIN t3 ON t2.a = t3.a AND t3.a = t1.a) ORDER BY a;
-----
-1
 
 statement ok
 DROP TABLE t1;
