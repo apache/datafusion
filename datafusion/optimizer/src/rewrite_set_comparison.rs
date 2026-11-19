@@ -108,38 +108,23 @@ fn build_set_comparison_subquery(
     let null_exists =
         exists_subquery(&subquery, Expr::IsNull(Box::new(comparison.clone())))?;
 
-    let result_expr = match quantifier {
-        SetQuantifier::Any => {
-            let true_exists =
-                exists_subquery(&subquery, Expr::IsTrue(Box::new(comparison)))?;
-            Expr::Case(expr::Case {
-                expr: None,
-                when_then_expr: vec![
-                    (Box::new(true_exists), Box::new(lit(true))),
-                    (
-                        Box::new(null_exists),
-                        Box::new(Expr::Literal(ScalarValue::Boolean(None), None)),
-                    ),
-                ],
-                else_expr: Some(Box::new(lit(false))),
-            })
-        }
-        SetQuantifier::All => {
-            let false_exists =
-                exists_subquery(&subquery, Expr::IsFalse(Box::new(comparison)))?;
-            Expr::Case(expr::Case {
-                expr: None,
-                when_then_expr: vec![
-                    (Box::new(false_exists), Box::new(lit(false))),
-                    (
-                        Box::new(null_exists),
-                        Box::new(Expr::Literal(ScalarValue::Boolean(None), None)),
-                    ),
-                ],
-                else_expr: Some(Box::new(lit(true))),
-            })
-        }
+    let (filter, found): (fn(Box<Expr>) -> Expr, bool) = match quantifier {
+        SetQuantifier::Any => (Expr::IsTrue, true),
+        SetQuantifier::All => (Expr::IsFalse, false),
     };
+    let found_exists = exists_subquery(&subquery, filter(Box::new(comparison)))?;
+
+    let result_expr = Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![
+            (Box::new(found_exists), Box::new(lit(found))),
+            (
+                Box::new(null_exists),
+                Box::new(Expr::Literal(ScalarValue::Boolean(None), None)),
+            ),
+        ],
+        else_expr: Some(Box::new(lit(!found))),
+    });
 
     Ok(result_expr)
 }

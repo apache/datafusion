@@ -970,7 +970,7 @@ fn build_join(
             join_type,
             alias,
             &expr_map,
-            pull_up.pull_up_having_expr.as_ref(),
+            pull_up.pull_up_having_expr,
         )
         .map(|plan| {
             Some(BuiltJoin {
@@ -1296,19 +1296,18 @@ fn build_join_with_count_bug(
     join_type: JoinType,
     alias: &str,
     expr_map: &crate::decorrelate::ExprResultMap,
-    pull_up_having_expr: Option<&Expr>,
+    pull_up_having_expr: Option<Expr>,
 ) -> Result<LogicalPlan> {
     let pull_up_having_expr = pull_up_having_expr
         .map(|f| {
-            f.clone()
-                .transform_up(|e| match e {
-                    Expr::Column(c) => Ok(Transformed::yes(Expr::Column(Column::new(
-                        Some(alias),
-                        c.name,
-                    )))),
-                    _ => Ok(Transformed::no(e)),
-                })
-                .data()
+            f.transform_up(|e| match e {
+                Expr::Column(c) => Ok(Transformed::yes(Expr::Column(Column::new(
+                    Some(alias),
+                    c.name,
+                )))),
+                _ => Ok(Transformed::no(e)),
+            })
+            .data()
         })
         .transpose()?;
 
