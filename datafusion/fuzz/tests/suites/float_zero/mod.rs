@@ -11,6 +11,19 @@
 //! The results must match once floats in the output are normalized. See
 //! <https://github.com/apache/datafusion/issues/26138>.
 //!
+//! The unit of work is a [`Pair`]: one query template under one setting.
+//! [`check`] runs a pair on both tables and compares the results.
+//!
+//! - [`FloatZeroFuzzer`] checks random pairs on random tables.
+//! - [`float_zero_fixed`] checks every pair on a fixed table, on which every
+//!   entry of [`KNOWN_FAILURES`] reproduces.
+//! - [`known_failures_entries`] checks that the [`KNOWN_FAILURES`] entries
+//!   neither overlap nor go unused.
+//! - [`float_zero_negative_literal`] checks that `-0.0` literals keep their
+//!   sign.
+//!
+//! The other files:
+//!
 //! - `data.rs` builds the two tables.
 //! - `queries.rs` holds the query templates and the known failures.
 //! - `settings.rs` holds the settings each query runs under.
@@ -27,8 +40,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::float_semantics::normalize;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_common_runtime::JoinSet;
-use futures::future::join;
+use datafusion_common_runtime::SpawnedTask;
+use futures::future::{join, join_all};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::IndexedRandom;
@@ -41,17 +54,145 @@ mod settings;
 use queries::{KNOWN_FAILURES, KnownFailure, TEMPLATES, Template};
 use settings::Setting;
 
+/// One template under one setting, with a context that has the `raw` and
+/// `canon` tables registered under that setting.
+pub(crate) struct Pair {
+    template: &'static Template,
+    setting: Setting,
+    ctx: SessionContext,
+}
+
+/// Every pair that runs on `data`.
+fn pairs(data: &data::Dataset) -> Result<Vec<Pair>> {
+    let mut pairs = vec![];
+    for setting in Setting::all() {
+        let ctx = setting.context(data)?;
+        for template in TEMPLATES.iter().filter(|t| runs(t, &setting)) {
+            pairs.push(Pair {
+                template,
+                setting,
+                ctx: ctx.clone(),
+            });
+        }
+    }
+    Ok(pairs)
+}
+
+/// Templates without a zero literal skip the `negative_literals` settings,
+/// which would run the same queries again.
+fn runs(template: &Template, setting: &Setting) -> bool {
+    !setting.negative_literals || template.sql.contains("{z}")
+}
+
+/// Why a pair failed.
+enum Failure {
+    /// Both queries ran, but the results differ.
+    Mismatch(String),
+    /// One or both of the queries failed. A failure on both tables usually
+    /// means the template itself is broken.
+    Error(String),
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Failure::Mismatch(msg) | Failure::Error(msg) => f.write_str(msg),
+        }
+    }
+}
+
+/// Runs the pair's template on `raw` and `canon` and compares the results
+/// with all floats normalized.
+async fn check(pair: &Pair) -> Result<(), Failure> {
+    let Pair {
+        template,
+        setting,
+        ctx,
+    } = pair;
+    let raw_sql = template.render("raw", setting.raw_zero());
+    let canon_sql = template.render("canon", "0.0");
+    let describe = || {
+        format!(
+            "{} under {setting:?}\n  raw:   {raw_sql}\n  canon: {canon_sql}",
+            template.name
+        )
+    };
+
+    let (canon, raw) = join(run_sql(&canon_sql, ctx), run_sql(&raw_sql, ctx)).await;
+    let (mut canon, mut raw) = match (canon, raw) {
+        (Ok(canon), Ok(raw)) => (format_rows(&canon), format_rows(&raw)),
+        (canon, raw) => {
+            let outcome = |r: &Result<_>| match r {
+                Ok(_) => "ok".to_string(),
+                Err(e) => format!("fails: {e}"),
+            };
+            return Err(Failure::Error(format!(
+                "{}\n  raw {}\n  canon {}",
+                describe(),
+                outcome(&raw),
+                outcome(&canon)
+            )));
+        }
+    };
+
+    if !template.ordered {
+        canon.sort_unstable();
+        raw.sort_unstable();
+    }
+    if canon == raw {
+        return Ok(());
+    }
+    let diff = first_difference(&raw, &canon, template.ordered);
+    Err(Failure::Mismatch(format!("{}\n{diff}", describe())))
+}
+
+async fn run_sql(sql: &str, ctx: &SessionContext) -> Result<Vec<RecordBatch>> {
+    ctx.sql(sql).await?.collect().await
+}
+
+/// One string per row, with every float, also nested ones, normalized so
+/// that `-0.0` prints as `0.0`.
+fn format_rows(batches: &[RecordBatch]) -> Vec<String> {
+    let options = FormatOptions::default().with_null("NULL");
+    let mut rows = vec![];
+    for batch in batches {
+        let columns: Vec<ArrayRef> =
+            batch.columns().iter().cloned().map(normalize).collect();
+        let formatters = columns
+            .iter()
+            .map(|c| ArrayFormatter::try_new(c.as_ref(), &options))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for row in 0..batch.num_rows() {
+            let values: Vec<String> = formatters
+                .iter()
+                .map(|f| f.value(row).to_string())
+                .collect();
+            rows.push(values.join(" | "));
+        }
+    }
+    rows
+}
+
+/// Describes the first row where `raw` and `canon` differ.
+fn first_difference(raw: &[String], canon: &[String], ordered: bool) -> String {
+    let row = if ordered { "row" } else { "sorted row" };
+    match raw.iter().zip(canon).position(|(r, c)| r != c) {
+        Some(i) => format!("{row} {i}: raw {}, canon {}", raw[i], canon[i]),
+        None => format!("raw {} rows, canon {} rows", raw.len(), canon.len()),
+    }
+}
+
 /// Number of rows a random table may have.
 const TABLE_SIZES: &[usize] = &[8, 16, 32, 64, 128];
 
 /// Each dataset is a random table registered under every setting. Each case
-/// runs one random (template, setting) pair. A known failure may give a wrong
-/// result on random data too, but it must not error or panic.
+/// runs one random pair. A known failure may give a wrong result on random
+/// data too, but it must not error or panic.
 pub(crate) struct FloatZeroFuzzer;
 
 impl FuzzTest for FloatZeroFuzzer {
-    /// Every pair that runs, with a context that has the random table.
-    type Dataset = Vec<(&'static Template, Setting, SessionContext)>;
+    type Dataset = Vec<Pair>;
 
     fn name(&self) -> &str {
         "float_zero"
@@ -65,12 +206,12 @@ impl FuzzTest for FloatZeroFuzzer {
     }
 
     async fn run_case(&self, pairs: &Self::Dataset, seed: u64) -> Result<()> {
-        let (template, setting, ctx) = pairs
+        let pair = pairs
             .choose(&mut StdRng::seed_from_u64(seed))
-            .ok_or_else(|| exec_datafusion_err!("no (template, setting) pair runs"))?;
+            .ok_or_else(|| exec_datafusion_err!("no pair runs"))?;
         match (
-            check(ctx, template, setting).await,
-            KnownFailure::matches(template, setting),
+            check(pair).await,
+            KnownFailure::matches(pair.template, &pair.setting),
         ) {
             (Ok(()), _) | (Err(Failure::Mismatch(_)), Some(_)) => Ok(()),
             (Err(failure), None) => exec_err!("{failure}"),
@@ -82,52 +223,15 @@ impl FuzzTest for FloatZeroFuzzer {
     }
 }
 
-/// Every (template, setting) pair that runs, each with a context that has
-/// `data` registered under that setting.
-fn pairs(
-    data: &data::Dataset,
-) -> Result<Vec<(&'static Template, Setting, SessionContext)>> {
-    let mut pairs = vec![];
-    for setting in Setting::all() {
-        let ctx = setting.context(data)?;
-        for template in TEMPLATES.iter().filter(|t| runs(t, &setting)) {
-            pairs.push((template, setting, ctx.clone()));
-        }
-    }
-    Ok(pairs)
-}
-
-/// Templates without a zero literal skip the `negative_literals` settings,
-/// which would run the same queries again.
-fn runs(template: &Template, setting: &Setting) -> bool {
-    !setting.negative_literals || template.sql.contains("{z}")
-}
-
-/// Every listed (template, setting) pair must fail on the fixed data and
-/// every other pair must pass.
+/// Every listed pair must give a wrong result on the fixed data and every
+/// other pair must pass.
 #[tokio::test(flavor = "multi_thread")]
 async fn float_zero_fixed() {
     let mut errors = vec![];
-    // Which KNOWN_FAILURES entries apply to some pair that ran.
-    let mut used = vec![false; KNOWN_FAILURES.len()];
-    for (template, setting, result) in check_all(&data::fixed()).await {
-        let applying: Vec<usize> = (0..KNOWN_FAILURES.len())
-            .filter(|&i| {
-                let known = &KNOWN_FAILURES[i];
-                known.template == template.name && (known.applies)(&setting)
-            })
-            .collect();
-        if applying.len() > 1 {
-            errors.push(format!(
-                "{} under {setting:?} matches {} KNOWN_FAILURES entries, \
-                 only the first one counts",
-                template.name,
-                applying.len()
-            ));
-        }
-        for &i in &applying {
-            used[i] = true;
-        }
+    for (pair, result) in check_all(&data::fixed()).await {
+        let Pair {
+            template, setting, ..
+        } = pair;
         match (result, KnownFailure::matches(template, &setting)) {
             (Ok(()), None) | (Err(Failure::Mismatch(_)), Some(_)) => {}
             (Err(failure), None) => errors.push(failure.to_string()),
@@ -139,6 +243,54 @@ async fn float_zero_fixed() {
                 "{} under {setting:?} now passes, remove it from KNOWN_FAILURES ({})",
                 template.name, known.issue
             )),
+        }
+    }
+    assert!(errors.is_empty(), "{}", errors.join("\n\n"));
+}
+
+/// Checks every pair that runs on `data`. Each pair runs in its own task:
+/// the queries are tiny, so planning dominates and running them in parallel
+/// is what makes the test fast.
+async fn check_all(data: &data::Dataset) -> Vec<(Pair, Result<(), Failure>)> {
+    let tasks = pairs(data).unwrap().into_iter().map(|pair| {
+        SpawnedTask::spawn(async move {
+            let result = check(&pair).await;
+            (pair, result)
+        })
+        .join_unwind()
+    });
+    join_all(tasks)
+        .await
+        .into_iter()
+        .map(|joined| joined.unwrap())
+        .collect()
+}
+
+/// Every [`KNOWN_FAILURES`] entry applies to some pair that runs, and no pair
+/// matches more than one entry.
+#[test]
+fn known_failures_entries() {
+    let mut errors = vec![];
+    let mut used = vec![false; KNOWN_FAILURES.len()];
+    for setting in Setting::all() {
+        for template in TEMPLATES.iter().filter(|t| runs(t, &setting)) {
+            let applying: Vec<usize> = (0..KNOWN_FAILURES.len())
+                .filter(|&i| {
+                    let known = &KNOWN_FAILURES[i];
+                    known.template == template.name && (known.applies)(&setting)
+                })
+                .collect();
+            if applying.len() > 1 {
+                errors.push(format!(
+                    "{} under {setting:?} matches {} KNOWN_FAILURES entries, \
+                     only the first one counts",
+                    template.name,
+                    applying.len()
+                ));
+            }
+            for i in applying {
+                used[i] = true;
+            }
         }
     }
     for (known, used) in KNOWN_FAILURES.iter().zip(used) {
@@ -158,7 +310,12 @@ async fn float_zero_fixed() {
 #[tokio::test]
 async fn float_zero_negative_literal() {
     let mut errors = vec![];
-    for (template, setting, ctx) in pairs(&data::fixed()).unwrap() {
+    for Pair {
+        template,
+        setting,
+        ctx,
+    } in pairs(&data::fixed()).unwrap()
+    {
         if !setting.negative_literals {
             continue;
         }
@@ -207,131 +364,4 @@ fn is_negative_zero(value: &ScalarValue) -> bool {
         }
         _ => false,
     }
-}
-
-/// Why a (template, setting) pair failed.
-enum Failure {
-    /// Both queries ran, but the results differ.
-    Mismatch(String),
-    /// One or both of the queries failed. A failure on both tables usually
-    /// means the template itself is broken.
-    Error(String),
-}
-
-impl std::fmt::Display for Failure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Failure::Mismatch(msg) | Failure::Error(msg) => f.write_str(msg),
-        }
-    }
-}
-
-/// Runs every template under every setting on `data` and returns the
-/// results in a fixed order. Each pair runs in its own task: the queries are
-/// tiny, so planning dominates and running them in parallel is what makes the
-/// test fast.
-async fn check_all(
-    data: &data::Dataset,
-) -> Vec<(&'static Template, Setting, Result<(), Failure>)> {
-    let mut join_set = JoinSet::new();
-    let pairs = pairs(data).unwrap();
-    let num_pairs = pairs.len();
-    for (index, (template, setting, ctx)) in pairs.into_iter().enumerate() {
-        join_set.spawn(async move {
-            let result = check(&ctx, template, &setting).await;
-            (index, (template, setting, result))
-        });
-    }
-    let mut results = Vec::with_capacity(num_pairs);
-    while let Some(joined) = join_set.join_next().await {
-        // A panic inside a query is a bug of its own: re-raise it with its
-        // own message.
-        results
-            .push(joined.unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic())));
-    }
-    // Tasks finish in any order; report failures in the order they ran.
-    results.sort_unstable_by_key(|(index, _)| *index);
-    results.into_iter().map(|(_, result)| result).collect()
-}
-
-/// Runs `template` on `raw` and `canon` and compares the results with all
-/// floats normalized.
-async fn check(
-    ctx: &SessionContext,
-    template: &Template,
-    setting: &Setting,
-) -> Result<(), Failure> {
-    let raw_sql = template.render("raw", setting.raw_zero());
-    let canon_sql = template.render("canon", "0.0");
-    let describe = || {
-        format!(
-            "{} under {setting:?}\n  raw:   {raw_sql}\n  canon: {canon_sql}",
-            template.name
-        )
-    };
-    let (canon, raw) = join(run_sql(&canon_sql, ctx), run_sql(&raw_sql, ctx)).await;
-    let (mut canon, mut raw) = match (canon, raw) {
-        (Ok(canon), Ok(raw)) => (format_rows(&canon), format_rows(&raw)),
-        (Err(canon), Err(raw)) => {
-            return Err(Failure::Error(format!(
-                "{}\nfails on both tables\n  raw:   {raw}\n  canon: {canon}",
-                describe()
-            )));
-        }
-        (Ok(_), Err(e)) => {
-            return Err(Failure::Error(format!("{}\nraw fails: {e}", describe())));
-        }
-        (Err(e), Ok(_)) => {
-            return Err(Failure::Error(format!("{}\ncanon fails: {e}", describe())));
-        }
-    };
-    if !template.ordered {
-        canon.sort_unstable();
-        raw.sort_unstable();
-    }
-    if canon == raw {
-        return Ok(());
-    }
-    let diff = canon
-        .iter()
-        .zip(&raw)
-        .position(|(c, r)| c != r)
-        .map(|i| {
-            let row = if template.ordered {
-                "row"
-            } else {
-                "sorted row"
-            };
-            format!("{row} {i}: raw {}, canon {}", raw[i], canon[i])
-        })
-        .unwrap_or_else(|| format!("raw {} rows, canon {} rows", raw.len(), canon.len()));
-    Err(Failure::Mismatch(format!("{}\n{diff}", describe())))
-}
-
-/// One string per row, with every float, also nested ones, normalized so
-/// that `-0.0` prints as `0.0`.
-fn format_rows(batches: &[RecordBatch]) -> Vec<String> {
-    let options = FormatOptions::default().with_null("NULL");
-    let mut rows = vec![];
-    for batch in batches {
-        let columns: Vec<ArrayRef> =
-            batch.columns().iter().cloned().map(normalize).collect();
-        let formatters = columns
-            .iter()
-            .map(|c| ArrayFormatter::try_new(c.as_ref(), &options))
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        for row in 0..batch.num_rows() {
-            let values: Vec<String> = formatters
-                .iter()
-                .map(|f| f.value(row).to_string())
-                .collect();
-            rows.push(values.join(" | "));
-        }
-    }
-    rows
-}
-
-async fn run_sql(sql: &str, ctx: &SessionContext) -> Result<Vec<RecordBatch>> {
-    ctx.sql(sql).await?.collect().await
 }
