@@ -133,45 +133,82 @@ async fn multi_parquet_coercion_projection() {
     ");
 }
 
-/// Nested binary fields read as strings go through the validating cast, so
-/// invalid UTF-8 is an error rather than an invalid string array.
-#[tokio::test]
-async fn nested_binary_read_as_string_rejects_invalid_utf8() {
+/// Nested `list<binary>` and `struct<binary>` columns with the given leaf
+/// values, paired with the table types that declare those leaves as strings.
+fn nested_binary_columns(
+    list_values: &[&[u8]],
+    struct_value: &[u8],
+) -> Vec<(ArrayRef, DataType)> {
     let list = ListArray::new(
         Arc::new(Field::new("element", DataType::Binary, true)),
-        OffsetBuffer::new(vec![0, 2].into()),
-        Arc::new(BinaryArray::from(vec![b"one".as_slice(), &[0xff]])),
+        OffsetBuffer::new(vec![0, list_values.len() as i32].into()),
+        Arc::new(BinaryArray::from(list_values.to_vec())),
         None,
     );
     let strukt = StructArray::from(vec![(
         Arc::new(Field::new("value", DataType::Binary, true)),
-        Arc::new(BinaryArray::from(vec![&[0xff_u8][..]])) as ArrayRef,
+        Arc::new(BinaryArray::from(vec![struct_value])) as ArrayRef,
     )]);
     let string_list =
         DataType::List(Arc::new(Field::new("element", DataType::Utf8, true)));
     let string_struct =
         DataType::Struct(vec![Field::new("value", DataType::Utf8, true)].into());
-
-    for (column, table_type) in [
+    vec![
         (Arc::new(list) as ArrayRef, string_list),
         (Arc::new(strukt) as ArrayRef, string_struct),
-    ] {
-        let batch = RecordBatch::try_from_iter([("c", column)]).unwrap();
-        let (meta, _files) = store_parquet(vec![batch]).unwrap();
-        let table_schema = Arc::new(Schema::new(vec![Field::new("c", table_type, true)]));
-        let config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
-            Arc::new(ParquetSource::new(table_schema)),
-        )
-        .with_file_group(meta.into_iter().map(Into::into).collect())
-        .build();
+    ]
+}
 
-        let task_ctx = SessionContext::new().task_ctx();
-        let err = collect(DataSourceExec::from_data_source(config), task_ctx)
-            .await
-            .unwrap_err();
+/// Writes `column` to a Parquet file and scans it through a table schema that
+/// declares it as `table_type`.
+async fn scan_as(column: ArrayRef, table_type: DataType) -> Result<Vec<RecordBatch>> {
+    let batch = RecordBatch::try_from_iter([("c", column)]).unwrap();
+    let (meta, _files) = store_parquet(vec![batch]).unwrap();
+    let table_schema = Arc::new(Schema::new(vec![Field::new("c", table_type, true)]));
+    let config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::local_filesystem(),
+        Arc::new(ParquetSource::new(table_schema)),
+    )
+    .with_file_group(meta.into_iter().map(Into::into).collect())
+    .build();
+
+    let task_ctx = SessionContext::new().task_ctx();
+    collect(DataSourceExec::from_data_source(config), task_ctx).await
+}
+
+/// Nested binary fields read as strings go through the validating cast, so
+/// invalid UTF-8 is an error rather than an invalid string array.
+#[tokio::test]
+async fn nested_binary_read_as_string_rejects_invalid_utf8() {
+    for (column, table_type) in nested_binary_columns(&[b"one", &[0xff]], &[0xff]) {
+        let err = scan_as(column, table_type).await.unwrap_err();
         assert!(err.to_string().contains("non UTF-8 data"), "{err}");
     }
+}
+
+/// Nested binary fields holding valid UTF-8 still read as strings through a
+/// table schema that declares them as strings.
+#[tokio::test]
+async fn nested_binary_read_as_string_returns_valid_utf8() {
+    let mut tables = vec![];
+    for (column, table_type) in nested_binary_columns(&[b"one", b"two"], b"three") {
+        let batches = scan_as(column, table_type.clone()).await.unwrap();
+        assert_eq!(batches[0].schema().field(0).data_type(), &table_type);
+        tables.push(batches_to_sort_string(&batches));
+    }
+
+    assert_snapshot!(tables.join("\n"), @"
+    +------------+
+    | c          |
+    +------------+
+    | [one, two] |
+    +------------+
+    +----------------+
+    | c              |
+    +----------------+
+    | {value: three} |
+    +----------------+
+    ");
 }
 
 /// Writes `batches` to a temporary parquet file
