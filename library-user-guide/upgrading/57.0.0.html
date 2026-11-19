@@ -596,6 +596,18 @@ that aligns with the SQL specification.</p>
 For counting rows, use <code class="docutils literal notranslate"><span class="pre">count_all()</span></code> or <code class="docutils literal notranslate"><span class="pre">count_all_window()</span></code>.</p>
 <p>It has also been removed from the Protobuf and Substrait based serialization.</p>
 </section>
+<section id="statistics-must-have-one-columnstatistics-per-schema-field">
+<h3>Statistics must have one <code class="docutils literal notranslate"><span class="pre">ColumnStatistics</span></code> per schema field<a class="headerlink" href="#statistics-must-have-one-columnstatistics-per-schema-field" title="Link to this heading">#</a></h3>
+<p>Planning now fails with an error if an <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> or <code class="docutils literal notranslate"><span class="pre">StatisticsProvider</span></code>
+reports a different number of <code class="docutils literal notranslate"><span class="pre">Statistics::column_statistics</span></code> than its schema
+has fields. Before, this could panic or return another column’s values.</p>
+<p>Start from <code class="docutils literal notranslate"><span class="pre">Statistics::new_unknown</span></code>, or project a child’s statistics with
+<code class="docutils literal notranslate"><span class="pre">Statistics::project</span></code> if the plan changes its columns:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">statistics</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Statistics</span><span class="p">::</span><span class="n">new_unknown</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">schema</span><span class="p">())</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_num_rows</span><span class="p">(</span><span class="n">Precision</span><span class="p">::</span><span class="n">Exact</span><span class="p">(</span><span class="n">num_rows</span><span class="p">));</span>
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -655,6 +667,7 @@ For counting rows, use <code class="docutils literal notranslate"><span class="p
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetfilereaderfactory-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">ParquetFileReaderFactory</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#copy-to-ordering"><code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">TO</span></code> ordering</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#deprecated-expr-wildcard-has-been-removed">Deprecated <code class="docutils literal notranslate"><span class="pre">Expr::Wildcard</span></code> has been removed</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-must-have-one-columnstatistics-per-schema-field">Statistics must have one <code class="docutils literal notranslate"><span class="pre">ColumnStatistics</span></code> per schema field</a></li>
 </ul>
 </li>
 </ul>
