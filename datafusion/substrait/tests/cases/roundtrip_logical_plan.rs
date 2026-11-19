@@ -22,7 +22,7 @@ use std::mem::size_of_val;
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit,
 };
-use datafusion::common::tree_node::Transformed;
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{DFSchema, DFSchemaRef, Spans, not_impl_err, plan_err};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
@@ -1526,6 +1526,28 @@ async fn roundtrip_union_all() -> Result<()> {
 }
 
 #[tokio::test]
+async fn consume_nary_union_as_single_union() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT a, e FROM data UNION ALL SELECT a, e FROM data UNION ALL SELECT a, e FROM data")
+        .await?
+        .into_optimized_plan()?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    // Skip optimization: OptimizeUnions would hide a chain of nested 2-input unions.
+    let consumed = from_substrait_plan(&ctx.state(), &proto).await?;
+
+    let mut union_widths = vec![];
+    consumed.apply(|node| {
+        if let LogicalPlan::Union(union) = node {
+            union_widths.push(union.inputs.len());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert_eq!(union_widths, vec![3]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn simple_intersect() -> Result<()> {
     async fn check_wildcard(syntax: &str) -> Result<()> {
         let expected_plan_str = format!(
@@ -1736,6 +1758,41 @@ async fn union_distinct_consume() -> Result<()> {
     let proto_plan = read_json("tests/testdata/test_plans/union_distinct.substrait.json");
 
     assert_substrait_sql(proto_plan, "SELECT a FROM data UNION SELECT a FROM data2").await
+}
+
+#[tokio::test]
+async fn nary_union_distinct_consume() -> Result<()> {
+    let proto_plan =
+        read_json("tests/testdata/test_plans/union_distinct_nary.substrait.json");
+
+    assert_substrait_sql(
+        proto_plan,
+        "SELECT a FROM data UNION SELECT a FROM data2 UNION SELECT a FROM data",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn consume_nary_union_distinct_as_single_union() -> Result<()> {
+    let ctx = create_context().await?;
+    let proto_plan =
+        read_json("tests/testdata/test_plans/union_distinct_nary.substrait.json");
+    // Skip optimization: OptimizeUnions would hide nested unions and distincts.
+    let consumed = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+    let mut distincts = 0;
+    let mut union_widths = vec![];
+    consumed.apply(|node| {
+        match node {
+            LogicalPlan::Distinct(_) => distincts += 1,
+            LogicalPlan::Union(union) => union_widths.push(union.inputs.len()),
+            _ => {}
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert_eq!(distincts, 1);
+    assert_eq!(union_widths, vec![3]);
+    Ok(())
 }
 
 #[tokio::test]

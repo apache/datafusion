@@ -6,7 +6,7 @@ use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext}
 use datafusion::arrow::datatypes::Field;
 use datafusion::common::{JoinType, NullEquality, not_impl_err, substrait_err};
 use datafusion::logical_expr::{
-    Cast, Expr, LogicalPlan, LogicalPlanBuilder, requalify_sides_if_needed,
+    Cast, Expr, LogicalPlan, LogicalPlanBuilder, Union, requalify_sides_if_needed,
 };
 use std::sync::Arc;
 use substrait::proto::set_rel::SetOp;
@@ -47,25 +47,30 @@ pub async fn from_set_rel(
     }
 }
 
+/// Builds a single n-ary [`Union`] over all `rels`.
+///
+/// Building a chain of 2-input unions instead would leave `OptimizeUnions` to flatten it
+/// again, which costs time quadratic in the number of inputs on wide unions.
 async fn union_rels(
     consumer: &impl SubstraitConsumer,
     rels: &[Rel],
     is_all: bool,
     context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
-    let mut union_builder = Ok(LogicalPlanBuilder::from(
-        consumer.consume_rel(&rels[0], context).await?,
-    ));
-    for input in &rels[1..] {
-        let rel_plan = consumer.consume_rel(input, context).await?;
-
-        union_builder = if is_all {
-            union_builder?.union(rel_plan)
-        } else {
-            union_builder?.union_distinct(rel_plan)
-        };
+    let mut inputs = Vec::with_capacity(rels.len());
+    for rel in rels {
+        inputs.push(Arc::new(consumer.consume_rel(rel, context).await?));
     }
-    union_builder?.build()
+    // The secondary side of a 2-input INTERSECT is a single relation: nothing to union.
+    if inputs.len() == 1 {
+        return Ok(Arc::unwrap_or_clone(inputs.remove(0)));
+    }
+    let union = LogicalPlan::Union(Union::try_new_with_loose_types(inputs)?);
+    if is_all {
+        Ok(union)
+    } else {
+        LogicalPlanBuilder::from(union).distinct()?.build()
+    }
 }
 
 async fn intersect_rels(
