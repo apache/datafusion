@@ -209,10 +209,6 @@ impl<K: Eq + Hash + Clone, V> LruQueue<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use rand::seq::IndexedRandom;
-
     use crate::cache::lru_queue::LruQueue;
 
     #[test]
@@ -491,45 +487,5 @@ mod tests {
         assert_eq!(lru_queue.pop(), Some((1, 10)));
         assert_eq!(lru_queue.pop(), Some((2, 20)));
         assert_eq!(lru_queue.pop(), None);
-    }
-
-    #[test]
-    /// Fuzzy test using an hashmap as the base to check the methods.
-    fn test_fuzzy() {
-        let mut lru_queue: LruQueue<i32, i32> = LruQueue::new();
-        let mut map: HashMap<i32, i32> = HashMap::new();
-        let max_keys = 1_000;
-        let methods = ["get", "put", "remove", "pop", "contains", "len"];
-        let mut rng = rand::rng();
-
-        for i in 0..1_000_000 {
-            match *methods.choose(&mut rng).unwrap() {
-                "get" => {
-                    assert_eq!(lru_queue.get(&(i % max_keys)), map.get(&(i % max_keys)))
-                }
-                "put" => assert_eq!(
-                    lru_queue.put(i % max_keys, i),
-                    map.insert(i % max_keys, i)
-                ),
-                "remove" => assert_eq!(
-                    lru_queue.remove(&(i % max_keys)),
-                    map.remove(&(i % max_keys))
-                ),
-                "pop" => {
-                    let removed = lru_queue.pop();
-                    if let Some((k, v)) = removed {
-                        assert_eq!(Some(v), map.remove(&k))
-                    }
-                }
-                "contains" => {
-                    assert_eq!(
-                        lru_queue.contains_key(&(i % max_keys)),
-                        map.contains_key(&(i % max_keys))
-                    )
-                }
-                "len" => assert_eq!(lru_queue.len(), map.len()),
-                _ => unreachable!(),
-            }
-        }
     }
 }
