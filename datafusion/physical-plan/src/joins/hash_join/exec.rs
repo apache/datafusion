@@ -3084,40 +3084,46 @@ fn is_perfect_hash_join_candidate(
     Ok(ArrayMap::is_supported_type(&data_type))
 }
 
+/// Returns the bytes [`new_join_hashmap`] reserves for a map of `num_rows`.
+fn join_hashmap_size(num_rows: usize) -> Result<usize> {
+    let (buckets, index_size) = if num_rows > u32::MAX as usize {
+        (
+            estimate_memory_size::<(u64, u64)>(num_rows, size_of::<JoinHashMapU64>())?,
+            size_of::<u64>(),
+        )
+    } else {
+        (
+            estimate_memory_size::<(u32, u64)>(num_rows, size_of::<JoinHashMapU32>())?,
+            size_of::<u32>(),
+        )
+    };
+    // Each build row also owns an index in the duplicate-key chain.
+    num_rows
+        .checked_mul(index_size)
+        .and_then(|chain| buckets.checked_add(chain))
+        .ok_or_else(|| {
+            datafusion_common::exec_datafusion_err!("Hash join table size overflow")
+        })
+}
+
 pub(super) fn new_join_hashmap(
     num_rows: usize,
     reservation: &mut MemoryReservation,
     metrics: &BuildProbeJoinMetrics,
 ) -> Result<Box<dyn JoinHashMapType>> {
-    let fixed_size_u32 = size_of::<JoinHashMapU32>();
-    let fixed_size_u64 = size_of::<JoinHashMapU64>();
+    let estimated_hashtable_size = join_hashmap_size(num_rows)?;
+    reservation.try_grow(estimated_hashtable_size)?;
+    metrics.build_mem_used.add(estimated_hashtable_size);
+    Ok(alloc_join_hashmap(num_rows))
+}
 
+/// Allocates a map of `num_rows`, whose [`join_hashmap_size`] the caller
+/// has already reserved.
+fn alloc_join_hashmap(num_rows: usize) -> Box<dyn JoinHashMapType> {
     if num_rows > u32::MAX as usize {
-        let estimated_hashtable_size =
-            estimate_memory_size::<(u64, u64)>(num_rows, fixed_size_u64)?
-                // Each build row also owns an index in the duplicate-key chain.
-                .checked_add(num_rows * size_of::<u64>())
-                .ok_or_else(|| {
-                    datafusion_common::exec_datafusion_err!(
-                        "Hash join table size overflow"
-                    )
-                })?;
-        reservation.try_grow(estimated_hashtable_size)?;
-        metrics.build_mem_used.add(estimated_hashtable_size);
-        Ok(Box::new(JoinHashMapU64::with_capacity(num_rows)))
+        Box::new(JoinHashMapU64::with_capacity(num_rows))
     } else {
-        let estimated_hashtable_size =
-            estimate_memory_size::<(u32, u64)>(num_rows, fixed_size_u32)?
-                // Each build row also owns an index in the duplicate-key chain.
-                .checked_add(num_rows * size_of::<u32>())
-                .ok_or_else(|| {
-                    datafusion_common::exec_datafusion_err!(
-                        "Hash join table size overflow"
-                    )
-                })?;
-        reservation.try_grow(estimated_hashtable_size)?;
-        metrics.build_mem_used.add(estimated_hashtable_size);
-        Ok(Box::new(JoinHashMapU32::with_capacity(num_rows)))
+        Box::new(JoinHashMapU32::with_capacity(num_rows))
     }
 }
 
@@ -3139,6 +3145,21 @@ fn estimate_concat_allocation(array: &dyn Array) -> Result<usize> {
     }
 }
 
+/// Returns the bytes that concatenating `batches` into one batch allocates.
+fn concat_copy_size(batches: &[RecordBatch]) -> Result<usize> {
+    // Concatenating a single batch is zero-copy
+    if batches.len() <= 1 {
+        return Ok(0);
+    }
+    let mut copy_size = 0;
+    for batch in batches {
+        for array in batch.columns() {
+            copy_size += estimate_concat_allocation(array.as_ref())?;
+        }
+    }
+    Ok(copy_size)
+}
+
 /// Concatenates the build side `batches` into a single batch, keeping
 /// `reservation` ahead of the actual memory usage.
 ///
@@ -3153,18 +3174,7 @@ fn concat_build_batches(
     reservation: &mut MemoryReservation,
     metrics: &BuildProbeJoinMetrics,
 ) -> Result<RecordBatch> {
-    // Concatenating a single batch is zero-copy
-    let copy_size = if batches.len() > 1 {
-        let mut copy_size = 0;
-        for batch in batches.iter() {
-            for array in batch.columns() {
-                copy_size += estimate_concat_allocation(array.as_ref())?;
-            }
-        }
-        copy_size
-    } else {
-        0
-    };
+    let copy_size = concat_copy_size(batches)?;
     reservation.try_grow(copy_size)?;
     metrics.build_mem_used.add(copy_size);
 
