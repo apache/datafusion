@@ -10,8 +10,10 @@
 //! <https://github.com/apache/datafusion/issues/26138>.
 
 use std::future::Future;
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, RecordBatch};
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::physical_plan::displayable;
 use datafusion::prelude::SessionContext;
@@ -91,8 +93,8 @@ async fn check(pair: &Pair) -> Result<(), Failure> {
 
     let (raw, canonical) =
         join(run_sql(&raw_sql, ctx), run_sql(&canonical_sql, ctx)).await;
-    let (mut raw, mut canonical) = match (raw, canonical) {
-        (Ok(raw), Ok(canonical)) => (format_rows(&raw), format_rows(&canonical)),
+    let ((raw_schema, raw), (canonical_schema, canonical)) = match (raw, canonical) {
+        (Ok(raw), Ok(canonical)) => (raw, canonical),
         (raw, canonical) => {
             let outcome = |r: &Result<_>| match r {
                 Ok(_) => "ok".to_string(),
@@ -107,6 +109,15 @@ async fn check(pair: &Pair) -> Result<(), Failure> {
         }
     };
 
+    let (raw_types, canonical_types) = (types(&raw_schema), types(&canonical_schema));
+    if raw_types != canonical_types {
+        return Err(Failure::Mismatch(format!(
+            "{}\ncolumn types: raw {raw_types:?}, canonical {canonical_types:?}",
+            describe()
+        )));
+    }
+
+    let (mut raw, mut canonical) = (format_rows(&raw), format_rows(&canonical));
     if !query.ordered {
         raw.sort_unstable();
         canonical.sort_unstable();
@@ -118,8 +129,23 @@ async fn check(pair: &Pair) -> Result<(), Failure> {
     Err(Failure::Mismatch(format!("{}\n{diff}", describe())))
 }
 
-async fn run_sql(sql: &str, ctx: &SessionContext) -> Result<Vec<RecordBatch>> {
-    ctx.sql(sql).await?.collect().await
+async fn run_sql(
+    sql: &str,
+    ctx: &SessionContext,
+) -> Result<(SchemaRef, Vec<RecordBatch>)> {
+    let df = ctx.sql(sql).await?;
+    let schema = Arc::clone(df.schema().inner());
+    Ok((schema, df.collect().await?))
+}
+
+/// The type of each column and whether it can be NULL. Names are left out
+/// because they include the table name and how the zero was written.
+fn types(schema: &SchemaRef) -> Vec<(DataType, bool)> {
+    schema
+        .fields()
+        .iter()
+        .map(|f| (f.data_type().clone(), f.is_nullable()))
+        .collect()
 }
 
 /// One line per row, with every `-0.0` shown as `0.0`.
