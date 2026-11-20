@@ -69,6 +69,20 @@ async fn key_range_bitmap_union() -> Result<()> {
     .await
 }
 
+#[tokio::test]
+async fn sort_topk() -> Result<()> {
+    run_suite(
+        &suites::limit::LimitFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: Some(100),
+            time_limit: None,
+            cases_per_dataset: 100,
+        },
+    )
+    .await
+}
+
 async fn run_suite<T: FuzzTest>(test: &T, config: RunConfig) -> Result<()> {
     eprintln!("Running fuzz suite: {}", test.name());
     let stats = run(test, config).await?;
