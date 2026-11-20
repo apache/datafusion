@@ -6,12 +6,14 @@
 //! tables and `SHOW` statements.
 
 use crate::TableType;
+use crate::registry::{ExtensionTypeRegistry, ExtensionTypeRegistryRef};
 use arrow::array::ArrayRef;
 use arrow::array::builder::{BooleanBuilder, StringBuilder, UInt8Builder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigEntry;
+use std::fmt::Write;
 use std::sync::Arc;
 
 /// Returns the Arrow schema of `information_schema.tables` rows.
@@ -230,6 +232,7 @@ pub struct InformationSchemaColumnsBuilder {
     numeric_scales: Option<UInt64Builder>,
     datetime_precisions: Option<UInt64Builder>,
     interval_types: Option<StringBuilder>,
+    extension_types: Option<ExtensionTypeRegistryRef>,
 }
 
 impl InformationSchemaColumnsBuilder {
@@ -269,7 +272,19 @@ impl InformationSchemaColumnsBuilder {
             datetime_precisions: full
                 .then(|| UInt64Builder::with_capacity(default_capacity)),
             interval_types: full.then(StringBuilder::new),
+            extension_types: None,
         }
+    }
+
+    /// Use the extension type registry to show the
+    /// [`display_name`](datafusion_common::types::DFExtensionType::display_name)
+    /// of registered extension types in `data_type`.
+    pub fn with_extension_type_registry(
+        mut self,
+        extension_types: Option<ExtensionTypeRegistryRef>,
+    ) -> Self {
+        self.extension_types = extension_types;
+        self
     }
 
     /// Append one row describing `field`. Values not needed at this builder's
@@ -310,8 +325,13 @@ impl InformationSchemaColumnsBuilder {
         let nullable_str = if field.is_nullable() { "YES" } else { "NO" };
         self.is_nullables.append_value(nullable_str);
 
-        // "System supplied type" --> Use display format of the datatype
-        self.data_types.append_value(field.data_type().to_string());
+        // "System supplied type" --> Use the display name of the extension type or the
+        // display format of the datatype
+        append_field_type_display_name(
+            self.extension_types.as_deref(),
+            field,
+            &mut self.data_types,
+        );
 
         // "If data_type identifies a character or bit string type, the
         // declared maximum length; null for all other data types or
@@ -432,6 +452,35 @@ impl InformationSchemaColumnsBuilder {
             columns.push(Arc::new(self.interval_types.as_mut().unwrap().finish()));
         }
         RecordBatch::try_new(Arc::clone(&self.schema), columns).unwrap()
+    }
+}
+
+/// Appends the name of the type of `field` shown in `data_type` to `builder`.
+///
+/// If the field has an extension type registered in `registry`, appends
+/// [`display_name`] if possible. appended. Otherwise, the storage type (raw
+/// Arrow physical type name) is appended.
+///
+/// [`display_name`]: datafusion_common::types::DFExtensionType::display_name
+fn append_field_type_display_name(
+    registry: Option<&dyn ExtensionTypeRegistry>,
+    field: &Field,
+    builder: &mut StringBuilder,
+) {
+    let extension_type = registry
+        .and_then(|registry| registry.create_extension_type_for_field(field).ok())
+        .flatten();
+    match extension_type
+        .as_ref()
+        .and_then(|extension_type| extension_type.display_name())
+    {
+        Some(name) => builder.append_value(name),
+        None => {
+            // Write the storage type straight into the builder, then finish the row.
+            // Writing to a `StringBuilder` does not fail.
+            let _ = write!(builder, "{}", field.data_type());
+            builder.append_value("");
+        }
     }
 }
 
@@ -826,4 +875,57 @@ pub fn show_functions_schema() -> Schema {
         Field::new("description", DataType::Utf8, true),
         Field::new("syntax_example", DataType::Utf8, true),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::MemoryExtensionTypeRegistry;
+    use arrow::array::Array;
+    use arrow_schema::extension::{EXTENSION_TYPE_NAME_KEY, Uuid};
+    use std::collections::HashMap;
+
+    fn display_names(
+        registry: Option<&dyn ExtensionTypeRegistry>,
+        fields: &[Field],
+    ) -> Vec<String> {
+        let mut builder = StringBuilder::new();
+        for field in fields {
+            append_field_type_display_name(registry, field, &mut builder);
+        }
+        let array = builder.finish();
+        (0..array.len())
+            .map(|i| array.value(i).to_owned())
+            .collect()
+    }
+
+    /// Fields whose extension type cannot be resolved show their storage type. The
+    /// resolvable cases are covered by `sql_extension_types.slt`.
+    #[test]
+    fn test_append_field_type_display_name_fallbacks() {
+        let registry = MemoryExtensionTypeRegistry::new_with_canonical_extension_types();
+
+        let unregistered = Field::new("x", DataType::Int32, true).with_metadata(
+            HashMap::from([(EXTENSION_TYPE_NAME_KEY.to_owned(), "example.x".to_owned())]),
+        );
+        // `arrow.uuid` with a storage type that the extension type does not support
+        let invalid =
+            Field::new("i", DataType::Int32, true).with_metadata(HashMap::from([(
+                EXTENSION_TYPE_NAME_KEY.to_owned(),
+                "arrow.uuid".to_owned(),
+            )]));
+        assert_eq!(
+            display_names(Some(&registry), &[unregistered, invalid]),
+            ["Int32", "Int32"]
+        );
+
+        let uuid = Field::new("u", DataType::FixedSizeBinary(16), true)
+            .with_extension_type(Uuid);
+        let empty_registry = MemoryExtensionTypeRegistry::new_empty();
+        assert_eq!(
+            display_names(Some(&empty_registry), std::slice::from_ref(&uuid)),
+            ["FixedSizeBinary(16)"]
+        );
+        assert_eq!(display_names(None, &[uuid]), ["FixedSizeBinary(16)"]);
+    }
 }

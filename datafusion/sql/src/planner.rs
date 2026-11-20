@@ -797,6 +797,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
                 Ok(DataType::Timestamp(precision, tz.map(Into::into)))
             }
+            SQLDataType::Datetime(precision)
+                if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
+            {
+                self.convert_simple_data_type(&SQLDataType::Timestamp(
+                    *precision,
+                    TimezoneInfo::None,
+                ))
+            }
             SQLDataType::Date => Ok(DataType::Date32),
             SQLDataType::Time(None, tz_info) => {
                 if *tz_info == TimezoneInfo::None

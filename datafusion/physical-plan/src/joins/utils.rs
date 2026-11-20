@@ -55,7 +55,7 @@ use arrow::datatypes::{
 use arrow_ord::ord::{DynComparator, make_comparator};
 use arrow_schema::{DataType, SortOptions, TimeUnit};
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::float_semantics::normalize_floats;
+use datafusion_common::float_semantics;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
@@ -2352,15 +2352,39 @@ pub fn update_hash(
 ) -> Result<()> {
     // evaluate the keys
     let keys_values = evaluate_expressions_to_arrays(on, batch)?;
+    update_hash_from_values(
+        &keys_values,
+        hash_map,
+        offset,
+        random_state,
+        hashes_buffer,
+        deleted_offset,
+        fifo_hashmap,
+        null_equality,
+    )
+}
 
+/// [`update_hash`] over the key columns `keys_values` that `on` evaluates to,
+/// with one entry of `hashes_buffer` for each of their rows.
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn update_hash_from_values(
+    keys_values: &[ArrayRef],
+    hash_map: &mut dyn JoinHashMapType,
+    offset: usize,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    deleted_offset: usize,
+    fifo_hashmap: bool,
+    null_equality: NullEquality,
+) -> Result<()> {
     // calculate the hash values
-    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+    let hash_values = create_hashes(keys_values, random_state, hashes_buffer)?;
 
     // For usual JoinHashmap, the implementation is void.
-    hash_map.extend_zero(batch.num_rows());
+    hash_map.extend_zero(hash_values.len());
 
     // Unmatchable NULL-key rows are filtered out below.
-    let valid_keys = matchable_join_keys(&keys_values, null_equality);
+    let valid_keys = matchable_join_keys(keys_values, null_equality);
 
     // Updating JoinHashMap from hash values iterator
     let hash_values_iter = hash_values
@@ -2431,7 +2455,7 @@ pub(super) fn equal_rows_arr(
 }
 
 /// Same as [`equal_rows_arr`], but `left_arrays` must already have float
-/// `-0.0` rewritten to `+0.0` (see `normalize_floats`), so a comparator
+/// `-0.0` rewritten to `+0.0` (see [`float_semantics::normalize`]), so a comparator
 /// built here skips that scan on the left side. Hash join keeps its build
 /// keys in that form, which saves rescanning the whole build side for every
 /// probe batch.
@@ -2699,17 +2723,14 @@ impl JoinKeyComparator {
             .map(|((l, r), opts)| {
                 // `make_comparator` uses IEEE 754 totalOrder for floats and
                 // treats `-0.0` / `+0.0` as distinct. Normalize float arrays
-                // so SMJ / piecewise-merge equi-keys honor SQL equality;
-                // no-op (Arc::clone) for non-floats and for float arrays
-                // that contain no `-0.0`. `normalize_floats` preserves
-                // null positions, so the original null masks below remain
-                // valid. A left side that is already normalized is used as is.
+                // to honor SQL equality. Normalizing keeps null positions, so
+                // the null masks of `l` and `r` below stay valid.
                 let l_norm = if normalize_left {
-                    normalize_floats(l)
+                    float_semantics::normalize(Arc::clone(l))
                 } else {
                     Arc::clone(l)
                 };
-                let r_norm = normalize_floats(r);
+                let r_norm = float_semantics::normalize(Arc::clone(r));
                 let inner = make_comparator(l_norm.as_ref(), r_norm.as_ref(), *opts)?;
                 if null_equality == NullEquality::NullEqualsNothing {
                     let ln = l.logical_nulls().filter(|n| n.null_count() > 0);

@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Format Options
@@ -154,7 +141,7 @@ The following options are available when reading or writing Parquet files. If an
 | Option                                     | Can be Column Specific? | Description                                                                                                                                                                                                                                                                                                                          | OPTIONS Key                                           | Default Value            |
 | ------------------------------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- | ------------------------ |
 | COMPRESSION                                | Yes                     | Sets the internal Parquet **compression codec** for data pages, optionally including the compression level. Applies globally if set without `::col`, or specifically to a column if set using `'compression::column_name'`. Valid values: `uncompressed`, `snappy`, `gzip(level)`, `brotli(level)`, `lz4`, `zstd(level)`, `lz4_raw`. | `'compression'` or `'compression::col'`               | zstd(3)                  |
-| ENCODING                                   | Yes                     | Sets the **encoding** scheme for data pages. Valid values: `plain`, `plain_dictionary`, `rle`, `bit_packed`, `delta_binary_packed`, `delta_length_byte_array`, `delta_byte_array`, `rle_dictionary`, `byte_stream_split`. Use key `'encoding'` or `'encoding::col'` in OPTIONS.                                                      | `'encoding'` or `'encoding::col'`                     | None                     |
+| ENCODING                                   | Yes                     | Sets the **encoding** scheme for data pages. Valid values: `plain`, `plain_dictionary`, `rle`, `bit_packed`, `delta_binary_packed`, `delta_length_byte_array`, `delta_byte_array`, `rle_dictionary`, `byte_stream_split`, `alp`. Use key `'encoding'` or `'encoding::col'` in OPTIONS.                                               | `'encoding'` or `'encoding::col'`                     | None                     |
 | DICTIONARY_ENABLED                         | Yes                     | Sets whether dictionary encoding should be enabled globally or for a specific column.                                                                                                                                                                                                                                                | `'dictionary_enabled'` or `'dictionary_enabled::col'` | true                     |
 | STATISTICS_ENABLED                         | Yes                     | Sets the level of statistics to write (`none`, `chunk`, `page`).                                                                                                                                                                                                                                                                     | `'statistics_enabled'` or `'statistics_enabled::col'` | page                     |
 | BLOOM_FILTER_ENABLED                       | Yes                     | Sets whether a bloom filter should be written for a specific column.                                                                                                                                                                                                                                                                 | `'bloom_filter_enabled::column_name'`                 | None                     |

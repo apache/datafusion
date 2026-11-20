@@ -7171,3 +7171,66 @@ RESET datafusion.explain.physical_plan_only;
 
 statement ok
 SET datafusion.execution.target_partitions = 4;
+
+##########
+## DATETIME is an alias of TIMESTAMP without time zone
+##########
+
+query PT
+SELECT CAST('2026-09-21 08:55:40.123456789' AS DATETIME), arrow_typeof(CAST('2026-09-21 08:55:40' AS DATETIME))
+----
+2026-09-21T08:55:40.123456789 Timestamp(ns)
+
+query PT
+SELECT CAST('2026-09-21 08:55:40.123456789' AS DATETIME(0)), arrow_typeof(CAST('2026-09-21 08:55:40' AS DATETIME(0)))
+----
+2026-09-21T08:55:40 Timestamp(s)
+
+query PT
+SELECT CAST('2026-09-21 08:55:40.123456789' AS DATETIME(3)), arrow_typeof(CAST('2026-09-21 08:55:40' AS DATETIME(3)))
+----
+2026-09-21T08:55:40.123 Timestamp(ms)
+
+query PT
+SELECT CAST('2026-09-21 08:55:40.123456789' AS DATETIME(6)), arrow_typeof(CAST('2026-09-21 08:55:40' AS DATETIME(6)))
+----
+2026-09-21T08:55:40.123456 Timestamp(µs)
+
+query PT
+SELECT CAST('2026-09-21 08:55:40.123456789' AS DATETIME(9)), arrow_typeof(CAST('2026-09-21 08:55:40' AS DATETIME(9)))
+----
+2026-09-21T08:55:40.123456789 Timestamp(ns)
+
+query PT
+SELECT DATETIME '2026-09-21 08:55:40', arrow_typeof(DATETIME '2026-09-21 08:55:40')
+----
+2026-09-21T08:55:40 Timestamp(ns)
+
+statement ok
+CREATE TABLE datetime_t (dt DATETIME(3)) AS VALUES ('2026-09-21 08:55:40.123');
+
+query PT
+SELECT dt, arrow_typeof(dt) FROM datetime_t
+----
+2026-09-21T08:55:40.123 Timestamp(ms)
+
+statement ok
+DROP TABLE datetime_t;
+
+# The session time zone only applies to TIMESTAMP WITH TIME ZONE
+statement ok
+SET datafusion.execution.time_zone = '+05:00';
+
+query T
+SELECT arrow_typeof(CAST('2026-09-21 08:55:40' AS DATETIME))
+----
+Timestamp(ns)
+
+statement ok
+RESET datafusion.execution.time_zone;
+
+statement error Unsupported SQL type DATETIME\(5\)
+SELECT CAST('2026-09-21 08:55:40' AS DATETIME(5));
+
+statement error Unsupported SQL type DATETIME\(1\)
+SELECT CAST('2026-09-21 08:55:40' AS DATETIME(1));

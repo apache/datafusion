@@ -1,23 +1,11 @@
 #!/usr/bin/env bash
-#
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-# Build the documentation for each release listed in docs/source/_static/versions.json
+# Build the documentation for releases in
+# 1. docs/source/_static/versions.json (shown in the version picker)
+# 2. docs/source/_static/old_versions.json (older releases to keep links working)
 #
 # The release is checked out into a temporary worktree, writing the result
 # to <output>/<version>/.
@@ -29,6 +17,7 @@ DOCS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_DIR="$(cd "${DOCS_DIR}/.." && pwd)"
 OVERLAY_DIR="${SCRIPT_DIR}/release"
 MANIFEST="${DOCS_DIR}/source/_static/versions.json"
+OLD_MANIFEST="${DOCS_DIR}/source/_static/old_versions.json"
 
 # Where to fetch release tags from (forks usually do not contain release tags)
 UPSTREAM_URL="${DATAFUSION_UPSTREAM_URL:-https://github.com/apache/datafusion.git}"
@@ -44,7 +33,8 @@ Build the documentation for released DataFusion versions.
 Usage: $(basename "$0") [options] [VERSION ...]
 
 Builds the documentation for each VERSION from its git tag. With no VERSION,
-builds every release listed in ${MANIFEST#"${REPO_DIR}/"}.
+builds every release listed in ${MANIFEST#"${REPO_DIR}/"}
+or ${OLD_MANIFEST#"${REPO_DIR}/"}.
 
 Options:
   -o, --output DIR   Write the documentation to DIR/<version>/
@@ -99,16 +89,21 @@ for tool in git uv python3; do
   fi
 done
 
-# Releases listed in the version picker manifest, newest first.
+# Releases listed in the version picker manifest followed by the older
+# releases that are published but not in the picker, without duplicates.
 list_versions() {
-  python3 - "${MANIFEST}" <<'PY'
+  python3 - "${MANIFEST}" "${OLD_MANIFEST}" <<'PY'
 import json
 import sys
 
-with open(sys.argv[1]) as f:
-    for entry in json.load(f):
-        if entry["version"] != "main":
-            print(entry["version"])
+seen = set()
+for manifest in sys.argv[1:]:
+    with open(manifest) as f:
+        for entry in json.load(f):
+            version = entry["version"]
+            if version != "main" and version not in seen:
+                seen.add(version)
+                print(version)
 PY
 }
 

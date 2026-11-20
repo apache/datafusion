@@ -6,6 +6,7 @@ use crate::error::Result;
 use arrow::array::Array;
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::DataType;
+use std::borrow::Cow;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -30,6 +31,7 @@ pub type DFExtensionTypeRef = Arc<dyn DFExtensionType>;
 /// Note that DataFusion's extension type support is still young and therefore might not cover all
 /// relevant use cases. Currently, the following operations can be customized:
 /// - Pretty-printing values in record batches
+/// - The type name shown by schema introspection (`DESCRIBE`, `information_schema.columns`)
 ///
 /// # Relation to Arrow's [`ExtensionType`](arrow_schema::extension::ExtensionType)
 ///
@@ -62,6 +64,16 @@ pub trait DFExtensionType: Debug + Send + Sync {
 
     /// Returns the serialized metadata.
     fn serialize_metadata(&self) -> Option<String>;
+
+    /// Returns the type's presentation label for schema introspection, such as
+    /// `DESCRIBE`, `SHOW COLUMNS` and `information_schema.columns`.
+    ///
+    /// Names may borrow from this instance or be computed from its metadata.
+    /// The label is not a unique type identifier or SQL syntax guaranteed to round-trip.
+    /// If `None` is returned, the storage type is shown.
+    fn display_name(&self) -> Option<Cow<'_, str>> {
+        None
+    }
 
     /// Returns an [`ArrayFormatter`] that can format values of this type.
     ///

@@ -1132,7 +1132,9 @@ impl OptimizerRule for PushDownFilter {
                 let mut push_predicates = vec![];
                 for expr in predicates {
                     let cols = expr.column_refs();
-                    if cols.iter().all(|c| group_expr_columns.contains(c)) {
+                    if !expr.is_volatile()
+                        && cols.iter().all(|c| group_expr_columns.contains(c))
+                    {
                         push_predicates.push(replace_cols_by_column(expr, &replace_map)?);
                     } else {
                         keep_predicates.push(expr);

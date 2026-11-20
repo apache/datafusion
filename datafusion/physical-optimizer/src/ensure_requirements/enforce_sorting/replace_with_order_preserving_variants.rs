@@ -8,6 +8,8 @@
 
 use std::sync::Arc;
 
+use super::sort_pushdown::can_push_fetch_through;
+use crate::row_bound::{RowBound, limit_node};
 use crate::utils::{
     is_coalesce_partitions, is_repartition, is_sort, is_sort_preserving_merge,
 };
@@ -97,6 +99,7 @@ pub fn plan_with_order_preserving_variants(
         sort_input.data = false;
         return Ok(sort_input);
     }
+    let child_fetch = fetch.filter(|_| can_push_fetch_through(&sort_input.plan));
     sort_input.children = sort_input
         .children
         .into_iter()
@@ -107,7 +110,7 @@ pub fn plan_with_order_preserving_variants(
                     node,
                     is_spr_better,
                     is_spm_better,
-                    fetch,
+                    child_fetch,
                 )
             } else {
                 Ok(node)
@@ -271,6 +274,13 @@ pub fn replace_with_order_preserving_variants(
     }
     for child in alternate_plan.children.iter_mut() {
         child.data = false;
+    }
+    if let Some(fetch) = requirements.plan.fetch() {
+        let plan = limit_node(
+            Arc::clone(&alternate_plan.plan),
+            RowBound::fetch(Some(fetch)),
+        );
+        alternate_plan = PlanContext::new(plan, false, vec![alternate_plan]);
     }
     Ok(Transformed::yes(alternate_plan))
 }

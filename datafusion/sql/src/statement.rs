@@ -14,7 +14,8 @@ use crate::parser::{
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::utils::normalize_ident;
 
-use arrow::datatypes::{Field, FieldRef, Fields, Metadata};
+use arrow::datatypes::{FieldRef, Fields, Metadata};
+use datafusion_common::datatype::FieldExt;
 use datafusion_common::error::_plan_err;
 use datafusion_common::format::ExplainStatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -1385,8 +1386,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         let function_args = function_args
                             .into_iter()
                             .map(|arg| {
-                                let data_type =
-                                    self.convert_data_type_to_field(&arg.data_type)?;
+                                // Name the field after the argument, so that it can also
+                                // be used as the type of the placeholder in the body
+                                let field = self
+                                    .convert_data_type_to_field(&arg.data_type)?
+                                    .renamed(
+                                        arg.name.as_ref().map_or("", |name| &name.value),
+                                    );
 
                                 let default_expr = match arg.default_expr {
                                     Some(expr) => Some(self.sql_to_expr(
@@ -1399,7 +1405,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 Ok(OperateFunctionArg {
                                     name: arg.name,
                                     default_expr,
-                                    data_type: data_type.data_type().clone(),
+                                    field,
                                 })
                             })
                             .collect::<Result<Vec<OperateFunctionArg>>>();
@@ -1432,15 +1438,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // Convert resulting expression to data fusion expression
                 //
                 let arg_types = args.as_ref().map(|arg| {
-                    arg.iter()
-                        .map(|t| {
-                            let name = match t.name.clone() {
-                                Some(name) => name.value,
-                                None => "".to_string(),
-                            };
-                            Arc::new(Field::new(name, t.data_type.clone(), true))
-                        })
-                        .collect::<Vec<_>>()
+                    arg.iter().map(|t| Arc::clone(&t.field)).collect::<Vec<_>>()
                 });
                 // Validate parameter style
                 if let Some(ref fields) = arg_types {
@@ -1502,7 +1500,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         temporary,
                         name,
                         args,
-                        return_type.map(|f| f.data_type().clone()),
+                        return_type,
                         params,
                     )?));
 

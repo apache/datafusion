@@ -8,6 +8,8 @@
 //! null-aware hash joins, are compared with `NOT EXISTS` / `EXISTS`
 //! formulations of the same three-valued logic, which do not. Random tables
 //! with NULLs on both sides are swept across batch sizes and partition counts.
+//! Some columns are NOT NULL, so that tuples mix elements that can be NULL with
+//! elements that cannot, which the null-aware join reads as scope keys.
 //!
 //! The subquery table is sometimes much smaller than the outer table, so
 //! `JoinSelection` also swaps `NOT IN` into a null-aware `RightAnti` that
@@ -29,13 +31,34 @@ use rand::{Rng, SeedableRng};
 #[tokio::test(flavor = "multi_thread")]
 async fn null_aware_join_matches_reference() {
     let mut plans = NullAwarePlans::default();
+    let cases = cases();
     for seed in 0..20 {
         let mut rng = StdRng::seed_from_u64(seed);
-        let outer = random_table(&mut rng, &["id", "k", "a", "b", "c"], 6);
+        let outer = random_table(&mut rng, &["id", "k", "a", "b", "c"], &["n", "m"], 6);
         // Alternate between a subquery table of similar size and a much
         // smaller one that `JoinSelection` moves to the build side.
         let inner_rows = if seed % 2 == 0 { 6 } else { 2 };
-        let inner = random_table(&mut rng, &["k", "x", "y", "z"], inner_rows);
+        let inner =
+            random_table(&mut rng, &["k", "x", "y", "z"], &["v", "w"], inner_rows);
+
+        // Reference results depend only on this seed's tables, so compute
+        // them once with a stable configuration instead of repeating them
+        // for every batch size and partition count below.
+        let reference_ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(1),
+        );
+        reference_ctx
+            .register_table("o", Arc::clone(&outer) as _)
+            .unwrap();
+        reference_ctx
+            .register_table("i", Arc::clone(&inner) as _)
+            .unwrap();
+        let mut expected_rows = Vec::with_capacity(cases.len());
+        for (_, reference) in &cases {
+            let (expected, _) = run(&reference_ctx, reference).await;
+            expected_rows.push(expected);
+        }
+
         for target_partitions in [1, 4] {
             for batch_size in [1, 3, 8192] {
                 let config = SessionConfig::new()
@@ -54,12 +77,11 @@ async fn null_aware_join_matches_reference() {
                 let ctx = SessionContext::new_with_config(config);
                 ctx.register_table("o", Arc::clone(&outer) as _).unwrap();
                 ctx.register_table("i", Arc::clone(&inner) as _).unwrap();
-                for (query, reference) in cases() {
-                    let (actual, plan) = run(&ctx, &query).await;
+                for ((query, reference), expected) in cases.iter().zip(&expected_rows) {
+                    let (actual, plan) = run(&ctx, query).await;
                     plans.record(plan.as_ref());
-                    let (expected, _) = run(&ctx, &reference).await;
                     assert_eq!(
-                        actual, expected,
+                        actual, *expected,
                         "seed={seed} target_partitions={target_partitions} \
                          batch_size={batch_size}\nquery: {query}\nreference: {reference}"
                     );
@@ -129,6 +151,22 @@ fn cases() -> Vec<(String, String)> {
                 "o.a = i.x AND o.b = i.y AND o.c = i.z",
             ),
             ("(o.a, 1)", "i.x, i.y", "o.a = i.x AND 1 = i.y"),
+            // `o.n`, `o.m`, `i.v` and `i.w` are NOT NULL.
+            ("(o.a, o.n)", "i.x, i.v", "o.a = i.x AND o.n = i.v"),
+            ("(o.n, o.a)", "i.v, i.x", "o.n = i.v AND o.a = i.x"),
+            (
+                "(o.n, o.a, o.b)",
+                "i.v, i.x, i.y",
+                "o.n = i.v AND o.a = i.x AND o.b = i.y",
+            ),
+            (
+                "(o.n, o.a, o.m)",
+                "i.v, i.x, i.w",
+                "o.n = i.v AND o.a = i.x AND o.m = i.w",
+            ),
+            ("(o.n, o.a)", "i.y, i.x", "o.n = i.y AND o.a = i.x"),
+            ("(1, o.a)", "i.v, i.x", "1 = i.v AND o.a = i.x"),
+            ("(o.n, o.m)", "i.v, i.w", "o.n = i.v AND o.m = i.w"),
         ] {
             let subquery = format!("SELECT {output} FROM i{correlation}");
             let matched = format!(
@@ -166,14 +204,24 @@ fn cases() -> Vec<(String, String)> {
     cases
 }
 
-/// A table of nullable `Int32` columns with values in `0..3`, split into up
-/// to three partitions of fewer than `max_rows` rows each. A column named `id`
-/// holds unique row ids instead.
-fn random_table(rng: &mut StdRng, columns: &[&str], max_rows: i32) -> Arc<MemTable> {
+/// A table of `Int32` columns with values in `0..3`, split into up to three
+/// partitions of fewer than `max_rows` rows each: the `nullable` columns, then
+/// the `non_nullable` ones. A column named `id` holds unique row ids instead.
+fn random_table(
+    rng: &mut StdRng,
+    nullable: &[&str],
+    non_nullable: &[&str],
+    max_rows: i32,
+) -> Arc<MemTable> {
+    let columns = nullable
+        .iter()
+        .map(|name| (*name, true))
+        .chain(non_nullable.iter().map(|name| (*name, false)))
+        .collect::<Vec<_>>();
     let schema = Arc::new(Schema::new(
         columns
             .iter()
-            .map(|name| Field::new(*name, DataType::Int32, true))
+            .map(|(name, nullable)| Field::new(*name, DataType::Int32, *nullable))
             .collect::<Vec<_>>(),
     ));
     let null_fraction = [0.0, 0.1, 0.3][rng.random_range(0..3)];
@@ -183,13 +231,13 @@ fn random_table(rng: &mut StdRng, columns: &[&str], max_rows: i32) -> Arc<MemTab
             let rows = rng.random_range(0..max_rows);
             let arrays = columns
                 .iter()
-                .map(|name| {
+                .map(|(name, nullable)| {
                     let values: Int32Array = if *name == "id" {
                         (next_id..next_id + rows).map(Some).collect()
                     } else {
                         (0..rows)
                             .map(|_| {
-                                (!rng.random_bool(null_fraction))
+                                (!(*nullable && rng.random_bool(null_fraction)))
                                     .then(|| rng.random_range(0..3))
                             })
                             .collect()

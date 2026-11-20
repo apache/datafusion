@@ -706,6 +706,38 @@ fn test_cli_wide_result_set_no_crash() {
     assert_cmd_snapshot!(cmd);
 }
 
+#[rstest]
+#[case("csv", "\n8200\n")]
+#[case("tsv", "\n8200\n")]
+#[case("json", r#"{"value":8200}]"#)]
+#[case("nd-json", "\n{\"value\":8200}\n")]
+fn test_non_table_formats_ignore_maxrows(
+    #[case] format: &str,
+    #[case] final_row_fragment: &str,
+) {
+    let output = cli()
+        .args([
+            "--format",
+            format,
+            "--maxrows",
+            "1",
+            "--command",
+            "SELECT value FROM generate_series(1, 8200)",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "query failed for {format} output:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(final_row_fragment),
+        "expected the final row in {format} output"
+    );
+}
+
 #[tokio::test]
 async fn test_cli() {
     let Some(container) = start_rustfs_or_skip().await else {
