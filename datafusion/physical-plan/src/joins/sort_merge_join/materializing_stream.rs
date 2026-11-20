@@ -31,7 +31,7 @@ use crate::{PhysicalExpr, SendableRecordBatchStream};
 use arrow::array::{types::UInt64Type, *};
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::{
-    self, BatchCoalescer, FilterBuilder, SortOptions, concat_batches,
+    self, BatchCoalescer, FilterBuilder, FilterPredicate, SortOptions, concat_batches,
     filter_record_batch, interleave, take_arrays,
 };
 use arrow::datatypes::{Schema, SchemaRef};
@@ -1851,21 +1851,20 @@ impl MaterializingSortMergeJoinStream {
             );
         }
 
-        let mut streamed_arrays = materialize_left_columns(
+        let streamed_filter_arrays = materialize_left_columns(
             &self
                 .streamed_batch
                 .batch
                 .project(&self.streamed_filter_columns)?,
             &streamed_indices,
-        )?
-        .into_iter();
-        let mut buffered_arrays = self
-            .materialize_right_columns(
-                matched_chunks,
-                total_matched_rows,
-                &self.buffered_filter_columns,
-            )?
-            .into_iter();
+        )?;
+        let buffered_filter_arrays = self.materialize_right_columns(
+            matched_chunks,
+            total_matched_rows,
+            &self.buffered_filter_columns,
+        )?;
+        let mut streamed_arrays = streamed_filter_arrays.iter().cloned();
+        let mut buffered_arrays = buffered_filter_arrays.iter().cloned();
         let columns = filter
             .column_indices()
             .iter()
@@ -1912,10 +1911,25 @@ impl MaterializingSortMergeJoinStream {
             }
         }
 
-        let streamed_columns =
-            materialize_left_columns(&self.streamed_batch.batch, &kept_streamed)?;
-        let buffered_columns =
-            self.materialize_right_columns(&kept, kept_rows, &self.buffered_columns)?;
+        let streamed_columns = output_columns(
+            self.streamed_schema.fields().len(),
+            &self.streamed_filter_columns,
+            &streamed_filter_arrays,
+            &predicate,
+            |others| {
+                materialize_left_columns(
+                    &self.streamed_batch.batch.project(others)?,
+                    &kept_streamed,
+                )
+            },
+        )?;
+        let buffered_columns = output_columns(
+            self.buffered_schema.fields().len(),
+            &self.buffered_filter_columns,
+            &buffered_filter_arrays,
+            &predicate,
+            |others| self.materialize_right_columns(&kept, kept_rows, others),
+        )?;
         let output_batch = RecordBatch::try_new(
             Arc::clone(&self.schema),
             [streamed_columns, buffered_columns].concat(),
@@ -1976,13 +1990,14 @@ impl MaterializingSortMergeJoinStream {
     /// Whether filtering the pairs of a freeze before materializing them is cheaper
     /// than materializing every column of every pair and filtering the batch.
     ///
-    /// Filtering first gathers the filter's `f` columns for every pair, filters the
-    /// pairs' two index arrays, and gathers all `k` output columns for the share
-    /// `p` of pairs that pass. The other way gathers the `k` columns for every
-    /// pair and copies the share `p` of them to filter the batch. Counting a
-    /// gathered value as 1 and a copied one as 1/2, filtering first is cheaper
-    /// while `f + 1 + k·p < k + k·p/2`, that is while `p < 2·(k - f - 1)/k`. `p` is
-    /// the share that passed in the earlier freezes, or 0 before the first.
+    /// Filtering first gathers the filter's `f` columns for every pair, filters them
+    /// and the pairs' two index arrays, and gathers the other `k - f` output
+    /// columns for the share `p` of pairs that pass. The other way gathers the `k`
+    /// columns for every pair and copies the share `p` of them to filter the batch.
+    /// Counting a gathered value as 1 and a copied one as 1/2, filtering first is
+    /// cheaper while `f + 1 + f·p/2 + (k - f)·p < k + k·p/2`, that is while
+    /// `(k - f)·(2 - p) > 2`. `p` is the share that passed in the earlier freezes,
+    /// or 0 before the first.
     ///
     /// The model counts columns rather than bytes, so a string column weighs the
     /// same as an integer one, and `p` averages over the life of the stream
@@ -1995,7 +2010,7 @@ impl MaterializingSortMergeJoinStream {
         } else {
             self.freeze_filter_passed as f64 / self.freeze_filter_evaluated as f64
         };
-        p < 2.0 * (k - f - 1.0) / k
+        (k - f) * (2.0 - p) > 2.0
     }
 
     /// Materializes the buffered columns at `columns` across all matched chunks.
@@ -2390,6 +2405,35 @@ fn fetch_right_columns_from_batch_by_idxs(
             )
         }
     }
+}
+
+/// One side's `num_columns` output columns for the pairs that passed the filter.
+/// The filter's columns are already gathered for every pair in `filter_arrays`,
+/// so `predicate` filters them, and `gather` materializes the other columns.
+fn output_columns(
+    num_columns: usize,
+    filter_columns: &[usize],
+    filter_arrays: &[ArrayRef],
+    predicate: &FilterPredicate,
+    gather: impl FnOnce(&[usize]) -> Result<Vec<ArrayRef>>,
+) -> Result<Vec<ArrayRef>> {
+    let others: Vec<usize> = (0..num_columns)
+        .filter(|c| !filter_columns.contains(c))
+        .collect();
+    let mut gathered = if others.is_empty() {
+        vec![]
+    } else {
+        gather(&others)?
+    }
+    .into_iter();
+    (0..num_columns)
+        .map(|c| match filter_columns.iter().position(|&f| f == c) {
+            Some(i) => Ok(predicate.filter(filter_arrays[i].as_ref())?),
+            None => gathered
+                .next()
+                .ok_or_else(|| internal_datafusion_err!("missing output column")),
+        })
+        .collect()
 }
 
 /// Concatenates the index arrays of several chunks into one.

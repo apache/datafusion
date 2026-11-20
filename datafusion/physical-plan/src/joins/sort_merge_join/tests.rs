@@ -8519,23 +8519,31 @@ fn interleaved_early_filter(left_schema: &Schema, right_schema: &Schema) -> Join
     JoinFilter::new(expression, column_indices, Arc::new(schema))
 }
 
-/// The filter `c2 <> c1 OR b2 < b1`, with its intermediate columns in the order
-/// `b2, b1, c2, c1`. It rejects only the few pairs with a NULL or equal `c`, so
-/// it reads four of the six output columns and keeps most pairs. After the first
-/// freeze the join then materializes whole batches and filters them (see
-/// `filter_first_pays`).
+/// The filter `a2 = a1 AND (c2 <> c1 OR b2 < b1)`, with its intermediate columns
+/// in the order `b2, b1, c2, c1, a2, a1`. The join keys are always equal, so it
+/// rejects only the few pairs with a NULL or equal `c` and keeps most pairs. It
+/// reads all six output columns, so the join materializes whole batches and
+/// filters them (see `filter_first_pays`).
 fn high_pass_early_filter(left_schema: &Schema, right_schema: &Schema) -> JoinFilter {
     let expression = Arc::new(BinaryExpr::new(
         Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("c2", 2)),
-            Operator::NotEq,
-            Arc::new(Column::new("c1", 3)),
+            Arc::new(Column::new("a2", 4)),
+            Operator::Eq,
+            Arc::new(Column::new("a1", 5)),
         )),
-        Operator::Or,
+        Operator::And,
         Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("b2", 0)),
-            Operator::Lt,
-            Arc::new(Column::new("b1", 1)),
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("c2", 2)),
+                Operator::NotEq,
+                Arc::new(Column::new("c1", 3)),
+            )),
+            Operator::Or,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("b2", 0)),
+                Operator::Lt,
+                Arc::new(Column::new("b1", 1)),
+            )),
         )),
     ));
     let column_indices = vec![
@@ -8555,12 +8563,22 @@ fn high_pass_early_filter(left_schema: &Schema, right_schema: &Schema) -> JoinFi
             index: 2,
             side: JoinSide::Left,
         },
+        ColumnIndex {
+            index: 0,
+            side: JoinSide::Right,
+        },
+        ColumnIndex {
+            index: 0,
+            side: JoinSide::Left,
+        },
     ];
     let schema = Schema::new(vec![
         right_schema.field_with_name("b2").unwrap().clone(),
         left_schema.field_with_name("b1").unwrap().clone(),
         right_schema.field_with_name("c2").unwrap().clone(),
         left_schema.field_with_name("c1").unwrap().clone(),
+        right_schema.field_with_name("a2").unwrap().clone(),
+        left_schema.field_with_name("a1").unwrap().clone(),
     ]);
     JoinFilter::new(expression, column_indices, Arc::new(schema))
 }

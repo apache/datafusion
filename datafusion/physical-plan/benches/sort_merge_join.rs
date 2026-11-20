@@ -278,7 +278,7 @@ fn bench_smj(c: &mut Criterion) {
 
     // 1:10 and 1:100 Inner Joins with a filter. `left.data < right.data` keeps
     // about half of the pairs. A streamed row meets a run of 10 or 100 buffered
-    // rows, so its pairs are filtered at freeze.
+    // rows.
     for (n, key_mod, name) in [
         (100_000, 10_000, "inner_1to10_filtered"),
         (20_000, 200, "inner_1to100_filtered"),
@@ -350,7 +350,7 @@ fn bench_smj(c: &mut Criterion) {
     // Every streamed row meets a run of 1000 buffered rows, the shape of TPC-DS
     // q72's `catalog_sales` to `inventory` join. Each key's 100 streamed rows take
     // the smallest of its `data` values, so `left.data > right.data` keeps about
-    // 5% of the 2M pairs. Such runs are filtered as they are paired.
+    // 5% of the 2M pairs.
     {
         let keys = 20;
         let left_batches = build_sorted_batches(keys * 100, keys, &s);
