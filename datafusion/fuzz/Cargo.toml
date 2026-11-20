@@ -21,7 +21,7 @@ extended_tests = []
 [dev-dependencies]
 arrow = { workspace = true }
 bytes = { workspace = true }
-datafusion = { workspace = true, default-features = true }
+datafusion = { workspace = true, features = ["nested_expressions", "sql"] }
 datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
