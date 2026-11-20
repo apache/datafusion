@@ -1,0 +1,13 @@
+name Q04
+group first_last_tz
+
+load sql_benchmarks/first_last_tz/init/load.sql
+
+expect_plan AggregateExec
+
+run
+-- Control for Q03: the same instants without a time zone.
+SELECT count(*), sum(v)
+FROM (SELECT DISTINCT ON (k) v FROM first_last_tz ORDER BY k, tsn DESC, o);
+
+cleanup sql_benchmarks/first_last_tz/init/cleanup.sql

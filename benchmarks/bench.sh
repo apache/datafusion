@@ -164,6 +164,7 @@ smj:                    Benchmark for simple sort merge joins, testing various j
 dict:                   Benchmark for dictionary-encoded group-by scenarios
 array_agg_distinct:     1000K-group, two-row-per-group array_agg(DISTINCT) benchmark
 grouped_count_distinct: Grouped count(DISTINCT) by key type, group count and distinct cardinality
+first_last_tz:          Grouped first_value and DISTINCT ON ordered by a time zone aware timestamp vs a naive one
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -283,6 +284,9 @@ main() {
                     ;;
                 grouped_count_distinct)
                     echo "grouped_count_distinct: no external data to generate"
+                    ;;
+                first_last_tz)
+                    echo "first_last_tz: no external data to generate"
                     ;;
                 asof_join)
                     data_asof_join
@@ -687,6 +691,9 @@ main() {
                     ;;
                 grouped_count_distinct)
                     run_grouped_count_distinct
+                    ;;
+                first_last_tz)
+                    run_first_last_tz
                     ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
@@ -1825,6 +1832,16 @@ run_grouped_count_distinct() {
     debug_run env BENCH_NAME=grouped_count_distinct \
       BENCH_RESULTS_FILE="$(sql_results_file grouped_count_distinct)" \
       GROUPED_DISTINCT_ROWS="${GROUPED_DISTINCT_ROWS:-4000000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs grouped first_value and DISTINCT ON ordered by a time zone aware timestamp
+# and by the same instants without a time zone, over inline data.
+run_first_last_tz() {
+    debug_run env BENCH_NAME=first_last_tz \
+      BENCH_RESULTS_FILE="$(sql_results_file first_last_tz)" \
+      FIRST_LAST_TZ_ROWS="${FIRST_LAST_TZ_ROWS:-2000000}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"} \
       bash -c "$SQL_CARGO_COMMAND"
 }

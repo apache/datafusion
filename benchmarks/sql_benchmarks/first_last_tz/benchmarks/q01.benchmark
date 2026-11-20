@@ -1,0 +1,29 @@
+name Q01
+group first_last_tz
+
+load sql_benchmarks/first_last_tz/init/load.sql
+
+# The time zone does not take part in the ordering: every group must pick the
+# same row as with the time zone free column.
+assert I
+WITH tz AS (
+  SELECT k, first_value(v ORDER BY ts, o) AS a FROM first_last_tz GROUP BY k
+), naive AS (
+  SELECT k, first_value(v ORDER BY tsn, o) AS a FROM first_last_tz GROUP BY k
+)
+SELECT NOT EXISTS (SELECT * FROM tz EXCEPT SELECT * FROM naive)
+   AND NOT EXISTS (SELECT * FROM naive EXCEPT SELECT * FROM tz);
+----
+true
+
+expect_plan AggregateExec
+
+run
+-- first_value ordered by a time zone aware timestamp (issue #27046). The
+-- second ORDER BY key keeps the query on the general accumulator, which stores
+-- each group's ordering values as ScalarValues; a single primitive key takes a
+-- specialized path.
+SELECT count(*), sum(a)
+FROM (SELECT k, first_value(v ORDER BY ts, o) AS a FROM first_last_tz GROUP BY k);
+
+cleanup sql_benchmarks/first_last_tz/init/cleanup.sql
