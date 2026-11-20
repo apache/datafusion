@@ -1,0 +1,345 @@
+{
+  "extensionUris": [
+    {
+      "extensionUriAnchor": 1,
+      "uri": "https://github.com/substrait-io/substrait/blob/main/extensions/functions_arithmetic.yaml"
+    }
+  ],
+  "extensions": [
+    {
+      "extensionFunction": {
+        "extensionUriReference": 1,
+        "functionAnchor": 1,
+        "name": "subtract:i64_i64"
+      }
+    },
+    {
+      "extensionFunction": {
+        "extensionUriReference": 1,
+        "functionAnchor": 2,
+        "name": "bitwise_shift_left:i64_i64"
+      }
+    },
+    {
+      "extensionFunction": {
+        "extensionUriReference": 1,
+        "functionAnchor": 3,
+        "name": "add:fp64_fp64"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "project": {
+            "common": {
+              "emit": {
+                "outputMapping": [
+                  8,
+                  9,
+                  10
+                ]
+              }
+            },
+            "expressions": [
+              {
+                "scalarFunction": {
+                  "functionReference": 1,
+                  "arguments": [
+                    {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 0
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    },
+                    {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 1
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    },
+                    {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 2
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    },
+                    {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 3
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    }
+                  ],
+                  "outputType": {
+                    "i64": {
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  }
+                }
+              },
+              {
+                "scalarFunction": {
+                  "functionReference": 2,
+                  "arguments": [
+                    {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 1
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    },
+                    {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 1
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    },
+                    {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 2
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    }
+                  ],
+                  "outputType": {
+                    "i64": {
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  }
+                }
+              },
+              {
+                "scalarFunction": {
+                  "functionReference": 3,
+                  "arguments": [
+                    {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 4
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    },
+                    {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 5
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    },
+                    {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 6
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    },
+                    {
+                      "value": {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 7
+                            }
+                          },
+                          "rootReference": {}
+                        }
+                      }
+                    }
+                  ],
+                  "outputType": {
+                    "fp64": {
+                      "nullability": "NULLABILITY_REQUIRED"
+                    }
+                  }
+                }
+              }
+            ],
+            "input": {
+              "read": {
+                "baseSchema": {
+                  "names": [
+                    "a",
+                    "b",
+                    "c",
+                    "d",
+                    "w",
+                    "x",
+                    "y",
+                    "z"
+                  ],
+                  "struct": {
+                    "types": [
+                      {
+                        "i64": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      {
+                        "i64": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      {
+                        "i64": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      {
+                        "i64": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      {
+                        "fp64": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      {
+                        "fp64": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      {
+                        "fp64": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      {
+                        "fp64": {
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      }
+                    ],
+                    "nullability": "NULLABILITY_REQUIRED"
+                  }
+                },
+                "common": {
+                  "direct": {}
+                },
+                "virtualTable": {
+                  "expressions": [
+                    {
+                      "fields": [
+                        {
+                          "literal": {
+                            "i64": "10",
+                            "nullable": false
+                          }
+                        },
+                        {
+                          "literal": {
+                            "i64": "1",
+                            "nullable": false
+                          }
+                        },
+                        {
+                          "literal": {
+                            "i64": "2",
+                            "nullable": false
+                          }
+                        },
+                        {
+                          "literal": {
+                            "i64": "3",
+                            "nullable": false
+                          }
+                        },
+                        {
+                          "literal": {
+                            "fp64": 1e+16,
+                            "nullable": false
+                          }
+                        },
+                        {
+                          "literal": {
+                            "fp64": 1.0,
+                            "nullable": false
+                          }
+                        },
+                        {
+                          "literal": {
+                            "fp64": -1e+16,
+                            "nullable": false
+                          }
+                        },
+                        {
+                          "literal": {
+                            "fp64": 1.0,
+                            "nullable": false
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "names": [
+          "subtract",
+          "shift_left",
+          "add"
+        ]
+      }
+    }
+  ]
+}

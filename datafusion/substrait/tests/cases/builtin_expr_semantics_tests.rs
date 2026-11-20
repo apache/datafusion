@@ -108,4 +108,26 @@ mod tests {
 
         test_scalar_fn_semantics("scalar_fn_logb_expr.substrait.json", expected).await
     }
+
+    /// Non-associative operators called with more than two arguments are evaluated
+    /// left to right, as SQL does:
+    /// - `subtract(10, 1, 2, 3)` is `((10 - 1) - 2) - 3`
+    /// - `bitwise_shift_left(1, 1, 2)` is `(1 << 1) << 2`
+    /// - `add(1e16, 1.0, -1e16, 1.0)` is `1.0`, because `1e16 + 1.0` rounds to `1e16`
+    #[tokio::test]
+    async fn test_nary_non_associative_ops_semantics() -> Result<()> {
+        let expected = vec![
+            "+----------+------------+-----+",
+            "| subtract | shift_left | add |",
+            "+----------+------------+-----+",
+            "| 4        | 8          | 1.0 |",
+            "+----------+------------+-----+",
+        ];
+
+        test_scalar_fn_semantics(
+            "scalar_fn_nary_non_associative_ops.substrait.json",
+            expected,
+        )
+        .await
+    }
 }
