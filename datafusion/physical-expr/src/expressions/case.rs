@@ -1525,6 +1525,9 @@ fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<NullableInter
             if let Some(expr) = predicate.downcast_ref::<NotExpr>() {
                 return evaluate_predicate(expr.arg())?.not();
             }
+            if is_certainly_null(predicate.as_ref()) {
+                return Ok(NullableInterval::UNKNOWN);
+            }
             return Ok(NullableInterval::ANY_TRUTH_VALUE);
         }
         Ok(ColumnarValue::Array(array)) => {
@@ -1552,6 +1555,29 @@ fn replace_with_null(
         })?
         .data;
     Ok(with_null)
+}
+
+/// Returns true if `expr` evaluates to NULL for every input row.
+///
+/// Keep this in sync with the logical-plan equivalent, `is_null` in
+/// `datafusion/expr/src/predicate_bounds.rs`, for the same reason as
+/// [`unwrap_certainly_null_expr`].
+fn is_certainly_null(expr: &dyn PhysicalExpr) -> bool {
+    if let Some(lit) = expr.downcast_ref::<Literal>() {
+        lit.value().is_null()
+    } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {
+        expr.op().returns_null_on_null()
+            && (is_certainly_null(expr.left().as_ref())
+                || is_certainly_null(expr.right().as_ref()))
+    } else if let Some(expr) = expr.downcast_ref::<NotExpr>() {
+        is_certainly_null(expr.arg().as_ref())
+    } else if let Some(expr) = expr.downcast_ref::<NegativeExpr>() {
+        is_certainly_null(expr.arg().as_ref())
+    } else if let Some(expr) = expr.downcast_ref::<CastExpr>() {
+        is_certainly_null(expr.expr.as_ref())
+    } else {
+        false
+    }
 }
 
 /// Returns the innermost [`PhysicalExpr`] that is provably null if `expr` is null.
@@ -2877,6 +2903,60 @@ mod tests {
         )?;
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         assert_eq!(result.null_count() > 0, nullable);
+        Ok(())
+    }
+
+    #[test]
+    fn test_case_expression_nullability_with_column_comparison() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let a: Arc<dyn PhysicalExpr> = col("a", &schema)?;
+        let b: Arc<dyn PhysicalExpr> = col("b", &schema)?;
+
+        // a < b
+        let a_lt_b = binary(Arc::clone(&a), Operator::Lt, Arc::clone(&b), &schema)?;
+        assert_not_nullable(when_then_else(&a_lt_b, &a, &lit(1))?, &schema);
+        assert_not_nullable(when_then_else(&a_lt_b, &b, &lit(1))?, &schema);
+
+        // a + 1 < b
+        let a_plus_1_lt_b = binary(
+            binary(Arc::clone(&a), Operator::Plus, lit(1), &schema)?,
+            Operator::Lt,
+            Arc::clone(&b),
+            &schema,
+        )?;
+        assert_not_nullable(when_then_else(&a_plus_1_lt_b, &a, &lit(1))?, &schema);
+
+        // CAST(a AS BIGINT) < b
+        let cast_a = cast(Arc::clone(&a), &schema, DataType::Int64)?;
+        let cast_a_lt_b = binary(
+            Arc::clone(&cast_a),
+            Operator::Lt,
+            cast(Arc::clone(&b), &schema, DataType::Int64)?,
+            &schema,
+        )?;
+        assert_not_nullable(when_then_else(&cast_a_lt_b, &cast_a, &lit(1i64))?, &schema);
+
+        // a IS DISTINCT FROM b
+        let a_distinct_b = binary(
+            Arc::clone(&a),
+            Operator::IsDistinctFrom,
+            Arc::clone(&b),
+            &schema,
+        )?;
+        assert_nullable(when_then_else(&a_distinct_b, &a, &lit(1))?, &schema);
+
+        // a < b OR b IS NULL
+        let a_lt_b_or_b_is_null = binary(
+            Arc::clone(&a_lt_b),
+            Operator::Or,
+            expressions::is_null(Arc::clone(&b))?,
+            &schema,
+        )?;
+        assert_nullable(when_then_else(&a_lt_b_or_b_is_null, &a, &lit(1))?, &schema);
+
         Ok(())
     }
 
