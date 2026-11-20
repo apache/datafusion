@@ -728,7 +728,7 @@ fn constant_granularity(precision: &ExprProperties) -> Option<DatePart> {
         return None;
     }
     let granularity = range.lower().try_as_str().flatten()?;
-    parse_granularity(&granularity.to_lowercase()).ok()
+    parse_granularity(granularity).ok()
 }
 
 /// Returns true if `tz` explicitly names UTC (`"UTC"` or `"+00:00"`)
