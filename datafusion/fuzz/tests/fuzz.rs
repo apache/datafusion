@@ -42,6 +42,20 @@ async fn spill_pool_scenario() -> Result<()> {
 }
 
 #[tokio::test]
+async fn lru_queue() -> Result<()> {
+    run_suite(
+        &suites::lru_queue::LruQueueFuzzer,
+        RunConfig {
+            run_seed: Some(0),
+            max_cases: Some(100),
+            time_limit: None,
+            cases_per_dataset: 100,
+        },
+    )
+    .await
+}
+
+#[tokio::test]
 async fn key_range_bitmap_union() -> Result<()> {
     run_suite(
         &suites::key_range_bitmap::KeyRangeBitmapFuzzer,
