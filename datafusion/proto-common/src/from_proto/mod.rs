@@ -2061,9 +2061,36 @@ mod tests {
             );
         }
 
-        let no_columns = crate::protobuf_common::ScalarNestedValue {
-            schema: Some(crate::protobuf_common::Schema::default()),
-            ..list
+        let no_columns = {
+            use std::sync::Arc;
+
+            use arrow::array::{RecordBatch, RecordBatchOptions};
+            use arrow::datatypes::Schema;
+            use arrow::ipc::writer::{
+                DictionaryTracker, IpcDataGenerator, IpcWriteContext, IpcWriteOptions,
+            };
+
+            let batch = RecordBatch::try_new_with_options(
+                Arc::new(Schema::empty()),
+                vec![],
+                &RecordBatchOptions::new().with_row_count(Some(1)),
+            )
+            .unwrap();
+            let (dictionaries, message) = IpcDataGenerator {}
+                .encode(
+                    &batch,
+                    &mut DictionaryTracker::new(false),
+                    &IpcWriteOptions::default(),
+                    &mut IpcWriteContext::default(),
+                )
+                .unwrap();
+            assert!(dictionaries.is_empty());
+            crate::protobuf_common::ScalarNestedValue {
+                ipc_message: message.ipc_message,
+                arrow_data: message.arrow_data,
+                dictionaries: vec![],
+                schema: Some(batch.schema().as_ref().try_into().unwrap()),
+            }
         };
         let proto = crate::protobuf_common::ScalarValue {
             value: Some(Value::ListValue(no_columns)),
@@ -2093,10 +2120,15 @@ mod tests {
             })),
         };
 
-        assert!(matches!(
-            DataType::try_from(&union(128)).unwrap(),
-            DataType::Union(fields, _) if fields.len() == 128
-        ));
+        let DataType::Union(fields, _) = DataType::try_from(&union(128)).unwrap() else {
+            panic!("expected a union");
+        };
+        let decoded: Vec<_> = fields
+            .iter()
+            .map(|(id, field)| (id, field.name().clone()))
+            .collect();
+        let expected: Vec<_> = (0..128).map(|i| (i as i8, format!("f{i}"))).collect();
+        assert_eq!(decoded, expected);
         let err = DataType::try_from(&union(129)).unwrap_err().to_string();
         assert!(err.contains("Deserializing Union DataType"), "{err}");
         assert!(
