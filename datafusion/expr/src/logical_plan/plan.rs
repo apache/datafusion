@@ -25,9 +25,7 @@ use crate::expr_rewriter::{
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::logical_plan::materialized_cte::{
-    MaterializedCte, MaterializedCtePlan, MaterializedCteScan,
-};
+use crate::logical_plan::materialized_cte::{MaterializedCte, MaterializedCtePlan};
 use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::type_coercion::other::coerce_union_type;
 use crate::utils::{
@@ -59,8 +57,9 @@ use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency,
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
     ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
-    aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err, plan_datafusion_err, plan_err, validate_range_split_points,
+    aggregate_functional_dependencies_with_computed_inputs, assert_eq_or_internal_err,
+    assert_or_internal_err, internal_err, plan_datafusion_err, plan_err,
+    validate_range_split_points,
 };
 use itertools::Itertools as _;
 
@@ -416,7 +415,9 @@ impl LogicalPlan {
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => cte.schema(),
-            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => &scan.schema,
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
+                scan.schema()
+            }
             LogicalPlan::Union(Union { schema, .. }) => schema,
             LogicalPlan::Show(Show { output_schema, .. }) => output_schema,
             LogicalPlan::Dml(DmlStatement { output_schema, .. }) => output_schema,
@@ -809,8 +810,8 @@ impl LogicalPlan {
             LogicalPlan::Limit(_) => Ok(self),
             LogicalPlan::Ddl(_) => Ok(self),
             // A `Cte` takes the schema of its continuation, and does not store
-            // it. A `Scan` keeps the schema of the CTE body, which also keeps
-            // its schema.
+            // it. The schema of a `Scan` is fixed by the columns of the CTE
+            // body that the scan reads.
             LogicalPlan::MaterializedCte(_) => Ok(self),
             LogicalPlan::Extension(Extension { node }) => {
                 // todo make an API that does not require cloning
@@ -2520,10 +2521,18 @@ impl LogicalPlan {
                     )) => {
                         write!(f, "MaterializedCte: name={name}")
                     }
-                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
-                        MaterializedCteScan { name, .. },
-                    )) => {
-                        write!(f, "MaterializedCteScan: name={name}")
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
+                        write!(f, "MaterializedCteScan: name={}", scan.name())?;
+                        if scan.projection().is_some() {
+                            let names: Vec<&str> = scan
+                                .schema()
+                                .fields()
+                                .iter()
+                                .map(|field| field.name().as_str())
+                                .collect();
+                            write!(f, " projection=[{}]", names.join(", "))?;
+                        }
+                        Ok(())
                     }
                     LogicalPlan::Show(Show { kind, .. }) => match kind {
                         ShowKind::Describe { .. }
@@ -2796,10 +2805,7 @@ impl Projection {
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
-        #[expect(deprecated)]
-        if !expr.iter().any(|e| matches!(e, Expr::Wildcard { .. }))
-            && expr.len() != schema.fields().len()
-        {
+        if expr.len() != schema.fields().len() {
             return plan_err!(
                 "Projection has mismatch between number of expressions ({}) and number of fields in schema ({})",
                 expr.len(),
@@ -4537,19 +4543,54 @@ fn calc_func_dependencies_for_aggregate(
     // - Otherwise, it may be possible to propagate functional dependencies.
     if !contains_grouping_set(group_expr) {
         // One entry per GROUP BY output field, in the order of `aggr_schema`
-        let group_by_input_indices = grouping_set_to_exprlist(group_expr)?
-            .into_iter()
+        let group_exprs = grouping_set_to_exprlist(group_expr)?;
+        let group_by_input_indices = group_exprs
+            .iter()
             .map(|item| passthrough_field_index(item, input.schema()))
             .collect::<Vec<_>>();
-        let aggregate_func_dependencies = aggregate_functional_dependencies(
-            input.schema(),
-            &group_by_input_indices,
-            aggr_schema,
-        );
+        let computed_input_indices = group_exprs
+            .iter()
+            .zip(&group_by_input_indices)
+            .map(|(item, input_idx)| match input_idx {
+                Some(_) => None,
+                None => deterministic_input_indices(item, input.schema()),
+            })
+            .collect::<Vec<_>>();
+        let aggregate_func_dependencies =
+            aggregate_functional_dependencies_with_computed_inputs(
+                input.schema(),
+                &group_by_input_indices,
+                &computed_input_indices,
+                aggr_schema,
+            );
         Ok(aggregate_func_dependencies)
     } else {
         Ok(FunctionalDependencies::empty())
     }
+}
+
+/// Returns the input fields that `expr` reads, or `None` if `expr` is volatile,
+/// contains a subquery or reads a column that is not an input field.
+fn deterministic_input_indices(expr: &Expr, schema: &DFSchema) -> Option<Vec<usize>> {
+    let has_subquery = expr
+        .exists(|e| {
+            Ok(matches!(
+                e,
+                Expr::ScalarSubquery(_)
+                    | Expr::Exists(_)
+                    | Expr::InSubquery(_)
+                    | Expr::SetComparison(_)
+                    | Expr::OuterReferenceColumn(..)
+            ))
+        })
+        .unwrap_or(true);
+    if expr.is_volatile() || has_subquery {
+        return None;
+    }
+    expr.column_refs()
+        .into_iter()
+        .map(|column| schema.index_of_column(column).ok())
+        .collect()
 }
 
 /// This function projects functional dependencies of the `input` plan according
@@ -4570,40 +4611,13 @@ fn calc_func_dependencies_for_project(
     }
 
     let input_schema = input.schema();
-    let input_index = |expr: &Expr| {
-        passthrough_field_index(expr, input_schema).unwrap_or(COMPUTED_EXPR_INDEX)
-    };
 
     // Map each projection output position to its input column index.
-    // A projection expression can produce multiple output columns, such as `*`.
     let proj_indices = exprs
         .iter()
-        .map(|expr| match expr {
-            #[expect(deprecated)]
-            Expr::Wildcard { qualifier, options } => {
-                let wildcard_fields = exprlist_to_fields(
-                    vec![&Expr::Wildcard {
-                        qualifier: qualifier.clone(),
-                        options: options.clone(),
-                    }],
-                    input,
-                )?;
-                Ok::<_, DataFusionError>(
-                    wildcard_fields
-                        .into_iter()
-                        .map(|(qualifier, f)| {
-                            input_schema
-                                .index_of_column_by_name(qualifier.as_ref(), f.name())
-                                .unwrap_or(COMPUTED_EXPR_INDEX)
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            }
-            _ => Ok(vec![input_index(expr)]),
+        .map(|expr| {
+            passthrough_field_index(expr, input_schema).unwrap_or(COMPUTED_EXPR_INDEX)
         })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
         .collect::<Vec<_>>();
 
     Ok(input_func_dependencies
@@ -5741,34 +5755,6 @@ mod tests {
     }
 
     #[test]
-    fn projection_with_wildcard_expr_before_pk_preserves_pk() -> Result<()> {
-        let constraints =
-            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
-        let source = Arc::new(
-            LogicalTableSource::new(Arc::new(employee_schema()))
-                .with_constraints(constraints),
-        );
-        let input = LogicalPlanBuilder::scan("employee_csv", source, None)?.build()?;
-        #[expect(deprecated)]
-        let projection = Projection::try_new(
-            vec![
-                Expr::Wildcard {
-                    qualifier: None,
-                    options: Box::new(crate::expr::WildcardOptions::default()),
-                },
-                col("employee_csv.id"),
-            ],
-            Arc::new(input),
-        )?;
-
-        let deps = projection.schema.functional_dependencies();
-        assert_eq!(deps.len(), 1);
-        assert_eq!(deps[0].source_indices, vec![1]);
-
-        Ok(())
-    }
-
-    #[test]
     fn projection_with_alias_preserves_pk() -> Result<()> {
         let constraints =
             Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
@@ -5955,20 +5941,14 @@ mod tests {
             vec![i32_split_point(20), i32_split_point(10)],
         )
         .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("split points must be strictly ordered")
-        );
+        assert!(err.to_string().contains("split points must be ordered"));
 
-        let err = RangePartitioning::try_new(
+        let range = RangePartitioning::try_new(
             vec![col("id").sort(true, true)],
             vec![i32_split_point(10), i32_split_point(10)],
         )
-        .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("split points must be strictly ordered")
-        );
+        .unwrap();
+        assert_eq!(range.partition_count(), 3);
 
         let range = RangePartitioning::try_new(
             vec![col("id").sort(true, true)],

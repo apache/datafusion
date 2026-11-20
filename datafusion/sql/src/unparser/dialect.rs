@@ -12,7 +12,7 @@ use super::{
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use chrono::DateTime;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, internal_err, not_impl_err};
 use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::tokenizer::Span;
@@ -59,6 +59,15 @@ pub trait Dialect: Send + Sync {
         IntervalStyle::PostgresVerbose
     }
 
+    /// Render a non-finite float literal (`inf`, `-inf` or `NaN`).
+    ///
+    /// Return `Ok(None)` to use the default, a cast of the string `'Infinity'`, `'-Infinity'`
+    /// or `'NaN'` to the float type. Override this for a dialect whose cast does not parse
+    /// those strings, so that the unparsed SQL keeps the value or fails to unparse.
+    fn non_finite_float_to_sql(&self, _value: f64) -> Result<Option<ast::Expr>> {
+        Ok(None)
+    }
+
     /// Does the dialect use DOUBLE PRECISION to represent Float64 rather than DOUBLE?
     /// E.g. Postgres uses DOUBLE PRECISION instead of DOUBLE
     fn float64_ast_dtype(&self) -> ast::DataType {
@@ -85,6 +94,18 @@ pub trait Dialect: Send + Sync {
     /// The style to use when unparsing DISTINCT FROM style expressions
     fn distinct_from_style(&self) -> DistinctFromStyle {
         DistinctFromStyle::FullText
+    }
+
+    /// The syntax for Arrow list types in casts. The default is `Unsupported`,
+    /// so the unparser returns an error unless the dialect opts in.
+    fn array_type_style(&self) -> ArrayTypeStyle {
+        ArrayTypeStyle::Unsupported
+    }
+
+    /// Whether the dialect allows an array whose elements are arrays.
+    /// BigQuery, for example, does not.
+    fn supports_nested_arrays(&self) -> bool {
+        true
     }
 
     /// The character length extraction style to use: `CharacterLengthStyle`
@@ -365,9 +386,24 @@ pub enum DistinctFromStyle {
     Spaceship,
 }
 
+/// `ArrayTypeStyle` to use for unparsing Arrow list types
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ArrayTypeStyle {
+    /// `INT[]`, and `INT[3]` for a fixed-size list, as in PostgreSQL and DuckDB
+    SquareBracket,
+    /// `ARRAY<INT>`, as in BigQuery. A fixed-size list is not supported.
+    AngleBracket,
+    /// The dialect has no array type, as in MySQL and SQLite
+    Unsupported,
+}
+
 pub struct DefaultDialect {}
 
 impl Dialect for DefaultDialect {
+    fn array_type_style(&self) -> ArrayTypeStyle {
+        ArrayTypeStyle::SquareBracket
+    }
+
     fn identifier_quote_style(&self, identifier: &str) -> Option<char> {
         let identifier_regex = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap();
         let id_upper = identifier.to_uppercase();
@@ -385,6 +421,10 @@ impl Dialect for DefaultDialect {
 pub struct PostgreSqlDialect {}
 
 impl Dialect for PostgreSqlDialect {
+    fn array_type_style(&self) -> ArrayTypeStyle {
+        ArrayTypeStyle::SquareBracket
+    }
+
     fn use_array_keyword_for_array_literals(&self) -> bool {
         true
     }
@@ -523,6 +563,10 @@ impl DuckDBDialect {
 }
 
 impl Dialect for DuckDBDialect {
+    fn array_type_style(&self) -> ArrayTypeStyle {
+        ArrayTypeStyle::SquareBracket
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('"')
     }
@@ -577,6 +621,12 @@ pub struct MySqlDialect {}
 impl Dialect for MySqlDialect {
     fn supports_qualify(&self) -> bool {
         false
+    }
+
+    /// MySQL `FLOAT` and `DOUBLE` cannot hold infinity or NaN, so a non-finite float literal
+    /// does not unparse.
+    fn non_finite_float_to_sql(&self, value: f64) -> Result<Option<ast::Expr>> {
+        not_impl_err!("MySQL has no literal for the float {value}")
     }
 
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
@@ -682,6 +732,24 @@ impl Dialect for SqliteDialect {
         false
     }
 
+    /// SQLite casts a string that is not a number to `0.0`, so `CAST('Infinity' AS REAL)` is
+    /// `0.0`. A literal that overflows a double is infinity in SQLite. SQLite has no literal
+    /// for NaN, so a NaN literal does not unparse.
+    fn non_finite_float_to_sql(&self, value: f64) -> Result<Option<ast::Expr>> {
+        if value.is_nan() {
+            return not_impl_err!("SQLite has no literal for a NaN float");
+        }
+        let overflow = if value.is_sign_positive() {
+            "9e999"
+        } else {
+            "-9e999"
+        };
+        Ok(Some(ast::Expr::value(ast::Value::Number(
+            overflow.to_string(),
+            false,
+        ))))
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
@@ -738,6 +806,14 @@ impl Dialect for SqliteDialect {
 pub struct BigQueryDialect {}
 
 impl Dialect for BigQueryDialect {
+    fn supports_nested_arrays(&self) -> bool {
+        false
+    }
+
+    fn array_type_style(&self) -> ArrayTypeStyle {
+        ArrayTypeStyle::AngleBracket
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
@@ -908,6 +984,8 @@ pub struct CustomDialect {
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
     unnest_as_lateral_flatten: bool,
+    array_type_style: ArrayTypeStyle,
+    supports_nested_arrays: bool,
 }
 
 impl Default for CustomDialect {
@@ -943,11 +1021,21 @@ impl Default for CustomDialect {
             full_qualified_col: false,
             unnest_as_table_factor: false,
             unnest_as_lateral_flatten: false,
+            array_type_style: ArrayTypeStyle::Unsupported,
+            supports_nested_arrays: true,
         }
     }
 }
 
 impl Dialect for CustomDialect {
+    fn supports_nested_arrays(&self) -> bool {
+        self.supports_nested_arrays
+    }
+
+    fn array_type_style(&self) -> ArrayTypeStyle {
+        self.array_type_style
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         self.identifier_quote_style
     }
@@ -1125,6 +1213,8 @@ pub struct CustomDialectBuilder {
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
     unnest_as_lateral_flatten: bool,
+    array_type_style: ArrayTypeStyle,
+    supports_nested_arrays: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -1166,6 +1256,8 @@ impl CustomDialectBuilder {
             full_qualified_col: false,
             unnest_as_table_factor: false,
             unnest_as_lateral_flatten: false,
+            array_type_style: ArrayTypeStyle::Unsupported,
+            supports_nested_arrays: true,
         }
     }
 
@@ -1199,6 +1291,8 @@ impl CustomDialectBuilder {
             full_qualified_col: self.full_qualified_col,
             unnest_as_table_factor: self.unnest_as_table_factor,
             unnest_as_lateral_flatten: self.unnest_as_lateral_flatten,
+            array_type_style: self.array_type_style,
+            supports_nested_arrays: self.supports_nested_arrays,
         }
     }
 
@@ -1332,6 +1426,18 @@ impl CustomDialectBuilder {
 
     pub fn with_date32_cast_dtype(mut self, date32_cast_dtype: ast::DataType) -> Self {
         self.date32_cast_dtype = date32_cast_dtype;
+        self
+    }
+
+    /// Customize the syntax for Arrow list types in casts
+    pub fn with_array_type_style(mut self, array_type_style: ArrayTypeStyle) -> Self {
+        self.array_type_style = array_type_style;
+        self
+    }
+
+    /// Customize whether the dialect allows an array whose elements are arrays
+    pub fn with_supports_nested_arrays(mut self, supports_nested_arrays: bool) -> Self {
+        self.supports_nested_arrays = supports_nested_arrays;
         self
     }
 

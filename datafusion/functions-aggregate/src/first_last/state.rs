@@ -35,6 +35,16 @@ pub(crate) trait ValueState: Send + Sync {
     /// group by t.id1, t.v1;
     /// ```
     fn update(&mut self, group_idx: usize, array: &ArrayRef, idx: usize) -> Result<()>;
+    /// Calls [`Self::update`] for each `(group_idx, idx)` in order.
+    fn update_rows(
+        &mut self,
+        array: &ArrayRef,
+        updates: &[(usize, usize)],
+    ) -> Result<()> {
+        updates
+            .iter()
+            .try_for_each(|&(group_idx, idx)| self.update(group_idx, array, idx))
+    }
     /// Takes the accumulated state and returns it as an [`ArrayRef`], respecting the `emit_to` strategy.
     fn take(&mut self, emit_to: EmitTo) -> Result<ArrayRef>;
     /// Returns the estimated memory size of the state in bytes.
@@ -68,6 +78,19 @@ impl<T: ArrowPrimitiveType + Send> ValueState for PrimitiveValueState<T> {
         let array = array.as_primitive::<T>();
         self.vals[group_idx] = array.value(idx);
         self.nulls.set_bit(group_idx, !array.is_null(idx));
+        Ok(())
+    }
+
+    fn update_rows(
+        &mut self,
+        array: &ArrayRef,
+        updates: &[(usize, usize)],
+    ) -> Result<()> {
+        let array = array.as_primitive::<T>();
+        for &(group_idx, idx) in updates {
+            self.vals[group_idx] = array.value(idx);
+            self.nulls.set_bit(group_idx, array.is_valid(idx));
+        }
         Ok(())
     }
 
