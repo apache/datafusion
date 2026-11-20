@@ -488,7 +488,7 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 -->
 <section id="extending-operators">
 <h1>Extending Operators<a class="headerlink" href="#extending-operators" title="Link to this heading">#</a></h1>
-<p>DataFusion supports extending operators by transforming <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html"><code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code></a> and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code></a> through customized <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html">optimizer rules</a>. This section will use the µWheel project to illustrate such capabilities.</p>
+<p>DataFusion supports extending operators with custom <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html"><code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code></a> and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code></a> nodes and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html">optimizer rules</a>. The examples below show two ways to extend query planning.</p>
 <section id="about-datafusion-wheel">
 <span id="about-datafusion-µwheel"></span><h2>About DataFusion µWheel<a class="headerlink" href="#about-datafusion-wheel" title="Link to this heading">#</a></h2>
 <p><a class="reference external" href="https://github.com/uwheel/datafusion-uwheel/tree/main">DataFusion µWheel</a> is a native DataFusion optimizer which improves query performance for time-based analytics through fast temporal aggregation and pruning using custom indices. The integration of µWheel into DataFusion is a joint effort with the DataFusion community.</p>
@@ -521,6 +521,136 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 </pre></div>
 </div>
 <p>To get a deeper dive into the usage of the µWheel project, visit the <a class="reference external" href="https://uwheel.rs/post/datafusion_uwheel/">blog post</a> by Max Meldrum.</p>
+</section>
+</section>
+<section id="a-custom-topk-operator">
+<h2>A custom TopK operator<a class="headerlink" href="#a-custom-topk-operator" title="Link to this heading">#</a></h2>
+<p>The <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/core/tests/user_defined/user_defined_plan.rs">TopK example</a> shows how to add a custom operator that finds the rows with
+the highest values. It uses a query like this one to find the three customers
+with the highest revenue:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">customer_id</span><span class="p">,</span><span class="w"> </span><span class="n">revenue</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">sales</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">revenue</span><span class="w"> </span><span class="k">DESC</span><span class="w"> </span><span class="k">LIMIT</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>DataFusion already has optimized support for TopK queries. This example is for
+learning how to connect a custom operator to DataFusion, not for replacing the
+built-in implementation.</p>
+<section id="describe-the-operation">
+<h3>Describe the operation<a class="headerlink" href="#describe-the-operation" title="Link to this heading">#</a></h3>
+<p>The example defines <code class="docutils literal notranslate"><span class="pre">TopKPlanNode</span></code>, a custom logical plan node. A logical plan
+describes the operations in a query. The node implements
+<code class="docutils literal notranslate"><span class="pre">UserDefinedLogicalNodeCore</span></code> so DataFusion can inspect and update it. Its main
+fields are:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">TopKPlanNode</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">k</span><span class="p">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">    </span><span class="n">input</span><span class="p">:</span><span class="w"> </span><span class="nc">LogicalPlan</span><span class="p">,</span>
+<span class="w">    </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="nc">SortExpr</span><span class="p">,</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">input</span></code> describes where the rows come from, such as the <code class="docutils literal notranslate"><span class="pre">sales</span></code> table.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">expr</span></code> describes how to rank the rows, such as by revenue in descending order.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">k</span></code> is the number of rows to keep. In this query, <code class="docutils literal notranslate"><span class="pre">k</span></code> is 3.</p></li>
+</ul>
+</section>
+<section id="add-the-node-to-the-plan">
+<h3>Add the node to the plan<a class="headerlink" href="#add-the-node-to-the-plan" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">TopKOptimizerRule</span></code> looks for a sort that has a row limit. The limit can be
+part of the sort, or it can be a separate limit directly above the sort. The
+sort must have exactly one sort expression. The rule replaces that part of the
+plan with a <code class="docutils literal notranslate"><span class="pre">TopKPlanNode</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">LogicalPlan</span><span class="p">::</span><span class="n">Extension</span><span class="p">(</span><span class="n">Extension</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">node</span><span class="p">:</span><span class="w"> </span><span class="nc">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">TopKPlanNode</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">k</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="n">fetch</span><span class="p">,</span>
+<span class="w">        </span><span class="n">input</span><span class="p">:</span><span class="w"> </span><span class="nc">input</span><span class="p">.</span><span class="n">as_ref</span><span class="p">().</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">        </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="nc">expr</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">    </span><span class="p">}),</span>
+<span class="p">})</span>
+</pre></div>
+</div>
+<p>The rule takes <code class="docutils literal notranslate"><span class="pre">k</span></code> from the row limit. It copies the input and the sort
+expression from the sort. <code class="docutils literal notranslate"><span class="pre">LogicalPlan::Extension</span></code> wraps the custom node so
+that it can be part of a logical plan.</p>
+<p>For the query above, the new plan includes:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>TopK: k=3
+  TableScan: sales
+</pre></div>
+</div>
+</section>
+<section id="register-the-rule-and-the-planner">
+<h3>Register the rule and the planner<a class="headerlink" href="#register-the-rule-and-the-planner" title="Link to this heading">#</a></h3>
+<p>Add the rule and a query planner when you build the session state:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionStateBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_default_features</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_query_planner</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">TopKQueryPlanner</span><span class="w"> </span><span class="p">{}))</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_optimizer_rule</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">TopKOptimizerRule</span><span class="p">::</span><span class="n">default</span><span class="p">()))</span>
+<span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new_with_state</span><span class="p">(</span><span class="n">state</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">TopKQueryPlanner</span></code> uses DataFusion’s normal physical planner. It adds
+<code class="docutils literal notranslate"><span class="pre">TopKPlanner</span></code>, which knows how to plan the custom node:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[async_trait]</span>
+<span class="k">impl</span><span class="w"> </span><span class="n">QueryPlanner</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">TopKQueryPlanner</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">create_physical_plan</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">logical_plan</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">LogicalPlan</span><span class="p">,</span>
+<span class="w">        </span><span class="n">session_state</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">Session</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ExecutionPlan</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">physical_planner</span><span class="w"> </span><span class="o">=</span>
+<span class="w">            </span><span class="n">DefaultPhysicalPlanner</span><span class="p">::</span><span class="n">with_extension_planners</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span>
+<span class="w">                </span><span class="n">TopKPlanner</span><span class="w"> </span><span class="p">{},</span>
+<span class="w">            </span><span class="p">)]);</span>
+<span class="w">        </span><span class="n">physical_planner</span>
+<span class="w">            </span><span class="p">.</span><span class="n">create_physical_plan</span><span class="p">(</span><span class="n">logical_plan</span><span class="p">,</span><span class="w"> </span><span class="n">session_state</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="k">await</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Without <code class="docutils literal notranslate"><span class="pre">TopKPlanner</span></code>, queries that the rule changed fail during physical
+planning.</p>
+</section>
+<section id="execute-the-operation">
+<h3>Execute the operation<a class="headerlink" href="#execute-the-operation" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">TopKPlanner</span></code> converts the logical <code class="docutils literal notranslate"><span class="pre">TopKPlanNode</span></code> into <code class="docutils literal notranslate"><span class="pre">TopKExec</span></code>, a physical
+operator. It returns <code class="docutils literal notranslate"><span class="pre">None</span></code> for other nodes, so DataFusion can try other
+planners:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[async_trait]</span>
+<span class="k">impl</span><span class="w"> </span><span class="n">ExtensionPlanner</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">TopKPlanner</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">plan_extension</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_planner</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">PhysicalPlanner</span><span class="p">,</span>
+<span class="w">        </span><span class="n">node</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">UserDefinedLogicalNode</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_logical_inputs</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="o">&amp;</span><span class="n">LogicalPlan</span><span class="p">],</span>
+<span class="w">        </span><span class="n">physical_inputs</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ExecutionPlan</span><span class="o">&gt;</span><span class="p">],</span>
+<span class="w">        </span><span class="n">_session_state</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">Session</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_planning_ctx</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">PhysicalPlanningContext</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ExecutionPlan</span><span class="o">&gt;&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">topk_node</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">node</span><span class="p">.</span><span class="n">as_any</span><span class="p">().</span><span class="n">downcast_ref</span><span class="p">::</span><span class="o">&lt;</span><span class="n">TopKPlanNode</span><span class="o">&gt;</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="nb">Some</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">TopKExec</span><span class="p">::</span><span class="n">new</span><span class="p">(</span>
+<span class="w">                    </span><span class="n">physical_inputs</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">clone</span><span class="p">(),</span>
+<span class="w">                    </span><span class="n">topk_node</span><span class="p">.</span><span class="n">k</span><span class="p">,</span>
+<span class="w">                </span><span class="p">)))</span>
+<span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="nb">None</span>
+<span class="w">            </span><span class="p">},</span>
+<span class="w">        </span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">TopKExec</span></code> reads its input and uses <code class="docutils literal notranslate"><span class="pre">TopKReader</span></code> to keep the highest values.
+Once it has read the input, the reader returns the retained rows.</p>
+<p><code class="docutils literal notranslate"><span class="pre">TopKPlanner</span></code> does not pass the sort expression (<code class="docutils literal notranslate"><span class="pre">expr</span></code>) to <code class="docutils literal notranslate"><span class="pre">TopKExec</span></code>. So
+<code class="docutils literal notranslate"><span class="pre">TopKReader</span></code> does not know the sort order. It always keeps the highest values
+from input column 1. This means a query with <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">revenue</span> <span class="pre">ASC</span></code> gives wrong
+results. It returns the highest values, not the lowest.</p>
+<p>The example is specialized for its test data. It expects particular columns
+and types, and its map stores only one customer per revenue value. It does not
+handle all sort options or other edge cases, so it should not be used as a
+general-purpose TopK operator.</p>
 </section>
 </section>
 </section>
@@ -574,6 +704,13 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#about-datafusion-wheel">About DataFusion µWheel</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#optimizing-logical-plan">Optimizing Logical Plan</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#a-custom-topk-operator">A custom TopK operator</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#describe-the-operation">Describe the operation</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#add-the-node-to-the-plan">Add the node to the plan</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#register-the-rule-and-the-planner">Register the rule and the planner</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#execute-the-operation">Execute the operation</a></li>
 </ul>
 </li>
 </ul>
