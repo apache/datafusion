@@ -93,8 +93,31 @@ fn assert_unique_field_names(plan: &LogicalPlan) -> Result<()> {
 /// Returns an error if the plan is not semantically valid.
 fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
     assert_subqueries_are_valid(plan)?;
+    assert_materialized_cte_scans_are_valid(plan)?;
 
     Ok(())
+}
+
+/// Returns an error if a scan of a materialized CTE does not have the names
+/// and types of the columns that it reads from the body of the CTE.
+///
+/// A scan whose CTE is not in `plan` is not checked, because `plan` can be a
+/// part of a larger plan.
+fn assert_materialized_cte_scans_are_valid(plan: &LogicalPlan) -> Result<()> {
+    plan.apply_with_subqueries(|node| {
+        if let LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) = node {
+            for scan in cte.scans()? {
+                scan.check_body_schema(cte.body().schema()).map_err(|e| {
+                    e.context(format!(
+                        "A scan of the materialized CTE {} does not match the CTE",
+                        cte.name()
+                    ))
+                })?;
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .map(|_| ())
 }
 
 /// Returns an error if the plan does not have the expected schema.

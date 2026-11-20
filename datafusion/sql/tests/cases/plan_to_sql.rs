@@ -165,6 +165,10 @@ fn roundtrip_statement() -> Result<()> {
             "select id, count(*) as cnt from (select id from person) group by id",
             "select (id-1)/2, count(*) / (sum(id/10)-1) as agg_expr from (select (id-1) as id from person) group by id",
             "select CAST(id/2 as VARCHAR) NOT LIKE 'foo*' from person where NOT EXISTS (select ta.j1_id, tb.j2_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id))",
+            "select j1_string from j1 where j1_string SIMILAR TO 'a(b|c)%'",
+            "select j1_string NOT SIMILAR TO '_b%' from j1",
+            "select j1_string from j1 where j1_string SIMILAR TO 'a!%%' ESCAPE '!'",
+            "select j1_string NOT SIMILAR TO 'a!%%' ESCAPE '!' from j1",
             r#"select "First Name" from person_quoted_cols"#,
             "select DISTINCT id FROM person",
             "select DISTINCT on (id) id, first_name from person",
@@ -317,6 +321,105 @@ fn roundtrip_statement() -> Result<()> {
 
         // Explicit output names can add redundant aliases without changing the plan's meaning.
         assert_eq!(normalize_aliases(plan)?, normalize_aliases(plan_roundtrip)?);
+    }
+
+    Ok(())
+}
+
+/// Folds `CAST(<string literal> AS <type>)` to a literal, as constant folding does
+/// before a plan reaches the unparser.
+fn fold_literal_casts(plan: LogicalPlan) -> Result<LogicalPlan> {
+    plan.transform_up_with_subqueries(|plan| {
+        plan.map_expressions(|expr| {
+            expr.transform_up(|expr| match &expr {
+                Expr::Cast(cast) => match cast.expr.as_ref() {
+                    Expr::Literal(value, None) => Ok(Transformed::yes(Expr::Literal(
+                        value.cast_to(cast.field.data_type())?,
+                        None,
+                    ))),
+                    _ => Ok(Transformed::no(expr)),
+                },
+                _ => Ok(Transformed::no(expr)),
+            })
+        })
+    })
+    .data()
+}
+
+#[test]
+fn roundtrip_non_finite_float_literals() -> Result<()> {
+    let tests = [
+        (
+            "SELECT * FROM t WHERE x < 'inf'::double",
+            r#"SELECT t.x FROM t WHERE (t.x < CAST('Infinity' AS DOUBLE))"#,
+        ),
+        (
+            "SELECT * FROM t WHERE x > '-inf'::double",
+            r#"SELECT t.x FROM t WHERE (t.x > CAST('-Infinity' AS DOUBLE))"#,
+        ),
+        (
+            "SELECT * FROM t WHERE x <> 'NaN'::double",
+            r#"SELECT t.x FROM t WHERE (t.x <> CAST('NaN' AS DOUBLE))"#,
+        ),
+        (
+            "SELECT * FROM t WHERE x NOT IN ('NaN'::double, 'Infinity'::double, '-Infinity'::double)",
+            r#"SELECT t.x FROM t WHERE t.x NOT IN (CAST('NaN' AS DOUBLE), CAST('Infinity' AS DOUBLE), CAST('-Infinity' AS DOUBLE))"#,
+        ),
+    ];
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    for (query, expected) in tests {
+        let statement = Parser::new(&GenericDialect {})
+            .try_with_sql(query)?
+            .parse_statement()?;
+        let plan = fold_literal_casts(sql_to_rel.sql_statement_to_plan(statement)?)?;
+
+        let roundtrip_statement = plan_to_sql(&plan)?;
+        assert_eq!(roundtrip_statement.to_string(), expected);
+
+        let plan_roundtrip =
+            fold_literal_casts(sql_to_rel.sql_statement_to_plan(roundtrip_statement)?)?;
+        assert_eq!(plan, plan_roundtrip);
+    }
+
+    Ok(())
+}
+
+// `roundtrip_statement` plans the unparsed AST directly; this test also renders it
+// to SQL text and parses the text again.
+#[test]
+fn roundtrip_similar_to_sql_text() -> Result<()> {
+    let tests = [
+        "select j1_string from j1 where j1_string SIMILAR TO 'a(b|c)%'",
+        "select j1_string NOT SIMILAR TO '_b%' from j1",
+        "select j1_string from j1 where j1_string SIMILAR TO 'a!%%' ESCAPE '!'",
+        "select j1_string NOT SIMILAR TO 'a!%%' ESCAPE '!' from j1",
+    ];
+
+    let dialect = GenericDialect {};
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    for query in tests {
+        let statement = Parser::new(&dialect)
+            .try_with_sql(query)?
+            .parse_statement()?;
+        let plan = sql_to_rel.sql_statement_to_plan(statement)?;
+
+        let sql = plan_to_sql(&plan)?.to_string();
+        let statement = Parser::new(&dialect)
+            .try_with_sql(&sql)?
+            .parse_statement()?;
+        let plan_roundtrip = sql_to_rel.sql_statement_to_plan(statement)?;
+
+        assert_eq!(
+            normalize_aliases(plan)?,
+            normalize_aliases(plan_roundtrip)?,
+            "{sql}"
+        );
     }
 
     Ok(())
@@ -2235,6 +2338,39 @@ fn test_cast_to_tinyint() -> Result<(), DataFusionError> {
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserPostgreSqlDialect {},
         expected: @"SELECT CAST(3 AS SMALLINT)",
+    );
+    Ok(())
+}
+
+#[test]
+fn test_cast_to_array() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(NULL as text[])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT CAST(NULL AS VARCHAR[])",
+    );
+    Ok(())
+}
+
+#[test]
+fn test_cast_to_fixed_size_array_default_dialect() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(NULL as int[2])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT CAST(NULL AS INTEGER[2])",
+    );
+    Ok(())
+}
+
+#[test]
+fn test_cast_to_nested_array() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(NULL as int[][][])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT CAST(NULL AS INTEGER[][][])",
     );
     Ok(())
 }

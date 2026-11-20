@@ -1,0 +1,20 @@
+---
+source: datafusion-cli/tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args:
+    - "-q"
+  stdin: "\\pset target_width\n\\pset target_width 80\n\\pset target_width invalid\n\\pset target_width\n\\pset target_width auto\n\\pset target_width inf\n\\pset target_width\n\\q\n"
+---
+success: true
+exit_code: 0
+----- stdout -----
+Target output width is auto.
+Target output width is 80.
+Target output width is 80.
+Target output width is auto.
+Target output width is inf.
+Target output width is inf.
+
+----- stderr -----
+Execution error: Invalid target width invalid. Expected auto, 1..65535, or 0/inf for no limit.

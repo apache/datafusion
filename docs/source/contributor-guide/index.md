@@ -211,6 +211,18 @@ The automatic draft notification also counts as activity and restarts this timer
 
 ## CI Runners
 
+### Job Timeouts
+
+Set `timeout-minutes` on every workflow job that runs on a runner. An explicit
+limit stops a hung job before GitHub Actions' six-hour default.
+
+Use recent successful runs to choose a limit. Allow extra time for cold caches
+and slower runners, including those used by forks. If a change increases a job's
+expected runtime, adjust its limit in the same pull request.
+
+For reusable workflows, set the limit on jobs in the called workflow. The merge
+queue has a separate deadline for required checks.
+
 ### Runs-On
 
 We use [Runs-On](https://runs-on.com/) for some actions in the main repository, which run in the ASF AWS account to speed up CI. In forks, these actions run on the default GitHub runners since forks do not have access to ASF infrastructure.
