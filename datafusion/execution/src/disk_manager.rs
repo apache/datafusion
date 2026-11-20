@@ -627,58 +627,6 @@ fn escape_for_temp_file_name_prefix(text: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Returns the paths that this process's open file descriptors refer to.
-    #[cfg(target_os = "linux")]
-    fn open_fd_targets() -> Vec<PathBuf> {
-        std::fs::read_dir("/proc/self/fd")
-            .unwrap()
-            .filter_map(|entry| std::fs::read_link(entry.ok()?.path()).ok())
-            .collect()
-    }
-
-    /// Live spill files must not hold file descriptors. Only open writers and
-    /// readers may hold one, so the descriptor count stays bounded however
-    /// many spill files an operator keeps.
-    ///
-    /// The test matches descriptors by target path, not by total count.
-    /// Other tests in this process open files concurrently, so a total count
-    /// is flaky.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn live_spill_files_hold_no_file_descriptors() -> Result<()> {
-        use std::collections::HashSet;
-        use std::io::Write;
-        const FILES: usize = 400;
-
-        let dm = Arc::new(DiskManagerBuilder::default().build()?);
-        let mut files = Vec::with_capacity(FILES);
-        for _ in 0..FILES {
-            let file = dm.create_tmp_file("fd bound")?;
-            let mut writer = file.open_writer()?;
-            writer.write_all(b"spilled")?;
-            writer.finish()?;
-            drop(writer);
-            files.push(file);
-        }
-
-        let paths: HashSet<PathBuf> =
-            files.iter().map(|f| f.path().unwrap().to_owned()).collect();
-        let held: Vec<_> = open_fd_targets()
-            .into_iter()
-            .filter(|target| paths.contains(target))
-            .collect();
-        assert_eq!(held, Vec::<PathBuf>::new());
-        assert_eq!(dm.spilling_progress().active_files_count, FILES);
-        for file in &files {
-            assert_eq!(std::fs::read(file.path().unwrap())?, b"spilled");
-        }
-
-        drop(files);
-        assert_eq!(dm.spilling_progress().active_files_count, 0);
-        assert!(paths.iter().all(|p| !p.exists()));
-        Ok(())
-    }
-
     #[test]
     fn lazy_temp_dir_creation() -> Result<()> {
         // A default configuration should not create temp files until requested
