@@ -1142,6 +1142,18 @@ physical_plan
 01)FilterExec: d@1 = 1969-12-31 OR d@1 = 1970-01-02
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+query IB
+SELECT id, CAST(d AS TIMESTAMP(3)) IN
+  (arrow_cast(-86400000, 'Timestamp(ms)'), arrow_cast(86400000, 'Timestamp(ms)'))
+FROM cast_preimage_date32 ORDER BY id;
+----
+1 false
+2 true
+3 false
+4 true
+5 false
+6 NULL
+
 query IBBB
 SELECT id,
   d = TIMESTAMP '1969-12-31 00:00:00',
