@@ -409,9 +409,10 @@ FROM (SELECT 1 AS x, 2 AS y FROM literal_ndv_empty);
 statement ok
 DROP TABLE literal_ndv_empty;
 
-# The years of the date bounds limit the groups of the final aggregate. The
-# key is nullable and its NULL count is unknown, so one NULL group is added to
-# the 7 years. The partial aggregate keeps the input row count.
+# The years of the date bounds limit the groups of the final aggregate. `d`
+# has no NULLs, but the statistics of `date_part` do not keep the NULL count of
+# `d`, so one NULL group is added to the 7 years. The partial aggregate keeps
+# the input row count.
 statement ok
 COPY (SELECT d FROM unnest(range(DATE '1992-01-02', DATE '1998-12-02', INTERVAL '1' DAY)) AS t(d))
 TO 'test_files/scratch/parquet_statistics/dates.parquet' STORED AS PARQUET;
@@ -452,6 +453,45 @@ SELECT date_part('year', d) AS y, COUNT(*) FROM date_stats GROUP BY y;
 
 statement ok
 DROP TABLE date_stats;
+
+# The key is nullable but has no NULLs. The partial aggregate keeps the NULL
+# count of the key, so the final aggregate adds no NULL group to the 7 values.
+statement ok
+COPY (SELECT CASE WHEN value < 0 THEN NULL ELSE CAST(value % 7 + 1 AS INT) END AS k FROM range(0, 10000))
+TO 'test_files/scratch/parquet_statistics/nullable_key.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE nullable_key STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/nullable_key.parquet';
+
+statement ok
+SET datafusion.explain.show_statistics = true;
+
+query TT
+EXPLAIN SELECT k, COUNT(*) FROM nullable_key GROUP BY k;
+----
+physical_plan
+01)ProjectionExec: expr=[k@0 as k, count(Int64(1))@1 as count(*)], statistics=[Rows=Inexact(7), Bytes=Inexact(84), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0)),(Col[1]:)]]
+02)--AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[count(Int64(1))], statistics=[Rows=Inexact(7), Bytes=Inexact(28), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0)),(Col[1]:)]]
+03)----RepartitionExec: partitioning=Hash([k@0], 2), input_partitions=2, statistics=[Rows=Inexact(10000), Bytes=Inexact(40000), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0)),(Col[1]:)]]
+04)------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[count(Int64(1))], statistics=[Rows=Inexact(10000), Bytes=Inexact(40000), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0)),(Col[1]:)]]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, statistics=[Rows=Exact(10000), Bytes=Exact(40000), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0) ScanBytes=Exact(40000))]]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/nullable_key.parquet]]}, projection=[k], file_type=parquet, statistics=[Rows=Exact(10000), Bytes=Exact(40000), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0) ScanBytes=Exact(40000))]]
+
+# radians(k * 100) is in [radians(100), radians(700)], not in (-pi, pi).
+query TT
+EXPLAIN SELECT radians(CAST(k AS DOUBLE) * 100) FROM nullable_key;
+----
+physical_plan
+01)ProjectionExec: expr=[radians(CAST(k@0 AS Float64) * 100) as radians(nullable_key.k * Int64(100))], statistics=[Rows=Exact(10000), Bytes=Exact(80000), [(Col[0]: Min=Inexact(Float64(1.7453292519943295)) Max=Inexact(Float64(12.217304763960307)))]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, statistics=[Rows=Exact(10000), Bytes=Exact(40000), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0) ScanBytes=Exact(40000))]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/nullable_key.parquet]]}, projection=[k], file_type=parquet, statistics=[Rows=Exact(10000), Bytes=Exact(40000), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0) ScanBytes=Exact(40000))]]
+
+statement ok
+SET datafusion.explain.show_statistics = false;
+
+statement ok
+DROP TABLE nullable_key;
 
 statement ok
 SET datafusion.execution.target_partitions = 4;

@@ -887,7 +887,7 @@ mod test {
             total_byte_size: Precision::Inexact(16),
             column_statistics: vec![
                 ColumnStatistics {
-                    null_count: Precision::Absent,
+                    null_count: Precision::Exact(0),
                     max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
                     min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
                     sum_value: Precision::Absent,
@@ -908,7 +908,7 @@ mod test {
             total_byte_size: Precision::Inexact(16),
             column_statistics: vec![
                 ColumnStatistics {
-                    null_count: Precision::Absent,
+                    null_count: Precision::Exact(0),
                     max_value: Precision::Exact(ScalarValue::Int32(Some(2))),
                     min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
                     sum_value: Precision::Absent,
@@ -994,6 +994,7 @@ mod test {
             column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Precision::Exact(0),
+                    null_count: Precision::Exact(0),
                     ..ColumnStatistics::new_unknown()
                 },
                 ColumnStatistics::new_unknown(),

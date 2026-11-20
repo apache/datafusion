@@ -1599,7 +1599,10 @@ impl AggregateExec {
         // A partial aggregate can emit a group more than once.
         let use_range_bounds = self.group_by().is_single()
             && self.mode.output_mode() == AggregateOutputMode::Final;
-        let mut final_group_count = use_range_bounds.then_some(1usize);
+        let mut final_group_count = use_range_bounds.then_some(FinalGroupCount {
+            groups: 1,
+            upper_bound_only: false,
+        });
         let input_schema = self.input.schema();
         let column_statistics = {
             // self.schema: [<group by exprs>, <aggregate exprs>]
@@ -1612,13 +1615,25 @@ impl AggregateExec {
                     &input_schema,
                 );
                 final_group_count = final_group_count.and_then(|product| {
-                    let groups = Self::final_group_key_count(
+                    let key = Self::final_group_key_count(
                         expr.as_ref(),
                         &key_stats,
                         &input_schema,
                     )?;
-                    Some(product.saturating_mul(groups))
+                    Some(FinalGroupCount {
+                        groups: product.groups.saturating_mul(key.groups),
+                        upper_bound_only: product.upper_bound_only
+                            || key.upper_bound_only,
+                    })
                 });
+                if self.group_by().is_single() {
+                    // All NULL keys form one group. A partial aggregate can
+                    // emit it more than once, and a TopK limit can drop it.
+                    column_statistics[idx].null_count = match key_stats.null_count {
+                        Precision::Exact(0) => Precision::Exact(0),
+                        count => count.map(|n| n.min(1)).to_inexact(),
+                    };
+                }
                 column_statistics[idx].max_value = key_stats.max_value;
                 column_statistics[idx].min_value = key_stats.min_value;
                 column_statistics[idx].distinct_count = key_stats.distinct_count;
@@ -1639,7 +1654,12 @@ impl AggregateExec {
             }
             None => {
                 let group_count = if use_range_bounds {
+                    // A range only bounds the groups from above, so it caps
+                    // a known input row count but does not replace it.
+                    let has_input_rows = child_statistics.num_rows.get_value().is_some();
                     final_group_count
+                        .filter(|count| has_input_rows || !count.upper_bound_only)
+                        .map(|count| count.groups)
                 } else {
                     self.compute_group_ndv(child_statistics)
                 };
@@ -1864,8 +1884,9 @@ impl AggregateExec {
     }
 
     /// Estimates the contribution of one key to a plain `GROUP BY` with final
-    /// output. A key without NDV uses the number of values between its integer
-    /// bounds, plus one NULL group unless the key has no NULLs.
+    /// output. The number of values between integer bounds limits the NDV of
+    /// a key. A key without NDV uses that number, plus one NULL group unless
+    /// the key has no NULLs.
     ///
     /// **Example:** `GROUP BY date_part('year', d)` where `d` is in
     /// `[1992-01-02, 1998-12-01]` and the key is nullable with an unknown
@@ -1874,15 +1895,22 @@ impl AggregateExec {
         expr: &dyn PhysicalExpr,
         stats: &ColumnStatistics,
         input_schema: &Schema,
-    ) -> Option<usize> {
+    ) -> Option<FinalGroupCount> {
+        let range_size = integer_range_size(stats);
         if let Some(&ndv) = stats.distinct_count.get_value() {
+            let ndv = range_size.map_or(ndv, |size| ndv.min(size));
             let has_nulls = stats.null_count.get_value().is_some_and(|&n| n > 0);
-            return Some(ndv.saturating_add(usize::from(has_nulls)).max(1));
+            return Some(FinalGroupCount {
+                groups: ndv.saturating_add(usize::from(has_nulls)).max(1),
+                upper_bound_only: false,
+            });
         }
-        let values = integer_range_size(stats)?;
         let no_nulls = stats.null_count == Precision::Exact(0)
             || !expr.nullable(input_schema).unwrap_or(true);
-        Some(values.saturating_add(usize::from(!no_nulls)))
+        Some(FinalGroupCount {
+            groups: range_size?.saturating_add(usize::from(!no_nulls)),
+            upper_bound_only: true,
+        })
     }
 
     /// Statistics of the values of the group expression `expr` in the input.
@@ -2901,6 +2929,15 @@ impl AggregateExec {
 
         Ok(Arc::new(aggregate))
     }
+}
+
+/// Estimated groups of a plain `GROUP BY` with final output.
+#[derive(Debug, Clone, Copy)]
+struct FinalGroupCount {
+    groups: usize,
+    /// Whether a key without NDV uses its range, which only bounds the groups
+    /// from above.
+    upper_bound_only: bool,
 }
 
 /// Number of integers from `min_value` to `max_value` of `stats`, inclusive.
@@ -9234,6 +9271,7 @@ mod tests {
 
         struct TestCase {
             name: &'static str,
+            input_rows: Precision<usize>,
             col_a_stats: ColumnStatistics,
             col_b_stats: ColumnStatistics,
             group_by_cols: Vec<&'static str>,
@@ -9241,6 +9279,7 @@ mod tests {
         }
         let case = |name, col_a_stats, expected_num_rows| TestCase {
             name,
+            input_rows: Precision::Exact(1_000_000),
             col_a_stats,
             col_b_stats: ColumnStatistics::new_unknown(),
             group_by_cols: vec!["a"],
@@ -9263,6 +9302,25 @@ mod tests {
                 bounds(1, 100).with_distinct_count(Precision::Inexact(3)),
                 Precision::Inexact(3),
             ),
+            case(
+                "bounds cap the NDV",
+                bounds(1, 7).with_distinct_count(Precision::Inexact(1_000)),
+                Precision::Inexact(7),
+            ),
+            TestCase {
+                name: "bounds do not replace unknown input rows",
+                input_rows: Precision::Absent,
+                ..case("", bounds(1, i32::MAX), Precision::Absent)
+            },
+            TestCase {
+                name: "NDV capped by bounds is used without input rows",
+                input_rows: Precision::Absent,
+                ..case(
+                    "",
+                    bounds(1, 7).with_distinct_count(Precision::Inexact(1_000)),
+                    Precision::Inexact(7),
+                )
+            },
             case(
                 "range larger than the input is capped by input rows",
                 bounds(0, i32::MAX),
@@ -9311,7 +9369,7 @@ mod tests {
                 Field::new("b", DataType::Int32, true),
             ]));
             let input_stats = Statistics {
-                num_rows: Precision::Exact(1_000_000),
+                num_rows: case.input_rows,
                 total_byte_size: Precision::Inexact(1_000_000),
                 column_statistics: vec![case.col_a_stats, case.col_b_stats],
             };
@@ -9420,6 +9478,55 @@ mod tests {
         )?;
         let stats = StatisticsContext::new().compute(&last, &StatisticsArgs::new())?;
         assert_eq!(stats.num_rows, Precision::Inexact(10));
+
+        Ok(())
+    }
+
+    /// The partial aggregate output keeps whether a key has NULLs, so the final
+    /// aggregate adds a NULL group only when Single mode does.
+    #[test]
+    fn test_aggregate_stats_null_count_through_partial() -> Result<()> {
+        use datafusion_common::ColumnStatistics;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let group_by = simple_group_by(&schema, &["a"]);
+        for (null_count, partial_null_count, expected_num_rows) in [
+            (Precision::Exact(0), Precision::Exact(0), 7),
+            (Precision::Exact(5), Precision::Inexact(1), 8),
+        ] {
+            let input_stats = Statistics {
+                num_rows: Precision::Exact(1_000_000),
+                total_byte_size: Precision::Inexact(1_000_000),
+                column_statistics: vec![
+                    ColumnStatistics::new_unknown()
+                        .with_min_value(Precision::Exact(ScalarValue::Int32(Some(1))))
+                        .with_max_value(Precision::Exact(ScalarValue::Int32(Some(7))))
+                        .with_null_count(null_count),
+                ],
+            };
+            let partial = Arc::new(build_test_aggregate_with_mode(
+                &schema,
+                input_stats,
+                group_by.clone(),
+                None,
+                AggregateMode::Partial,
+            )?);
+            let stats = StatisticsContext::new()
+                .compute(partial.as_ref(), &StatisticsArgs::new())?;
+            assert_eq!(stats.column_statistics[0].null_count, partial_null_count);
+
+            let last = AggregateExec::try_new(
+                AggregateMode::Final,
+                group_by.as_final(),
+                vec![count_a_aggregate(&schema)?],
+                vec![None],
+                partial,
+                Arc::clone(&schema),
+            )?;
+            let stats =
+                StatisticsContext::new().compute(&last, &StatisticsArgs::new())?;
+            assert_eq!(stats.num_rows, Precision::Inexact(expected_num_rows));
+        }
 
         Ok(())
     }
