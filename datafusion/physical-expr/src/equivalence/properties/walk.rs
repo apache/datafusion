@@ -41,7 +41,8 @@ use itertools::Itertools;
 /// currently pinned expressions: it is a literal, a constant, pinned, a leaf
 /// that reports itself as a singleton (e.g. an uncorrelated scalar subquery),
 /// or not volatile and computed only from fixed expressions (e.g. `a + 1`
-/// once `a` is pinned).
+/// once `a` is pinned). A column is also fixed once the columns that
+/// functionally determine it are.
 ///
 /// ## Heads
 ///
@@ -259,12 +260,8 @@ impl<'a> SortKeyWalk<'a> {
     ///
     /// [normal form]: EquivalenceProperties#normal-form
     pub(super) fn pin(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
-        match self.props.eq_group.get_equivalence_class(&expr) {
-            Some(class) => self.pinned.extend(class.iter().cloned()),
-            None => {
-                self.pinned.insert(expr);
-            }
-        }
+        self.insert_pinned(expr);
+        self.pin_determined();
         let ordering_count = self.props.oeq_cache.normal_cls.len() + self.implied.len();
         self.head_idxs.resize(ordering_count, 0);
         // Pins do not change below, so after the first round only the
@@ -297,6 +294,55 @@ impl<'a> SortKeyWalk<'a> {
                 return Ok(());
             }
             first = count;
+        }
+    }
+
+    /// Marks `expr`, an expression in [normal form], and the members of its
+    /// equivalence class as pinned.
+    ///
+    /// [normal form]: EquivalenceProperties#normal-form
+    fn insert_pinned(&mut self, expr: Arc<dyn PhysicalExpr>) {
+        match self.props.eq_group.get_equivalence_class(&expr) {
+            Some(class) => self.pinned.extend(class.iter().cloned()),
+            None => {
+                self.pinned.insert(expr);
+            }
+        }
+    }
+
+    /// Pins the columns that the pinned expressions functionally determine,
+    /// until there are no more: if the rows that tie on `x` all have the same
+    /// `y` because `x -> y`, then `y` is fixed once `x` is.
+    fn pin_determined(&mut self) {
+        let props = self.props;
+        if props.functional_dependencies.is_empty() {
+            return;
+        }
+        let column = |idx: usize| {
+            let field = props.schema().fields().get(idx)?;
+            let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), idx));
+            Some(props.eq_group.normalize_expr(column))
+        };
+        loop {
+            let mut found = false;
+            for dependency in &props.functional_dependencies {
+                let determined = dependency
+                    .determinant
+                    .iter()
+                    .all(|&idx| column(idx).is_some_and(|expr| self.is_fixed(&expr)));
+                if !determined {
+                    continue;
+                }
+                for expr in dependency.dependents.iter().filter_map(|&idx| column(idx)) {
+                    if !self.is_fixed(&expr) {
+                        self.insert_pinned(expr);
+                        found = true;
+                    }
+                }
+            }
+            if !found {
+                return;
+            }
         }
     }
 

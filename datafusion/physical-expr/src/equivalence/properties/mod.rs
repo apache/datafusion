@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod dependency; // Submodule containing DependencyMap and Dependencies
+mod functional_dependency; // Submodule containing FunctionalDependency
 mod joins; // Submodule containing join_equivalence_properties
 mod union; // Submodule containing calculate_union
 mod walk; // Submodule containing SortKeyWalk
@@ -18,6 +19,7 @@ use self::dependency::{
     Dependencies, DependencyMap, construct_prefix_orderings,
     generate_dependency_orderings, referred_dependencies,
 };
+use self::functional_dependency::FunctionalDependency;
 use self::walk::SortKeyWalk;
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, GroupingEquivalenceClass,
@@ -63,6 +65,7 @@ use itertools::{Either, Itertools};
 /// | Orderings              | `[a ASC, b DESC]` after a sort            | An [`OrderingEquivalenceClass`]                                     |
 /// | Groupings              | `[a, b]` declared by a custom data source | A [`GroupingEquivalenceClass`]                                      |
 /// | Constraints            | A primary key or unique constraint        | [`Constraints`]                                                     |
+/// | Functional dependencies | `i_id -> i_name` after joining on `s_item = i_id` | A list of `FunctionalDependency`s                    |
 ///
 /// [`EquivalenceClass`]: crate::equivalence::EquivalenceClass
 /// [Required orderings]: #required-orderings
@@ -392,6 +395,10 @@ pub struct EquivalenceProperties {
     /// across all output partitions, since operators that merge partitions
     /// keep them.
     constraints: Constraints,
+    /// Functional dependencies between columns that hold across all output
+    /// partitions. Constraints imply further dependencies that are not stored
+    /// here.
+    functional_dependencies: Vec<FunctionalDependency>,
     /// Schema associated with this object.
     schema: SchemaRef,
 }
@@ -507,6 +514,7 @@ impl EquivalenceProperties {
             oeq_cache: OrderingEquivalenceCache::default(),
             geq_cache: GroupingEquivalenceClass::default(),
             constraints: Constraints::default(),
+            functional_dependencies: vec![],
             schema,
         }
     }
@@ -542,6 +550,7 @@ impl EquivalenceProperties {
             geq_cache: GroupingEquivalenceClass::default(),
             eq_group,
             constraints: Constraints::default(),
+            functional_dependencies: vec![],
             schema,
         }
     }
@@ -594,6 +603,7 @@ impl EquivalenceProperties {
     /// Extends this `EquivalenceProperties` with the `other` object.
     pub fn extend(mut self, other: Self) -> Result<Self> {
         self.constraints.extend(other.constraints);
+        self.add_functional_dependencies(other.functional_dependencies);
         self.add_equivalence_group(other.eq_group)?;
         self.add_orderings(other.oeq_class);
         self.add_groupings(other.geq_class);
@@ -1668,6 +1678,7 @@ impl EquivalenceProperties {
             geq_class: GroupingEquivalenceClass::default(),
             geq_cache: GroupingEquivalenceClass::default(),
             constraints: self.projected_constraints(mapping).unwrap_or_default(),
+            functional_dependencies: self.projected_functional_dependencies(mapping),
             schema: output_schema,
             eq_group,
         };
