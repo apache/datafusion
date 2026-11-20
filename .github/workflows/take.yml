@@ -13,6 +13,7 @@ permissions:
 jobs:
   issue_assign:
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     if: (!github.event.issue.pull_request) && (github.event.comment.body == 'take' || github.event.comment.body == 'untake')
     concurrency:
       group: ${{ github.actor }}-issue-assign

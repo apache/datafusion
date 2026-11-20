@@ -53,7 +53,7 @@ impl PreparedHashJoinBuild {
         self.build.batch.num_rows()
     }
 
-    /// Create independent mutable state for one consuming join.
+    /// Create independent mutable state for one consuming legacy join.
     pub(super) fn probe_data(&self, probe_threads: usize) -> JoinLeftData {
         JoinLeftData {
             build: Arc::clone(&self.build),
@@ -62,6 +62,12 @@ impl PreparedHashJoinBuild {
             visited_indices_bitmap: Mutex::new(BooleanBufferBuilder::new(0)),
             probe_completion: ProbeCompletion::new(probe_threads),
         }
+    }
+
+    /// Create independent [`RegularJoinLeftData`] for one consuming regular join.
+    /// Prepared builds currently support INNER only, so no unmatched-row state is needed.
+    pub(super) fn regular_probe_data(&self) -> RegularJoinLeftData {
+        RegularJoinLeftData::new(Arc::clone(&self.build), None, 0)
     }
 
     /// Validate the build descriptor and current execution restrictions without

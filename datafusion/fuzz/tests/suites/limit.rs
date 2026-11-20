@@ -10,45 +10,44 @@ use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
+use datafusion_common::Result;
 use datafusion_common::assert_contains;
-use rand::{Rng, rng};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::sync::Arc;
+use test_utils::fuzz::FuzzTest;
 use test_utils::stagger_batch;
 
-#[tokio::test]
-async fn test_sort_topk_i32() {
-    run_limit_fuzz_test(SortedData::new_i32).await
-}
+/// Runs TopK on random data. Each case picks a data type, an input size, and
+/// a limit from its case seed.
+pub(crate) struct LimitFuzzer;
 
-#[tokio::test]
-async fn test_sort_topk_f64() {
-    run_limit_fuzz_test(SortedData::new_f64).await
-}
+impl FuzzTest for LimitFuzzer {
+    type Dataset = ();
 
-#[tokio::test]
-async fn test_sort_topk_str() {
-    run_limit_fuzz_test(SortedData::new_str).await
-}
+    fn name(&self) -> &str {
+        "sort_topk"
+    }
 
-#[tokio::test]
-async fn test_sort_topk_i64str() {
-    run_limit_fuzz_test(SortedData::new_i64str).await
-}
+    fn prepare_dataset(&self, _: u64) -> impl Future<Output = Result<()>> {
+        std::future::ready(Ok(()))
+    }
 
-/// Run TopK fuzz tests the specified input data with different
-/// different test functions so they can run in parallel)
-async fn run_limit_fuzz_test<F>(make_data: F)
-where
-    F: Fn(usize) -> SortedData,
-{
-    let mut rng = rng();
-    for size in [10, 1_0000, 10_000, 100_000] {
-        let data = make_data(size);
-        // test various limits including some random ones
-        for limit in [1, 3, 7, 17, 10000, rng.random_range(1..size * 2)] {
-            //  limit can be larger than the number of rows in the input
-            run_limit_test(limit, &data).await;
-        }
+    async fn run_case(&self, _: &(), case_seed: u64) -> Result<()> {
+        let mut rng = StdRng::seed_from_u64(case_seed);
+        let make_data = match rng.random_range(0..4) {
+            0 => SortedData::new_i32,
+            1 => SortedData::new_f64,
+            2 => SortedData::new_str,
+            _ => SortedData::new_i64str,
+        };
+        let size = [10, 1_000, 10_000, 100_000][rng.random_range(0..4)];
+        // The limit can be larger than the number of input rows.
+        let limit =
+            [1, 3, 7, 17, 10_000, rng.random_range(1..size * 2)][rng.random_range(0..6)];
+        let data = make_data(size, &mut rng);
+        run_limit_test(limit, &data).await;
+        Ok(())
     }
 }
 
@@ -57,7 +56,7 @@ where
 /// Each variants stores the input batches and the expected sorted values
 /// compute the expected output for a given fetch (limit) value.
 #[derive(Debug)]
-enum SortedData {
+pub(crate) enum SortedData {
     // single Int32 column
     I32 {
         batches: Vec<RecordBatch>,
@@ -83,8 +82,7 @@ enum SortedData {
 impl SortedData {
     /// Create an i32 column of random values, with the specified number of
     /// rows, sorted the default
-    fn new_i32(size: usize) -> Self {
-        let mut rng = rng();
+    fn new_i32(size: usize, rng: &mut StdRng) -> Self {
         // have some repeats (approximately 1/3 of the values are the same)
         let max = size as i32 / 3;
         let data: Vec<Option<i32>> = (0..size)
@@ -104,8 +102,7 @@ impl SortedData {
 
     /// Create an f64 column of random values, with the specified number of
     /// rows, sorted the default
-    fn new_f64(size: usize) -> Self {
-        let mut rng = rng();
+    fn new_f64(size: usize, rng: &mut StdRng) -> Self {
         let mut data: Vec<Option<f64>> = (0..size / 3)
             .map(|_| {
                 // no nulls for now
@@ -128,12 +125,11 @@ impl SortedData {
 
     /// Create an string column of random values, with the specified number of
     /// rows, sorted the default
-    fn new_str(size: usize) -> Self {
-        let mut rng = rng();
+    fn new_str(size: usize, rng: &mut StdRng) -> Self {
         let mut data: Vec<Option<String>> = (0..size / 3)
             .map(|_| {
                 // no nulls for now
-                Some(get_random_string(16))
+                Some(get_random_string(rng, 16))
             })
             .collect();
 
@@ -152,14 +148,12 @@ impl SortedData {
 
     /// Create two  columns of random values (int64, string), with the specified number of
     /// rows, sorted the default
-    fn new_i64str(size: usize) -> Self {
-        let mut rng = rng();
-
+    fn new_i64str(size: usize, rng: &mut StdRng) -> Self {
         // 100 distinct values
         let strings: Vec<Option<String>> = (0..100)
             .map(|_| {
                 // no nulls for now
-                Some(get_random_string(16))
+                Some(get_random_string(rng, 16))
             })
             .collect();
 
@@ -326,9 +320,8 @@ async fn run_limit_test(fetch: usize, data: &SortedData) {
 }
 
 /// Return random ASCII String with len
-fn get_random_string(len: usize) -> String {
-    rng()
-        .sample_iter(rand::distr::Alphanumeric)
+fn get_random_string(rng: &mut StdRng, len: usize) -> String {
+    rng.sample_iter(rand::distr::Alphanumeric)
         .take(len)
         .map(char::from)
         .collect()
