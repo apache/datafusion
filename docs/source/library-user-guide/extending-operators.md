@@ -82,7 +82,7 @@ describes the operations in a query. The node implements
 `UserDefinedLogicalNodeCore` so DataFusion can inspect and update it. Its main
 fields are:
 
-```rust,ignore
+```rust
 struct TopKPlanNode {
     k: usize,
     input: LogicalPlan,
@@ -101,7 +101,7 @@ part of the sort, or it can be a separate limit directly above the sort. The
 sort must have exactly one sort expression. The rule replaces that part of the
 plan with a `TopKPlanNode`:
 
-```rust,ignore
+```rust
 LogicalPlan::Extension(Extension {
     node: Arc::new(TopKPlanNode {
         k: *fetch,
@@ -122,24 +122,10 @@ TopK: k=3
   TableScan: sales
 ```
 
-### Register the rule and the planner
-
-The example's `make_topk_context` function sets up the session. It registers
-`TopKOptimizerRule` so DataFusion applies it while optimizing the query. It
-also installs `TopKQueryPlanner` with `with_query_planner`:
-
-```rust,ignore
-let state = SessionStateBuilder::new()
-    .with_default_features()
-    .with_query_planner(Arc::new(TopKQueryPlanner {}))
-    .with_optimizer_rule(Arc::new(TopKOptimizerRule { invariant_mock }))
-    .build();
-```
-
-`TopKQueryPlanner` creates a `DefaultPhysicalPlanner` with `TopKPlanner` as an
-extension planner. The default planner does not know how to plan a
-`TopKPlanNode`, so without this extension planner, queries rewritten by the
-rule fail during physical planning.
+The example's `make_topk_context` function registers `TopKOptimizerRule`. It
+also installs `TopKQueryPlanner` with `with_query_planner`. That planner adds
+`TopKPlanner` to DataFusion's normal planner. Without `TopKPlanner`, queries
+that the rule changed fail during physical planning.
 
 ### Execute the operation
 
