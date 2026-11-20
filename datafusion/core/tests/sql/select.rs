@@ -620,3 +620,36 @@ async fn test_conditional_functions_field_metadata() -> Result<()> {
     }
     Ok(())
 }
+
+/// An optimized plan with a materialized CTE whose scans read columns that
+/// are not a prefix of the body can be analyzed and optimized again.
+#[tokio::test]
+async fn materialized_cte_optimized_plan_plans_again() -> Result<()> {
+    let config =
+        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "PostgreSQL");
+    let ctx = SessionContext::new_with_config(config);
+    ctx.sql("CREATE TABLE t(a INT, b INT, c INT, d VARCHAR) AS VALUES (1, 2, 3, 'x'), (4, 5, 3, 'y')")
+        .await?
+        .collect()
+        .await?;
+    let sql = "WITH w AS MATERIALIZED (SELECT a, b, c, d FROM t) \
+               SELECT x.c, y.b FROM w x JOIN w y ON x.c = y.c ORDER BY y.b";
+    let expected = ctx.sql(sql).await?.collect().await?;
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    let again = ctx.execute_logical_plan(plan).await?.collect().await?;
+    assert_eq!(
+        arrow::util::pretty::pretty_format_batches(&again)?.to_string(),
+        arrow::util::pretty::pretty_format_batches(&expected)?.to_string()
+    );
+    assert_snapshot!(arrow::util::pretty::pretty_format_batches(&again)?, @r"
+    +---+---+
+    | c | b |
+    +---+---+
+    | 3 | 2 |
+    | 3 | 2 |
+    | 3 | 5 |
+    | 3 | 5 |
+    +---+---+
+    ");
+    Ok(())
+}

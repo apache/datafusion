@@ -6,6 +6,20 @@
 //!
 //! This module implements [`HashJoinStream`], the streaming engine for
 //! [`super::HashJoinExec`]. See comments in [`HashJoinStream`] for more details.
+//!
+//! # Ongoing Hash Join refactor
+//!
+//! Hash join execution is being incrementally split into dedicated regular and
+//! existence join streams; see [#26361](https://github.com/apache/datafusion/issues/26361).
+//!
+//! Inner, left, right, and full joins use this stream only when
+//! `datafusion.execution.enable_migration_hash_join = false`. Implement changes
+//! for these join types in [`BatchedJoinProcessor`], the default path, and keep
+//! this legacy fallback consistent.
+//!
+//! Semi, anti, mark, and null-aware joins still use this stream by default.
+//!
+//! [`BatchedJoinProcessor`]: super::batched_join_processor::BatchedJoinProcessor
 
 use std::sync::Arc;
 use std::task::Poll;
@@ -245,18 +259,43 @@ pub(super) struct EmitUnmatchedBuildRowsState {
 /// `Scheduled` means the reporting `OnceFut` has been constructed but is lazy:
 /// the coordinator has not necessarily observed the report. Only `Delivered`
 /// guarantees the coordinator saw it, so `Drop` must still cancel a `Scheduled`
-/// partition — otherwise sibling partitions can wait forever for a report that
+/// partition. Otherwise sibling partitions can wait forever for a report that
 /// never runs.
 #[derive(Debug, PartialEq, Eq)]
 enum BuildReportState {
     NotReported,
     Scheduled,
     Delivered,
+    /// The stream was dropped before it started to probe. See
+    /// [`BuildReportHandle`].
     Canceled,
     Finalized,
 }
 
-/// Owns the stream-side lifecycle for one partition's build-data report.
+/// Tracks whether this stream has reported its build side to the shared
+/// dynamic filter. If the stream is dropped first, the handle cancels the
+/// partition.
+///
+/// # Canceled partitions
+///
+/// In `Partitioned` mode, each partition of the join runs as its own stream.
+/// A parent operator can drop one of these streams early, because it needs no
+/// output from that partition. For example, a parent join whose own build
+/// side is empty for a partition drops this join's stream for that partition
+/// without polling it (<https://github.com/apache/datafusion/issues/21625>).
+///
+/// A partition is canceled when its stream is dropped before the stream
+/// starts to read its probe side. Cancellation affects that one partition:
+///
+/// - The other partitions of this join keep running. The query is not
+///   canceled.
+/// - The probe input keeps running, because the other partitions read from
+///   it. A `RepartitionExec` in that input discards the rows that it routes
+///   to the canceled partition.
+/// - The canceled stream has produced no output and never will.
+///
+/// The other partitions wait for the build side of every partition before
+/// they probe. The handle tells them not to wait for the canceled partition.
 struct BuildReportHandle {
     partition: usize,
     mode: PartitionMode,
@@ -512,7 +551,7 @@ pub(super) fn lookup_join_hashmap(
 ///
 /// The input array must be sorted (e.g., `[0, 1, 1, 2, 2, ...]`) and contain no null values.
 #[inline]
-fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
+pub(super) fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
     if indices.is_empty() {
         return 0;
     }

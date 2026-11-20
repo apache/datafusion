@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::push_down_filter::lr_is_preserved;
 use crate::simplify_expressions::ExprSimplifier;
-use crate::utils::replace_qualified_name;
+use crate::utils::{aggregate_emits_on_empty_input, replace_qualified_name};
 
 use datafusion_common::nested_struct::is_injective_cast;
 use datafusion_common::tree_node::{
@@ -22,6 +22,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
+use datafusion_expr::logical_plan::builder::unique_field_aliases;
 use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{collect_subquery_cols, conjunction, split_conjunction};
@@ -68,6 +69,14 @@ pub struct PullUpCorrelatedExpr {
     pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
     /// pull up having expr, which must be evaluated after the Join
     pub pull_up_having_expr: Option<Expr>,
+    /// Outer-reference conditions from a `Filter` that sits directly above a
+    /// count-bug `Aggregate`: a `HAVING` clause (or an outer-only filter)
+    /// that filters the aggregate *output*. Unlike `join_filters`, these do
+    /// not merely correlate the two sides: an unmatched LEFT JOIN row may
+    /// mean one of them rejected the group rather than that no group
+    /// matched, and a scalar subquery must yield NULL for a rejected group.
+    /// `build_join` uses them to reject such queries up front.
+    pub having_like_join_filters: Vec<Expr>,
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
     /// lateral joins, we need to produce a left outer join in such cases.
     ///
@@ -124,6 +133,7 @@ impl PullUpCorrelatedExpr {
             need_handle_count_bug: false,
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
+            having_like_join_filters: Vec::new(),
             pulled_up_scalar_agg: false,
             correlated_filters: Vec::new(),
             column_refs_above: Vec::new(),
@@ -415,6 +425,22 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     // in_predicate may be already included in the join filters, remove it from the join filters first.
                     join_filters = remove_duplicated_filter(join_filters, in_predicate)?;
                 }
+                // A `Filter` directly above a count-bug `Aggregate` is a
+                // HAVING clause (or an outer-only filter above the aggregate):
+                // its outer-reference conditions filter the aggregate *output*,
+                // so a LEFT JOIN row can be unmatched either because the
+                // correlation matched no group or because one of them rejected
+                // the group. Record them so the scalar rewrite can tell the
+                // two apart; where the output needs count-bug compensation it
+                // rejects the query instead of guessing. A `Filter` below the
+                // aggregate only prunes input rows and is left out.
+                if self
+                    .collected_count_expr_map
+                    .contains_key(&*plan_filter.input)
+                {
+                    self.having_like_join_filters
+                        .extend(join_filters.iter().cloned());
+                }
                 let correlated_subquery_cols =
                     collect_subquery_cols(&join_filters, subquery_schema)?;
                 for expr in join_filters {
@@ -684,6 +710,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 );
                 let mut new_correlated_cols = BTreeSet::new();
                 for col in local_correlated_cols.iter() {
+                    check_alias_keeps_column_name(alias.input.schema(), col)?;
                     new_correlated_cols
                         .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
                 }
@@ -864,10 +891,7 @@ impl PullUpCorrelatedExpr {
             return GroupingSetsPullUp::NoColumnsToAdd;
         }
 
-        let has_empty_set = grouping_sets.iter().any(|grouping_set| match grouping_set {
-            GroupingSet::Rollup(_) | GroupingSet::Cube(_) => true,
-            GroupingSet::GroupingSets(sets) => sets.iter().any(|set| set.is_empty()),
-        });
+        let has_empty_set = aggregate_emits_on_empty_input(group_expr);
         // `GROUPING`/`GROUPING_ID` are resolved to bit tests on `__grouping_id`
         // above the aggregate by `ResolveGroupingFunction` before this rule
         // runs, so `aggregate.aggr_expr` never holds a `GROUPING` call by the
@@ -1200,6 +1224,27 @@ pub(crate) fn find_join_exprs(exprs: Vec<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
     (joins, others)
 }
 
+/// Returns an error if `col` would be renamed when `schema` is wrapped in a `SubqueryAlias`.
+///
+/// Wrapping `schema` in a `SubqueryAlias` renames fields that collide with
+/// earlier field names or aliases (`k:1`, ...), so qualifying `col` as
+/// `<alias>.<name>` refers to `col` only when its original name is preserved.
+/// See <https://github.com/apache/datafusion/issues/26234>.
+pub(crate) fn check_alias_keeps_column_name(
+    schema: &DFSchema,
+    col: &Column,
+) -> Result<()> {
+    let Some(index) = schema.maybe_index_of_column(col) else {
+        return Ok(());
+    };
+    if unique_field_aliases(schema.fields())[index].is_some() {
+        return plan_err!(
+            "Unsupported correlated subquery: correlated column {col} has the same name as an earlier column of the subquery output"
+        );
+    }
+    Ok(())
+}
+
 /// Combines join filters and qualifies their inner columns with the subquery alias.
 ///
 /// Aliasing must precede stripping outer references so inner and outer columns
@@ -1207,12 +1252,18 @@ pub(crate) fn find_join_exprs(exprs: Vec<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
 pub(crate) fn build_join_filter<'a>(
     join_filters: Vec<Expr>,
     correlated_cols: impl IntoIterator<Item = &'a Column>,
+    subquery_schema: &DFSchema,
     subquery_alias: &str,
 ) -> Result<Option<Expr>> {
     let correlated_cols = correlated_cols
         .into_iter()
         .cloned()
         .collect::<BTreeSet<_>>();
+
+    for col in &correlated_cols {
+        check_alias_keeps_column_name(subquery_schema, col)?;
+    }
+
     conjunction(join_filters)
         .map(|filter| {
             replace_qualified_name(filter, &correlated_cols, subquery_alias)
@@ -1425,16 +1476,36 @@ mod tests {
 
     #[test]
     fn test_build_join_filter() -> Result<()> {
-        assert_eq!(build_join_filter(vec![], [], "sq")?, None);
+        let empty_schema = DFSchema::empty();
+        assert_eq!(build_join_filter(vec![], [], &empty_schema, "sq")?, None);
 
         let column = Column::from("t.a");
         let outer = out_ref_col(DataType::Int32, "t.a");
         let filters = vec![col("t.a").eq(outer.clone()), outer.gt(lit(1))];
+        let schema = DFSchema::from_unqualified_fields(
+            vec![arrow::datatypes::Field::new("a", DataType::Int32, true)].into(),
+            std::collections::HashMap::new(),
+        )?;
 
         assert_eq!(
-            build_join_filter(filters, [&column, &column], "sq")?,
+            build_join_filter(filters.clone(), [&column, &column], &schema, "sq")?,
             Some(col("sq.a").eq(col("t.a")).and(col("t.a").gt(lit(1))))
         );
+
+        // Under the alias, `one.a` keeps the name `a` and `two.a` becomes `a:1`,
+        // so only `one.a` can be qualified as `sq.a`.
+        let field_a = Arc::new(arrow::datatypes::Field::new("a", DataType::Int32, true));
+        let dup_schema = DFSchema::new_with_metadata(
+            vec![
+                (Some("one".into()), Arc::clone(&field_a)),
+                (Some("two".into()), field_a),
+            ],
+            std::collections::HashMap::new(),
+        )?;
+        let one_a = Column::from("one.a");
+        let two_a = Column::from("two.a");
+        assert!(build_join_filter(vec![], [&one_a], &dup_schema, "sq").is_ok());
+        assert!(build_join_filter(vec![], [&two_a], &dup_schema, "sq").is_err());
         Ok(())
     }
 }

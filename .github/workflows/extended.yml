@@ -4,7 +4,7 @@
 
 # Each test command below is implemented with `cargo xtask` so developers can
 # run the same suite locally. Append `--explain` to print the underlying
-# `cargo test` invocation without running it. Job setup, the clean working tree
+# test command without running it. Job setup, the clean working tree
 # check, and `cargo clean` remain in this workflow.
 #
 # See `xtask/README.md` for details about DataFusion's `xtask` tooling.
@@ -45,9 +45,10 @@ jobs:
     # Long-running job: run in the merge queue, on release pushes, or manually.
     if: github.event_name != 'pull_request'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    timeout-minutes: 90
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: runs-on/action@284bff869d4a825f778ac7c38e50f1e31ef198fd  # v2.6.0
+      - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
@@ -65,14 +66,22 @@ jobs:
             run: |
               sudo apt-get update
               sudo apt-get install -y protobuf-compiler
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2  # v2.90.2
+        with:
+          tool: nextest
       # For debugging, test binaries can be large.
       - name: Show available disk space
         run: |
           df -h
-      - name: Run tests (excluding doctests)
+      - name: Run extended tests
         run: cargo xtask ci step test extended
-      - name: Run fuzzers with more iterations
+      - name: Run fuzz tests
         run: cargo xtask ci step test fuzz
+      # Migrate it to the above unified fuzz runner over time
+      # Tracker: https://github.com/apache/datafusion/issues/27082
+      - name: Run unmigrated fuzzers with more iterations
+        run: cargo xtask ci step test fuzz-legacy
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code
@@ -85,10 +94,11 @@ jobs:
     # Long-running job: run in the merge queue, on release pushes, or manually.
     if: github.event_name != 'pull_request'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    timeout-minutes: 60
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@284bff869d4a825f778ac7c38e50f1e31ef198fd  # v2.6.0
+      - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
@@ -109,10 +119,11 @@ jobs:
     # Long-running job: run in the merge queue, on release pushes, or manually.
     if: github.event_name != 'pull_request'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    timeout-minutes: 90
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@284bff869d4a825f778ac7c38e50f1e31ef198fd  # v2.6.0
+      - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - parallel:
           - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
             with:

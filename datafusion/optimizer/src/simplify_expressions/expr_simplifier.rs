@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::float_semantics::has_float_leaf;
 use datafusion_common::nested_struct::has_one_of_more_common_fields;
 use datafusion_common::{
     DFSchema, DataFusionError, Result, ScalarValue, exec_datafusion_err, internal_err,
@@ -625,8 +626,6 @@ impl ConstEvaluator {
         // added they can be checked for their ability to be evaluated
         // at plan time
         match expr {
-            // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[expect(deprecated)]
             Expr::AggregateFunction { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
@@ -637,7 +636,6 @@ impl ConstEvaluator {
             | Expr::ScalarSubquery(_)
             | Expr::WindowFunction { .. }
             | Expr::GroupingSet(_)
-            | Expr::Wildcard { .. }
             | Expr::Placeholder(_) => false,
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
@@ -2234,8 +2232,9 @@ fn are_inlist_and_eq_and_match_neg(
 fn inlists_have_set_comparable_literals(left: &Expr, right: &Expr) -> bool {
     match (left, right) {
         (Expr::InList(l), Expr::InList(r)) => l.list.iter().chain(&r.list).all(|item| {
-            item.as_literal()
-                .is_some_and(|value| !value.is_null() && !value.data_type().is_floating())
+            item.as_literal().is_some_and(|value| {
+                !value.is_null() && !has_float_leaf(&value.data_type())
+            })
         }),
         _ => false,
     }

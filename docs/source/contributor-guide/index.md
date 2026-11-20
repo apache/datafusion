@@ -128,9 +128,9 @@ Please ensure your PR follows the [testing guide](testing.md). In particular:
 
 ## AI-Assisted Contributions
 
-We welcome AI-assisted PRs, but not unreviewed "AI dumps". See the
-[AI Policy](ai-policy.md) page for what we expect from authors and reviewers
-who use AI tools.
+We welcome AI-assisted contributions with meaningful, task-specific human
+supervision. We do not accept contributions from fully autonomous agents or
+unreviewed "AI dumps". See the [AI Policy](ai-policy.md) for details.
 
 ## Conventional Commits & Labeling PRs
 
@@ -210,6 +210,18 @@ Commenting on the PR will remove the `stale` label.
 The automatic draft notification also counts as activity and restarts this timer.
 
 ## CI Runners
+
+### Job Timeouts
+
+Set `timeout-minutes` on every workflow job that runs on a runner. An explicit
+limit stops a hung job before GitHub Actions' six-hour default.
+
+Use recent successful runs to choose a limit. Allow extra time for cold caches
+and slower runners, including those used by forks. If a change increases a job's
+expected runtime, adjust its limit in the same pull request.
+
+For reusable workflows, set the limit on jobs in the called workflow. The merge
+queue has a separate deadline for required checks.
 
 ### Runs-On
 

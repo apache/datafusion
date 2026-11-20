@@ -10,14 +10,12 @@ use arrow::datatypes::{self as arrow_schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::Result;
-use datafusion::common::config::ConfigOptions;
-use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::{Expr, Operator, TableType};
 use datafusion::physical_expr::expressions::{binary, col, lit, negative};
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -25,8 +23,7 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::test::TestMemoryExec;
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
-    ExecutionPlanProperties, InputDistributionRequirements, PlanProperties,
-    ReplaceChildrenOptions,
+    InputDistributionRequirements, PlanProperties, ReplaceChildrenOptions,
 };
 use datafusion::prelude::SessionContext;
 
@@ -76,7 +73,12 @@ pub(super) fn register_custom_sort_pushdown(ctx: &SessionContext) -> Result<()> 
         TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
             .try_with_sort_information(vec![ordering])?,
     );
-    ctx.register_table("custom_ordered_input", Arc::new(CustomExec(input)))?;
+    // The custom node keeps the first two rows of its ordered input.
+    let limit = LocalLimitExec::new(input, 2);
+    ctx.register_table(
+        "custom_ordered_limit",
+        Arc::new(CustomExec(Arc::new(limit))),
+    )?;
 
     // The custom node hides the final sort key while selecting its first row.
     // Refining its visible ordering must still preserve that hidden key.
@@ -113,56 +115,6 @@ pub(super) fn register_custom_sort_pushdown(ctx: &SessionContext) -> Result<()> 
     let limit = GlobalLimitExec::new(input, 1, Some(1));
     ctx.register_table("custom_offset_limit", Arc::new(CustomExec(Arc::new(limit))))?;
     Ok(())
-}
-
-/// Replace a redundant sort on the ordered test input with a custom limit, so SQL
-/// `ORDER BY ... LIMIT` exercises the generic sort-pushdown path.
-#[derive(Debug)]
-pub(super) struct CustomLimitRule;
-
-impl PhysicalOptimizerRule for CustomLimitRule {
-    fn optimize(
-        &self,
-        plan: Arc<dyn ExecutionPlan>,
-        _: &ConfigOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan.transform_up(|plan| {
-            let Some(sort) = plan.downcast_ref::<SortExec>() else {
-                return Ok(Transformed::no(plan));
-            };
-            let Some(fetch) = sort.fetch() else {
-                return Ok(Transformed::no(plan));
-            };
-            let input = sort.input();
-            let source = input
-                .downcast_ref::<ProjectionExec>()
-                .map_or(input, |projection| projection.input());
-            let Some(source) = source.downcast_ref::<CustomExec>() else {
-                return Ok(Transformed::no(plan));
-            };
-            // Only the dedicated ordered source is a wrapped memory scan.
-            if !source.0.is::<TestMemoryExec>()
-                || input.output_partitioning().partition_count() != 1
-                || !input
-                    .equivalence_properties()
-                    .ordering_satisfy(sort.expr().clone())?
-            {
-                return Ok(Transformed::no(plan));
-            }
-            let limit = LocalLimitExec::new(Arc::clone(input), fetch);
-            let plan: Arc<dyn ExecutionPlan> = Arc::new(CustomExec(Arc::new(limit)));
-            Ok(Transformed::yes(plan))
-        })
-        .map(|transformed| transformed.data)
-    }
-
-    fn name(&self) -> &str {
-        "CustomLimitRule"
-    }
-
-    fn schema_check(&self) -> bool {
-        true
-    }
 }
 
 /// Exposes a native plan's children and properties under a distinct plan type,

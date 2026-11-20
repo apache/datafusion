@@ -283,6 +283,11 @@ impl TryFrom<&CsvOptionsProto> for CsvOptions {
             } else {
                 Some(proto.ignore_trailing_whitespace[0] != 0)
             },
+            match_columns_by_header: if proto.match_columns_by_header.is_empty() {
+                None
+            } else {
+                Some(proto.match_columns_by_header[0] != 0)
+            },
         })
     }
 }
@@ -362,6 +367,7 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
             pushdown_filters: proto.pushdown_filters,
             reorder_filters: proto.reorder_filters,
             force_filter_selections: proto.force_filter_selections,
+            enable_exact_reverse_scan: proto.enable_exact_reverse_scan,
             data_pagesize_limit: to_usize(
                 proto.data_pagesize_limit,
                 "data_pagesize_limit",

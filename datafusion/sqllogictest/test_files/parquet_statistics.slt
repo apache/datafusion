@@ -46,9 +46,9 @@ query TT
 EXPLAIN SELECT * FROM test_table WHERE column1 = 1;
 ----
 physical_plan
-01)FilterExec: column1@0 = 1, statistics=[Rows=Inexact(2), Bytes=Inexact(10), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Exact(0) Distinct=Inexact(1) ScanBytes=Inexact(10))]]
-02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2, statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0) ScanBytes=Inexact(40))]]
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/1.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)], statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0) ScanBytes=Inexact(40))]]
+01)FilterExec: column1@0 = 1, statistics=[Rows=Inexact(1), Bytes=Inexact(8), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Exact(0) Distinct=Inexact(1) ScanBytes=Inexact(8))]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, statistics=[Rows=Inexact(3), Bytes=Inexact(24), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(3)) Null=Inexact(0) ScanBytes=Inexact(24))]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)], statistics=[Rows=Inexact(3), Bytes=Inexact(24), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(3)) Null=Inexact(0) ScanBytes=Inexact(24))]]
 
 # cleanup
 statement ok
@@ -71,9 +71,9 @@ query TT
 EXPLAIN SELECT * FROM test_table WHERE column1 = 1;
 ----
 physical_plan
-01)FilterExec: column1@0 = 1, statistics=[Rows=Inexact(2), Bytes=Inexact(10), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Exact(0) Distinct=Inexact(1) ScanBytes=Inexact(10))]]
-02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2, statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0) ScanBytes=Inexact(40))]]
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/1.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)], statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0) ScanBytes=Inexact(40))]]
+01)FilterExec: column1@0 = 1, statistics=[Rows=Inexact(1), Bytes=Inexact(8), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Exact(0) Distinct=Inexact(1) ScanBytes=Inexact(8))]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, statistics=[Rows=Inexact(3), Bytes=Inexact(24), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(3)) Null=Inexact(0) ScanBytes=Inexact(24))]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)], statistics=[Rows=Inexact(3), Bytes=Inexact(24), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(3)) Null=Inexact(0) ScanBytes=Inexact(24))]]
 
 # cleanup
 statement ok
@@ -239,6 +239,30 @@ physical_plan
 
 statement ok
 DROP TABLE div_zero_endpoint;
+
+######
+# IN and NOT IN estimate the share of the column's distinct values they name
+######
+
+# The months 1 to 12, ten rows each. Parquet gives no distinct count, so the
+# values from min to max are the distinct values.
+statement ok
+COPY (SELECT CAST(value % 12 + 1 AS INT) AS m FROM generate_series(0, 119))
+TO 'test_files/scratch/parquet_statistics/months.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE months STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/months.parquet';
+
+query TT
+EXPLAIN SELECT m FROM months WHERE m NOT IN (1, 2, 3);
+----
+physical_plan
+01)FilterExec: m@0 NOT IN (SET) ([1, 2, 3]), statistics=[Rows=Inexact(90), Bytes=Inexact(360), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(12)) Null=Exact(0) ScanBytes=Inexact(360))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/months.parquet]]}, projection=[m], file_type=parquet, predicate=m@0 NOT IN (SET) ([1, 2, 3]), pruning_predicate=m_null_count@2 != row_count@3 AND (m_min@0 != 1 OR 1 != m_max@1) AND m_null_count@2 != row_count@3 AND (m_min@0 != 2 OR 2 != m_max@1) AND m_null_count@2 != row_count@3 AND (m_min@0 != 3 OR 3 != m_max@1), required_guarantees=[m not in (1, 2, 3)], statistics=[Rows=Inexact(120), Bytes=Inexact(480), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(12)) Null=Inexact(0) ScanBytes=Inexact(480))]]
+
+statement ok
+DROP TABLE months;
 
 ######
 # Aggregate statistics through casts

@@ -13,6 +13,7 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
     util::pretty::pretty_format_columns,
 };
+use datafusion_common::float_semantics;
 use datafusion_common::internal_datafusion_err;
 use datafusion_common::{
     Result, ScalarValue,
@@ -110,6 +111,19 @@ impl ColumnarValue {
         match self {
             ColumnarValue::Array(array_value) => array_value.data_type().clone(),
             ColumnarValue::Scalar(scalar_value) => scalar_value.data_type(),
+        }
+    }
+
+    /// Applies DataFusion's [float equality semantics] to this value, so that
+    /// `-0.0` becomes `+0.0`. Values without floats are returned unchanged.
+    ///
+    /// [float equality semantics]: datafusion_common::float_semantics
+    pub fn normalize(self) -> Self {
+        match self {
+            ColumnarValue::Array(array) => {
+                ColumnarValue::Array(float_semantics::normalize(array))
+            }
+            ColumnarValue::Scalar(scalar) => ColumnarValue::Scalar(scalar.normalize()),
         }
     }
 
@@ -454,9 +468,38 @@ impl fmt::Display for ColumnarValue {
 mod tests {
     use super::*;
     use arrow::{
-        array::{Date64Array, Int32Array, StructArray},
-        datatypes::{Field, Fields, TimeUnit},
+        array::{AsArray, Date64Array, Float64Array, Int32Array, StructArray},
+        datatypes::{Field, Fields, Float64Type, TimeUnit},
     };
+
+    #[test]
+    fn normalize_rewrites_negative_zero() {
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![-0.0, 1.0]));
+        let ColumnarValue::Array(normalized) = ColumnarValue::Array(array).normalize()
+        else {
+            panic!("expected an array");
+        };
+        let normalized = normalized.as_primitive::<Float64Type>();
+        assert_eq!(normalized.value(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(normalized.value(1), 1.0);
+
+        let scalar = ColumnarValue::Scalar(ScalarValue::Float64(Some(-0.0)));
+        let ColumnarValue::Scalar(ScalarValue::Float64(Some(normalized))) =
+            scalar.normalize()
+        else {
+            panic!("expected a float scalar");
+        };
+        assert_eq!(normalized.to_bits(), 0.0_f64.to_bits());
+
+        // Non-float values are returned as they are
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        let ColumnarValue::Array(normalized) =
+            ColumnarValue::Array(Arc::clone(&array)).normalize()
+        else {
+            panic!("expected an array");
+        };
+        assert!(Arc::ptr_eq(&normalized, &array));
+    }
 
     #[test]
     fn into_array_of_size() {

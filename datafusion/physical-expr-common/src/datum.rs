@@ -10,7 +10,7 @@ use arrow::compute::kernels::cmp::{
 };
 use arrow::compute::{SortOptions, ilike, like, nilike, nlike};
 use arrow::error::ArrowError;
-use datafusion_common::float_semantics::{has_float_leaf, normalize_floats};
+use datafusion_common::float_semantics::{self, has_float_leaf};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{arrow_datafusion_err, assert_or_internal_err, internal_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -76,16 +76,9 @@ pub fn apply_cmp(
         // floats, which treats `-0.0` and `+0.0` as distinct. Normalize float
         // operands so SQL semantics (`+0.0 == -0.0`) hold. No-op for
         // non-float types.
-        let lhs = normalize_cmp_input(lhs);
-        let rhs = normalize_cmp_input(rhs);
+        let lhs = lhs.clone().normalize();
+        let rhs = rhs.clone().normalize();
         apply(&lhs, &rhs, |l, r| Ok(Arc::new(f(l, r)?)))
-    }
-}
-
-fn normalize_cmp_input(cv: &ColumnarValue) -> ColumnarValue {
-    match cv {
-        ColumnarValue::Array(a) => ColumnarValue::Array(normalize_floats(a)),
-        ColumnarValue::Scalar(s) => ColumnarValue::Scalar(s.clone().normalize()),
     }
 }
 
@@ -134,7 +127,7 @@ pub fn compare_with_eq(
 
 fn normalize_nested_float_zero(array: &dyn Array) -> Option<ArrayRef> {
     has_float_leaf(array.data_type())
-        .then(|| normalize_floats(&make_array(array.to_data())))
+        .then(|| float_semantics::normalize(make_array(array.to_data())))
 }
 
 /// Compare on nested type List, Struct, and so on

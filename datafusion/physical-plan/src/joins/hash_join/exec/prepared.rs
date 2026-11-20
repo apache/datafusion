@@ -53,7 +53,7 @@ impl PreparedHashJoinBuild {
         self.build.batch.num_rows()
     }
 
-    /// Create independent mutable state for one consuming join.
+    /// Create independent mutable state for one consuming legacy join.
     pub(super) fn probe_data(&self, probe_threads: usize) -> JoinLeftData {
         JoinLeftData {
             build: Arc::clone(&self.build),
@@ -62,6 +62,12 @@ impl PreparedHashJoinBuild {
             visited_indices_bitmap: Mutex::new(BooleanBufferBuilder::new(0)),
             probe_completion: ProbeCompletion::new(probe_threads),
         }
+    }
+
+    /// Create independent [`RegularJoinLeftData`] for one consuming regular join.
+    /// Prepared builds currently support INNER only, so no unmatched-row state is needed.
+    pub(super) fn regular_probe_data(&self) -> RegularJoinLeftData {
+        RegularJoinLeftData::new(Arc::clone(&self.build), None, 0)
     }
 
     /// Validate the build descriptor and current execution restrictions without
@@ -233,14 +239,15 @@ pub(super) fn prepared_copy_bytes(batches: &[RecordBatch]) -> Result<usize> {
         .ok_or_else(overflow)
 }
 
-/// Bound hashes and flat-key null masks for the largest input batch.
+/// Bound hashes and flat-key null masks for the largest slice the hash map is
+/// filled from.
 pub(super) fn prepared_scratch_bytes(
-    max_batch_rows: usize,
+    chunk_rows: usize,
     num_keys: usize,
     null_equality: NullEquality,
 ) -> Result<usize> {
     let overflow = || exec_datafusion_err!("Prepared hash-join scratch size overflow");
-    let hash_bytes = max_batch_rows
+    let hash_bytes = chunk_rows
         .checked_mul(size_of::<u64>())
         .ok_or_else(overflow)?;
     if null_equality == NullEquality::NullEqualsNull {
@@ -248,7 +255,7 @@ pub(super) fn prepared_scratch_bytes(
     }
     // Allow one logical null mask per key plus the combined mask.
     let masks = num_keys.checked_add(1).ok_or_else(overflow)?;
-    let mask_bytes = max_batch_rows
+    let mask_bytes = chunk_rows
         .div_ceil(8)
         .checked_add(64)
         .and_then(|bytes| bytes.checked_mul(masks))
