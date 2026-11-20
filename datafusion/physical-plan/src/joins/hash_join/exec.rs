@@ -163,26 +163,22 @@ fn subtree_max_len(data: &ArrayData) -> usize {
 /// Decides whether the build side should be joined with an [`ArrayMap`]
 /// (perfect hash join), returning the `(min, max)` key range to build it over.
 ///
-/// On `Some`, the memory of the [`ArrayMap`] has already been added to
-/// `reservation`; the caller creates the map with [`ArrayMap::try_new`].
+/// `keys` are the join key types and `num_rows` the build side row count.
+/// The caller still checks the key values with [`array_map_admits_keys`],
+/// and creates the map with [`ArrayMap::try_new`].
 fn array_map_key_range(
     bounds: Option<&PartitionBounds>,
-    keys: &[ArrayRef],
-    reservation: &mut MemoryReservation,
+    keys: &[DataType],
+    num_rows: usize,
     perfect_hash_join_small_build_threshold: usize,
     perfect_hash_join_min_key_density: f64,
-    null_equality: NullEquality,
 ) -> Result<Option<(u64, u64)>> {
     let [key] = keys else {
         return Ok(None);
     };
     // `bounds` are also collected for dynamic filters, on any key type, so the
     // key type cannot be inferred from their presence.
-    if !ArrayMap::is_supported_type(key.data_type()) {
-        return Ok(None);
-    }
-
-    if null_equality == NullEquality::NullEqualsNull && key.null_count() > 0 {
+    if !ArrayMap::is_supported_type(key) {
         return Ok(None);
     }
 
@@ -213,7 +209,6 @@ fn array_map_key_range(
     };
 
     let range = ArrayMap::calculate_range(min_val, max_val);
-    let num_rows = key.len();
 
     // TODO: support create ArrayMap<u64>
     if num_rows >= u32::MAX as usize {
@@ -234,10 +229,13 @@ fn array_map_key_range(
         return Ok(None);
     }
 
-    let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_rows);
-    reservation.try_grow(mem_size)?;
-
     Ok(Some((min_val, max_val)))
+}
+
+/// Returns whether an [`ArrayMap`] can hold the build side join `keys`, whose
+/// key range [`array_map_key_range`] accepted.
+fn array_map_admits_keys(keys: &[ArrayRef], null_equality: NullEquality) -> bool {
+    !(null_equality == NullEquality::NullEqualsNull && keys[0].null_count() > 0)
 }
 
 /// Immutable build buffers and their durable reservation.
@@ -3163,20 +3161,23 @@ fn concat_copy_size(batches: &[RecordBatch]) -> Result<usize> {
 /// Concatenates the build side `batches` into a single batch, keeping
 /// `reservation` ahead of the actual memory usage.
 ///
-/// `inputs_reserved` is the memory `reservation` already holds for `batches`.
-/// The copy is reserved before it is made, and once `batches` are dropped the
-/// reservation is trimmed to the memory retained by the returned batch.
+/// `reservation` holds `inputs_reserved` for `batches` plus `reserved_ahead`
+/// more bytes. The copy is taken from `reserved_ahead`, and only the part of
+/// the copy that does not fit in it is reserved before the copy is made.
+/// Once `batches` are dropped, the reservation is set to the memory retained
+/// by the returned batch plus `keep_ahead`, for the allocations that follow.
 /// On success, `batches` contains that batch; errors retain all input rows.
 fn concat_build_batches(
     schema: &SchemaRef,
     batches: &mut Vec<RecordBatch>,
     inputs_reserved: usize,
+    reserved_ahead: usize,
+    keep_ahead: usize,
     reservation: &mut MemoryReservation,
     metrics: &BuildProbeJoinMetrics,
 ) -> Result<RecordBatch> {
     let copy_size = concat_copy_size(batches)?;
-    reservation.try_grow(copy_size)?;
-    metrics.build_mem_used.add(copy_size);
+    reservation.try_grow(copy_size.saturating_sub(reserved_ahead))?;
 
     let batch = concat_batches(schema, batches.iter())?;
     batches.clear();
@@ -3184,14 +3185,18 @@ fn concat_build_batches(
 
     // The inputs are gone: only hold on to what the concatenated batch retains,
     // which includes any buffers it still shares with the inputs.
-    let held = inputs_reserved + copy_size;
+    let held = inputs_reserved + reserved_ahead.max(copy_size);
     let retained = get_record_batch_memory_size(&batch);
-    if retained > held {
-        reservation.try_grow(retained - held)?;
-        metrics.build_mem_used.add(retained - held);
+    let target = retained + keep_ahead;
+    if target > held {
+        reservation.try_grow(target - held)?;
     } else {
-        reservation.shrink(held - retained);
-        metrics.build_mem_used.sub(held - retained);
+        reservation.shrink(held - target);
+    }
+    if retained > inputs_reserved {
+        metrics.build_mem_used.add(retained - inputs_reserved);
+    } else {
+        metrics.build_mem_used.sub(inputs_reserved - retained);
     }
 
     Ok(batch)
@@ -3218,11 +3223,14 @@ fn concat_build_batches(
 ///   bitmaps and correlation-scope maps are required
 ///
 /// # Memory Accounting
-/// Build batches are added to `reservation` as they arrive. They are then copied
-/// into a single batch, see [`concat_build_batches`]: the copy is reserved
-/// before it is made, and the reservation is trimmed to what the single batch
-/// retains once the input batches are dropped. Join key arrays that do not
-/// share the buffers of that batch are reserved as well.
+/// Build batches are added to `reservation` as they arrive. When the input
+/// ends, [`build_in_memory`] reserves the concatenated copy, the hash map and
+/// the visited bitmap in one request, before it allocates any of them. The
+/// input batches are dropped before the map is allocated, so that request is
+/// the larger of the copy and the structures that follow it, not their sum.
+/// See [`concat_build_batches`] for how the reservation then follows the
+/// single batch. Join key arrays that do not share the buffers of that batch
+/// are reserved as well.
 ///
 /// # Dynamic Filter Coordination
 /// When `should_compute_dynamic_filters` is true, this function computes the min/max bounds
@@ -3376,8 +3384,44 @@ fn build_in_memory(
 ) -> Result<CollectedBuild> {
     let is_phj_candidate = is_perfect_hash_join_candidate(on_left, schema)?;
 
+    // Reserve everything the build allocates from `num_rows` alone in one
+    // request, before the first allocation, so a full pool fails the build
+    // here rather than half way through it. Outside prepared mode the input
+    // batches are dropped before the map is allocated, so the copy and the
+    // map are never live together.
+    let key_types = on_left
+        .iter()
+        .map(|expr| expr.data_type(schema))
+        .collect::<Result<Vec<_>>>()?;
+    let array_map_range = array_map_key_range(
+        bounds.as_ref(),
+        &key_types,
+        num_rows,
+        config.execution.perfect_hash_join_small_build_threshold,
+        config.execution.perfect_hash_join_min_key_density,
+    )?;
+    let map_size = match array_map_range {
+        Some((min_val, max_val)) => {
+            ArrayMap::estimate_memory_size(min_val, max_val, num_rows)
+        }
+        None => join_hashmap_size(num_rows)?,
+    };
+    let bitmap_size = if with_visited_indices_bitmap {
+        bit_util::ceil(num_rows, 8)
+    } else {
+        0
+    };
+    let after_concat = map_size + bitmap_size;
+    let copy_size = if prepared {
+        0
+    } else {
+        concat_copy_size(batches)?
+    };
+    let reserved_ahead = copy_size.max(after_concat);
+    reservation.try_grow(reserved_ahead)?;
+
     // Bound before the map so error paths release the map before its charge.
-    let mut map_reservation = reservation.new_empty();
+    let map_reservation;
 
     // Merge all batches into a single batch, so we can directly index into the
     // arrays. Outside prepared mode the input batches are dropped here, before
@@ -3385,18 +3429,22 @@ fn build_in_memory(
     let batch = if prepared {
         concat_batches(schema, batches.iter())?
     } else {
-        concat_build_batches(schema, batches, input_bytes, &mut reservation, metrics)?
+        concat_build_batches(
+            schema,
+            batches,
+            input_bytes,
+            reserved_ahead,
+            after_concat,
+            &mut reservation,
+            metrics,
+        )?
     };
+    map_reservation = reservation.split(map_size);
     let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
 
-    let join_hash_map = if let Some((min_val, max_val)) = array_map_key_range(
-        bounds.as_ref(),
-        &left_values,
-        &mut map_reservation,
-        config.execution.perfect_hash_join_small_build_threshold,
-        config.execution.perfect_hash_join_min_key_density,
-        null_equality,
-    )? {
+    let array_map_range =
+        array_map_range.filter(|_| array_map_admits_keys(&left_values, null_equality));
+    let join_hash_map = if let Some((min_val, max_val)) = array_map_range {
         let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
 
         array_map_created_count.add(1);
@@ -3409,7 +3457,11 @@ fn build_in_memory(
         // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
         // `u64` indice variant
         // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
-        let mut hashmap = new_join_hashmap(num_rows, &mut map_reservation, metrics)?;
+        // Only NULL keys found after the concat rule out an array map.
+        let hashmap_size = join_hashmap_size(num_rows)?;
+        map_reservation.try_resize(hashmap_size)?;
+        metrics.build_mem_used.add(hashmap_size);
+        let mut hashmap = alloc_join_hashmap(num_rows);
 
         // Every slice shares everything beneath a dictionary or list view,
         // at any depth of a key, which `create_hashes` hashes on each call:
@@ -3482,8 +3534,6 @@ fn build_in_memory(
     metrics.build_mem_used.add(keys_size);
 
     let allocate_bitmap = || -> Result<BooleanBufferBuilder> {
-        let bitmap_size = bit_util::ceil(batch.num_rows(), 8);
-        reservation.try_grow(bitmap_size)?;
         metrics.build_mem_used.add(bitmap_size);
 
         let mut bitmap = BooleanBufferBuilder::new(batch.num_rows());
@@ -3491,7 +3541,7 @@ fn build_in_memory(
         Ok(bitmap)
     };
 
-    // Reserve additional memory for visited indices bitmap and create shared builder
+    // The visited indices bitmap was reserved with the map
     let visited = with_visited_indices_bitmap
         .then(allocate_bitmap)
         .transpose()?;
@@ -4636,6 +4686,109 @@ mod tests {
             ");
         }
 
+        Ok(())
+    }
+
+    /// Records the size of every `try_grow` that reaches the pool. It skips
+    /// requests for zero bytes, which cannot fail.
+    #[derive(Debug, Default)]
+    struct TryGrowRecorder {
+        inner: UnboundedMemoryPool,
+        try_grows: Mutex<Vec<usize>>,
+    }
+
+    impl fmt::Display for TryGrowRecorder {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("TryGrowRecorder")
+        }
+    }
+
+    impl MemoryPool for TryGrowRecorder {
+        fn name(&self) -> &str {
+            "TryGrowRecorder"
+        }
+
+        fn grow(&self, reservation: &MemoryReservation, additional: usize) {
+            self.inner.grow(reservation, additional);
+        }
+
+        fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
+            self.inner.shrink(reservation, shrink);
+        }
+
+        fn try_grow(
+            &self,
+            reservation: &MemoryReservation,
+            additional: usize,
+        ) -> Result<()> {
+            self.inner.try_grow(reservation, additional)?;
+            if additional > 0 {
+                self.try_grows.lock().push(additional);
+            }
+            Ok(())
+        }
+
+        fn reserved(&self) -> usize {
+            self.inner.reserved()
+        }
+    }
+
+    /// After the input ends, the build reserves its copy, hash map and visited
+    /// bitmap in a single `try_grow`, and every later allocation is taken from
+    /// it. That request is exactly what the finished build holds beyond the
+    /// input, or the copy if the copy is larger.
+    #[tokio::test]
+    async fn collect_left_input_reserves_build_once() -> Result<()> {
+        let values = (0..1000).collect::<Vec<i32>>();
+        let batches = (0..4)
+            .map(|_| build_table_i32(("a1", &values), ("b1", &values), ("c1", &values)))
+            .collect::<Vec<_>>();
+        let schema = batches[0].schema();
+        let mut counter = RecordBatchMemoryCounter::new();
+        let input_sizes: Vec<usize> =
+            batches.iter().map(|b| counter.count_batch(b)).collect();
+        let num_rows = 4000;
+        let copy_size = concat_copy_size(&batches)?;
+        let map_size = join_hashmap_size(num_rows)?;
+        let bitmap_size = num_rows / 8;
+        assert!(copy_size < map_size + bitmap_size);
+
+        let exec = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let stream = exec.execute(0, Arc::new(TaskContext::default()))?;
+        let recorder = Arc::new(TryGrowRecorder::default());
+        let pool: Arc<dyn MemoryPool> = Arc::<TryGrowRecorder>::clone(&recorder);
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        // Two keys rule out an array map, and plain columns share the batch.
+        let on_left: Vec<PhysicalExprRef> = vec![
+            Arc::new(Column::new_with_schema("a1", &schema)?),
+            Arc::new(Column::new_with_schema("b1", &schema)?),
+        ];
+        let build = collect_left_input(
+            RandomState::with_seed(0),
+            stream,
+            on_left,
+            metrics.clone(),
+            MemoryConsumer::new("HashJoinInput").register(&pool),
+            true,
+            1,
+            false,
+            Arc::new(ConfigOptions::default()),
+            NullEquality::NullEqualsNothing,
+            None,
+            Count::new(),
+            BuildMode::Ordinary,
+        )
+        .await?
+        .into_legacy_left_data();
+
+        let mut expected = input_sizes;
+        expected.push(map_size + bitmap_size);
+        assert_eq!(*recorder.try_grows.lock(), expected);
+        let retained = get_record_batch_memory_size(build.batch());
+        assert_eq!(pool.reserved(), retained + map_size + bitmap_size);
+        assert_eq!(metrics.build_mem_used.value(), pool.reserved());
+        drop(build);
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 
@@ -8867,6 +9020,8 @@ mod tests {
             &schema,
             &mut batches.clone(),
             inputs_reserved,
+            0,
+            0,
             &mut reservation,
             &metrics,
         )?;
@@ -8890,6 +9045,8 @@ mod tests {
             &schema,
             &mut batches,
             inputs_reserved,
+            0,
+            0,
             &mut reservation,
             &metrics,
         )
@@ -8906,6 +9063,8 @@ mod tests {
             &schema,
             &mut batches,
             inputs_reserved,
+            0,
+            0,
             &mut reservation,
             &metrics,
         )?;
@@ -8929,6 +9088,8 @@ mod tests {
             &schema,
             &mut batches,
             inputs_reserved,
+            0,
+            0,
             &mut reservation,
             &metrics,
         )?;
@@ -8961,6 +9122,8 @@ mod tests {
             &schema,
             &mut batches,
             inputs_reserved,
+            0,
+            0,
             &mut reservation,
             &metrics,
         )?;
