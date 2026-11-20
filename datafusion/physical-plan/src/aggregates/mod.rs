@@ -1597,8 +1597,10 @@ impl AggregateExec {
         // - aggregations sometimes also preserve invariants such as min, max...
 
         // A partial aggregate can emit a group more than once.
-        let use_range_bounds = self.group_by().is_single()
-            && self.mode.output_mode() == AggregateOutputMode::Final;
+        let plain_group_by = self.group_by().is_single();
+        let use_range_bounds =
+            plain_group_by && self.mode.output_mode() == AggregateOutputMode::Final;
+        let has_one_final_key = use_range_bounds && self.group_by().expr.len() == 1;
         let mut final_group_count = use_range_bounds.then_some(FinalGroupCount {
             groups: 1,
             upper_bound_only: false,
@@ -1626,12 +1628,15 @@ impl AggregateExec {
                             || key.upper_bound_only,
                     })
                 });
-                if self.group_by().is_single() {
-                    // All NULL keys form one group. A partial aggregate can
-                    // emit it more than once, and a TopK limit can drop it.
+                if plain_group_by {
+                    // Partial aggregates can repeat groups, and other keys can
+                    // distinguish several groups with a NULL in this key.
                     column_statistics[idx].null_count = match key_stats.null_count {
                         Precision::Exact(0) => Precision::Exact(0),
-                        count => count.map(|n| n.min(1)).to_inexact(),
+                        count if has_one_final_key => {
+                            count.map(|n| n.min(1)).to_inexact()
+                        }
+                        _ => Precision::Absent,
                     };
                 }
                 column_statistics[idx].max_value = key_stats.max_value;
@@ -9482,8 +9487,8 @@ mod tests {
         Ok(())
     }
 
-    /// The partial aggregate output keeps whether a key has NULLs, so the final
-    /// aggregate adds a NULL group only when Single mode does.
+    /// Exact zero survives partial aggregation so the final aggregate can
+    /// rule out a NULL group.
     #[test]
     fn test_aggregate_stats_null_count_through_partial() -> Result<()> {
         use datafusion_common::ColumnStatistics;
@@ -9492,7 +9497,7 @@ mod tests {
         let group_by = simple_group_by(&schema, &["a"]);
         for (null_count, partial_null_count, expected_num_rows) in [
             (Precision::Exact(0), Precision::Exact(0), 7),
-            (Precision::Exact(5), Precision::Inexact(1), 8),
+            (Precision::Exact(5), Precision::Absent, 8),
         ] {
             let input_stats = Statistics {
                 num_rows: Precision::Exact(1_000_000),
@@ -9528,6 +9533,34 @@ mod tests {
             assert_eq!(stats.num_rows, Precision::Inexact(expected_num_rows));
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_stats_null_count_with_multiple_keys() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let input_stats = Statistics {
+            num_rows: Precision::Exact(200),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics::new_unknown().with_null_count(Precision::Exact(100)),
+                ColumnStatistics::new_unknown().with_null_count(Precision::Exact(0)),
+            ],
+        };
+        let aggregate = build_test_aggregate_with_mode(
+            &schema,
+            input_stats,
+            simple_group_by(&schema, &["a", "b"]),
+            None,
+            AggregateMode::Single,
+        )?;
+        let stats =
+            StatisticsContext::new().compute(&aggregate, &StatisticsArgs::new())?;
+        assert_eq!(stats.column_statistics[0].null_count, Precision::Absent);
+        assert_eq!(stats.column_statistics[1].null_count, Precision::Exact(0));
         Ok(())
     }
 

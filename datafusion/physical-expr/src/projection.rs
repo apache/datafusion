@@ -988,10 +988,9 @@ fn project_column_statistics_through_expr(
 }
 
 /// Bounds `expr` by [`PhysicalExpr::evaluate_bounds`] over the bounds of its
-/// inputs. These bounds enclose the non-NULL values of `expr`, but they can be
-/// loose: `sin` reports `[-1, 1]` for every input. The bounds are therefore
-/// inexact, so that they never answer `MIN` or `MAX` queries. All other
-/// statistics are unknown.
+/// inputs. The bounds are inexact, so that they never answer `MIN` or `MAX`
+/// queries. Floating-point intervals cannot represent NaN, which can match
+/// in SQL comparisons, so they are excluded from derived statistics here.
 fn expression_bounds_statistics(
     expr: &dyn PhysicalExpr,
     column_stats: &[ColumnStatistics],
@@ -1007,7 +1006,11 @@ fn expression_bounds_statistics(
                 input_schema,
             );
             match (stats.min_value.get_value(), stats.max_value.get_value()) {
-                (Some(min), Some(max)) if !min.is_null() && !max.is_null() => {
+                (Some(min), Some(max))
+                    if !min.is_null()
+                        && !max.is_null()
+                        && !min.data_type().is_floating() =>
+                {
                     Interval::try_new(min.clone(), max.clone()).ok()
                 }
                 _ => None,
@@ -1021,7 +1024,7 @@ fn expression_bounds_statistics(
             expr.evaluate_bounds(&input_bounds).ok()
         });
     match bounds {
-        Some(bounds) if !bounds.is_unbounded() => {
+        Some(bounds) if !bounds.is_unbounded() && !bounds.data_type().is_floating() => {
             let (min, max) = bounds.into_bounds();
             ColumnStatistics::new_unknown()
                 .with_min_value(Precision::Inexact(min))
