@@ -90,6 +90,9 @@ const SORT_MERGE_JOIN: &str = "https://github.com/apache/datafusion/issues/26115
 /// - No math on float columns, which can turn `0.0` into `-0.0`, and no
 ///   functions that can tell the two apart, like `1 / a`.
 /// - `.ordered()` only when the ORDER BY fixes the order of every row.
+/// - Numbers compared with `a32` or `a16` are written with `arrow_cast`.
+///   Written as plain `0.0`, they would turn the column into a bigger float
+///   type, and the query would no longer test that column's own type.
 pub const QUERIES: &[Query] = &[
     // Sort
     query("order_by_a_b", "SELECT a, b FROM {t} ORDER BY a, b")
@@ -99,6 +102,9 @@ pub const QUERIES: &[Query] = &[
         .ordered()
         .fails(FLOAT_SEMANTICS),
     query("order_by_k", "SELECT id FROM {t} ORDER BY k, id")
+        .ordered()
+        .fails(FLOAT_SEMANTICS),
+    query("order_by_a32_b", "SELECT a32, b FROM {t} ORDER BY a32, b")
         .ordered()
         .fails(FLOAT_SEMANTICS),
     query("order_by_a16_b", "SELECT a16, b FROM {t} ORDER BY a16, b")
@@ -126,6 +132,9 @@ pub const QUERIES: &[Query] = &[
     // Aggregate
     query("group_by_a", "SELECT count(*) FROM {t} GROUP BY a"),
     query("count_distinct", "SELECT count(DISTINCT a) FROM {t}"),
+    query("group_by_a32", "SELECT count(*) FROM {t} GROUP BY a32"),
+    query("group_by_a32_g", "SELECT g, count(*) FROM {t} GROUP BY a32, g"),
+    query("count_distinct_a32", "SELECT count(DISTINCT a32) FROM {t}"),
     query("group_by_a16", "SELECT count(*) FROM {t} GROUP BY a16"),
     query("group_by_a16_g", "SELECT g, count(*) FROM {t} GROUP BY a16, g"),
     query("count_distinct_a16", "SELECT count(DISTINCT a16) FROM {t}"),
@@ -143,20 +152,23 @@ pub const QUERIES: &[Query] = &[
     query("min_max_k", "SELECT min(k), max(k) FROM {t}").fails(FLOAT_SEMANTICS),
     // Join
     query("join_a", "SELECT count(*) FROM {t} x JOIN {t} y ON x.a = y.a"),
+    query("join_a32", "SELECT count(*) FROM {t} x JOIN {t} y ON x.a32 = y.a32"),
     query("join_a16", "SELECT count(*) FROM {t} x JOIN {t} y ON x.a16 = y.a16"),
     query("join_k", "SELECT count(*) FROM {t} x JOIN {t} y ON x.k = y.k")
         .fails_when(sort_merge_join, SORT_MERGE_JOIN),
     // Expression
     query("in_list", "SELECT id, a IN ({z}, 1.0) FROM {t}"),
-    query("in_list_f32", "SELECT id, a32 IN ({z}, 1.0) FROM {t}"),
+    query(
+        "in_list_f32",
+        "SELECT id, a32 IN (arrow_cast({z}, 'Float32'), arrow_cast(1.0, 'Float32'), \
+         arrow_cast(2.0, 'Float32'), arrow_cast(3.0, 'Float32')) FROM {t}",
+    ),
     query(
         "in_list_long",
         "SELECT id, a IN ({z}, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, \
          11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0, \
          23.0, 24.0, 25.0) FROM {t}",
     ),
-    // Written as plain `0.0`, the numbers would turn `a16` into a bigger
-    // float type, so these queries would never test `Float16` itself.
     query(
         "in_list_f16",
         "SELECT id, a16 IN (arrow_cast({z}, 'Float16'), arrow_cast(1.0, 'Float16'), \
@@ -174,6 +186,12 @@ pub const QUERIES: &[Query] = &[
     query(
         "case_when",
         "SELECT id, CASE a WHEN {z} THEN 'eq' ELSE 'ne' END FROM {t}",
+    )
+    .fails(FLOAT_SEMANTICS),
+    query(
+        "case_when_f32",
+        "SELECT id, CASE a32 WHEN arrow_cast({z}, 'Float32') THEN 'zero' \
+         WHEN arrow_cast(1.0, 'Float32') THEN 'one' ELSE 'other' END FROM {t}",
     )
     .fails(FLOAT_SEMANTICS),
     query(
