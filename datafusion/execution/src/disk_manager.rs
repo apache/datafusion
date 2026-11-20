@@ -17,7 +17,7 @@ use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use tempfile::{Builder, NamedTempFile, TempDir};
+use tempfile::{Builder, TempDir, TempPath};
 pub const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
 pub const DEFAULT_MAX_SPILL_MERGE_FAN_IN: usize = 0;
 
@@ -369,11 +369,17 @@ impl DiskManager {
         self.active_files_count.fetch_add(1, Ordering::Relaxed);
         Ok(Arc::new(RefCountedTempFile {
             parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
+            // Keep only the path. A held `NamedTempFile` keeps one file
+            // descriptor open per spill file, so an operator that holds many
+            // spill runs (for example a hash aggregate before its final merge)
+            // can exhaust the process file limit. Writers and readers open the
+            // path on demand instead.
             tempfile: Arc::new(
                 Builder::new()
                     .prefix(&escape_for_temp_file_name_prefix(request_description))
                     .tempfile_in(local_dirs[dir_index].as_ref())
-                    .map_err(DataFusionError::IoError)?,
+                    .map_err(DataFusionError::IoError)?
+                    .into_temp_path(),
             ),
             current_file_disk_usage: Arc::new(AtomicU64::new(0)),
             disk_manager: Arc::clone(self),
@@ -381,8 +387,12 @@ impl DiskManager {
     }
 }
 
-/// A wrapper around a [`NamedTempFile`] that also contains
+/// A wrapper around a temporary file path ([`TempPath`]) that also contains
 /// a reference to its parent temporary directory.
+///
+/// This type does not keep the file open. It holds no file descriptor, so
+/// the number of live spill files does not count against the process file
+/// limit. Only open writers and read streams hold descriptors.
 ///
 /// This type is Clone-able, allowing multiple references to the same underlying file.
 /// The file is deleted only when the last reference is dropped.
@@ -395,10 +405,11 @@ impl DiskManager {
 #[derive(Debug)]
 pub struct RefCountedTempFile {
     /// The reference to the directory in which temporary files are created to ensure
-    /// it is not cleaned up prior to the NamedTempFile
+    /// it is not cleaned up prior to the temporary file
     parent_temp_dir: Arc<TempDir>,
-    /// The underlying temporary file, wrapped in Arc to allow cloning
-    tempfile: Arc<NamedTempFile>,
+    /// The path of the underlying temporary file, wrapped in Arc to allow
+    /// cloning. Dropping the last reference deletes the file.
+    tempfile: Arc<TempPath>,
     /// Tracks the current disk usage of this temporary file.
     ///
     /// This is wrapped in `Arc<AtomicU64>` so that all clones share the same
@@ -421,11 +432,7 @@ impl Clone for RefCountedTempFile {
 
 impl RefCountedTempFile {
     pub fn path(&self) -> &Path {
-        self.tempfile.path()
-    }
-
-    pub fn inner(&self) -> &NamedTempFile {
-        self.tempfile.as_ref()
+        &self.tempfile
     }
 
     fn current_disk_usage(&self) -> u64 {
@@ -523,7 +530,7 @@ impl SpillWriter for FileSpillWriter {
 
 impl SpillFile for RefCountedTempFile {
     fn path(&self) -> Option<&Path> {
-        Some(self.tempfile.path())
+        Some(&self.tempfile)
     }
 
     fn size(&self) -> Option<u64> {
@@ -572,10 +579,11 @@ impl SpillFile for RefCountedTempFile {
     }
 
     fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
-        let file = self
-            .tempfile
-            .as_file()
-            .try_clone()
+        // Append mode keeps the shared-offset behavior of several writers
+        // on one file.
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&*self.tempfile)
             .map_err(DataFusionError::IoError)?;
         Ok(Box::new(FileSpillWriter {
             file,
@@ -618,6 +626,56 @@ fn escape_for_temp_file_name_prefix(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Counts the open file descriptors of this process.
+    #[cfg(unix)]
+    fn open_fd_count() -> usize {
+        std::fs::read_dir("/dev/fd").unwrap().count()
+    }
+
+    /// Live spill files must not hold file descriptors. Only open writers and
+    /// readers may hold one, so the descriptor count stays bounded however
+    /// many spill files an operator keeps.
+    #[cfg(unix)]
+    #[test]
+    fn live_spill_files_hold_no_file_descriptors() -> Result<()> {
+        use std::io::Write;
+        // More than the macOS default soft limit of 256 descriptors.
+        const FILES: usize = 400;
+        // Other tests in this process can open files concurrently.
+        const SLACK: usize = 64;
+
+        let dm = Arc::new(DiskManagerBuilder::default().build()?);
+        // Create the temp directory before the first count.
+        drop(dm.create_tmp_file("warmup")?);
+        let before = open_fd_count();
+
+        let mut files = Vec::with_capacity(FILES);
+        for _ in 0..FILES {
+            let file = dm.create_tmp_file("fd bound")?;
+            let mut writer = file.open_writer()?;
+            writer.write_all(b"spilled")?;
+            writer.finish()?;
+            drop(writer);
+            files.push(file);
+        }
+
+        let held = open_fd_count().saturating_sub(before);
+        assert!(
+            held < SLACK,
+            "{FILES} live spill files hold {held} file descriptors"
+        );
+        assert_eq!(dm.spilling_progress().active_files_count, FILES);
+        for file in &files {
+            assert_eq!(std::fs::read(file.path().unwrap())?, b"spilled");
+        }
+
+        let paths: Vec<_> = files.iter().map(|f| f.path().unwrap().to_owned()).collect();
+        drop(files);
+        assert_eq!(dm.spilling_progress().active_files_count, 0);
+        assert!(paths.iter().all(|p| !p.exists()));
+        Ok(())
+    }
 
     #[test]
     fn lazy_temp_dir_creation() -> Result<()> {
