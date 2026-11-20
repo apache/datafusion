@@ -28,6 +28,7 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 futures = { workspace = true }
+half = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 test-utils = { path = "../../test-utils" }

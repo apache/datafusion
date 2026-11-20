@@ -2439,6 +2439,7 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-plan",
  "futures",
+ "half",
  "parking_lot 0.13.0",
  "rand 0.9.4",
  "test-utils",

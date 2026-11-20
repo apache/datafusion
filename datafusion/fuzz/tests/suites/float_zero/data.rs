@@ -13,10 +13,12 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, AsArray, Float32Array, Float64Array, Int64Array, ListArray, RecordBatch,
+    ArrayRef, AsArray, Float16Array, Float32Array, Float64Array, Int64Array, ListArray,
+    RecordBatch,
 };
-use arrow::datatypes::{DataType, Float32Type, Float64Type, SchemaRef};
+use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type, SchemaRef};
 use datafusion_common::float_semantics::normalize;
+use half::f16;
 use rand::Rng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -34,6 +36,7 @@ struct Columns {
     g: Vec<i64>,
     a: Vec<Option<f64>>,
     a32: Vec<Option<f32>>,
+    a16: Vec<Option<f16>>,
     k: Vec<Option<Vec<Option<f64>>>>,
 }
 
@@ -46,6 +49,7 @@ impl Columns {
             ("g", Arc::new(Int64Array::from(self.g))),
             ("a", Arc::new(Float64Array::from(self.a))),
             ("a32", Arc::new(Float32Array::from(self.a32))),
+            ("a16", Arc::new(Float16Array::from(self.a16))),
             ("k", Arc::new(k)),
         ])
         .unwrap()
@@ -70,6 +74,11 @@ fn has_negative_zero(array: &ArrayRef) -> bool {
             .iter()
             .flatten()
             .any(|v| v == 0.0 && v.is_sign_negative()),
+        DataType::Float16 => array
+            .as_primitive::<Float16Type>()
+            .iter()
+            .flatten()
+            .any(|v| v == f16::ZERO && v.is_sign_negative()),
         DataType::List(_) => array
             .as_list::<i32>()
             .iter()
@@ -90,6 +99,12 @@ pub fn fixed() -> Dataset {
         g: vec![1, 1, 1, 1],
         a: vec![Some(z), Some(0.0), Some(1.0), Some(z)],
         a32: vec![Some(-0.0), Some(0.0), Some(1.0), Some(-0.0)],
+        a16: vec![
+            Some(f16::NEG_ZERO),
+            Some(f16::ZERO),
+            Some(f16::ONE),
+            Some(f16::NEG_ZERO),
+        ],
         k: vec![
             Some(vec![Some(z), Some(1.0)]),
             Some(vec![Some(0.0), Some(0.0)]),
@@ -122,7 +137,7 @@ fn pool_value(rng: &mut impl Rng) -> Option<f64> {
 }
 
 /// A random table of 8 to 128 rows, split into 1 to 3 partitions. Tries
-/// again until `a`, `a32` and `k` each hold a `-0.0`.
+/// again until `a`, `a32`, `a16` and `k` each hold a `-0.0`.
 pub fn random(rng: &mut StdRng) -> Dataset {
     let num_rows = rng.random_range(8..=128);
     let raw = loop {
@@ -136,6 +151,9 @@ pub fn random(rng: &mut StdRng) -> Dataset {
             a32: (0..num_rows)
                 .map(|_| pool_value(rng).map(|v| v as f32))
                 .collect(),
+            a16: (0..num_rows)
+                .map(|_| pool_value(rng).map(f16::from_f64))
+                .collect(),
             k: (0..num_rows)
                 .map(|_| {
                     let len = rng.random_range(0..5);
@@ -145,7 +163,7 @@ pub fn random(rng: &mut StdRng) -> Dataset {
                 .collect(),
         }
         .into_batch();
-        if ["a", "a32", "k"]
+        if ["a", "a32", "a16", "k"]
             .iter()
             .all(|name| has_negative_zero(raw.column_by_name(name).unwrap()))
         {
@@ -189,6 +207,9 @@ fn split(
 fn has_negative_zero_column_types() {
     let f64s = |v: f64| -> ArrayRef { Arc::new(Float64Array::from(vec![None, Some(v)])) };
     let f32s = |v: f32| -> ArrayRef { Arc::new(Float32Array::from(vec![None, Some(v)])) };
+    let f16s = |v: f64| -> ArrayRef {
+        Arc::new(Float16Array::from(vec![None, Some(f16::from_f64(v))]))
+    };
     let list = |v: f64| -> ArrayRef {
         Arc::new(ListArray::from_iter_primitive::<Float64Type, _, _>([
             None,
@@ -198,9 +219,11 @@ fn has_negative_zero_column_types() {
     for v in [0.0, 1.0, f64::NAN] {
         assert!(!has_negative_zero(&f64s(v)), "{v}");
         assert!(!has_negative_zero(&f32s(v as f32)), "{v}");
+        assert!(!has_negative_zero(&f16s(v)), "{v}");
         assert!(!has_negative_zero(&list(v)), "{v}");
     }
     assert!(has_negative_zero(&f64s(-0.0)));
     assert!(has_negative_zero(&f32s(-0.0)));
+    assert!(has_negative_zero(&f16s(-0.0)));
     assert!(has_negative_zero(&list(-0.0)));
 }

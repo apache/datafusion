@@ -101,6 +101,9 @@ pub const QUERIES: &[Query] = &[
     query("order_by_k", "SELECT id FROM {t} ORDER BY k, id")
         .ordered()
         .fails(FLOAT_SEMANTICS),
+    query("order_by_a16_b", "SELECT a16, b FROM {t} ORDER BY a16, b")
+        .ordered()
+        .fails(FLOAT_SEMANTICS),
     // Window
     query("rank", "SELECT id, rank() OVER (ORDER BY a) FROM {t}").fails(WINDOW),
     query(
@@ -123,6 +126,9 @@ pub const QUERIES: &[Query] = &[
     // Aggregate
     query("group_by_a", "SELECT count(*) FROM {t} GROUP BY a"),
     query("count_distinct", "SELECT count(DISTINCT a) FROM {t}"),
+    query("group_by_a16", "SELECT count(*) FROM {t} GROUP BY a16"),
+    query("group_by_a16_g", "SELECT g, count(*) FROM {t} GROUP BY a16, g"),
+    query("count_distinct_a16", "SELECT count(DISTINCT a16) FROM {t}"),
     query(
         "count_distinct_two",
         "SELECT count(DISTINCT a), count(DISTINCT b) FROM {t}",
@@ -137,6 +143,7 @@ pub const QUERIES: &[Query] = &[
     query("min_max_k", "SELECT min(k), max(k) FROM {t}").fails(FLOAT_SEMANTICS),
     // Join
     query("join_a", "SELECT count(*) FROM {t} x JOIN {t} y ON x.a = y.a"),
+    query("join_a16", "SELECT count(*) FROM {t} x JOIN {t} y ON x.a16 = y.a16"),
     query("join_k", "SELECT count(*) FROM {t} x JOIN {t} y ON x.k = y.k")
         .fails_when(sort_merge_join, SORT_MERGE_JOIN),
     // Expression
@@ -148,9 +155,31 @@ pub const QUERIES: &[Query] = &[
          11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0, \
          23.0, 24.0, 25.0) FROM {t}",
     ),
+    // Written as plain `0.0`, the numbers would turn `a16` into a bigger
+    // float type, so these queries would never test `Float16` itself.
+    query(
+        "in_list_f16",
+        "SELECT id, a16 IN (arrow_cast({z}, 'Float16'), arrow_cast(1.0, 'Float16'), \
+         arrow_cast(2.0, 'Float16'), arrow_cast(3.0, 'Float16')) FROM {t}",
+    ),
+    query(
+        "in_list_f16_long",
+        "SELECT id, a16 IN (arrow_cast({z}, 'Float16'), arrow_cast(1.0, 'Float16'), \
+         arrow_cast(2.0, 'Float16'), arrow_cast(3.0, 'Float16'), \
+         arrow_cast(4.0, 'Float16'), arrow_cast(5.0, 'Float16'), \
+         arrow_cast(6.0, 'Float16'), arrow_cast(7.0, 'Float16'), \
+         arrow_cast(8.0, 'Float16'), arrow_cast(9.0, 'Float16'), \
+         arrow_cast(10.0, 'Float16'), arrow_cast(11.0, 'Float16')) FROM {t}",
+    ),
     query(
         "case_when",
         "SELECT id, CASE a WHEN {z} THEN 'eq' ELSE 'ne' END FROM {t}",
+    )
+    .fails(FLOAT_SEMANTICS),
+    query(
+        "case_when_f16",
+        "SELECT id, CASE a16 WHEN arrow_cast({z}, 'Float16') THEN 'zero' \
+         WHEN arrow_cast(1.0, 'Float16') THEN 'one' ELSE 'other' END FROM {t}",
     )
     .fails(FLOAT_SEMANTICS),
     query("nullif", "SELECT id, nullif(a, {z}) FROM {t}").fails(FLOAT_SEMANTICS),
