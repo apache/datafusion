@@ -675,6 +675,68 @@ fn test_cli_wide_result_set_no_crash() {
     assert_cmd_snapshot!(cmd);
 }
 
+#[test]
+fn cli_pset_target_width() {
+    let input = r"\pset target_width
+\pset target_width 80
+\pset target_width invalid
+\pset target_width
+\pset target_width auto
+\pset target_width inf
+\pset target_width
+\q
+";
+    assert_cmd_snapshot!(cli().arg("-q").env_clear().pass_stdin(input));
+}
+
+#[test]
+fn cli_output_respects_target_width() {
+    let output = cli()
+        .args([
+            "-q",
+            "--target-width",
+            "80",
+            "--maxrows",
+            "2",
+            "--command",
+            "SET datafusion.format.types_info = true; \
+             SELECT 1 AS n, 'hello' AS s; \
+             SELECT * FROM generate_series(1, 5); \
+             SELECT '      indented text ' || repeat('wrap ', 40) AS value; \
+             EXPLAIN FORMAT PGJSON SELECT repeat('abcdefghij', 20) AS value; \
+             SET datafusion.explain.format = 'indent'; \
+             EXPLAIN VERBOSE SELECT repeat('abcdefghij', 20) AS value",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(output.status.success(), "{stdout}");
+    assert!(
+        stdout.lines().all(|line| line.chars().count() <= 80),
+        "{stdout}"
+    );
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.starts_with("| ."))
+            .count(),
+        3
+    );
+    for expected in [
+        "| Int64 | Utf8",
+        "|       indented text",
+        "| wrap",
+        "|         \"Utf8(",
+        "| initial_logical_plan",
+        "| physical_plan",
+        "|   EmptyRelation:",
+        "|     repeat(",
+    ] {
+        assert!(stdout.contains(expected), "missing {expected}: {stdout}");
+    }
+    assert!(!stdout.contains("|       wrap"), "{stdout}");
+}
+
 #[rstest]
 #[case("csv", "\n8200\n")]
 #[case("tsv", "\n8200\n")]

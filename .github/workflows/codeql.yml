@@ -19,6 +19,7 @@ jobs:
   analyze:
     name: Analyze Actions
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     permissions:
       contents: read
       security-events: write

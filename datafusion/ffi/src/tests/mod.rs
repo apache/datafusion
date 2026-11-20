@@ -281,24 +281,69 @@ pub extern "C" fn datafusion_ffi_test_create_exec_with_byte_metrics() -> FFI_Exe
     FFI_ExecutionPlan::new(plan, None)
 }
 
-/// Builds an [`FFI_PhysicalExtensionCodec`] inside this library, so the
-/// cross-library test gets a codec that is genuinely foreign to the caller.
+/// A plan whose top node requires its input hash-partitioned (or, with
+/// `hard_ordering`, sorted) on `a`, and whose child already provides it.
 ///
-/// Exported as its own symbol rather than a [`ForeignLibraryModule`] field,
-/// for the same reason as [`datafusion_ffi_test_create_exec_with_byte_metrics`]:
-/// that struct is `#[repr(C)]` with no gated constructor, so adding a field
-/// changes its ABI.
+/// Exported as its own symbol, like
+/// `datafusion_ffi_test_create_exec_with_byte_metrics`, so it does not change
+/// the layout of [`ForeignLibraryModule`].
 #[unsafe(no_mangle)]
-pub extern "C" fn datafusion_ffi_test_create_scalar_subquery_expr_exec_codec(
-    task_ctx_provider: crate::execution::FFI_TaskContextProvider,
-) -> FFI_PhysicalExtensionCodec {
-    use crate::proto::physical_extension_codec::fixtures::ScalarSubqueryExprExecCodec;
+pub extern "C" fn datafusion_ffi_test_create_exec_with_requirements(
+    hard_ordering: bool,
+) -> FFI_ExecutionPlan {
+    use crate::execution_plan::tests::TestInputRequirements;
+    use datafusion_physical_expr::Distribution;
+    use datafusion_physical_expr_common::sort_expr::{
+        LexRequirement, OrderingRequirements, PhysicalSortRequirement,
+    };
+    use datafusion_physical_plan::InputDistributionRequirements;
+    use datafusion_physical_plan::repartition::RepartitionExec;
+    use datafusion_physical_plan::sorts::sort::SortExec;
 
-    FFI_PhysicalExtensionCodec::new(
-        Arc::new(ScalarSubqueryExprExecCodec),
-        None,
-        task_ctx_provider,
-    )
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+    let leaf = Arc::new(EmptyExec::new(Arc::clone(&schema))) as Arc<dyn ExecutionPlan>;
+    let (child, reqs): (Arc<dyn ExecutionPlan>, _) = if hard_ordering {
+        let ord =
+            LexOrdering::new([PhysicalSortExpr::new_default(Arc::clone(&a))]).unwrap();
+        let req = OrderingRequirements::new(
+            LexRequirement::new([PhysicalSortRequirement::new(Arc::clone(&a), None)])
+                .unwrap(),
+        );
+        (
+            Arc::new(SortExec::new(ord, leaf).with_preserve_partitioning(true)),
+            TestInputRequirements {
+                distribution: InputDistributionRequirements::new(vec![
+                    Distribution::UnspecifiedDistribution,
+                ]),
+                ordering: vec![Some(req)],
+                maintains_input_order: vec![true],
+                benefits_from_input_partitioning: vec![false],
+            },
+        )
+    } else {
+        (
+            Arc::new(
+                RepartitionExec::try_new(
+                    leaf,
+                    Partitioning::Hash(vec![Arc::clone(&a)], 4),
+                )
+                .unwrap(),
+            ),
+            TestInputRequirements {
+                distribution: InputDistributionRequirements::new(vec![
+                    Distribution::KeyPartitioned(vec![Arc::clone(&a)]),
+                ]),
+                ordering: vec![None],
+                maintains_input_order: vec![false],
+                benefits_from_input_partitioning: vec![true],
+            },
+        )
+    };
+    let plan = EmptyExec::new(schema)
+        .with_children(vec![child])
+        .with_input_requirements(reqs);
+    FFI_ExecutionPlan::new(Arc::new(plan), None)
 }
 
 /// Thin wrapper that attaches a fixed [`Statistics`] snapshot to any inner
@@ -441,4 +486,24 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_first_value_udaf: create_ffi_first_value_func,
         create_min_udaf: create_ffi_min_func,
     }
+}
+
+/// Builds an [`FFI_PhysicalExtensionCodec`] inside this library, so the
+/// cross-library test gets a codec that is genuinely foreign to the caller.
+///
+/// Exported as its own symbol rather than a [`ForeignLibraryModule`] field,
+/// for the same reason as [`datafusion_ffi_test_create_exec_with_byte_metrics`]:
+/// that struct is `#[repr(C)]` with no gated constructor, so adding a field
+/// changes its ABI.
+#[unsafe(no_mangle)]
+pub extern "C" fn datafusion_ffi_test_create_scalar_subquery_expr_exec_codec(
+    task_ctx_provider: crate::execution::FFI_TaskContextProvider,
+) -> FFI_PhysicalExtensionCodec {
+    use crate::proto::physical_extension_codec::fixtures::ScalarSubqueryExprExecCodec;
+
+    FFI_PhysicalExtensionCodec::new(
+        Arc::new(ScalarSubqueryExprExecCodec),
+        None,
+        task_ctx_provider,
+    )
 }
