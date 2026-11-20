@@ -41,6 +41,7 @@ jobs:
   check-semver:
     name: Check semver
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       # The checkout is GitHub's test merge commit of the PR into the base
       # branch. Depth 2 fetches that commit and its two parents: the base

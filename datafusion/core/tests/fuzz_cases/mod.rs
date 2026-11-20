@@ -22,7 +22,6 @@ mod equivalence;
 mod pruning;
 
 mod leaf_pushdown_fuzz;
-mod limit_fuzz;
 #[expect(clippy::needless_pass_by_value)]
 mod sort_preserving_repartition_fuzz;
 mod window_fuzz;

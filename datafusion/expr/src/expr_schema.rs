@@ -721,11 +721,9 @@ impl ExprSchemable for Expr {
                     .map(|arg| match arg {
                         Expr::Lambda(Lambda { params: _, body }) => {
                             // use the name of the lambda instead of just the body to help with debugging
-                            Ok(ValueOrLambda::Lambda(Arc::new(Field::new(
-                                arg.qualified_name().1,
-                                body.get_type(schema)?,
-                                body.nullable(schema)?,
-                            ))))
+                            Ok(ValueOrLambda::Lambda(
+                                body.to_field(schema)?.1.renamed(&arg.qualified_name().1),
+                            ))
                         }
                         _ => Ok(ValueOrLambda::Value(arg.to_field(schema)?.1)),
                     })
