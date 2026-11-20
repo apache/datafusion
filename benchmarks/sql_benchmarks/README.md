@@ -20,6 +20,7 @@ in the community:
 | `clickbench`          | ClickBench benchmark                                               |
 | `clickbench extended` | 12 additional, more complex queries against the Clickbench dataset |
 | `clickbench_sorted`   | ClickBench benchmark using a pre-sorted hits file.                 |
+| `first_last_orderings`| Grouped `first_value` (Q01) and `DISTINCT ON` (Q03) ordered by a time zone aware timestamp, and the same queries over the same instants without a time zone (Q02, Q04), from [#27046](https://github.com/apache/datafusion/issues/27046). Each pair should take about the same time at any `--partitions`. Q05 and Q06 order by (int, int) and (string, int). Size the inline table with `FIRST_LAST_ROWS` (default `2000000`, two rows per group). |
 | `h2o`                 | The `h2o` benchmark                                                |
 | `hj`                  | Hash join benchmark                                                |
 | `imdb`                | IMDb benchmark                                                     |
@@ -192,6 +193,7 @@ Some benchmarks use custom environment variables as outlined below:
 | PSQ_ROWS                     | Used in the projection_subquery benchmark to size the two inline tables.                                                 | `30000`       |
 | SPILL_VIEWS_LIMIT_REPEATED   | Used in the spill_views benchmark as the memory limit of the `repeated` subgroup.                                        | `40M`         |
 | SPILL_VIEWS_LIMIT_DISTINCT   | Used in the spill_views benchmark as the memory limit of the `distinct` subgroup.                                        | `96M`         |
+| FIRST_LAST_ROWS              | Used in the first_last_orderings benchmark to size the inline table (two rows per group).                                       | `2000000`     |
 
 ## How it works
 
