@@ -67,7 +67,14 @@ use crate::window_state::WindowAggState;
 /// |false                |true/false                    |true              | [`evaluate_all_with_rank`] |
 /// |true                 |true/false                    |true/false        | [`evaluate`]               |
 ///
+/// A function that uses the window frame can also implement
+/// [`evaluate_ranges`] and return `true` from
+/// [`evaluates_frames_independently`], so that the frames of several
+/// partitions are evaluated in one call.
+///
 /// [`evaluate`]: Self::evaluate
+/// [`evaluate_ranges`]: Self::evaluate_ranges
+/// [`evaluates_frames_independently`]: Self::evaluates_frames_independently
 /// [`evaluate_all`]: Self::evaluate_all
 /// [`evaluate_all_with_rank`]: Self::evaluate_all_with_rank
 /// [`uses_window_frame`]: Self::uses_window_frame

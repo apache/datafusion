@@ -9,7 +9,9 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::{StandardWindowFunctionExpr, WindowExpr};
-use crate::window::window_expr::{WindowEvalContext, WindowFn, get_orderby_values};
+use crate::window::window_expr::{
+    WindowEvalContext, WindowFn, calculate_frames, get_orderby_values,
+};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{EquivalenceProperties, PhysicalExpr};
 
@@ -87,37 +89,8 @@ impl StandardWindowExpr {
         let batch = batch.slice(offset, num_rows);
         let mut values = self.evaluate_args(&batch)?;
         let order_bys = get_orderby_values(self.order_by_columns(&batch)?);
-        let sort_options = self.order_by.iter().map(|o| o.options).collect();
-        let mut window_frame_ctx =
-            WindowFrameContext::new(Arc::clone(&self.window_frame), sort_options);
-        let mut partition_order_bys = Vec::with_capacity(order_bys.len());
-        let mut ranges = Vec::with_capacity(num_rows);
-        for partition in partitions {
-            let start = partition.start - offset;
-            partition_order_bys.clear();
-            partition_order_bys.extend(
-                order_bys
-                    .iter()
-                    .map(|column| column.slice(start, partition.len())),
-            );
-            // A GROUPS frame keeps the group boundaries of the previous partition.
-            // A RANGE frame caches only a comparator keyed by the ORDER BY arrays,
-            // which are new slices for each partition.
-            if let WindowFrameContext::Groups { state, .. } = &mut window_frame_ctx {
-                state.group_end_indices.clear();
-                state.current_group_idx = 0;
-            }
-            let mut range = 0..0;
-            for idx in 0..partition.len() {
-                range = window_frame_ctx.calculate_range(
-                    &partition_order_bys,
-                    &range,
-                    partition.len(),
-                    idx,
-                )?;
-                ranges.push(start + range.start..start + range.end);
-            }
-        }
+        let ranges =
+            calculate_frames(&self.window_frame, &self.order_by, &order_bys, partitions)?;
         values.extend(order_bys);
         evaluator.evaluate_ranges(&values, &ranges)
     }

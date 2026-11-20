@@ -196,6 +196,19 @@ impl WindowFrameContext {
         }
     }
 
+    /// Clears the state kept from previous rows, so that the context can
+    /// calculate the frames of a new partition
+    pub fn reset(&mut self) {
+        match self {
+            WindowFrameContext::Rows(_) => {}
+            WindowFrameContext::Range { state, .. } => state.peer_comparator = None,
+            WindowFrameContext::Groups { state, .. } => {
+                state.group_end_indices.clear();
+                state.current_group_idx = 0;
+            }
+        }
+    }
+
     /// This function calculates beginning/ending indices for the frame of the current row.
     pub fn calculate_range(
         &mut self,

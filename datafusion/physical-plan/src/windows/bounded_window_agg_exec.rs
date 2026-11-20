@@ -1062,14 +1062,13 @@ pub struct SortedSearch {
     ordered_partition_by_indices: Vec<usize>,
     input_schema: SchemaRef,
     /// Whether partitions that start and end inside one input batch are
-    /// evaluated directly instead of being buffered. Only when every window
-    /// expression is an aggregate, for which [`WindowExpr::evaluate`] is the
-    /// calculation `evaluate_stateful` does for a whole partition, or a window
-    /// function that evaluates its frames independently, for which
-    /// [`WindowExpr::evaluate_partitions`] evaluates all these partitions in
-    /// one call. Other functions can call different `PartitionEvaluator`
-    /// methods in `evaluate`. Off when a [`WindowStateObserver`] needs the
-    /// state of each partition.
+    /// evaluated directly instead of being buffered, by one
+    /// [`WindowExpr::evaluate_partitions`] call. Only when every window
+    /// expression is an aggregate, for which this is the calculation
+    /// `evaluate_stateful` does for whole partitions, or a window function
+    /// that evaluates its frames independently. Other functions can call
+    /// different `PartitionEvaluator` methods in `evaluate`. Off when a
+    /// [`WindowStateObserver`] needs the state of each partition.
     can_evaluate_complete: bool,
     /// Results of the complete partitions of the latest input batch, one array
     /// per window expression, or empty. Set by `evaluate_partition_batches`

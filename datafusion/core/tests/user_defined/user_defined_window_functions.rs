@@ -216,6 +216,19 @@ async fn test_udwf_bounded_window() {
     // Without `evaluates_frames_independently`, each call sees one partition,
     // and x = 2 has 7 of the 10 rows
     assert_eq!(test_state.max_values_len(), 7);
+
+    // With it, one call sees both partitions, with the same results
+    let test_state = TestState {
+        evaluates_frames_independently: true,
+        ..TestState::new().with_uses_window_frame()
+    };
+    let TestContext { ctx, test_state } = TestContext::new(test_state);
+    execute(&ctx, "SET datafusion.execution.target_partitions = 1")
+        .await
+        .unwrap();
+    let independent = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
+    assert_eq!(batches_to_string(&independent), batches_to_string(&actual));
+    assert_eq!(test_state.max_values_len(), 10);
 }
 
 /// Basic stateful user defined window function
@@ -481,6 +494,8 @@ struct TestState {
     supports_bounded_execution: bool,
     /// should the functions they need include rank
     include_rank: bool,
+    /// should the functions say they evaluate frames independently?
+    evaluates_frames_independently: bool,
     /// should the functions return NULL for 0s?
     null_for_zero: bool,
 }
@@ -675,6 +690,10 @@ impl PartitionEvaluator for OddCounter {
 
     fn include_rank(&self) -> bool {
         self.test_state.include_rank
+    }
+
+    fn evaluates_frames_independently(&self) -> bool {
+        self.test_state.evaluates_frames_independently
     }
 }
 
