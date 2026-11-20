@@ -122,8 +122,24 @@ TopK: k=3
   TableScan: sales
 ```
 
-The rule is registered with the session so DataFusion can apply it while
-optimizing the query.
+### Register the rule and the planner
+
+The example's `make_topk_context` function sets up the session. It registers
+`TopKOptimizerRule` so DataFusion applies it while optimizing the query. It
+also installs `TopKQueryPlanner` with `with_query_planner`:
+
+```rust,ignore
+let state = SessionStateBuilder::new()
+    .with_default_features()
+    .with_query_planner(Arc::new(TopKQueryPlanner {}))
+    .with_optimizer_rule(Arc::new(TopKOptimizerRule { invariant_mock }))
+    .build();
+```
+
+`TopKQueryPlanner` creates a `DefaultPhysicalPlanner` with `TopKPlanner` as an
+extension planner. The default planner does not know how to plan a
+`TopKPlanNode`, so without this extension planner, queries rewritten by the
+rule fail during physical planning.
 
 ### Execute the operation
 
