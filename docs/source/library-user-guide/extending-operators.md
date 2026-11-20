@@ -109,16 +109,78 @@ TopK: k=3
   TableScan: sales
 ```
 
-The example's `make_topk_context` function registers `TopKOptimizerRule`. It
-also installs `TopKQueryPlanner` with `with_query_planner`. That planner adds
-`TopKPlanner` to DataFusion's normal planner. Without `TopKPlanner`, queries
-that the rule changed fail during physical planning.
+### Register the rule and the planner
+
+Add the rule and a query planner when you build the session state:
+
+```rust
+let state = SessionStateBuilder::new()
+    .with_default_features()
+    .with_query_planner(Arc::new(TopKQueryPlanner {}))
+    .with_optimizer_rule(Arc::new(TopKOptimizerRule::default()))
+    .build();
+let ctx = SessionContext::new_with_state(state);
+```
+
+`TopKQueryPlanner` uses DataFusion's normal physical planner. It adds
+`TopKPlanner`, which knows how to plan the custom node:
+
+```rust
+#[async_trait]
+impl QueryPlanner for TopKQueryPlanner {
+    async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        session_state: &dyn Session,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let physical_planner =
+            DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+                TopKPlanner {},
+            )]);
+        physical_planner
+            .create_physical_plan(logical_plan, session_state)
+            .await
+    }
+}
+```
+
+Without `TopKPlanner`, queries that the rule changed fail during physical
+planning.
 
 ### Execute the operation
 
 `TopKPlanner` converts the logical `TopKPlanNode` into `TopKExec`, a physical
-operator. `TopKExec` reads its input and uses `TopKReader` to keep the highest
-values. Once it has read the input, the reader returns the retained rows.
+operator. It returns `None` for other nodes, so DataFusion can try other
+planners:
+
+```rust
+#[async_trait]
+impl ExtensionPlanner for TopKPlanner {
+    async fn plan_extension(
+        &self,
+        _planner: &dyn PhysicalPlanner,
+        node: &dyn UserDefinedLogicalNode,
+        _logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        _session_state: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(
+            if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
+                Some(Arc::new(TopKExec::new(
+                    physical_inputs[0].clone(),
+                    topk_node.k,
+                )))
+            } else {
+                None
+            },
+        )
+    }
+}
+```
+
+`TopKExec` reads its input and uses `TopKReader` to keep the highest values.
+Once it has read the input, the reader returns the retained rows.
 
 `TopKPlanner` does not pass the sort expression (`expr`) to `TopKExec`. So
 `TopKReader` does not know the sort order. It always keeps the highest values
