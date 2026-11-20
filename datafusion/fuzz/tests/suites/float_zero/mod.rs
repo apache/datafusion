@@ -15,9 +15,10 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::util::display::{ArrayFormatter, FormatOptions};
-use datafusion::physical_plan::displayable;
+use datafusion::logical_expr::{Expr, LogicalPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_common::float_semantics::normalize;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use datafusion_common_runtime::SpawnedTask;
 use futures::future::{join, join_all};
@@ -249,8 +250,8 @@ async fn check_all(data: &data::Dataset) -> Vec<(Pair, Result<(), Failure>)> {
         .collect()
 }
 
-/// A `-0.0` written in a query must keep its sign, or the
-/// `negative_literals` settings test nothing.
+/// Every `-0.0` written in a query must keep its sign, or the
+/// `negative_literals` settings test less than they seem to.
 #[tokio::test]
 async fn float_zero_negative_literal() {
     let mut errors = vec![];
@@ -260,11 +261,33 @@ async fn float_zero_negative_literal() {
         }
         let sql = pair.query.render("raw", "-0.0");
         let plan = pair.ctx.sql(&sql).await.unwrap();
-        let plan = plan.create_physical_plan().await.unwrap();
-        let plan = displayable(plan.as_ref()).indent(true).to_string();
-        if !plan.contains("-0") {
-            errors.push(format!("no `-0` in the plan of {sql}\n{plan}"));
+        let plan = plan.into_optimized_plan().unwrap();
+        let written = pair.query.sql.matches("{z}").count();
+        let kept = negative_zero_literals(&plan);
+        if kept < written {
+            errors.push(format!(
+                "{written} `-0.0` in {sql}, but only {kept} kept their sign\n{plan}"
+            ));
         }
     }
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
+}
+
+/// How many literals in `plan` hold a `-0.0`, also inside lists.
+fn negative_zero_literals(plan: &LogicalPlan) -> usize {
+    let mut count = 0;
+    plan.apply(|node| {
+        node.apply_expressions(|expr| {
+            expr.apply(|expr| {
+                if let Expr::Literal(value, _) = expr
+                    && *value != value.clone().normalize()
+                {
+                    count += 1;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+        })
+    })
+    .unwrap();
+    count
 }
