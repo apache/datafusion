@@ -40,7 +40,7 @@ use std::fmt::{Debug, Formatter};
 
 pub(super) type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug)]
 enum EvalMethod {
     /// CASE WHEN condition THEN result
     ///      [WHEN ...]
@@ -79,30 +79,6 @@ enum EvalMethod {
     /// See [`LiteralLookupTable`] for more details
     WithExprScalarLookupTable(LiteralLookupTable),
 }
-
-/// Implementing hash so we can use `derive` on [`EvalMethod`].
-///
-/// not implementing actual [`Hash`] as it is not dyn compatible so we cannot implement it for
-/// `dyn` [`literal_lookup_table::WhenLiteralIndexMap`].
-///
-/// So implementing empty hash is still valid as the data is derived from `PhysicalExpr` s which are already hashed
-impl Hash for LiteralLookupTable {
-    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
-}
-
-/// Implementing Equal so we can use `derive` on [`EvalMethod`].
-///
-/// not implementing actual [`PartialEq`] as it is not dyn compatible so we cannot implement it for
-/// `dyn` [`literal_lookup_table::WhenLiteralIndexMap`].
-///
-/// So we always return true as the data is derived from `PhysicalExpr` s which are already compared
-impl PartialEq for LiteralLookupTable {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-impl Eq for LiteralLookupTable {}
 
 /// The body of a CASE expression which consists of an optional base expression, the "when/then"
 /// branches and an optional "else" branch.
@@ -1599,6 +1575,8 @@ mod tests {
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use half::f16;
 
+    use std::assert_matches;
+
     #[derive(Debug, Hash, PartialEq, Eq)]
     struct CustomColumn {
         inner: Column,
@@ -2628,7 +2606,7 @@ mod tests {
             make_lit_i32(250),
         ));
         let expr = CaseExpr::try_new(None, vec![(predicate, make_col("c2", 1))], None)?;
-        assert_eq!(expr.eval_method, EvalMethod::InfallibleExprOrNull);
+        assert_matches!(expr.eval_method, EvalMethod::InfallibleExprOrNull);
         match expr.evaluate(&batch)? {
             ColumnarValue::Array(array) => {
                 assert_eq!(1000, array.len());
@@ -3339,20 +3317,37 @@ mod tests {
             (0..num_literals).map(|i| (Some(literal(i)), Some(format!("v{i}")))),
         );
 
-        let (input_values, expected): (Vec<_>, Vec<_>) = (0..(OFFSET + LEN) as i64)
-            .map(|row| match row % 13 {
-                // Nulls only in the first half, to also have validity words with no nulls
-                0 | 5 if row < 300 => (None, None),
-                // No match in WHEN
-                1 | 8 => (Some(literal(num_literals) + row), None),
-                _ => {
-                    let i = row % num_literals;
-                    (Some(literal(i)), Some(format!("v{i}")))
+        // The values under nulls match a literal, so a null is only looked up as such
+        // if its validity is applied.
+        let mut values = Vec::with_capacity(OFFSET + LEN);
+        let mut validity = Vec::with_capacity(OFFSET + LEN);
+        let mut expected = Vec::with_capacity(OFFSET + LEN);
+        for row in 0..(OFFSET + LEN) as i64 {
+            let i = row % num_literals;
+            match row % 13 {
+                // Nulls in the first validity words and in the final partial one, leaving
+                // full words with no nulls in between
+                0 | 5 if row < 300 || row >= (OFFSET + LEN) as i64 - 20 => {
+                    values.push(literal(i));
+                    validity.push(false);
+                    expected.push(None);
                 }
-            })
-            .unzip();
+                // No match in WHEN
+                1 | 8 => {
+                    values.push(literal(num_literals) + row);
+                    validity.push(true);
+                    expected.push(None);
+                }
+                _ => {
+                    values.push(literal(i));
+                    validity.push(true);
+                    expected.push(Some(format!("v{i}")));
+                }
+            }
+        }
 
-        let input_values = Int64Array::from(input_values).slice(OFFSET, LEN);
+        let input_values =
+            Int64Array::new(values.into(), Some(validity.into())).slice(OFFSET, LEN);
         let expected = StringArray::from(expected).slice(OFFSET, LEN);
 
         test_lookup_eval_with_and_without_else(
@@ -3362,14 +3357,14 @@ mod tests {
         );
     }
 
-    /// Looks up values of a decimal type wider than 64 bits, given the type's null scalar
-    /// and a function making a scalar from the lower and the upper part of its value.
+    /// Looks up values of a decimal type wider than 64 bits, given a function making
+    /// a scalar from the lower and the upper part of its value.
     ///
     /// The literals have the upper part set, and the misses differ from them either only in
-    /// the lower part or only in the upper part.
+    /// the lower part or only in the upper part. The values under nulls match a literal,
+    /// so a null is only looked up as such if its validity is applied.
     fn test_lookup_wide_decimal(
         num_literals: i64,
-        null: ScalarValue,
         value: impl Fn(i64, i64) -> ScalarValue,
     ) {
         const HIGH: i64 = 5;
@@ -3378,23 +3373,39 @@ mod tests {
             (0..num_literals).map(|i| (value(i, HIGH), Some(format!("v{i}")))),
         );
 
-        let (input_values, expected): (Vec<_>, Vec<_>) = (0..300)
-            .map(|row| {
-                let i = row % num_literals;
-                match row % 7 {
-                    0 => (null.clone(), None),
-                    // No match in WHEN, differing in the lower part only
-                    1 => (value(num_literals + i, HIGH), None),
-                    // No match in WHEN, differing in the upper part only
-                    2 => (value(i, HIGH + 1), None),
-                    _ => (value(i, HIGH), Some(format!("v{i}"))),
-                }
-            })
-            .unzip();
+        // 300 rows end mid-way of a validity word, so there are nulls in both the full
+        // words and the final partial one
+        let mut values = Vec::with_capacity(300);
+        let mut validity = Vec::with_capacity(300);
+        let mut expected = Vec::with_capacity(300);
+        for row in 0..300 {
+            let i = row % num_literals;
+            let (v, valid, e) = match row % 7 {
+                0 => (value(i, HIGH), false, None),
+                // No match in WHEN, differing in the lower part only
+                1 => (value(num_literals + i, HIGH), true, None),
+                // No match in WHEN, differing in the upper part only
+                2 => (value(i, HIGH + 1), true, None),
+                _ => (value(i, HIGH), true, Some(format!("v{i}"))),
+            };
+            values.push(v);
+            validity.push(valid);
+            expected.push(e);
+        }
+
+        let input_values = ScalarValue::iter_to_array(values).unwrap();
+        let input_values = make_array(
+            input_values
+                .into_data()
+                .into_builder()
+                .nulls(Some(validity.into()))
+                .build()
+                .unwrap(),
+        );
 
         test_lookup_eval_with_and_without_else(
             &lookup_map,
-            ScalarValue::iter_to_array(input_values).unwrap(),
+            input_values,
             StringArray::from(expected),
         );
     }
@@ -3405,17 +3416,13 @@ mod tests {
     fn test_case_when_literal_lookup_decimal128_by_number_of_literals(
         #[values(2, 4, 5)] num_literals: i64,
     ) {
-        test_lookup_wide_decimal(
-            num_literals,
-            ScalarValue::Decimal128(None, 38, 0),
-            |low, high| {
-                ScalarValue::Decimal128(
-                    Some((i128::from(high) << 64) | i128::from(low)),
-                    38,
-                    0,
-                )
-            },
-        );
+        test_lookup_wide_decimal(num_literals, |low, high| {
+            ScalarValue::Decimal128(
+                Some((i128::from(high) << 64) | i128::from(low)),
+                38,
+                0,
+            )
+        });
     }
 
     /// Covers both sides of the limit of the number of `Decimal256` literals looked up
@@ -3424,17 +3431,13 @@ mod tests {
     fn test_case_when_literal_lookup_decimal256_by_number_of_literals(
         #[values(2, 3, 4, 5)] num_literals: i64,
     ) {
-        test_lookup_wide_decimal(
-            num_literals,
-            ScalarValue::Decimal256(None, 76, 0),
-            |low, high| {
-                ScalarValue::Decimal256(
-                    Some(i256::from_parts(low as u128, i128::from(high))),
-                    76,
-                    0,
-                )
-            },
-        );
+        test_lookup_wide_decimal(num_literals, |low, high| {
+            ScalarValue::Decimal256(
+                Some(i256::from_parts(low as u128, i128::from(high))),
+                76,
+                0,
+            )
+        });
     }
 
     #[test]
