@@ -1228,3 +1228,24 @@ FROM cast_preimage_date64 ORDER BY id;
 
 statement ok
 DROP TABLE cast_preimage_date64;
+
+# The year 2500 fits in Date32 and Date64 but overflows a nanosecond timestamp.
+statement ok
+CREATE TABLE cast_preimage_date_overflow AS
+SELECT id, d AS d32, arrow_cast(d, 'Date64') AS d64
+FROM (VALUES (1, DATE '1969-12-31'), (2, DATE '2500-01-01'), (3, NULL)) AS t(id, d);
+
+query IBBBB
+SELECT id,
+  CAST(d32 AS TIMESTAMP(9)) > TIMESTAMP '1970-01-01 00:00:00' AS d32_gt,
+  TRY_CAST(d32 AS TIMESTAMP(9)) > TIMESTAMP '1970-01-01 00:00:00' AS try_d32_gt,
+  CAST(d64 AS TIMESTAMP(9)) > TIMESTAMP '1970-01-01 00:00:00' AS d64_gt,
+  TRY_CAST(d64 AS TIMESTAMP(9)) > TIMESTAMP '1970-01-01 00:00:00' AS try_d64_gt
+FROM cast_preimage_date_overflow ORDER BY id;
+----
+1 false false false false
+2 true true true true
+3 NULL NULL NULL NULL
+
+statement ok
+DROP TABLE cast_preimage_date_overflow;

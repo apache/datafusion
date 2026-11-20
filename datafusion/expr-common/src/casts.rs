@@ -480,6 +480,10 @@ fn exact_preimage_int_to_str_eq_like(
 /// cast. Each source day maps to midnight, so aligned literals have an exact
 /// preimage. Non-midnight literals have no equality preimage; ordered predicates
 /// compare against the next day using an empty interval `[ceil, ceil)`.
+///
+/// Retained policy: at extreme source values where the cast itself overflows,
+/// `CAST` can error and `TRY_CAST` can return `NULL` while the rewritten
+/// source-unit comparison returns a Boolean.
 fn date32_to_timestamp_preimage(
     source_type: &DataType,
     source: &DataType,
@@ -536,6 +540,10 @@ fn date32_to_timestamp_preimage(
 /// cast. Arrow preserves sub-day milliseconds in `Date64`, so seconds require a
 /// truncation bucket, milliseconds are exact, and finer units require checking
 /// millisecond alignment rather than midnight alignment.
+///
+/// Retained policy: at extreme source values where the cast itself overflows,
+/// `CAST` can error and `TRY_CAST` can return `NULL` while the rewritten
+/// source-unit comparison returns a Boolean.
 fn date64_to_timestamp_preimage(
     source_type: &DataType,
     source: &DataType,
