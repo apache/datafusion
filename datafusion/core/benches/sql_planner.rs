@@ -861,8 +861,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     }
 
-    // Nested SELECTs that each name every column of the one below, against
-    // the same nesting through qualified wildcards
+    // Nested SELECT statements that each name every column of the one below.
+    // `{depth}_levels` counts the wrappers around the base query over `t700`,
+    // so `8_levels` plans nine SELECT statements.
     {
         let named_columns = |qualifier: &str, width: usize| {
             (0..width)
@@ -887,6 +888,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                 |b| b.iter(|| logical_plan(&ctx, &rt, &query)),
             );
         }
+        // Controls for the cases above: the same nesting through qualified
+        // wildcards, whose projections need no USING-column lookup (#26313).
+        // Compare each case with itself across revisions, not with the named
+        // cases, which also differ in parsing and other planning costs.
         for depth in [1, 8] {
             let query = nested_query(depth, &|qualifier| format!("{qualifier}.*"));
             c.bench_function(
