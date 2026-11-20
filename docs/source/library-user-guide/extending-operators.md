@@ -70,6 +70,7 @@ describes the operations in a query. The node implements
 fields are:
 
 ```rust
+# use datafusion::logical_expr::{LogicalPlan, SortExpr};
 struct TopKPlanNode {
     k: usize,
     input: LogicalPlan,
@@ -89,6 +90,48 @@ sort must have exactly one sort expression. The rule replaces that part of the
 plan with a `TopKPlanNode`:
 
 ```rust
+# use std::fmt;
+# use std::sync::Arc;
+# use datafusion::common::DFSchemaRef;
+# use datafusion::error::Result;
+# use datafusion::logical_expr::{
+#     Expr, Extension, LogicalPlan, SortExpr, UserDefinedLogicalNodeCore,
+# };
+# #[derive(Debug, PartialEq, Eq, PartialOrd, Hash)]
+# struct TopKPlanNode {
+#     k: usize,
+#     input: LogicalPlan,
+#     expr: SortExpr,
+# }
+# impl UserDefinedLogicalNodeCore for TopKPlanNode {
+#     fn name(&self) -> &str {
+#         "TopK"
+#     }
+#     fn inputs(&self) -> Vec<&LogicalPlan> {
+#         vec![&self.input]
+#     }
+#     fn schema(&self) -> &DFSchemaRef {
+#         self.input.schema()
+#     }
+#     fn expressions(&self) -> Vec<Expr> {
+#         vec![self.expr.expr.clone()]
+#     }
+#     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+#         write!(f, "TopK: k={}", self.k)
+#     }
+#     fn with_exprs_and_inputs(
+#         &self,
+#         mut exprs: Vec<Expr>,
+#         mut inputs: Vec<LogicalPlan>,
+#     ) -> Result<Self> {
+#         Ok(Self {
+#             k: self.k,
+#             input: inputs.swap_remove(0),
+#             expr: self.expr.with_expr(exprs.swap_remove(0)),
+#         })
+#     }
+# }
+# fn make_topk(fetch: &usize, input: &Arc<LogicalPlan>, expr: &[SortExpr]) -> LogicalPlan {
 LogicalPlan::Extension(Extension {
     node: Arc::new(TopKPlanNode {
         k: *fetch,
@@ -96,6 +139,7 @@ LogicalPlan::Extension(Extension {
         expr: expr[0].clone(),
     }),
 })
+# }
 ```
 
 The rule takes `k` from the row limit. It copies the input and the sort
@@ -114,6 +158,46 @@ TopK: k=3
 Add the rule and a query planner when you build the session state:
 
 ```rust
+# use std::sync::Arc;
+# use async_trait::async_trait;
+# use datafusion::catalog::Session;
+# use datafusion::common::tree_node::Transformed;
+# use datafusion::error::Result;
+# use datafusion::execution::context::QueryPlanner;
+# use datafusion::execution::SessionStateBuilder;
+# use datafusion::logical_expr::LogicalPlan;
+# use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
+# use datafusion::physical_plan::ExecutionPlan;
+# use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
+# use datafusion::prelude::SessionContext;
+# #[derive(Debug)]
+# struct TopKQueryPlanner {}
+# #[async_trait]
+# impl QueryPlanner for TopKQueryPlanner {
+#     async fn create_physical_plan(
+#         &self,
+#         logical_plan: &LogicalPlan,
+#         session_state: &dyn Session,
+#     ) -> Result<Arc<dyn ExecutionPlan>> {
+#         DefaultPhysicalPlanner::default()
+#             .create_physical_plan(logical_plan, session_state)
+#             .await
+#     }
+# }
+# #[derive(Debug, Default)]
+# struct TopKOptimizerRule {}
+# impl OptimizerRule for TopKOptimizerRule {
+#     fn name(&self) -> &str {
+#         "topk"
+#     }
+#     fn rewrite(
+#         &self,
+#         plan: LogicalPlan,
+#         _config: &dyn OptimizerConfig,
+#     ) -> Result<Transformed<LogicalPlan>> {
+#         Ok(Transformed::no(plan))
+#     }
+# }
 let state = SessionStateBuilder::new()
     .with_default_features()
     .with_query_planner(Arc::new(TopKQueryPlanner {}))
@@ -126,6 +210,34 @@ let ctx = SessionContext::new_with_state(state);
 `TopKPlanner`, which knows how to plan the custom node:
 
 ```rust
+# use std::sync::Arc;
+# use async_trait::async_trait;
+# use datafusion::catalog::Session;
+# use datafusion::error::Result;
+# use datafusion::execution::context::QueryPlanner;
+# use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
+# use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
+# use datafusion::physical_plan::ExecutionPlan;
+# use datafusion::physical_planner::{
+#     DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
+# };
+# #[derive(Debug)]
+# struct TopKQueryPlanner {}
+# struct TopKPlanner {}
+# #[async_trait]
+# impl ExtensionPlanner for TopKPlanner {
+#     async fn plan_extension(
+#         &self,
+#         _planner: &dyn PhysicalPlanner,
+#         _node: &dyn UserDefinedLogicalNode,
+#         _logical_inputs: &[&LogicalPlan],
+#         _physical_inputs: &[Arc<dyn ExecutionPlan>],
+#         _session_state: &dyn Session,
+#         _planning_ctx: &PhysicalPlanningContext,
+#     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+#         Ok(None)
+#     }
+# }
 #[async_trait]
 impl QueryPlanner for TopKQueryPlanner {
     async fn create_physical_plan(
@@ -154,6 +266,27 @@ operator. It returns `None` for other nodes, so DataFusion can try other
 planners:
 
 ```rust
+# use std::sync::Arc;
+# use async_trait::async_trait;
+# use datafusion::catalog::Session;
+# use datafusion::error::Result;
+# use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
+# use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
+# use datafusion::physical_plan::ExecutionPlan;
+# use datafusion::physical_planner::{
+#     ExtensionPlanner, PhysicalPlanner,
+# };
+# use datafusion::physical_plan::limit::GlobalLimitExec;
+# struct TopKPlanNode {
+#     k: usize,
+# }
+# struct TopKExec;
+# impl TopKExec {
+#     fn new(input: Arc<dyn ExecutionPlan>, k: usize) -> GlobalLimitExec {
+#         GlobalLimitExec::new(input, 0, Some(k))
+#     }
+# }
+# struct TopKPlanner {}
 #[async_trait]
 impl ExtensionPlanner for TopKPlanner {
     async fn plan_extension(
