@@ -12,6 +12,8 @@ use datafusion_common::Result;
 
 use super::data::Dataset;
 
+/// Options that change how a query runs, but never its answer. Each query
+/// runs under every mix of them, to try more of the engine.
 #[derive(Debug, Clone, Copy)]
 pub struct Setting {
     pub target_partitions: usize,

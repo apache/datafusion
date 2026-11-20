@@ -31,6 +31,8 @@ mod settings;
 use queries::{QUERIES, Query};
 use settings::Setting;
 
+/// One query and one setting to run it under. `ctx` holds both tables, and
+/// pairs with the same setting share it.
 pub(crate) struct Pair {
     query: &'static Query,
     setting: Setting,
@@ -143,6 +145,8 @@ fn format_rows(batches: &[RecordBatch]) -> Vec<String> {
     rows
 }
 
+/// Says where two results that do not match first part ways: the first row
+/// that differs, or how many rows each has if one just has more rows.
 fn first_difference(raw: &[String], canonical: &[String], ordered: bool) -> String {
     let row = if ordered { "row" } else { "sorted row" };
     match raw.iter().zip(canonical).position(|(r, c)| r != c) {

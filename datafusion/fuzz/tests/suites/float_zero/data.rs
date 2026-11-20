@@ -161,6 +161,9 @@ pub fn random(rng: &mut StdRng) -> Dataset {
     }
 }
 
+/// Cuts both tables into the same random pieces of 1 to 16 rows and spreads
+/// them over 1 to 3 groups. The two tables still differ only in how their
+/// zeros are written.
 fn split(
     rng: &mut StdRng,
     canonical: &RecordBatch,
