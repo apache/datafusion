@@ -1261,10 +1261,21 @@ impl From<Vec<(Arc<dyn PhysicalExpr>, usize)>> for ProjectionTargets {
 
 /// Stores the mapping between source expressions and target expressions for a
 /// projection.
+///
+/// # Example
+///
+/// Given input columns `[a, b, c]` and the projection
+/// `c AS x, a + b AS total, c AS y`, the mapping is:
+///
+/// ```txt
+/// c@2       -> [(x@0, 0), (y@2, 2)]
+/// a@0 + b@1 -> [(total@1, 1)]
+/// ```
+///
+/// Here, `name@index` identifies a column in the input or output schema.
 #[derive(Clone, Debug)]
 pub struct ProjectionMapping {
-    /// Mapping between source expressions and target expressions.
-    /// Vector indices correspond to the indices after projection.
+    /// Maps each source expression to its targets and their output column indices.
     map: IndexMap<Arc<dyn PhysicalExpr>, ProjectionTargets>,
 }
 
@@ -1272,16 +1283,7 @@ impl ProjectionMapping {
     /// Constructs the mapping between a projection's input and output
     /// expressions.
     ///
-    /// For example, given the input projection expressions (`a + b`, `c + d`)
-    /// and an output schema with two columns `"c + d"` and `"a + b"`, the
-    /// projection mapping would be:
-    ///
-    /// ```text
-    ///  [0]: (c + d, [(col("c + d"), 0)])
-    ///  [1]: (a + b, [(col("a + b"), 1)])
-    /// ```
-    ///
-    /// where `col("c + d")` means the column named `"c + d"`.
+    /// See [`ProjectionMapping`] for an example.
     pub fn try_new(
         expr: impl IntoIterator<Item = (Arc<dyn PhysicalExpr>, String)>,
         input_schema: &SchemaRef,
