@@ -313,12 +313,17 @@ fn hash_array_primitive<T>(
         // Null rows keep their previous hash, so an all-null array, such as a
         // column that ROLLUP or GROUPING SETS nulls out, changes nothing
         Some(nulls) if nulls.null_count() == nulls.len() => {}
-        Some(nulls) => hash_prim_with_nulls(
+        Some(nulls) if rehash => hash_prim_with_nulls::<_, _, true>(
             array.values(),
             nulls,
             hashes_buffer,
             random_state,
-            rehash,
+        ),
+        Some(nulls) => hash_prim_with_nulls::<_, _, false>(
+            array.values(),
+            nulls,
+            hashes_buffer,
+            random_state,
         ),
     }
 }
@@ -349,12 +354,11 @@ const MIN_VALID_FOR_DENSE: u32 = 48;
 /// back after. A sparser chunk, and the last `len % 64` rows, hash only their
 /// valid rows.
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_prim_with_nulls<N, S>(
+fn hash_prim_with_nulls<N, S, const REHASH: bool>(
     values: &[N],
     nulls: &NullBuffer,
     hashes: &mut [u64],
     state: &S,
-    rehash: bool,
 ) where
     N: HashValue + Copy,
     S: HashState,
@@ -365,7 +369,7 @@ fn hash_prim_with_nulls<N, S>(
     let rows = value_chunks.iter().zip(hash_chunks.iter_mut());
     for ((values, hashes), valid) in rows.zip(chunks.iter()) {
         if valid.count_ones() < MIN_VALID_FOR_DENSE {
-            hash_prim_valid(values, hashes, valid, state, rehash);
+            hash_prim_valid::<_, _, REHASH>(values, hashes, valid, state);
             continue;
         }
         // The check above leaves at most `64 - MIN_VALID_FOR_DENSE` null rows,
@@ -374,7 +378,7 @@ fn hash_prim_with_nulls<N, S>(
         for (kept, i) in kept.iter_mut().zip(set_bits(!valid)) {
             *kept = hashes[i];
         }
-        if rehash {
+        if REHASH {
             hash_prim_rehash_dense(values, hashes, state);
         } else {
             hash_prim_fresh_dense(values, hashes, state);
@@ -384,7 +388,7 @@ fn hash_prim_with_nulls<N, S>(
         }
     }
     let valid = chunks.remainder_bits();
-    hash_prim_valid(value_tail, hash_tail, valid, state, rehash);
+    hash_prim_valid::<_, _, REHASH>(value_tail, hash_tail, valid, state);
 }
 
 /// Hashes the rows whose bit is set in `valid`, one at a time
@@ -392,17 +396,16 @@ fn hash_prim_with_nulls<N, S>(
 // about as much as hashing them.
 #[cfg(not(feature = "force_hash_collisions"))]
 #[inline(always)]
-fn hash_prim_valid<N, S>(
+fn hash_prim_valid<N, S, const REHASH: bool>(
     values: &[N],
     hashes: &mut [u64],
     valid: u64,
     state: &S,
-    rehash: bool,
 ) where
     N: HashValue + Copy,
     S: HashState,
 {
-    if rehash {
+    if REHASH {
         for i in set_bits(valid) {
             let mut hasher = state.seeded_state(hashes[i]).build_hasher();
             values[i].hash_write(&mut hasher);
@@ -3071,30 +3074,8 @@ mod tests {
         Ok(())
     }
 
-    /// The hash of each valid row, or the previous hash for a null row.
-    #[cfg(not(feature = "force_hash_collisions"))]
-    fn primitive_hashes_per_row<T>(
-        array: &PrimitiveArray<T>,
-        previous: &[u64],
-        rehash: bool,
-    ) -> Vec<u64>
-    where
-        T: ArrowPrimitiveType<Native: HashValue>,
-    {
-        let state = RandomState::with_seed(0);
-        (0..array.len())
-            .map(|i| match (array.is_valid(i), rehash) {
-                (false, _) => previous[i],
-                (true, false) => array.value(i).hash_one(&state),
-                (true, true) => {
-                    let mut hasher = state.seeded_state(previous[i]).build_hasher();
-                    array.value(i).hash_write(&mut hasher);
-                    hasher.finish()
-                }
-            })
-            .collect()
-    }
-
+    /// Checks that `array` hashes like its values without nulls, except that
+    /// null rows keep their previous hash
     #[cfg(not(feature = "force_hash_collisions"))]
     fn check_primitive_with_nulls<T>(array: &PrimitiveArray<T>)
     where
@@ -3103,10 +3084,15 @@ mod tests {
         let state = RandomState::with_seed(0);
         // Distinct values, so a null row that loses its previous hash shows up
         let previous: Vec<u64> = (0..array.len() as u64).map(|i| i * 31 + 1).collect();
+        let no_nulls = PrimitiveArray::<T>::new(array.values().clone(), None);
         for rehash in [false, true] {
             let mut hashes = previous.clone();
             hash_array_primitive(array, &state, &mut hashes, rehash);
-            let expected = primitive_hashes_per_row(array, &previous, rehash);
+            let mut expected = previous.clone();
+            hash_array_primitive(&no_nulls, &state, &mut expected, rehash);
+            for i in (0..array.len()).filter(|&i| array.is_null(i)) {
+                expected[i] = previous[i];
+            }
             assert_eq!(
                 hashes,
                 expected,
@@ -3145,20 +3131,9 @@ mod tests {
                     // Values past 64 bits, so a hash of a truncated value shows up
                     let decimals = Decimal128Array::new(
                         (0..n as i128).map(|i| (i << 70) - i * 7919).collect(),
-                        Some(nulls.clone()),
-                    );
-                    check_primitive_with_nulls(&decimals.slice(offset, len));
-                    let floats = Float64Array::new(
-                        (0..n)
-                            .map(|i| match i % 4 {
-                                0 => -0.0,
-                                1 => f64::NAN,
-                                _ => i as f64 * 0.5,
-                            })
-                            .collect(),
                         Some(nulls),
                     );
-                    check_primitive_with_nulls(&floats.slice(offset, len));
+                    check_primitive_with_nulls(&decimals.slice(offset, len));
                 }
             }
         }

@@ -62,10 +62,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     let small_pool = StringPool::new(100, 5);
     let cases = [
         BenchData {
-            // Dense from 10% to 50%. Near 25% a random 64-row chunk drops below the
-            // `MIN_VALID_FOR_DENSE` (48) valid rows at which `hash_array_primitive`
-            // switches from hashing every row to hashing the valid rows one at a
-            // time, and up to 50% that per-row path has to keep up with `main`'s.
+            // Dense from 10% to 50%, around the density at which a random 64-row
+            // chunk drops below `MIN_VALID_FOR_DENSE` valid rows (in
+            // `hash_utils.rs`) and `hash_array_primitive` switches from hashing
+            // every row of the chunk to hashing only its valid rows one at a time.
             // 90 and 99 show the cost of the chunk loop on mostly null arrays, and
             // 100 is the all-null column that ROLLUP and GROUPING SETS hash.
             null_densities: &[
@@ -164,16 +164,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         let label = format!("{null_percent}% nulls in 64-row blocks");
         bench_single_and_multiple(c, "int64", &label, &columns);
     }
-
-    // Slices at an offset that isn't a multiple of 64, so each 64-bit chunk of
-    // the validity mask straddles two words of the buffer
-    let offset = 5;
-    let int64 = primitive_array::<Int64Type>(BATCH_SIZE + offset);
-    let columns = null_columns(&int64, DEFAULT_NULL_PERCENT)
-        .iter()
-        .map(|column| column.slice(offset, BATCH_SIZE))
-        .collect::<Vec<_>>();
-    bench_single_and_multiple(c, "int64 (offset 5)", "nulls", &columns);
 }
 
 /// Registers hashing of the first of `columns` ("single") and of all of them
