@@ -63,43 +63,6 @@ where
     }
 }
 
-/// Emits the build rows `rows[pos..]` of probe row `prob_idx`, at most
-/// `remaining` of them, for maps that store the build rows of each key next to
-/// each other instead of in a chain. Returns `Some(offset)` if the limit was
-/// reached and there are more results to process, as [`traverse_chain`] does.
-#[inline(always)]
-fn emit_grouped_rows<T>(
-    rows: &[T],
-    pos: usize,
-    prob_idx: usize,
-    remaining: &mut usize,
-    input_indices: &mut Vec<u32>,
-    match_indices: &mut Vec<u64>,
-    is_last_input: bool,
-) -> Option<ProbeOffset>
-where
-    T: Copy + Into<u64>,
-{
-    let end = rows.len();
-    let take = (end - pos).min(*remaining);
-    match_indices.extend(rows[pos..pos + take].iter().map(|&row| row.into()));
-    input_indices.extend(std::iter::repeat_n(prob_idx as u32, take));
-    *remaining -= take;
-    if *remaining > 0 {
-        return None;
-    }
-    if pos + take < end {
-        Some(MidChain {
-            row: prob_idx,
-            next: (pos + take) as u64,
-        })
-    } else if is_last_input {
-        None
-    } else {
-        Some(AtRow { row: prob_idx + 1 })
-    }
-}
-
 /// Emits the matches of the probe rows `0..num_rows` from `offset`, at most
 /// `limit` of them, for maps that store the build rows of each key next to
 /// each other, see `JoinHashMapType::group_rows`. `rows_of` returns the range
@@ -122,39 +85,32 @@ where
     match_indices.clear();
     let mut remaining = limit;
 
-    let to_skip = match offset {
-        AtRow { row } => row,
+    let (first_row, mut resume_pos) = match offset {
+        AtRow { row } => (row, None),
         // Resume at position `next` of the matches of probe row `row`
-        MidChain { row, next } => {
-            let (_, end) = rows_of(row).expect("a probe row resumed mid-group has rows");
-            if let Some(next_offset) = emit_grouped_rows(
-                &rows[..end],
-                next as usize,
-                row,
-                &mut remaining,
-                input_indices,
-                match_indices,
-                row == num_rows - 1,
-            ) {
-                return Some(next_offset);
-            }
-            row + 1
-        }
+        MidChain { row, next } => (row, Some(next as usize)),
     };
-
-    for row in to_skip..num_rows {
-        if let Some((start, end)) = rows_of(row)
-            && let Some(next_offset) = emit_grouped_rows(
-                &rows[..end],
-                start,
-                row,
-                &mut remaining,
-                input_indices,
-                match_indices,
-                row == num_rows - 1,
-            )
-        {
-            return Some(next_offset);
+    for row in first_row..num_rows {
+        let resume_pos = resume_pos.take();
+        let Some((start, end)) = rows_of(row) else {
+            continue;
+        };
+        let pos = resume_pos.unwrap_or(start);
+        let take = (end - pos).min(remaining);
+        match_indices.extend(rows[pos..pos + take].iter().map(|&row| row.into()));
+        input_indices.extend(std::iter::repeat_n(row as u32, take));
+        remaining -= take;
+        if remaining == 0 {
+            return if pos + take < end {
+                Some(MidChain {
+                    row,
+                    next: (pos + take) as u64,
+                })
+            } else if row == num_rows - 1 {
+                None
+            } else {
+                Some(AtRow { row: row + 1 })
+            };
         }
     }
     None

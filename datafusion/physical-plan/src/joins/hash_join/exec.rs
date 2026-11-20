@@ -3398,14 +3398,19 @@ fn build_in_memory(
     // Grouping the rows of repeated keys is optional: it keeps the chain if
     // the memory for the groups is not available. Doing it after every
     // reservation the build needs keeps it from making one of them fail.
+    let ungrouped_size = map_reservation.size();
     let grouped = match &mut join_hash_map {
-        Map::HashMap(hashmap) => {
-            hashmap.group_rows(&map_reservation, &metrics.build_mem_used)
-        }
+        Map::HashMap(hashmap) => hashmap.group_rows(&map_reservation),
         Map::ArrayMap(_) => false,
     };
     if grouped {
         grouped_map_count.add(1);
+        let grouped_size = map_reservation.size();
+        if grouped_size >= ungrouped_size {
+            metrics.build_mem_used.add(grouped_size - ungrouped_size);
+        } else {
+            metrics.build_mem_used.sub(ungrouped_size - grouped_size);
+        }
     }
 
     let map = Arc::new(ReservedMap::new(join_hash_map, map_reservation));
@@ -3589,7 +3594,7 @@ mod tests {
     };
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::{
-        GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
+        GreedyMemoryPool, MemoryPool, PeakRecordingPool, UnboundedMemoryPool,
     };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
@@ -3947,50 +3952,13 @@ mod tests {
     /// memory for the groups is available.
     #[tokio::test]
     async fn grouping_never_fails_the_build() -> Result<()> {
-        use std::fmt::{self, Display};
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        /// An unbounded pool that remembers the most it had reserved at once
-        #[derive(Debug, Default)]
-        struct PeakPool {
-            reserved: AtomicUsize,
-            peak: AtomicUsize,
-        }
-        impl Display for PeakPool {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "PeakPool")
-            }
-        }
-        impl MemoryPool for PeakPool {
-            fn name(&self) -> &str {
-                "PeakPool"
-            }
-            fn grow(&self, _: &MemoryReservation, additional: usize) {
-                let reserved = self.reserved.fetch_add(additional, Ordering::Relaxed);
-                self.peak
-                    .fetch_max(reserved + additional, Ordering::Relaxed);
-            }
-            fn shrink(&self, _: &MemoryReservation, shrink: usize) {
-                self.reserved.fetch_sub(shrink, Ordering::Relaxed);
-            }
-            fn try_grow(
-                &self,
-                reservation: &MemoryReservation,
-                additional: usize,
-            ) -> Result<()> {
-                self.grow(reservation, additional);
-                Ok(())
-            }
-            fn reserved(&self) -> usize {
-                self.reserved.load(Ordering::Relaxed)
-            }
-        }
-
         // The memory a build of 10,000 rows needs without grouping: that of a
         // build with unique keys, whose map and chain take the same room
-        let pool = Arc::new(PeakPool::default());
+        let pool = Arc::new(PeakRecordingPool::new(Arc::new(
+            UnboundedMemoryPool::default(),
+        )));
         grouped_build(|row| row * 1_000_003, Arc::clone(&pool) as _).await?;
-        let limit = pool.peak.load(Ordering::Relaxed);
+        let limit = pool.peak_reserved();
 
         // With 10 rows for each of 1,000 sparse keys, for a hash map
         let key = |row| (row % 1_000) * 1_000_003;
@@ -4000,9 +3968,11 @@ mod tests {
         grouped_build(key, pool).await?;
 
         // With the memory a grouped build peaks at, it groups its rows
-        let pool = Arc::new(PeakPool::default());
+        let pool = Arc::new(PeakRecordingPool::new(Arc::new(
+            UnboundedMemoryPool::default(),
+        )));
         assert_eq!(grouped_build(key, Arc::clone(&pool) as _).await?, 1);
-        let peak = pool.peak.load(Ordering::Relaxed);
+        let peak = pool.peak_reserved();
         let pool = Arc::new(GreedyMemoryPool::new(peak));
         assert_eq!(grouped_build(key, pool).await?, 1);
         Ok(())
