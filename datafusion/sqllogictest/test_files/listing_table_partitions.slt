@@ -259,10 +259,8 @@ statement ok
 set datafusion.execution.listing_table_hive_default_partition_name = '__HIVE_DEFAULT_PARTITION__';
 
 
-# Test: Merging statistics across partitions preserves min/max bounds
-# when a null partition is present. See #26748.
-#
-# Set up a table with three date partitions plus a null partition.
+# Test: a NULL (__HIVE_DEFAULT_PARTITION__) partition must not wipe out the
+# merged min/max statistics of the partition column. See #26748.
 
 query I
 copy (values(1, 100))
@@ -294,39 +292,100 @@ stored as parquet
 partitioned by (d)
 location 'test_files/scratch/listing_table_partitions/null_part_stats/';
 
-# The null partition must not wipe out the known partition bounds.
-# Before the #26748 fix, min(d) and max(d) would be computed by scanning
-# data because the merged statistics had Absent min/max (the optimizer
-# could not use them for pruning). After the fix, the merged statistics
-# correctly report min=2024-01-01 and max=2024-12-31.
+# min/max on the partition column is answered from statistics (no scan)
+# despite the NULL partition.
+query TT
+explain select min(d), max(d) from null_part_stats;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[min(null_part_stats.d), max(null_part_stats.d)]]
+02)--TableScan: null_part_stats projection=[d]
+physical_plan
+01)ProjectionExec: expr=[2024-01-01 as min(null_part_stats.d), 2024-12-31 as max(null_part_stats.d)]
+02)--PlaceholderRowExec
+
 query DD
 select min(d), max(d) from null_part_stats;
 ----
 2024-01-01 2024-12-31
 
-# A filter on the partition column should still return correct results
-# even with the null partition present.
-query III
-select column1, column2, extract(month from d) as month from null_part_stats
-where d >= '2024-06-01' order by column1;
-----
-2 200 6
-3 300 12
+statement ok
+drop table null_part_stats;
 
-# Rows in the null partition are excluded by a non-null filter.
+# A root filename cannot supply an integer partition value, so the stray
+# year=2025.parquet below is skipped instead of being cast to INT.
 query I
-select count(*) from null_part_stats where d is not null;
+copy (values(7))
+to 'test_files/scratch/listing_table_partitions/filename_partition_int/year=2024/data.parquet';
 ----
-3
+1
 
-# Rows in the null partition are found by IS NULL.
+statement ok
+create external table filename_partition_int (column1 bigint)
+partitioned by (year int)
+stored as parquet
+location 'test_files/scratch/listing_table_partitions/filename_partition_int/';
+
+# A new stray file arrives after the table's valid layout has been registered.
+query I
+copy (values(8))
+to 'test_files/scratch/listing_table_partitions/filename_partition_int/year=2025.parquet';
+----
+1
+
+statement ok
+set datafusion.runtime.list_files_cache_limit = '0K';
+
 query II
-select column1, column2 from null_part_stats where d is null;
+select column1, year from filename_partition_int order by column1;
 ----
-4 400
+7 2024
 
-# Total row count includes all partitions.
+# A filename shaped like a partition must not supply a missing directory level.
 query I
-select count(*) from null_part_stats;
+copy (values(3))
+to 'test_files/scratch/listing_table_partitions/filename_partition/year=2024/month=01/a.parquet';
 ----
-4
+1
+
+statement ok
+create external table filename_partition (column1 bigint)
+partitioned by (year varchar, month varchar)
+stored as parquet
+location 'test_files/scratch/listing_table_partitions/filename_partition/';
+
+query I
+copy (values(4))
+to 'test_files/scratch/listing_table_partitions/filename_partition/year=2024/month=02.parquet';
+----
+1
+
+query I
+copy (values(5))
+to 'test_files/scratch/listing_table_partitions/filename_partition/year=2024/data.parquet';
+----
+1
+
+# A key=value filename inside a complete partition path remains a valid file.
+query I
+copy (values(6))
+to 'test_files/scratch/listing_table_partitions/filename_partition/year=2024/month=01/month=03.parquet';
+----
+1
+
+query ITT
+select column1, year, month from filename_partition order by column1;
+----
+3 2024 01
+6 2024 01
+
+query I
+select count(*) from filename_partition where month = '01';
+----
+2
+
+statement ok
+RESET datafusion.runtime.list_files_cache_limit;
+
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema;

@@ -281,7 +281,7 @@ impl ScalarUDFImpl for DateBinFunc {
         argument_types: &[DataType],
         literal_arguments: &[Option<&ScalarValue>],
     ) -> bool {
-        // With the epoch origin, a positive fixed-duration stride rounds down
+        // With a fixed origin, a positive fixed-duration stride rounds down
         // monotonically. As in date_bin_impl, each day is 24 hours.
         // Timestamp binning preserves NULLs or returns an error.
         match (argument_types, literal_arguments) {
@@ -291,6 +291,18 @@ impl ScalarUDFImpl for DateBinFunc {
                     Timestamp(Nanosecond, None),
                 ],
                 [Some(ScalarValue::IntervalMonthDayNano(Some(stride))), None],
+            )
+            | (
+                [
+                    DataType::Interval(MonthDayNano),
+                    Timestamp(Nanosecond, None),
+                    Timestamp(Nanosecond, None),
+                ],
+                [
+                    Some(ScalarValue::IntervalMonthDayNano(Some(stride))),
+                    None,
+                    Some(ScalarValue::TimestampNanosecond(Some(_), None)),
+                ],
             ) => {
                 stride.months == 0
                     && TimeDelta::try_days(i64::from(stride.days))
@@ -1013,6 +1025,7 @@ mod tests {
 
         let function = DateBinFunc::new();
         let timestamp_type = Timestamp(Nanosecond, None);
+        let epoch = ScalarValue::TimestampNanosecond(Some(0), None);
         let cases = [
             (
                 "one nanosecond",
@@ -1089,7 +1102,19 @@ mod tests {
                     &[Some(&stride), None],
                 ),
                 expected,
-                "{description}",
+                "{description}, default origin",
+            );
+            assert_eq!(
+                function.supports_range_key_locality_analysis(
+                    &[
+                        stride.data_type(),
+                        timestamp_type.clone(),
+                        epoch.data_type(),
+                    ],
+                    &[Some(&stride), None, Some(&epoch)],
+                ),
+                expected,
+                "{description}, explicit origin",
             );
         }
     }
@@ -1101,6 +1126,7 @@ mod tests {
 
         let function = DateBinFunc::new();
         let stride = ScalarValue::new_interval_mdn(0, 0, 3_600_000_000_000);
+        let epoch = ScalarValue::TimestampNanosecond(Some(0), None);
         for source_type in [
             Timestamp(Second, None),
             Timestamp(Millisecond, None),
@@ -1113,7 +1139,14 @@ mod tests {
                     &[stride.data_type(), source_type.clone()],
                     &[Some(&stride), None],
                 ),
-                "source type {source_type:?}",
+                "source type {source_type:?}, default origin",
+            );
+            assert!(
+                !function.supports_range_key_locality_analysis(
+                    &[stride.data_type(), source_type.clone(), epoch.data_type()],
+                    &[Some(&stride), None, Some(&epoch)],
+                ),
+                "source type {source_type:?}, explicit origin",
             );
         }
     }
@@ -1131,21 +1164,52 @@ mod tests {
             !function
                 .supports_range_key_locality_analysis(&argument_types, &[None, None])
         );
-    }
-
-    #[test]
-    fn range_key_locality_rejects_explicit_origin() {
-        let function = DateBinFunc::new();
-        let stride = ScalarValue::new_interval_mdn(0, 0, 3_600_000_000_000);
         let epoch = ScalarValue::TimestampNanosecond(Some(0), None);
         assert!(!function.supports_range_key_locality_analysis(
             &[
-                stride.data_type(),
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                argument_types[0].clone(),
+                argument_types[1].clone(),
                 epoch.data_type(),
             ],
-            &[Some(&stride), None, Some(&epoch)],
+            &[None, None, Some(&epoch)],
         ));
+    }
+
+    #[test]
+    fn range_key_locality_rejects_non_literal_origin() {
+        let function = DateBinFunc::new();
+        let stride = ScalarValue::new_interval_mdn(0, 0, 3_600_000_000_000);
+        let timestamp_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        assert!(!function.supports_range_key_locality_analysis(
+            &[stride.data_type(), timestamp_type.clone(), timestamp_type],
+            &[Some(&stride), None, None],
+        ));
+    }
+
+    #[test]
+    fn range_key_locality_rejects_unsupported_origins() {
+        let function = DateBinFunc::new();
+        let stride = ScalarValue::new_interval_mdn(0, 0, 3_600_000_000_000);
+        for origin in [
+            ScalarValue::TimestampNanosecond(None, None),
+            ScalarValue::TimestampNanosecond(Some(0), Some("UTC".into())),
+            ScalarValue::TimestampSecond(Some(0), None),
+            ScalarValue::TimestampMillisecond(Some(0), None),
+            ScalarValue::TimestampMicrosecond(Some(0), None),
+            ScalarValue::Int64(Some(0)),
+        ] {
+            assert!(
+                !function.supports_range_key_locality_analysis(
+                    &[
+                        stride.data_type(),
+                        DataType::Timestamp(TimeUnit::Nanosecond, None),
+                        origin.data_type(),
+                    ],
+                    &[Some(&stride), None, Some(&origin)],
+                ),
+                "origin {origin:?}",
+            );
+        }
     }
 
     #[test]

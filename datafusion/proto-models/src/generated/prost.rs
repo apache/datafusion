@@ -825,7 +825,7 @@ pub struct SubqueryAliasNode {
 pub struct LogicalExprNode {
     #[prost(
         oneof = "logical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 13, 14, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39"
     )]
     pub expr_type: ::core::option::Option<logical_expr_node::ExprType>,
 }
@@ -861,8 +861,7 @@ pub mod logical_expr_node {
         Negative(::prost::alloc::boxed::Box<super::NegativeNode>),
         #[prost(message, tag = "14")]
         InList(::prost::alloc::boxed::Box<super::InListNode>),
-        #[prost(message, tag = "15")]
-        Wildcard(super::Wildcard),
+        /// was  Wildcard wildcard = 15;
         /// was  ScalarFunctionNode scalar_function = 16;
         #[prost(message, tag = "17")]
         TryCast(::prost::alloc::boxed::Box<super::TryCastNode>),
@@ -913,11 +912,6 @@ pub mod logical_expr_node {
         #[prost(message, tag = "39")]
         LambdaVariable(super::LambdaVariable),
     }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct Wildcard {
-    #[prost(message, optional, tag = "1")]
-    pub qualifier: ::core::option::Option<TableReference>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SubqueryNode {
@@ -1203,6 +1197,8 @@ pub struct SimilarToNode {
     pub pattern: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(string, tag = "4")]
     pub escape_char: ::prost::alloc::string::String,
+    #[prost(bool, tag = "5")]
+    pub case_insensitive: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CaseNode {
@@ -2127,6 +2123,10 @@ pub struct ParquetScanExecNode {
     /// Source-specific footer prefetch size. Absent means no hint.
     #[prost(uint64, optional, tag = "7")]
     pub metadata_size_hint: ::core::option::Option<u64>,
+    /// Reverse the rows within each row group too, making a reversed scan
+    /// exactly ordered. Only meaningful with `reverse_row_groups`.
+    #[prost(bool, tag = "8")]
+    pub reverse_rows: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvScanExecNode {
@@ -2145,6 +2145,8 @@ pub struct CsvScanExecNode {
     /// Custom one-byte line terminator. Absent means the default newline terminator.
     #[prost(bytes = "vec", optional, tag = "9")]
     pub terminator: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bool, tag = "10")]
+    pub match_columns_by_header: bool,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
     #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
@@ -2170,6 +2172,9 @@ pub struct JsonScanExecNode {
     /// Absent means newline-delimited JSON for compatibility with older payloads.
     #[prost(bool, optional, tag = "2")]
     pub newline_delimited: ::core::option::Option<bool>,
+    /// Absent means false: a JSON number or boolean in a string column is an error.
+    #[prost(bool, optional, tag = "3")]
+    pub coerce_primitive: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvroScanExecNode {

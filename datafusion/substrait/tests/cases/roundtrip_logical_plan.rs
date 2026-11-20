@@ -22,6 +22,7 @@ use std::mem::size_of_val;
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit,
 };
+use datafusion::common::test_util::batches_to_sort_string;
 use datafusion::common::tree_node::Transformed;
 use datafusion::common::{DFSchema, DFSchemaRef, Spans, not_impl_err, plan_err};
 use datafusion::error::Result;
@@ -971,7 +972,7 @@ async fn roundtrip_scalar_subquery_projection_with_join_rewrite() -> Result<()> 
       Left Join:
         TableScan: data projection=[a]
         Aggregate: groupBy=[[]], aggr=[[max(data2.b)]]
-          TableScan: data2 projection=[b], partial_filters=[Boolean(true)]
+          TableScan: data2 projection=[b]
     "
     );
 
@@ -1461,6 +1462,63 @@ async fn roundtrip_union2() -> Result<()> {
         "SELECT a, b FROM data UNION SELECT a, b FROM data UNION SELECT a, b FROM data",
     )
     .await
+}
+
+#[tokio::test]
+async fn roundtrip_union_join_duplicate_column_names() -> Result<()> {
+    use datafusion::arrow::array::{Int64Array, ListBuilder, MapBuilder, StringBuilder};
+    use datafusion::arrow::record_batch::RecordBatch;
+
+    // Non-nullable list items expose type coercion after consumption widens the
+    // typed NULL's list items to nullable. Both joined columns need that cast.
+    let mut tags = MapBuilder::new(
+        None,
+        StringBuilder::new(),
+        ListBuilder::new(StringBuilder::new()).with_field(Field::new(
+            "item",
+            DataType::Utf8,
+            false,
+        )),
+    );
+    tags.keys().append_value("env");
+    tags.values().values().append_value("test");
+    tags.values().append(true);
+    tags.append(true)?;
+    let batch = RecordBatch::try_from_iter(vec![
+        ("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef),
+        ("_tags", Arc::new(tags.finish()) as ArrayRef),
+    ])?;
+    let ctx = SessionContext::new();
+    for table in ["t1", "t2", "t3"] {
+        ctx.register_batch(table, batch.clone())?;
+    }
+
+    // List-item nullability changes during the round trip, so the schemas differ.
+    let plan = generate_plan_from_sql_with_ctx(
+        "SELECT NULL AS a, NULL AS b FROM t1 \
+         UNION ALL \
+         SELECT x._tags AS a, y._tags AS b \
+         FROM t2 AS x INNER JOIN t3 AS y ON x.id = y.id",
+        false,
+        true,
+        &ctx,
+    )
+    .await?;
+
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: Map([NULL]) AS a, Map([NULL])__temp__0 AS b
+      Union
+        Projection: Map([NULL]), Map([NULL]) AS Map([NULL])__temp__0
+          TableScan: t1 projection=[]
+        Projection: CAST(t2._tags AS Map("entries": non-null Struct("key": non-null Utf8, "value": List(Utf8)), unsorted)) AS Map([NULL]), CAST(t3._tags AS Map("entries": non-null Struct("key": non-null Utf8, "value": List(Utf8)), unsorted)) AS Map([NULL])__temp__0
+          Inner Join: t2.id = t3.id
+            TableScan: t2 projection=[id, _tags]
+            TableScan: t3 projection=[id, _tags]
+    "#
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -2645,7 +2703,7 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
     assert_snapshot!(
     plan,
     @"
-    Projection: array_transform2(make_array(make_array(data3.p1)), (p0) -> array_concat(array_transform2(p0, (p2) -> p2 * Int64(2)), array_transform2(p0, (p3) -> p3 * Int64(2)))) AS array_transform2(make_array(make_array(data3.p1)),(v) -> array_concat(array_transform2(v,(v) -> v * Int64(2)),array_transform2(v,(v) -> v * Int64(2))))
+    Projection: array_transform2(make_array(make_array(data3.p1)), (p0) -> array_concat(array_transform2(p0, (p2) -> p2 * Int64(2)), array_transform2(p0, (p2) -> p2 * Int64(2)))) AS array_transform2(make_array(make_array(data3.p1)),(v) -> array_concat(array_transform2(v,(v) -> v * Int64(2)),array_transform2(v,(v) -> v * Int64(2))))
       TableScan: data3 projection=[p1]
     "
     );
@@ -2695,6 +2753,210 @@ async fn roundtrip_lambda_parameter_struct_field_names() -> Result<()> {
     )
     .await?;
 
+    Ok(())
+}
+
+/// Round trips `sql` and checks that the output type and rows don't change. Substrait
+/// literals carry no struct field names, so a struct literal combined with a struct
+/// column must take the column's names for the two to have the same type.
+///
+/// `sql` can read two tables: `struct_rows`, whose column `st` is a `Struct{a, b}`, and
+/// `zones`, whose column `z` is a `List<Struct{subnet: Struct{id}, zone_name}>`. Plans
+/// are not compared as text: for a set operation, the consumer puts the output alias
+/// above the union rather than in each input.
+async fn assert_struct_literal_roundtrips(sql: &str) -> Result<()> {
+    let ctx = higher_order_function_ctx().await?;
+    for table in [
+        "CREATE TABLE struct_rows AS SELECT named_struct('a', 1, 'b', 'x') AS st \
+         UNION ALL SELECT NULL AS st",
+        "CREATE TABLE zones AS SELECT [named_struct('subnet', named_struct('id', 'subnet-1'), \
+         'zone_name', 'zone-a')] AS z UNION ALL SELECT NULL AS z",
+    ] {
+        ctx.sql(table).await?.collect().await?;
+    }
+
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    let expected = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+    assert_eq!(
+        plan.schema().field(0).data_type(),
+        plan2.schema().field(0).data_type()
+    );
+    let actual = DataFrame::new(ctx.state(), plan2).collect().await?;
+    assert_eq!(
+        batches_to_sort_string(&expected),
+        batches_to_sort_string(&actual)
+    );
+    Ok(())
+}
+
+// coalesce is simplified to a CASE, whose ELSE branch is the literal
+#[tokio::test]
+async fn roundtrip_struct_literal_in_coalesce() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT coalesce(st, named_struct('a', 0, 'b', 'z')) FROM struct_rows",
+    )
+    .await
+}
+
+// the lambda reads `subnet.id`, which it only finds if `[]` took the column's names
+#[tokio::test]
+async fn roundtrip_struct_literal_next_to_nested_struct_column() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT array_transform(coalesce(z, []), p0 -> get_field(get_field(p0, 'subnet'), 'id')) \
+         FROM zones",
+    )
+    .await
+}
+
+// a NULL struct in the ELSE branch, from https://github.com/apache/datafusion/issues/14632
+#[tokio::test]
+async fn roundtrip_struct_literal_in_case_else() -> Result<()> {
+    roundtrip(
+        "SELECT (CASE WHEN column1 IS NOT NULL THEN named_struct('f1', column1) ELSE NULL END) AS res \
+         FROM (VALUES ('a'), (NULL))",
+    )
+    .await
+}
+
+// the inner CASE has only literal results, so it takes the names of the outer CASE's column
+#[tokio::test]
+async fn roundtrip_struct_literal_in_nested_case_after_column() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT CASE WHEN st IS NOT NULL THEN st \
+         ELSE CASE WHEN random() > 2 THEN named_struct('a', 0, 'b', 'z') \
+         ELSE named_struct('a', 9, 'b', 'w') END END FROM struct_rows",
+    )
+    .await
+}
+
+// same as above, with the inner CASE first: it must not give its generated names to `st`
+#[tokio::test]
+async fn roundtrip_struct_literal_in_nested_case_before_column() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT CASE WHEN st IS NULL \
+         THEN CASE WHEN random() > 2 THEN named_struct('a', 0, 'b', 'z') \
+         ELSE named_struct('a', 9, 'b', 'w') END ELSE st END FROM struct_rows",
+    )
+    .await
+}
+
+// up to 3 items, so the optimizer rewrites the IN list into `st = ... OR st = ...`
+#[tokio::test]
+async fn roundtrip_struct_literal_in_list() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT st IN (named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y')) \
+         FROM struct_rows",
+    )
+    .await
+}
+
+// the default value of `lag` must have the type of `st`
+#[tokio::test]
+async fn roundtrip_struct_literal_window_function_argument() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT lag(st, 1, named_struct('a', 0, 'b', 'z')) OVER () FROM struct_rows",
+    )
+    .await
+}
+
+// the input padded with a NULL comes first, so it must not give its generated names
+#[tokio::test]
+async fn roundtrip_struct_literal_union_with_null_first_input() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT NULL AS r FROM struct_rows UNION ALL SELECT st AS r FROM struct_rows",
+    )
+    .await
+}
+
+// the input padded with a NULL comes second
+#[tokio::test]
+async fn roundtrip_struct_literal_union_with_null_second_input() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT st AS r FROM struct_rows UNION ALL SELECT NULL AS r FROM struct_rows",
+    )
+    .await
+}
+
+// the LIMIT hides the projection with the literal from the union
+#[tokio::test]
+async fn roundtrip_struct_literal_union_with_limit() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT * FROM (SELECT NULL AS r FROM struct_rows LIMIT 1) \
+         UNION ALL SELECT st AS r FROM struct_rows",
+    )
+    .await
+}
+
+// the input with the literals is itself a UNION, without ALL
+#[tokio::test]
+async fn roundtrip_struct_literal_union_with_nested_union_input() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT * FROM (SELECT named_struct('a', 0, 'b', 'z') AS r FROM struct_rows \
+         UNION SELECT named_struct('a', 9, 'b', 'w') AS r FROM struct_rows) \
+         UNION ALL SELECT st AS r FROM struct_rows",
+    )
+    .await
+}
+
+// make_array survives optimization, so it reaches the consumer as a function call
+#[tokio::test]
+async fn roundtrip_struct_literal_in_function_call() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT make_array(st, named_struct('a', 0, 'b', 'z')) FROM struct_rows",
+    )
+    .await
+}
+
+// `r` has the shape of `st` but is independent of it, so it keeps its own names
+#[tokio::test]
+async fn roundtrip_struct_literal_independent_function_argument() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT named_struct('l', st, 'r', named_struct('c0', 42, 'c1', 'q')) FROM struct_rows",
+    )
+    .await
+}
+
+// more than 3 items, so the optimizer doesn't rewrite the IN list into `=`/`OR`
+#[tokio::test]
+async fn roundtrip_struct_literal_in_long_in_list() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT st IN (named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y'), \
+         named_struct('a', 3, 'b', 'z'), named_struct('a', 4, 'b', 'w')) FROM struct_rows",
+    )
+    .await
+}
+
+// the literal is a map's values, renamed through the map type
+#[tokio::test]
+async fn roundtrip_struct_literal_in_map_values() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT CASE WHEN st IS NULL THEN map(['k'], [named_struct('a', 0, 'b', 'z')]) \
+         ELSE map(['k'], [st]) END FROM struct_rows",
+    )
+    .await
+}
+
+// Sibling lambda parameter names may repeat, but nested captures must still
+// resolve against their own enclosing scopes during optimization and execution.
+#[tokio::test]
+async fn roundtrip_executes_sibling_and_nested_lambda_scopes() -> Result<()> {
+    let ctx = create_context_with_dialect(Some(Dialect::Databricks)).await?;
+    let df = ctx.sql(
+        "SELECT array_transform([1, 2], x -> x + 10) AS ints,
+                array_transform(['a', 'b'], s -> upper(s)) AS strings,
+                array_transform([1, 2], x -> array_transform([10, 20], y -> x + y)) AS nested",
+    ).await?;
+    let plan = df.logical_plan().clone();
+    let expected = df.collect().await?;
+    assert_eq!(
+        expected.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        1
+    );
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let consumed = from_substrait_plan(&ctx.state(), &proto).await?;
+    let actual = DataFrame::new(ctx.state(), consumed).collect().await?;
+    assert_eq!(actual, expected);
     Ok(())
 }
 
