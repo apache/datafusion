@@ -608,6 +608,30 @@ has fields. Before, this could panic or return another column’s values.</p>
 </pre></div>
 </div>
 </section>
+<section id="materialized-cte-scans-have-a-projection">
+<h3>Materialized CTE scans have a projection<a class="headerlink" href="#materialized-cte-scans-have-a-projection" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">MaterializedCteScan</span></code> and <code class="docutils literal notranslate"><span class="pre">MaterializedCteScanExec</span></code> have a <code class="docutils literal notranslate"><span class="pre">projection</span></code>. It gives
+the indexes of the columns of the CTE body that the scan outputs. <code class="docutils literal notranslate"><span class="pre">None</span></code> means all
+the columns. <code class="docutils literal notranslate"><span class="pre">OptimizeProjections</span></code> uses it to remove from the body the columns
+that no scan reads.</p>
+<p>A custom optimizer rule that changes the schema of the body of a
+<code class="docutils literal notranslate"><span class="pre">MaterializedCte</span></code> must also change the <code class="docutils literal notranslate"><span class="pre">projection</span></code> of every scan of that CTE,
+because a scan reads the columns of the body by position. Use
+<code class="docutils literal notranslate"><span class="pre">MaterializedCteScan::with_body_columns</span></code> to remap a scan, and
+<code class="docutils literal notranslate"><span class="pre">MaterializedCteScan::with_body_schema</span></code> to give a scan the new types of the
+columns that it reads.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">schema</span></code> and <code class="docutils literal notranslate"><span class="pre">projection</span></code> fields of <code class="docutils literal notranslate"><span class="pre">MaterializedCteScan</span></code> are private, so
+that the two always match. Read them with <code class="docutils literal notranslate"><span class="pre">MaterializedCteScan::schema</span></code> and
+<code class="docutils literal notranslate"><span class="pre">MaterializedCteScan::projection</span></code>. Build a scan with <code class="docutils literal notranslate"><span class="pre">MaterializedCteScan::new</span></code>
+and <code class="docutils literal notranslate"><span class="pre">MaterializedCteScan::with_projection</span></code>. To build a physical scan with a
+projection, use <code class="docutils literal notranslate"><span class="pre">MaterializedCteScanExec::with_body_projection</span></code>. It returns an
+error if the projection does not have one index for each column of the scan
+schema.</p>
+<p><code class="docutils literal notranslate"><span class="pre">LogicalPlan::check_invariants</span></code> checks that each scan of a <code class="docutils literal notranslate"><span class="pre">MaterializedCte</span></code>
+has the names and types of the columns that it reads from the body. The
+optimizer runs this check after each rule in debug builds, so a custom rule
+that does not remap the scans now fails with an error that names the rule.</p>
+</section>
 </section>
 </section>
 
@@ -668,6 +692,7 @@ has fields. Before, this could panic or return another column’s values.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#copy-to-ordering"><code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">TO</span></code> ordering</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#deprecated-expr-wildcard-has-been-removed">Deprecated <code class="docutils literal notranslate"><span class="pre">Expr::Wildcard</span></code> has been removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-must-have-one-columnstatistics-per-schema-field">Statistics must have one <code class="docutils literal notranslate"><span class="pre">ColumnStatistics</span></code> per schema field</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#materialized-cte-scans-have-a-projection">Materialized CTE scans have a projection</a></li>
 </ul>
 </li>
 </ul>
