@@ -115,8 +115,10 @@ pub fn cast_predicate_preimage(
     op: Operator,
     lit_value: &ScalarValue,
 ) -> Result<Option<CastPredicatePreimage>> {
-    if let Some(preimage) = temporal_preimage(source_type, target_type, op, lit_value) {
-        return Ok(preimage);
+    match temporal_preimage(source_type, target_type, op, lit_value) {
+        PreimageOutcome::NotApplicable => {}
+        PreimageOutcome::NoRewrite => return Ok(None),
+        PreimageOutcome::Preimage(preimage) => return Ok(Some(preimage)),
     }
 
     if let Some(value) =
@@ -138,13 +140,13 @@ pub fn exact_preimage_cast(
     target_type: &DataType,
     lit_value: &ScalarValue,
 ) -> Option<ScalarValue> {
-    if let Some(preimage) =
-        temporal_preimage(source_type, target_type, Operator::Eq, lit_value)
-    {
-        return match preimage {
-            Some(CastPredicatePreimage::Exact(value)) => Some(value),
-            Some(CastPredicatePreimage::Range(_)) | None => None,
-        };
+    match temporal_preimage(source_type, target_type, Operator::Eq, lit_value) {
+        PreimageOutcome::NotApplicable => {}
+        PreimageOutcome::NoRewrite
+        | PreimageOutcome::Preimage(CastPredicatePreimage::Range(_)) => return None,
+        PreimageOutcome::Preimage(CastPredicatePreimage::Exact(value)) => {
+            return Some(value);
+        }
     }
 
     // Apply a family-level gate: the source→target cast must normally preserve
@@ -173,16 +175,19 @@ pub fn is_timestamp_precision_narrowing_cast(
     timestamp_unit_scale(source_unit) > timestamp_unit_scale(target_unit)
 }
 
+enum PreimageOutcome {
+    NotApplicable,
+    NoRewrite,
+    Preimage(CastPredicatePreimage),
+}
+
 /// Dispatches to the preimage calculation for the matching temporal cast family.
-///
-/// Returns `None` when no family matches.
-/// Returns `Some(None)` when a family matches but declines the rewrite.
 fn temporal_preimage(
     source_type: &DataType,
     target_type: &DataType,
     op: Operator,
     lit_value: &ScalarValue,
-) -> Option<Option<CastPredicatePreimage>> {
+) -> PreimageOutcome {
     let source = unwrap_dictionary_type(source_type);
     let target = unwrap_dictionary_type(target_type);
 
@@ -196,10 +201,13 @@ fn temporal_preimage(
         (DataType::Date64, DataType::Timestamp(_, None)) => {
             date64_to_timestamp_preimage(source_type, source, target, op, lit_value)
         }
-        _ => return None,
+        _ => return PreimageOutcome::NotApplicable,
     };
 
-    Some(preimage)
+    match preimage {
+        Some(preimage) => PreimageOutcome::Preimage(preimage),
+        None => PreimageOutcome::NoRewrite,
+    }
 }
 
 fn unwrap_dictionary_type(data_type: &DataType) -> &DataType {
