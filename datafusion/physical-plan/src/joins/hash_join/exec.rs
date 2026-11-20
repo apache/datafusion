@@ -3902,6 +3902,46 @@ mod tests {
         Ok(())
     }
 
+    /// A hash map build fills the bloom filter from the hashes stored in the
+    /// map, and the filter is probed with `HASH_JOIN_SEED`. String keys take
+    /// the hash map path, so this fails if the build map uses another seed.
+    #[tokio::test]
+    async fn bloom_filter_from_hash_map_keeps_every_build_key() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Utf8, false)]));
+        let keys: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..1000).map(|i| format!("key-{i}")),
+        ));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&keys)])?;
+        let exec = || {
+            TestMemoryExec::try_new_exec(
+                &[vec![batch.clone()]],
+                Arc::clone(&schema),
+                None,
+            )
+        };
+        let on = vec![(
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+        )];
+        let (join, filter) =
+            hash_join_with_dynamic_filter(exec()?, exec()?, on, JoinType::Inner)?;
+
+        let mut config = SessionConfig::new();
+        config
+            .options_mut()
+            .optimizer
+            .hash_join_inlist_pushdown_max_size = 0;
+        let task_ctx = Arc::new(TaskContext::default().with_session_config(config));
+        let batches = crate::execution_plan::collect(Arc::new(join), task_ctx).await?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1000);
+
+        let current = filter.current()?;
+        assert!(bloom_filter_bytes(&current)? > 0);
+        let kept = current.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(kept.as_boolean().true_count(), 1000);
+        Ok(())
+    }
+
     #[derive(Debug)]
     struct PartitionedTestExec {
         cache: Arc<PlanProperties>,
