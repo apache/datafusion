@@ -12,14 +12,16 @@ use crate::{PhysicalExpr, ScalarFunctionExpr};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
-    FilterBuilder, FilterPredicate, is_not_null, not, nullif, prep_null_mask_filter,
+    CastOptions, FilterBuilder, FilterPredicate, can_cast_types, is_not_null, not,
+    nullif, prep_null_mask_filter,
 };
-use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
+use arrow::datatypes::{DataType, Field, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_or_internal_err, exec_err,
-    internal_datafusion_err, internal_err,
+    internal_datafusion_err, internal_err, plan_err,
 };
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::NullableInterval;
@@ -34,6 +36,7 @@ use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
 use arrow::compute::kernels::merge::{MergeIndex, merge, merge_n};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_physical_expr_common::datum::compare_with_eq;
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_expr_common::utils::scatter;
 use itertools::Itertools;
 use std::fmt::{Debug, Formatter};
@@ -104,6 +107,178 @@ impl PartialEq for LiteralLookupTable {
 
 impl Eq for LiteralLookupTable {}
 
+/// Name of the field that carries the shared operand while the first WHEN of a CASE with an
+/// [`ElseReuse`] is evaluated. Only the position of that field (the last one) is meaningful.
+const SHARED_OPERAND_FIELD_NAME: &str = "__case_shared_operand";
+
+/// Evaluation of an ELSE expression that is the same expression as the operand evaluated first
+/// inside the first WHEN of the same CASE. See
+/// [`CaseExpr::with_else_reusing_first_when_operand`].
+///
+/// The operand is evaluated once, for all rows, as part of the first WHEN. The resulting array
+/// is then filtered down to the rows that reach the ELSE branch instead of evaluating the
+/// ELSE expression a second time.
+#[derive(Debug)]
+struct ElseReuse {
+    /// Child indices leading from the root of the first WHEN expression to the operand.
+    operand_path: Vec<usize>,
+    /// The first WHEN expression with the operand replaced by a [`SharedOperand`] placeholder.
+    ///
+    /// Evaluated against the input batch extended with a trailing column that holds the
+    /// operand values.
+    first_when: Arc<dyn PhysicalExpr>,
+}
+
+// `first_when` is derived from `operand_path` and the first WHEN of the owning `CaseBody`,
+// both of which are already hashed and compared as part of the body. Leaving it out avoids
+// walking the expression tree a second time (see #22173).
+impl Hash for ElseReuse {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.operand_path.hash(state);
+    }
+}
+
+impl PartialEq for ElseReuse {
+    fn eq(&self, other: &Self) -> bool {
+        self.operand_path == other.operand_path
+    }
+}
+
+impl Eq for ElseReuse {}
+
+impl ElseReuse {
+    /// Validates that `body` can reuse the operand found at `operand_path` below its first
+    /// WHEN expression as its ELSE value, and derives the expression used to evaluate the
+    /// first WHEN from the shared operand.
+    fn try_new(body: &CaseBody, operand_path: &[usize]) -> Result<Self> {
+        if body.expr.is_some() {
+            return plan_err!(
+                "CASE ELSE can only reuse a WHEN operand for CASE without a base expression"
+            );
+        }
+        let Some(else_expr) = &body.else_expr else {
+            return plan_err!(
+                "CASE ELSE can only reuse a WHEN operand if it has an ELSE"
+            );
+        };
+        let Some((first_when, _)) = body.when_then_expr.first() else {
+            return plan_err!("There must be at least one WHEN clause");
+        };
+        let Some(operand) = expr_at_path(first_when, operand_path) else {
+            return plan_err!(
+                "Path {operand_path:?} does not lead to a sub-expression of the first WHEN `{first_when}`"
+            );
+        };
+        if operand != else_expr {
+            return plan_err!(
+                "CASE ELSE `{else_expr}` is not the same expression as the first WHEN operand `{operand}`"
+            );
+        }
+        // Reusing the value would change the result of an expression that returns something
+        // different every time it is evaluated, e.g. `random()`.
+        if is_volatile(else_expr) {
+            return plan_err!(
+                "CASE ELSE `{else_expr}` is volatile and cannot be shared with the first WHEN"
+            );
+        }
+
+        let placeholder: Arc<dyn PhysicalExpr> = Arc::new(SharedOperand);
+        Ok(Self {
+            operand_path: operand_path.to_vec(),
+            first_when: replace_at_path(first_when, operand_path, &placeholder)?,
+        })
+    }
+}
+
+/// Returns the sub-expression found by following the child indices in `path` from `expr`.
+fn expr_at_path<'a>(
+    expr: &'a Arc<dyn PhysicalExpr>,
+    path: &[usize],
+) -> Option<&'a Arc<dyn PhysicalExpr>> {
+    let mut current = expr;
+    for index in path {
+        current = current.children().get(*index).copied()?;
+    }
+    Some(current)
+}
+
+/// Replaces the sub-expression found by following the child indices in `path` from `expr`.
+fn replace_at_path(
+    expr: &Arc<dyn PhysicalExpr>,
+    path: &[usize],
+    replacement: &Arc<dyn PhysicalExpr>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let Some((index, rest)) = path.split_first() else {
+        return Ok(Arc::clone(replacement));
+    };
+    let mut children = expr
+        .children()
+        .into_iter()
+        .map(Arc::clone)
+        .collect::<Vec<_>>();
+    let Some(child) = children.get_mut(*index) else {
+        return internal_err!("Child index {index} out of bounds for `{expr}`");
+    };
+    *child = replace_at_path(child, rest, replacement)?;
+    Arc::clone(expr).with_new_children(children)
+}
+
+/// Placeholder for an operand that has already been evaluated. It evaluates to the last column
+/// of the batch it is evaluated against.
+///
+/// This is an implementation detail of [`ElseReuse`]. It only appears in expressions that are
+/// created and evaluated by [`CaseExpr`] itself and is never exposed through
+/// [`PhysicalExpr::children`].
+#[derive(Debug, Hash, PartialEq, Eq)]
+struct SharedOperand;
+
+impl SharedOperand {
+    fn field(input_schema: &Schema) -> Result<&Field> {
+        match input_schema.fields().last() {
+            Some(field) => Ok(field.as_ref()),
+            None => internal_err!("SharedOperand requires a schema with a column"),
+        }
+    }
+}
+
+impl std::fmt::Display for SharedOperand {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{SHARED_OPERAND_FIELD_NAME}")
+    }
+}
+
+impl PhysicalExpr for SharedOperand {
+    fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        Self::field(input_schema).map(|field| field.data_type().clone())
+    }
+
+    fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+        Self::field(input_schema).map(|field| field.is_nullable())
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        match batch.columns().last() {
+            Some(column) => Ok(ColumnarValue::Array(Arc::clone(column))),
+            None => internal_err!("SharedOperand requires a batch with a column"),
+        }
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
+    }
+
+    fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
 /// The body of a CASE expression which consists of an optional base expression, the "when/then"
 /// branches and an optional "else" branch.
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -114,6 +289,9 @@ struct CaseBody {
     when_then_expr: Vec<WhenThen>,
     /// Optional "else" expression
     else_expr: Option<Arc<dyn PhysicalExpr>>,
+    /// Set if the "else" expression is the operand evaluated first inside the first "when"
+    /// expression, in which case it is only evaluated once.
+    else_reuse: Option<ElseReuse>,
 }
 
 impl CaseBody {
@@ -192,6 +370,19 @@ impl CaseBody {
                 .map(|t| t.data)
         };
 
+        // The rewritten first WHEN only references columns that its original counterpart,
+        // which was collected above, references as well.
+        let else_reuse = self
+            .else_reuse
+            .as_ref()
+            .map(|reuse| -> Result<ElseReuse> {
+                Ok(ElseReuse {
+                    operand_path: reuse.operand_path.clone(),
+                    first_when: project(&reuse.first_when)?,
+                })
+            })
+            .transpose()?;
+
         let projected_body = CaseBody {
             expr: self.expr.as_ref().map(project).transpose()?,
             when_then_expr: self
@@ -200,6 +391,7 @@ impl CaseBody {
                 .map(|(e, t)| Ok((project(e)?, project(t)?)))
                 .collect::<Result<Vec<_>>>()?,
             else_expr: self.else_expr.as_ref().map(project).transpose()?,
+            else_reuse,
         };
 
         // Construct the projection vector
@@ -337,6 +529,29 @@ impl std::fmt::Display for CaseExpr {
 /// expressions in the future
 fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.is::<Column>()
+}
+
+/// Turns the values of an `ELSE` operand that was evaluated as part of the first `WHEN` into
+/// the value of the `ELSE` branch by casting them to the type of the CASE expression.
+///
+/// This mirrors what happens to an `ELSE` expression that is evaluated on its own: it is wrapped
+/// in a `TRY_CAST` if its type differs from the return type, unless the cast is not supported.
+fn cast_reused_else_values(
+    values: ArrayRef,
+    return_type: &DataType,
+) -> Result<ColumnarValue> {
+    let needs_cast = values.data_type() != return_type
+        && can_cast_types(values.data_type(), return_type);
+    let value = ColumnarValue::Array(values);
+    if needs_cast {
+        let options = CastOptions {
+            safe: true,
+            format_options: DEFAULT_FORMAT_OPTIONS,
+        };
+        value.cast_to(return_type, Some(&options))
+    } else {
+        Ok(value)
+    }
 }
 
 /// Creates a [FilterPredicate] from a boolean array.
@@ -691,11 +906,75 @@ impl CaseExpr {
             expr,
             when_then_expr,
             else_expr,
+            else_reuse: None,
         };
 
         let eval_method = Self::find_best_eval_method(&body)?;
 
         Ok(Self { body, eval_method })
+    }
+
+    /// Opt in to evaluating the ELSE expression only once, by reusing the value of the operand
+    /// that is evaluated first inside the first WHEN expression.
+    ///
+    /// ```text
+    /// CASE WHEN f(x) = 'a' THEN 'b' ELSE f(x) END
+    /// ```
+    ///
+    /// Evaluating this expression as-is evaluates `f(x)` for every row to decide the first
+    /// WHEN and then evaluates it again for the rows that reach the ELSE. If `f` is expensive,
+    /// the second evaluation can dominate. With this option, `f(x)` is evaluated once, for
+    /// all rows, at the position it has within the first WHEN. The resulting array is reused
+    /// for the rows that reach the ELSE.
+    ///
+    /// `operand_path` identifies the operand: the child indices (as returned by
+    /// [`PhysicalExpr::children`]) to follow from the first WHEN expression to reach it. In the
+    /// example above, `f(x)` is the first child of the `=` expression, so the path is `[0]`. An
+    /// empty path denotes the first WHEN expression itself.
+    ///
+    /// The ELSE expression must be equal to the expression found at `operand_path`, which is
+    /// verified. DataFusion cannot verify evaluation order: which child an expression evaluates
+    /// first is not part of the [`PhysicalExpr`] contract. The caller guarantees that
+    /// evaluating the first WHEN expression
+    ///
+    /// * evaluates the operand for every row of the input, and
+    /// * does so before evaluating anything else that could fail or otherwise be observed.
+    ///
+    /// Under that guarantee, the outcome, including which error surfaces first, is the same
+    /// as without this option. The reuse of a value computed at a different position would
+    /// be observable otherwise.
+    ///
+    /// Errors if the CASE has a base expression (`CASE expr WHEN ...`) or no ELSE, if
+    /// `operand_path` does not lead to an expression equal to the ELSE or if that expression
+    /// is volatile. Has no effect if the ELSE is a literal, since there is nothing to save.
+    ///
+    /// The option is kept when the expression is rebuilt through
+    /// [`PhysicalExpr::with_new_children`] if the new children still satisfy the requirements
+    /// above, and dropped otherwise. It is not part of the serialized form of the expression.
+    pub fn with_else_reusing_first_when_operand(
+        mut self,
+        operand_path: &[usize],
+    ) -> Result<Self> {
+        let else_reuse = ElseReuse::try_new(&self.body, operand_path)?;
+        self.set_else_reuse(else_reuse)?;
+        Ok(self)
+    }
+
+    /// If the ELSE expression is evaluated by reusing the operand that is evaluated first
+    /// inside the first WHEN, returns the child indices leading from the first WHEN expression
+    /// to that operand. See [`CaseExpr::with_else_reusing_first_when_operand`].
+    pub fn else_reusing_first_when_operand(&self) -> Option<&[usize]> {
+        self.body
+            .else_reuse
+            .as_ref()
+            .map(|reuse| reuse.operand_path.as_slice())
+    }
+
+    fn set_else_reuse(&mut self, else_reuse: ElseReuse) -> Result<()> {
+        self.body.else_reuse = Some(else_reuse);
+        // The projected bodies are derived from the body, so they need to be updated too.
+        self.eval_method = Self::find_best_eval_method(&self.body)?;
+        Ok(())
     }
 
     fn find_best_eval_method(body: &CaseBody) -> Result<EvalMethod> {
@@ -923,14 +1202,25 @@ impl CaseBody {
             Arc::new(UInt32Array::from_iter(0..batch.num_rows() as u32));
         // `remainder_batch` contains the rows themselves that need to be evaluated
         let mut remainder_batch = Cow::Borrowed(batch);
+        // If the 'else' expression reuses the operand of the first 'when' expression, this holds
+        // the values of that operand for the rows in `remainder_rows`.
+        let mut else_values: Option<ArrayRef> = None;
 
         for i in 0..self.when_then_expr.len() {
             // Evaluate the 'when' predicate for the remainder batch
             // This results in a boolean array with the same length as the remaining number of rows
-            let when_predicate = &self.when_then_expr[i].0;
-            let when_value = when_predicate
-                .evaluate(&remainder_batch)?
-                .into_array(remainder_batch.num_rows())?;
+            let when_value = match &self.else_reuse {
+                // The first 'when' predicate is evaluated for all rows, so this evaluates the
+                // operand for all rows.
+                Some(else_reuse) if i == 0 => {
+                    let (when_value, operand_values) =
+                        self.evaluate_first_when_shared(&remainder_batch, else_reuse)?;
+                    else_values = Some(operand_values);
+                    when_value
+                }
+                _ => self.when_then_expr[i].0.evaluate(&remainder_batch)?,
+            }
+            .into_array(remainder_batch.num_rows())?;
             let when_value = as_boolean_array(&when_value).map_err(|_| {
                 internal_datafusion_err!("WHEN expression did not return a BooleanArray")
             })?;
@@ -982,25 +1272,75 @@ impl CaseBody {
             remainder_batch =
                 Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
             remainder_rows = filter_array(&remainder_rows, &next_filter)?;
+            else_values = else_values
+                .map(|values| filter_array(&values, &next_filter))
+                .transpose()?;
         }
 
         // If we reached this point, some rows were left unmatched.
         // Check if those need to be evaluated using the 'else' expression.
         if let Some(e) = &self.else_expr {
-            // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
-            let else_value = expr.evaluate(&remainder_batch)?;
+            let else_value = match else_values {
+                // The operand was already evaluated as part of the first 'when' expression.
+                Some(values) => cast_reused_else_values(values, return_type)?,
+                None => {
+                    // keep `else_expr`'s data type and return type consistent
+                    let expr =
+                        try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
+                    expr.evaluate(&remainder_batch)?
+                }
+            };
             result_builder.add_branch_result(&remainder_rows, else_value)?;
         }
 
         result_builder.finish()
     }
 
+    /// Evaluates the first 'when' expression of a CASE whose 'else' expression reuses its operand.
+    ///
+    /// The operand, which is the 'else' expression, is evaluated for all rows of `batch`. Then,
+    /// the first 'when' expression is evaluated with the result in place of the operand.
+    ///
+    /// Returns the value of the first 'when' expression and the values of the operand.
+    fn evaluate_first_when_shared(
+        &self,
+        batch: &RecordBatch,
+        else_reuse: &ElseReuse,
+    ) -> Result<(ColumnarValue, ArrayRef)> {
+        let Some(operand) = &self.else_expr else {
+            return internal_err!("Reusing a WHEN operand requires an ELSE expression");
+        };
+        let operand_values = operand.evaluate(batch)?.into_array(batch.num_rows())?;
+
+        // The columns of the batch keep their positions. The operand values come last.
+        let schema = batch.schema();
+        let mut fields = schema.fields().iter().cloned().collect::<Vec<_>>();
+        fields.push(Arc::new(Field::new(
+            SHARED_OPERAND_FIELD_NAME,
+            operand_values.data_type().clone(),
+            true,
+        )));
+        let mut columns = batch.columns().to_vec();
+        columns.push(Arc::clone(&operand_values));
+        let extended_batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
+            columns,
+            &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+        )?;
+
+        let when_value = else_reuse.first_when.evaluate(&extended_batch)?;
+        Ok((when_value, operand_values))
+    }
+
     /// See [CaseExpr::expr_or_expr].
+    ///
+    /// If `else_values` is set, it holds the values of the 'else' expression for all rows of
+    /// `batch` and the 'else' expression is not evaluated again.
     fn expr_or_expr(
         &self,
         batch: &RecordBatch,
         when_value: &BooleanArray,
+        else_values: Option<ArrayRef>,
     ) -> Result<ColumnarValue> {
         let when_value = match when_value.null_count() {
             0 => Cow::Borrowed(when_value),
@@ -1025,15 +1365,29 @@ impl CaseBody {
             Some(else_expr) => {
                 let else_selection = not(&when_value)?;
                 let else_filter = create_filter(&else_selection, optimize_filter);
-                let else_batch = filter_record_batch(batch, &else_filter)?;
 
-                // keep `else_expr`'s data type and return type consistent
                 let return_type = self.data_type(&batch.schema())?;
-                let else_expr =
-                    try_cast(Arc::clone(else_expr), &batch.schema(), return_type.clone())
+                let else_value = match else_values {
+                    // Only the values need to be filtered, there is no need to
+                    // filter the input batch.
+                    Some(values) => cast_reused_else_values(
+                        filter_array(&values, &else_filter)?,
+                        &return_type,
+                    )?,
+                    None => {
+                        let else_batch = filter_record_batch(batch, &else_filter)?;
+
+                        // keep `else_expr`'s data type and return type consistent
+                        let else_expr = try_cast(
+                            Arc::clone(else_expr),
+                            &batch.schema(),
+                            return_type.clone(),
+                        )
                         .unwrap_or_else(|_| Arc::clone(else_expr));
 
-                let else_value = else_expr.evaluate(&else_batch)?;
+                        else_expr.evaluate(&else_batch)?
+                    }
+                };
 
                 Ok(ColumnarValue::Array(match (then_value, else_value) {
                     (ColumnarValue::Array(t), ColumnarValue::Array(e)) => {
@@ -1182,8 +1536,17 @@ impl CaseExpr {
         batch: &RecordBatch,
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
-        // evaluate when condition on batch
-        let when_value = self.body.when_then_expr[0].0.evaluate(batch)?;
+        // Evaluate when condition on batch. If the else expression reuses the operand of the
+        // when condition, the operand is evaluated here, once, and its values are kept in
+        // `else_values`.
+        let (when_value, else_values) = match &self.body.else_reuse {
+            Some(else_reuse) => {
+                let (when_value, operand_values) =
+                    self.body.evaluate_first_when_shared(batch, else_reuse)?;
+                (when_value, Some(operand_values))
+            }
+            None => (self.body.when_then_expr[0].0.evaluate(batch)?, None),
+        };
         // `num_rows == 1` is intentional to avoid expanding scalars.
         // If the `when_value` is effectively a scalar, the 'all true' and 'all false' checks
         // below will avoid incorrectly using the scalar as a merge/zip mask.
@@ -1200,9 +1563,11 @@ impl CaseExpr {
             self.body.when_then_expr[0].1.evaluate(batch)
         } else if !when_value.has_true() {
             // All input rows are false/null, just call the 'else' expression
-            match &self.body.else_expr {
-                Some(else_expr) => else_expr.evaluate(batch),
-                None => {
+            // (or, if its values are known already, return them)
+            match (&self.body.else_expr, else_values) {
+                (Some(_), Some(else_values)) => Ok(ColumnarValue::Array(else_values)),
+                (Some(else_expr), None) => else_expr.evaluate(batch),
+                (None, _) => {
                     let return_type = self.data_type(&batch.schema())?;
                     Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
                         &return_type,
@@ -1213,10 +1578,12 @@ impl CaseExpr {
             // The case expressions do not use all the columns of the input batch.
             // Project first to reduce time spent filtering.
             let projected_batch = batch.project(&projection)?;
-            projected.body.expr_or_expr(&projected_batch, when_value)
+            projected
+                .body
+                .expr_or_expr(&projected_batch, when_value, else_values)
         } else {
             // All columns are used in the case expressions, so there is no need to project.
-            self.body.expr_or_expr(batch, when_value)
+            self.body.expr_or_expr(batch, when_value, else_values)
         }
     }
 
@@ -1372,11 +1739,20 @@ impl PhysicalExpr for CaseExpr {
                     ),
                     (false, false) => (None, &children[0..children.len()], None),
                 };
-            Ok(Arc::new(CaseExpr::try_new(
+            let mut case = CaseExpr::try_new(
                 expr.cloned(),
                 when_then_expr.iter().cloned().tuples().collect(),
                 else_expr.cloned(),
-            )?))
+            )?;
+            // Keep sharing the operand if the new children still allow it. Not doing so does
+            // not change the result of the expression, only how often the operand is evaluated.
+            if let Some(else_reuse) = &self.body.else_reuse
+                && let Ok(else_reuse) =
+                    ElseReuse::try_new(&case.body, &else_reuse.operand_path)
+            {
+                case.set_else_reuse(else_reuse)?;
+            }
+            Ok(Arc::new(case))
         }
     }
 
@@ -1423,6 +1799,9 @@ impl PhysicalExpr for CaseExpr {
             expr,
             when_then_expr,
             else_expr,
+            // Not part of the serialized form, so a decoded expression evaluates its
+            // ELSE separately.
+            else_reuse: _,
         } = body;
 
         Ok(Some(protobuf::PhysicalExprNode {
@@ -1598,6 +1977,7 @@ mod tests {
     use datafusion_expr::type_coercion::binary::type_union_coercion;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use half::f16;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Debug, Hash, PartialEq, Eq)]
     struct CustomColumn {
@@ -2732,6 +3112,654 @@ mod tests {
             .try_fold(else_type, |left_type, right_type| {
                 type_union_coercion(&left_type, right_type)
             })
+    }
+
+    /// Wraps an expression and records how often, and for how many rows, it is evaluated.
+    #[derive(Debug)]
+    struct CountingExpr {
+        inner: Arc<dyn PhysicalExpr>,
+        calls: Arc<AtomicUsize>,
+        rows: Arc<AtomicUsize>,
+    }
+
+    impl Hash for CountingExpr {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.inner.hash(state);
+        }
+    }
+
+    impl PartialEq for CountingExpr {
+        fn eq(&self, other: &Self) -> bool {
+            self.inner.eq(&other.inner) && Arc::ptr_eq(&self.calls, &other.calls)
+        }
+    }
+
+    impl Eq for CountingExpr {}
+
+    impl std::fmt::Display for CountingExpr {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "counting({})", self.inner)
+        }
+    }
+
+    impl PhysicalExpr for CountingExpr {
+        fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+            self.inner.data_type(input_schema)
+        }
+
+        fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+            self.inner.nullable(input_schema)
+        }
+
+        fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.rows.fetch_add(batch.num_rows(), Ordering::SeqCst);
+            self.inner.evaluate(batch)
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.inner]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(Arc::new(Self {
+                inner: Arc::clone(&children[0]),
+                calls: Arc::clone(&self.calls),
+                rows: Arc::clone(&self.rows),
+            }))
+        }
+
+        fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            std::fmt::Display::fmt(self, f)
+        }
+    }
+
+    /// Creates [`CountingExpr`]s that share their counters.
+    struct Probe {
+        calls: Arc<AtomicUsize>,
+        rows: Arc<AtomicUsize>,
+    }
+
+    impl Probe {
+        fn new() -> Self {
+            Self {
+                calls: Arc::new(AtomicUsize::new(0)),
+                rows: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn wrap(&self, inner: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+            Arc::new(CountingExpr {
+                inner,
+                calls: Arc::clone(&self.calls),
+                rows: Arc::clone(&self.rows),
+            })
+        }
+
+        /// The number of evaluations and the total number of rows they were evaluated for.
+        fn evaluations(&self) -> (usize, usize) {
+            (
+                self.calls.load(Ordering::SeqCst),
+                self.rows.load(Ordering::SeqCst),
+            )
+        }
+    }
+
+    fn evaluate_to_array(expr: &CaseExpr, batch: &RecordBatch) -> Result<ArrayRef> {
+        expr.evaluate(batch)?.into_array(batch.num_rows())
+    }
+
+    fn string_array(values: Vec<Option<&str>>) -> ArrayRef {
+        Arc::new(StringArray::from(values))
+    }
+
+    #[test]
+    fn else_reuses_first_when_operand() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+
+        // CASE WHEN f(a) = 'foo' THEN 'x' ELSE f(a) END
+        let build = |probe: &Probe| -> Result<CaseExpr> {
+            let operand = probe.wrap(col("a", &schema)?);
+            let when = binary(Arc::clone(&operand), Operator::Eq, lit("foo"), &schema)?;
+            CaseExpr::try_new(None, vec![(when, lit("x"))], Some(operand))
+        };
+        let expected = string_array(vec![Some("x"), Some("baz"), None, Some("bar")]);
+
+        // Without reuse `f(a)` is evaluated for all 4 rows by the WHEN, and again for the 3 rows
+        // that do not match.
+        let probe = Probe::new();
+        let plain = build(&probe)?;
+        assert_eq!(
+            evaluate_to_array(&plain, &batch)?.as_ref(),
+            expected.as_ref()
+        );
+        assert_eq!(probe.evaluations(), (2, 7));
+        assert_eq!(plain.else_reusing_first_when_operand(), None);
+
+        let probe = Probe::new();
+        let reusing = build(&probe)?.with_else_reusing_first_when_operand(&[0])?;
+        assert!(matches!(
+            reusing.eval_method,
+            EvalMethod::ExpressionOrExpression(_)
+        ));
+        assert_eq!(reusing.else_reusing_first_when_operand(), Some(&[0][..]));
+        assert_eq!(
+            evaluate_to_array(&reusing, &batch)?.as_ref(),
+            expected.as_ref()
+        );
+        assert_eq!(probe.evaluations(), (1, 4));
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuses_first_when_operand_with_multiple_whens() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+
+        // CASE WHEN f(a) = 'foo' THEN 'x' WHEN b = 2 THEN 'y' ELSE f(a) END
+        let build = |probe: &Probe| -> Result<CaseExpr> {
+            let operand = probe.wrap(col("a", &schema)?);
+            let when1 = binary(Arc::clone(&operand), Operator::Eq, lit("foo"), &schema)?;
+            let when2 = binary(col("b", &schema)?, Operator::Eq, lit(2i32), &schema)?;
+            CaseExpr::try_new(
+                None,
+                vec![(when1, lit("x")), (when2, lit("y"))],
+                Some(operand),
+            )
+        };
+        let expected = string_array(vec![Some("x"), Some("y"), None, Some("bar")]);
+
+        // Without reuse, `f(a)` is evaluated for all 4 rows by the first WHEN and again for the
+        // 2 rows that are left after the second WHEN.
+        let probe = Probe::new();
+        let plain = build(&probe)?;
+        assert_eq!(
+            evaluate_to_array(&plain, &batch)?.as_ref(),
+            expected.as_ref()
+        );
+        assert_eq!(probe.evaluations(), (2, 6));
+
+        let probe = Probe::new();
+        let reusing = build(&probe)?.with_else_reusing_first_when_operand(&[0])?;
+        // The CASE only uses columns `a` and `b` of the batch, so this evaluates a projected body.
+        match &reusing.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                assert!(projected.supports_projection);
+                assert_eq!(projected.projection, vec![0, 1]);
+                assert!(projected.body.else_reuse.is_some());
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
+        assert_eq!(
+            evaluate_to_array(&reusing, &batch)?.as_ref(),
+            expected.as_ref()
+        );
+        assert_eq!(probe.evaluations(), (1, 4));
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_without_projection() -> Result<()> {
+        // All columns of the batch are used by the CASE expression, so it is evaluated as is.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), Some(9), None, Some(7)])),
+                Arc::new(Int32Array::from(vec![Some(5), Some(6), Some(7), Some(8)])),
+            ],
+        )?;
+
+        let probe = Probe::new();
+        // CASE WHEN f(a) > 6 THEN b ELSE f(a) END
+        let operand = probe.wrap(col("a", &schema)?);
+        let when = binary(Arc::clone(&operand), Operator::Gt, lit(6i32), &schema)?;
+        let expr =
+            CaseExpr::try_new(None, vec![(when, col("b", &schema)?)], Some(operand))?
+                .with_else_reusing_first_when_operand(&[0])?;
+
+        let expected =
+            Arc::new(Int32Array::from(vec![Some(1), Some(6), None, Some(8)])) as ArrayRef;
+        assert_eq!(
+            evaluate_to_array(&expr, &batch)?.as_ref(),
+            expected.as_ref()
+        );
+        assert_eq!(probe.evaluations(), (1, 4));
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_when_all_rows_match_the_when() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+
+        // CASE WHEN f(c) > 0 THEN 100 ELSE f(c) END
+        let probe = Probe::new();
+        let operand = probe.wrap(col("c", &schema)?);
+        let when = binary(Arc::clone(&operand), Operator::Gt, lit(0i32), &schema)?;
+        let expr = CaseExpr::try_new(None, vec![(when, lit(100i32))], Some(operand))?
+            .with_else_reusing_first_when_operand(&[0])?;
+
+        let expected = Arc::new(Int32Array::from(vec![100; 4])) as ArrayRef;
+        assert_eq!(
+            evaluate_to_array(&expr, &batch)?.as_ref(),
+            expected.as_ref()
+        );
+        assert_eq!(probe.evaluations(), (1, 4));
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_when_no_row_matches_the_when() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+
+        // CASE WHEN f(a) = 'zzz' THEN 'x' ELSE f(a) END
+        let probe = Probe::new();
+        let operand = probe.wrap(col("a", &schema)?);
+        let when = binary(Arc::clone(&operand), Operator::Eq, lit("zzz"), &schema)?;
+        let expr = CaseExpr::try_new(None, vec![(when, lit("x"))], Some(operand))?
+            .with_else_reusing_first_when_operand(&[0])?;
+
+        let expected = string_array(vec![Some("foo"), Some("baz"), None, Some("bar")]);
+        assert_eq!(
+            evaluate_to_array(&expr, &batch)?.as_ref(),
+            expected.as_ref()
+        );
+        assert_eq!(probe.evaluations(), (1, 4));
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_when_operand_is_scalar() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+
+        // CASE WHEN f('x') = 'foo' THEN 'y' ELSE f('x') END, where `f` returns a scalar
+        let probe = Probe::new();
+        let operand = probe.wrap(lit("x"));
+        let when = binary(Arc::clone(&operand), Operator::Eq, lit("foo"), &schema)?;
+        let expr = CaseExpr::try_new(None, vec![(when, lit("y"))], Some(operand))?
+            .with_else_reusing_first_when_operand(&[0])?;
+
+        let expected = string_array(vec![Some("x"); 4]);
+        assert_eq!(
+            evaluate_to_array(&expr, &batch)?.as_ref(),
+            expected.as_ref()
+        );
+        assert_eq!(probe.evaluations(), (1, 4));
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_with_nested_operand_path() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+
+        // CASE WHEN f(a) = 'foo' THEN 'x' ELSE a END
+        // The ELSE is the input of `f`, which is the first child of the first child of the WHEN.
+        let probe = Probe::new();
+        let a = col("a", &schema)?;
+        let when = binary(
+            probe.wrap(Arc::clone(&a)),
+            Operator::Eq,
+            lit("foo"),
+            &schema,
+        )?;
+        let expr = CaseExpr::try_new(None, vec![(when, lit("x"))], Some(a))?
+            .with_else_reusing_first_when_operand(&[0, 0])?;
+        assert_eq!(expr.else_reusing_first_when_operand(), Some(&[0, 0][..]));
+
+        let expected = string_array(vec![Some("x"), Some("baz"), None, Some("bar")]);
+        assert_eq!(
+            evaluate_to_array(&expr, &batch)?.as_ref(),
+            expected.as_ref()
+        );
+        // `f` still sees each row once, now with the shared operand as its input
+        assert_eq!(probe.evaluations(), (1, 4));
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_with_empty_operand_path() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+
+        // CASE WHEN b > 2 THEN false ELSE b > 2 END
+        let probe = Probe::new();
+        let predicate = probe.wrap(binary(
+            col("b", &schema)?,
+            Operator::Gt,
+            lit(2i32),
+            &schema,
+        )?);
+        let build = |reuse: bool| -> Result<CaseExpr> {
+            let expr = CaseExpr::try_new(
+                None,
+                vec![(Arc::clone(&predicate), lit(false))],
+                Some(Arc::clone(&predicate)),
+            )?;
+            if reuse {
+                expr.with_else_reusing_first_when_operand(&[])
+            } else {
+                Ok(expr)
+            }
+        };
+
+        let expected = evaluate_to_array(&build(false)?, &batch)?;
+        assert_eq!(probe.evaluations(), (2, 6));
+
+        let probe_calls_before = probe.evaluations();
+        assert_eq!(
+            evaluate_to_array(&build(true)?, &batch)?.as_ref(),
+            expected.as_ref()
+        );
+        let (calls, rows) = probe.evaluations();
+        assert_eq!(
+            (calls - probe_calls_before.0, rows - probe_calls_before.1),
+            (1, 4)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_casts_to_the_return_type() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+
+        // The type of the CASE is Int64, but f(b) is Int32.
+        let build = |when_thens: Vec<(Arc<dyn PhysicalExpr>, i64)>,
+                     operand: Arc<dyn PhysicalExpr>|
+         -> Result<CaseExpr> {
+            let when_thens = when_thens
+                .into_iter()
+                .map(|(when, then)| (when, lit(then)))
+                .collect();
+            CaseExpr::try_new(None, when_thens, Some(operand))?
+                .with_else_reusing_first_when_operand(&[0])
+        };
+        let expected_single = Arc::new(Int64Array::from(vec![100, 2, 3, 4])) as ArrayRef;
+        let expected_multiple =
+            Arc::new(Int64Array::from(vec![100, 200, 3, 4])) as ArrayRef;
+
+        // CASE WHEN f(b) = 1 THEN 100 ELSE f(b) END
+        let probe = Probe::new();
+        let operand = probe.wrap(col("b", &schema)?);
+        let when = binary(Arc::clone(&operand), Operator::Eq, lit(1i32), &schema)?;
+        let expr = build(vec![(when, 100)], operand)?;
+        assert!(matches!(
+            expr.eval_method,
+            EvalMethod::ExpressionOrExpression(_)
+        ));
+        assert_eq!(
+            evaluate_to_array(&expr, &batch)?.as_ref(),
+            expected_single.as_ref()
+        );
+        assert_eq!(probe.evaluations(), (1, 4));
+
+        // CASE WHEN f(b) = 1 THEN 100 WHEN b = 2 THEN 200 ELSE f(b) END
+        let probe = Probe::new();
+        let operand = probe.wrap(col("b", &schema)?);
+        let when1 = binary(Arc::clone(&operand), Operator::Eq, lit(1i32), &schema)?;
+        let when2 = binary(col("b", &schema)?, Operator::Eq, lit(2i32), &schema)?;
+        let expr = build(vec![(when1, 100), (when2, 200)], operand)?;
+        assert!(matches!(expr.eval_method, EvalMethod::NoExpression(_)));
+        assert_eq!(
+            evaluate_to_array(&expr, &batch)?.as_ref(),
+            expected_multiple.as_ref()
+        );
+        assert_eq!(probe.evaluations(), (1, 4));
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_matches_plain_evaluation() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]));
+        // A small xorshift generator keeps the inputs reproducible.
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut random_column = |num_rows: usize, null_percentage: u64| -> ArrayRef {
+            let values = (0..num_rows).map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state % 100 >= null_percentage).then_some(((state >> 8) % 10) as i32)
+            });
+            Arc::new(values.collect::<Int32Array>())
+        };
+
+        // CASE WHEN f(a) > 6 THEN 1 [WHEN b > 5 THEN 2] ELSE f(a) END
+        let build = |probe: &Probe, second_when: bool, reuse: bool| -> Result<CaseExpr> {
+            let operand = probe.wrap(col("a", &schema)?);
+            let mut when_thens = vec![(
+                binary(Arc::clone(&operand), Operator::Gt, lit(6i32), &schema)?,
+                lit(1i32),
+            )];
+            if second_when {
+                when_thens.push((
+                    binary(col("b", &schema)?, Operator::Gt, lit(5i32), &schema)?,
+                    lit(2i32),
+                ));
+            }
+            let expr = CaseExpr::try_new(None, when_thens, Some(operand))?;
+            if reuse {
+                expr.with_else_reusing_first_when_operand(&[0])
+            } else {
+                Ok(expr)
+            }
+        };
+
+        for num_rows in [0, 1, 2, 7, 64, 1000] {
+            for null_percentage in [0, 10, 50, 100] {
+                let batch = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        random_column(num_rows, null_percentage),
+                        random_column(num_rows, null_percentage),
+                        random_column(num_rows, null_percentage),
+                    ],
+                )?;
+                for second_when in [false, true] {
+                    let plain = build(&Probe::new(), second_when, false)?;
+                    let probe = Probe::new();
+                    let reusing = build(&probe, second_when, true)?;
+                    assert_eq!(
+                        evaluate_to_array(&reusing, &batch)?.as_ref(),
+                        evaluate_to_array(&plain, &batch)?.as_ref(),
+                        "rows: {num_rows}, nulls: {null_percentage}%, second WHEN: {second_when}",
+                    );
+                    assert_eq!(probe.evaluations(), (1, num_rows));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_requires_equal_else_and_operand() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+
+        // CASE WHEN a = 'foo' THEN 1 ELSE b END
+        let when = binary(Arc::clone(&a), Operator::Eq, lit("foo"), &schema)?;
+        let expr =
+            CaseExpr::try_new(None, vec![(when, lit(1i32))], Some(Arc::clone(&b)))?;
+        let err = expr.with_else_reusing_first_when_operand(&[0]).unwrap_err();
+        assert!(
+            err.to_string().contains("is not the same expression"),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_requires_valid_path() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+        let a = col("a", &schema)?;
+
+        // CASE WHEN a = 'foo' THEN 'x' ELSE a END
+        let when = binary(Arc::clone(&a), Operator::Eq, lit("foo"), &schema)?;
+        let build = || {
+            CaseExpr::try_new(
+                None,
+                vec![(Arc::clone(&when), lit("x"))],
+                Some(Arc::clone(&a)),
+            )
+        };
+
+        let paths: [&[usize]; 3] = [&[2], &[0, 0], &[0, 0, 0]];
+        for path in paths {
+            let err = build()?
+                .with_else_reusing_first_when_operand(path)
+                .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("does not lead to a sub-expression"),
+                "{path:?}: {err}"
+            );
+        }
+        // The other child is a literal and not equal to the ELSE
+        let err = build()?
+            .with_else_reusing_first_when_operand(&[1])
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("is not the same expression"),
+            "{err}"
+        );
+        // While the first child is accepted
+        build()?.with_else_reusing_first_when_operand(&[0])?;
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_requires_else_and_no_base_expression() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+        let a = col("a", &schema)?;
+
+        // CASE WHEN a = 'foo' THEN 'x' END
+        let when = binary(Arc::clone(&a), Operator::Eq, lit("foo"), &schema)?;
+        let expr = CaseExpr::try_new(None, vec![(when, lit("x"))], None)?;
+        let err = expr.with_else_reusing_first_when_operand(&[0]).unwrap_err();
+        assert!(err.to_string().contains("has an ELSE"), "{err}");
+
+        // CASE a WHEN 'foo' THEN 'x' ELSE a END
+        let expr = CaseExpr::try_new(
+            Some(Arc::clone(&a)),
+            vec![(lit("foo"), lit("x"))],
+            Some(Arc::clone(&a)),
+        )?;
+        let err = expr.with_else_reusing_first_when_operand(&[]).unwrap_err();
+        assert!(
+            err.to_string().contains("without a base expression"),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_rejects_volatile_operand() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+
+        // CASE WHEN random() > 0.5 THEN 1.0 ELSE random() END
+        let random: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            datafusion_functions::math::random(),
+            vec![],
+            &schema,
+            Arc::new(ConfigOptions::default()),
+        )?);
+        let when = binary(Arc::clone(&random), Operator::Gt, lit(0.5f64), &schema)?;
+        let expr = CaseExpr::try_new(None, vec![(when, lit(1.0f64))], Some(random))?;
+
+        let err = expr.with_else_reusing_first_when_operand(&[0]).unwrap_err();
+        assert!(err.to_string().contains("is volatile"), "{err}");
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_is_part_of_equality() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+        let a = col("a", &schema)?;
+
+        let when = binary(Arc::clone(&a), Operator::Eq, lit("foo"), &schema)?;
+        let build = || {
+            CaseExpr::try_new(
+                None,
+                vec![(Arc::clone(&when), lit("x"))],
+                Some(Arc::clone(&a)),
+            )
+        };
+        let reusing = build()?.with_else_reusing_first_when_operand(&[0])?;
+
+        assert_eq!(build()?, build()?);
+        assert_eq!(
+            reusing,
+            build()?.with_else_reusing_first_when_operand(&[0])?
+        );
+        assert_ne!(reusing, build()?);
+        Ok(())
+    }
+
+    #[test]
+    fn else_reuse_survives_with_new_children() -> Result<()> {
+        let batch = case_test_batch_with_extra_columns()?;
+        let schema = batch.schema();
+
+        // CASE WHEN f(a) = 'foo' THEN 'x' ELSE f(a) END
+        let probe = Probe::new();
+        let operand = probe.wrap(col("a", &schema)?);
+        let when = binary(Arc::clone(&operand), Operator::Eq, lit("foo"), &schema)?;
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(
+            CaseExpr::try_new(None, vec![(when, lit("x"))], Some(operand))?
+                .with_else_reusing_first_when_operand(&[0])?,
+        );
+        let expected = string_array(vec![Some("x"), Some("baz"), None, Some("bar")]);
+
+        // Rebuilding with children that still satisfy the requirement keeps the option
+        let children = expr.children().into_iter().map(Arc::clone).collect();
+        let rebuilt = Arc::clone(&expr).with_new_children(children)?;
+        let rebuilt_case = rebuilt.downcast_ref::<CaseExpr>().unwrap();
+        assert_eq!(
+            rebuilt_case.else_reusing_first_when_operand(),
+            Some(&[0][..])
+        );
+        assert_eq!(
+            evaluate_to_array(rebuilt_case, &batch)?.as_ref(),
+            expected.as_ref()
+        );
+        assert_eq!(probe.evaluations(), (1, 4));
+
+        // Children that no longer satisfy the requirement drop the option, but still evaluate
+        let mut children = expr
+            .children()
+            .into_iter()
+            .map(Arc::clone)
+            .collect::<Vec<_>>();
+        let else_index = children.len() - 1;
+        children[else_index] = col("a", &schema)?;
+        let rebuilt = Arc::clone(&expr).with_new_children(children)?;
+        let rebuilt_case = rebuilt.downcast_ref::<CaseExpr>().unwrap();
+        assert_eq!(rebuilt_case.else_reusing_first_when_operand(), None);
+        assert_eq!(
+            evaluate_to_array(rebuilt_case, &batch)?.as_ref(),
+            expected.as_ref()
+        );
+        Ok(())
     }
 
     #[test]
