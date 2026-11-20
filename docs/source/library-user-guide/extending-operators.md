@@ -147,6 +147,11 @@ rule fail during physical planning.
 operator. `TopKExec` reads its input and uses `TopKReader` to keep the highest
 values. Once it has read the input, the reader returns the retained rows.
 
+`TopKPlanner` does not pass the sort expression (`expr`) to `TopKExec`. So
+`TopKReader` does not know the sort order. It always keeps the highest values
+from input column 1. This means a query with `ORDER BY revenue ASC` gives wrong
+results. It returns the highest values, not the lowest.
+
 The example is specialized for its test data. It expects particular columns
 and types, and its map stores only one customer per revenue value. It does not
 handle all sort options or other edge cases, so it should not be used as a
