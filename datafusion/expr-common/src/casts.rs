@@ -115,38 +115,8 @@ pub fn cast_predicate_preimage(
     op: Operator,
     lit_value: &ScalarValue,
 ) -> Result<Option<CastPredicatePreimage>> {
-    // Timestamp casts have their own rules: a truncation bucket when the cast
-    // narrows, and the source values equal to the literal when it does not. A
-    // rejected timestamp cast keeps its `CAST` instead of falling back to
-    // another cast family.
-    if let Some((source, target)) = timestamp_cast_types(source_type, target_type) {
-        return Ok(timestamp_preimage(
-            source_type,
-            source,
-            target,
-            op,
-            lit_value,
-        ));
-    }
-
-    if let Some((source, target)) = date32_to_timestamp_types(source_type, target_type) {
-        return Ok(date32_to_timestamp_preimage(
-            source_type,
-            source,
-            target,
-            op,
-            lit_value,
-        ));
-    }
-
-    if let Some((source, target)) = date64_to_timestamp_types(source_type, target_type) {
-        return Ok(date64_to_timestamp_preimage(
-            source_type,
-            source,
-            target,
-            op,
-            lit_value,
-        ));
+    if let Some(preimage) = temporal_preimage(source_type, target_type, op, lit_value) {
+        return Ok(preimage);
     }
 
     if let Some(value) =
@@ -168,44 +138,12 @@ pub fn exact_preimage_cast(
     target_type: &DataType,
     lit_value: &ScalarValue,
 ) -> Option<ScalarValue> {
-    // Timestamp casts need unit arithmetic rather than a literal round trip; only
-    // their singleton preimages are valid here.
-    if let Some((source, target)) = timestamp_cast_types(source_type, target_type) {
-        return match timestamp_preimage(
-            source_type,
-            source,
-            target,
-            Operator::Eq,
-            lit_value,
-        )? {
-            CastPredicatePreimage::Exact(value) => Some(value),
-            CastPredicatePreimage::Range(_) => None,
-        };
-    }
-
-    if let Some((source, target)) = date32_to_timestamp_types(source_type, target_type) {
-        return match date32_to_timestamp_preimage(
-            source_type,
-            source,
-            target,
-            Operator::Eq,
-            lit_value,
-        )? {
-            CastPredicatePreimage::Exact(value) => Some(value),
-            CastPredicatePreimage::Range(_) => None,
-        };
-    }
-
-    if let Some((source, target)) = date64_to_timestamp_types(source_type, target_type) {
-        return match date64_to_timestamp_preimage(
-            source_type,
-            source,
-            target,
-            Operator::Eq,
-            lit_value,
-        )? {
-            CastPredicatePreimage::Exact(value) => Some(value),
-            CastPredicatePreimage::Range(_) => None,
+    if let Some(preimage) =
+        temporal_preimage(source_type, target_type, Operator::Eq, lit_value)
+    {
+        return match preimage {
+            Some(CastPredicatePreimage::Exact(value)) => Some(value),
+            Some(CastPredicatePreimage::Range(_)) | None => None,
         };
     }
 
@@ -235,41 +173,33 @@ pub fn is_timestamp_precision_narrowing_cast(
     timestamp_unit_scale(source_unit) > timestamp_unit_scale(target_unit)
 }
 
-/// Returns the source and target types of a timestamp cast, each unwrapped from
-/// at most one `Dictionary` level.
-fn timestamp_cast_types<'a>(
-    source_type: &'a DataType,
-    target_type: &'a DataType,
-) -> Option<(&'a DataType, &'a DataType)> {
-    let (source, target) = (
-        unwrap_dictionary_type(source_type),
-        unwrap_dictionary_type(target_type),
-    );
-    (matches!(source, DataType::Timestamp(_, _))
-        && matches!(target, DataType::Timestamp(_, _)))
-    .then_some((source, target))
-}
+/// Dispatches to the preimage calculation for the matching temporal cast family.
+///
+/// Returns `None` when no family matches.
+/// Returns `Some(None)` when a family matches but declines the rewrite.
+fn temporal_preimage(
+    source_type: &DataType,
+    target_type: &DataType,
+    op: Operator,
+    lit_value: &ScalarValue,
+) -> Option<Option<CastPredicatePreimage>> {
+    let source = unwrap_dictionary_type(source_type);
+    let target = unwrap_dictionary_type(target_type);
 
-fn date32_to_timestamp_types<'a>(
-    source_type: &'a DataType,
-    target_type: &'a DataType,
-) -> Option<(&'a DataType, &'a DataType)> {
-    let source_type = unwrap_dictionary_type(source_type);
-    let target_type = unwrap_dictionary_type(target_type);
-    (matches!(source_type, DataType::Date32)
-        && matches!(target_type, DataType::Timestamp(_, None)))
-    .then_some((source_type, target_type))
-}
+    let preimage = match (source, target) {
+        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => {
+            timestamp_preimage(source_type, source, target, op, lit_value)
+        }
+        (DataType::Date32, DataType::Timestamp(_, None)) => {
+            date32_to_timestamp_preimage(source_type, source, target, op, lit_value)
+        }
+        (DataType::Date64, DataType::Timestamp(_, None)) => {
+            date64_to_timestamp_preimage(source_type, source, target, op, lit_value)
+        }
+        _ => return None,
+    };
 
-fn date64_to_timestamp_types<'a>(
-    source_type: &'a DataType,
-    target_type: &'a DataType,
-) -> Option<(&'a DataType, &'a DataType)> {
-    let source_type = unwrap_dictionary_type(source_type);
-    let target_type = unwrap_dictionary_type(target_type);
-    (matches!(source_type, DataType::Date64)
-        && matches!(target_type, DataType::Timestamp(_, None)))
-    .then_some((source_type, target_type))
+    Some(preimage)
 }
 
 fn unwrap_dictionary_type(data_type: &DataType) -> &DataType {
