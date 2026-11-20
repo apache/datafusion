@@ -12,11 +12,11 @@ use std::sync::Arc;
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
 use crate::joins::PartitionMode;
-use crate::joins::hash_join::bloom_filter::{BloomFilterExpr, BloomFilterOptions};
+use crate::joins::hash_join::bloom_filter::{self, BloomFilterExpr, BloomFilterOptions};
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::not_in::NotIn;
 use crate::joins::key_range_bitmap::{KeyRangeBitmap, KeyRangePart};
-use arrow::array::{Array, ArrayRef, UInt32Array};
+use arrow::array::{Array, ArrayRef, AsArray, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::config::ConfigOptions;
@@ -24,7 +24,9 @@ use datafusion_common::{
     DataFusionError, NullEquality, Result, ScalarValue, SharedResult,
     assert_or_internal_err,
 };
-use datafusion_execution::memory_pool::{MemoryPool, UnboundedMemoryPool};
+use datafusion_execution::memory_pool::{
+    MemoryConsumer, MemoryPool, UnboundedMemoryPool,
+};
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
@@ -783,7 +785,7 @@ impl SharedBuildAccumulator {
                 _ => None,
             })
             .collect::<Option<Vec<_>>>();
-        let membership_expr = match in_lists {
+        let membership_expr = match &in_lists {
             // The partitions hold disjoint keys, so the sum of their distinct
             // counts is the number of distinct keys of the build side.
             Some(in_lists)
@@ -805,15 +807,31 @@ impl SharedBuildAccumulator {
                 // Every partition must have its filter. A partition has none
                 // when the build side is too big for a bloom filter, or its
                 // memory reservation failed.
-                let filters = non_empty
-                    .iter()
-                    .map(|p| p.build_keys.bloom_filter.as_deref())
-                    .collect::<Option<Vec<_>>>();
                 let pool = self
                     .global_filter_options
                     .memory_pool
                     .clone()
                     .unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
+                // Each partition sizes its filter for the keys of all partitions,
+                // estimated from its own count. With few keys per partition the
+                // counts vary a lot, and the merge folds into the smallest
+                // filter, which then cannot hold every key. Partitions with an
+                // IN list hold their keys, so build one filter of all of them,
+                // sized for the real count.
+                let from_in_lists = in_lists
+                    .as_deref()
+                    .map(|in_lists| {
+                        self.filter_from_in_lists(in_lists, num_distinct, &pool)
+                    })
+                    .transpose()?
+                    .flatten();
+                let filters = match &from_in_lists {
+                    Some(filter) => Some(vec![filter]),
+                    None => non_empty
+                        .iter()
+                        .map(|p| p.build_keys.bloom_filter.as_deref())
+                        .collect::<Option<Vec<_>>>(),
+                };
                 let bloom = BloomFilterExpr::try_new(
                     self.on_right.clone(),
                     filters.as_deref(),
@@ -833,6 +851,34 @@ impl SharedBuildAccumulator {
         let filter_expr = combine_membership_and_bounds(membership_expr, bounds_expr)
             .unwrap_or_else(|| lit(true));
         self.preserve_probe_nulls(filter_expr, keys_have_null)
+    }
+
+    /// A bloom filter of the IN list values of all partitions, sized for
+    /// `num_distinct` keys. `None` when that filter is too large or `pool`
+    /// cannot hold it.
+    fn filter_from_in_lists(
+        &self,
+        in_lists: &[ArrayRef],
+        num_distinct: usize,
+        pool: &Arc<dyn MemoryPool>,
+    ) -> Result<Option<Sbbf>> {
+        let arrays: Vec<&dyn Array> = in_lists.iter().map(|a| a.as_ref()).collect();
+        let values = arrow::compute::concat(&arrays)?;
+        // Multi-column keys are a struct of the key columns.
+        let keys = if self.on_right.len() == 1 {
+            vec![values]
+        } else {
+            values.as_struct().columns().to_vec()
+        };
+        // Only for the build: the merge copies the filter into its own
+        // reservation.
+        let reservation = MemoryConsumer::new("HashJoinBloomFilterBuild").register(pool);
+        bloom_filter::partition_filter(
+            &keys,
+            num_distinct,
+            self.global_filter_options.bloom_filter,
+            &reservation,
+        )
     }
 
     /// One [`KeyRangeBitmap`] for the keys of all partitions, so that scans can
@@ -983,17 +1029,16 @@ mod tests {
     /// Adds the bloom filter of `build_keys.keys`, sized for 4 times its
     /// keys (the keys of a few partitions).
     fn test_build_keys(mut build_keys: BuildKeys) -> BuildKeys {
-        let reservation = datafusion_execution::memory_pool::MemoryConsumer::new("test")
+        let reservation = MemoryConsumer::new("test")
             .register(&(Arc::new(UnboundedMemoryPool::default()) as Arc<dyn MemoryPool>));
-        build_keys.bloom_filter =
-            crate::joins::hash_join::bloom_filter::partition_filter(
-                &build_keys.keys,
-                build_keys.num_distinct * 4,
-                GlobalFilterOptions::default().bloom_filter,
-                &reservation,
-            )
-            .unwrap()
-            .map(Arc::new);
+        build_keys.bloom_filter = bloom_filter::partition_filter(
+            &build_keys.keys,
+            build_keys.num_distinct * 4,
+            GlobalFilterOptions::default().bloom_filter,
+            &reservation,
+        )
+        .unwrap()
+        .map(Arc::new);
         build_keys
     }
 
@@ -1218,6 +1263,68 @@ mod tests {
         // Bounds remove everything outside [0, 12997]; the bloom filter removes
         // most other keys
         assert!(false_positives < 300, "{false_positives} false positives");
+    }
+
+    /// Many partitions with few keys each have uneven key counts, so the
+    /// filter that the smallest partition sizes for all partitions is too
+    /// small for every key. The IN lists still give a bloom filter.
+    #[test]
+    fn many_small_inlist_partitions_keep_bloom_filter() {
+        const PARTITIONS: usize = 128;
+        let partition_keys = |p: usize| -> Vec<i32> {
+            let n = if p == 0 { 4 } else { 16 };
+            (0..n).map(|i| (p * 100 + i) as i32).collect()
+        };
+        let partitions = (0..PARTITIONS)
+            .map(|p| {
+                let keys = partition_keys(p);
+                let values: ArrayRef = Arc::new(Int32Array::from(keys.clone()));
+                // Sized as the build sizes it: for this partition's keys times
+                // the number of partitions.
+                let reservation = MemoryConsumer::new("test").register(
+                    &(Arc::new(UnboundedMemoryPool::default()) as Arc<dyn MemoryPool>),
+                );
+                let bloom_filter = bloom_filter::partition_filter(
+                    std::slice::from_ref(&values),
+                    keys.len() * PARTITIONS,
+                    GlobalFilterOptions::default().bloom_filter,
+                    &reservation,
+                )
+                .unwrap()
+                .map(Arc::new);
+                PartitionStatus::Reported(PartitionData {
+                    pushdown: PushdownStrategy::InList(Arc::clone(&values)),
+                    bounds: bounds(keys[0], *keys.last().unwrap()),
+                    keys_have_null: false,
+                    build_keys: BuildKeys {
+                        bloom_filter,
+                        num_distinct: keys.len(),
+                        keys: vec![values],
+                    },
+                })
+            })
+            .collect();
+        let acc = make_partitioned_expr_accumulator_for_test(PARTITIONS);
+        acc.build_filter(FinalizeInput::Partitioned(partitions))
+            .unwrap();
+
+        let expr = current_expr(&acc);
+        assert!(format!("{expr}").ends_with("AND bloom_filter"), "{expr}");
+        let build_keys: Vec<i32> = (0..PARTITIONS).flat_map(partition_keys).collect();
+        let num_keys = build_keys.len();
+        assert!(eval_bool(&expr, build_keys).into_iter().all(|kept| kept));
+        // Keys between the partitions pass the bounds but not the bloom filter
+        let others: Vec<i32> = (0..PARTITIONS as i32)
+            .flat_map(|p| p * 100 + 50..p * 100 + 100)
+            .collect();
+        let false_positives = eval_bool(&expr, others)
+            .into_iter()
+            .filter(|&kept| kept)
+            .count();
+        assert!(
+            false_positives < num_keys / 10,
+            "{false_positives} false positives"
+        );
     }
 
     /// Partitions that each fit an InList but together exceed the InList limit get
