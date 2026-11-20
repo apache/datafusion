@@ -378,12 +378,10 @@ fn create_simple_csv_exec() -> Arc<dyn ExecutionPlan> {
     ]));
     let config =
         FileScanConfigBuilder::new(ObjectStoreUrl::parse("test:///").unwrap(), {
-            let options = CsvOptions {
-                has_header: Some(false),
-                delimiter: 0,
-                quote: 0,
-                ..Default::default()
-            };
+            let mut options = CsvOptions::default();
+            options.has_header = Some(false);
+            options.delimiter = 0;
+            options.quote = 0;
             Arc::new(CsvSource::new(schema.clone()).with_csv_options(options))
         })
         .with_file(PartitionedFile::new("x", 100))
@@ -403,12 +401,10 @@ fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
     ]));
     let config =
         FileScanConfigBuilder::new(ObjectStoreUrl::parse("test:///").unwrap(), {
-            let options = CsvOptions {
-                has_header: Some(false),
-                delimiter: 0,
-                quote: 0,
-                ..Default::default()
-            };
+            let mut options = CsvOptions::default();
+            options.has_header = Some(false);
+            options.delimiter = 0;
+            options.quote = 0;
             Arc::new(CsvSource::new(schema.clone()).with_csv_options(options))
         })
         .with_file(PartitionedFile::new("x", 100))
@@ -1561,12 +1557,10 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
         Field::new("string_col", DataType::Utf8, true),
     ]));
 
-    let options = CsvOptions {
-        has_header: Some(false),
-        delimiter: b',',
-        quote: b'"',
-        ..Default::default()
-    };
+    let mut options = CsvOptions::default();
+    options.has_header = Some(false);
+    options.delimiter = b',';
+    options.quote = b'"';
     let table_schema = TableSchemaBuilder::from(&file_schema)
         .with_table_partition_cols(vec![Arc::new(Field::new(
             "partition_col",

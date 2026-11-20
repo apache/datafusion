@@ -790,10 +790,8 @@ mod tests {
         )
         .unwrap();
         let empty_batch = RecordBatch::new_empty(schema.clone());
-        let format_options = FormatOptions {
-            time_format: Some("%Y".to_owned()),
-            ..Default::default()
-        };
+        let mut format_options = FormatOptions::default();
+        format_options.time_format = Some("%Y".to_owned());
 
         for batches in [vec![batch], vec![empty_batch]] {
             let mut output = Vec::new();

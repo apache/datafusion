@@ -57,7 +57,7 @@ use std::sync::Arc;
 ///
 /// ```ignore
 /// /// Amazing config
-/// #[derive(Debug, Clone)]
+/// #[derive(Debug, Clone, PartialEq)]
 /// #[non_exhaustive]
 /// pub struct MyConfig {
 ///     /// Field 1 doc
@@ -108,6 +108,24 @@ use std::sync::Arc;
 /// }
 /// ```
 ///
+/// The generated struct is `#[non_exhaustive]`, so that new fields can be
+/// added without a breaking change. Outside the defining crate it cannot be
+/// built with a struct literal; start from `Default::default()` instead:
+///
+/// ```compile_fail,E0639
+/// use datafusion_common::config::ExecutionOptions;
+/// let options = ExecutionOptions {
+///     collect_statistics: false,
+///     ..Default::default()
+/// };
+/// ```
+///
+/// ```
+/// use datafusion_common::config::ExecutionOptions;
+/// let mut options = ExecutionOptions::default();
+/// options.collect_statistics = false;
+/// ```
+///
 /// NB: Misplaced commas may result in nonsensical errors
 #[macro_export]
 macro_rules! config_namespace {
@@ -131,6 +149,7 @@ macro_rules! config_namespace {
         $(#[deprecated($($struct_depr)*)])? // Apply struct deprecation
         $(#[allow($($struct_de)*)])?
         #[derive(Debug, Clone, PartialEq)]
+        #[non_exhaustive]
         $vis struct $struct_name {
             $(
                 $(#[doc = $d])* // Apply field documentation

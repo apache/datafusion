@@ -132,12 +132,11 @@ async fn cdc_affects_page_boundaries() {
 
     // Write WITH CDC using small chunk sizes to maximize effect
     let mut cdc_opts = TableParquetOptions::default();
-    cdc_opts.global.content_defined_chunking = ParquetCdcOptions {
-        enabled: true,
-        min_chunk_size: 512,
-        max_chunk_size: 2048,
-        norm_level: 0,
-    };
+    let cdc = &mut cdc_opts.global.content_defined_chunking;
+    cdc.enabled = true;
+    cdc.min_chunk_size = 512;
+    cdc.max_chunk_size = 2048;
+    cdc.norm_level = 0;
     let cdc_file =
         write_parquet_file(&batch, writer_props(&mut cdc_opts, &batch.schema()));
     let cdc_meta = read_metadata(&cdc_file);

@@ -1124,50 +1124,49 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
     fn try_from(
         proto_opts: &protobuf::CsvOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        Ok(CsvOptions {
-            has_header: proto_opts.has_header.first().map(|h| *h != 0),
-            delimiter: proto_opts.delimiter[0],
-            quote: proto_opts.quote[0],
-            terminator: proto_opts.terminator.first().copied(),
-            escape: proto_opts.escape.first().copied(),
-            double_quote: proto_opts.double_quote.first().map(|h| *h != 0),
-            newlines_in_values: proto_opts.newlines_in_values.first().map(|h| *h != 0),
-            compression: proto_opts.compression().into(),
-            compression_level: proto_opts.compression_level,
-            schema_infer_max_rec: proto_opts
-                .schema_infer_max_rec
-                .map(|v| usize_from_wire(v, "CsvOptions", "schema_infer_max_rec"))
-                .transpose()?,
-            date_format: (!proto_opts.date_format.is_empty())
-                .then(|| proto_opts.date_format.clone()),
-            datetime_format: (!proto_opts.datetime_format.is_empty())
-                .then(|| proto_opts.datetime_format.clone()),
-            timestamp_format: (!proto_opts.timestamp_format.is_empty())
-                .then(|| proto_opts.timestamp_format.clone()),
-            timestamp_tz_format: (!proto_opts.timestamp_tz_format.is_empty())
-                .then(|| proto_opts.timestamp_tz_format.clone()),
-            time_format: (!proto_opts.time_format.is_empty())
-                .then(|| proto_opts.time_format.clone()),
-            null_value: (!proto_opts.null_value.is_empty())
-                .then(|| proto_opts.null_value.clone()),
-            null_regex: (!proto_opts.null_regex.is_empty())
-                .then(|| proto_opts.null_regex.clone()),
-            comment: proto_opts.comment.first().copied(),
-            truncated_rows: proto_opts.truncated_rows.first().map(|h| *h != 0),
-            quote_style: proto_opts.quote_style().into(),
-            ignore_leading_whitespace: proto_opts
-                .ignore_leading_whitespace
-                .first()
-                .map(|h| *h != 0),
-            ignore_trailing_whitespace: proto_opts
-                .ignore_trailing_whitespace
-                .first()
-                .map(|h| *h != 0),
-            match_columns_by_header: proto_opts
-                .match_columns_by_header
-                .first()
-                .map(|h| *h != 0),
-        })
+        let mut options = CsvOptions::default();
+        options.has_header = proto_opts.has_header.first().map(|h| *h != 0);
+        options.delimiter = proto_opts.delimiter[0];
+        options.quote = proto_opts.quote[0];
+        options.terminator = proto_opts.terminator.first().copied();
+        options.escape = proto_opts.escape.first().copied();
+        options.double_quote = proto_opts.double_quote.first().map(|h| *h != 0);
+        options.newlines_in_values =
+            proto_opts.newlines_in_values.first().map(|h| *h != 0);
+        options.compression = proto_opts.compression().into();
+        options.compression_level = proto_opts.compression_level;
+        options.schema_infer_max_rec = proto_opts
+            .schema_infer_max_rec
+            .map(|v| usize_from_wire(v, "CsvOptions", "schema_infer_max_rec"))
+            .transpose()?;
+        options.date_format =
+            (!proto_opts.date_format.is_empty()).then(|| proto_opts.date_format.clone());
+        options.datetime_format = (!proto_opts.datetime_format.is_empty())
+            .then(|| proto_opts.datetime_format.clone());
+        options.timestamp_format = (!proto_opts.timestamp_format.is_empty())
+            .then(|| proto_opts.timestamp_format.clone());
+        options.timestamp_tz_format = (!proto_opts.timestamp_tz_format.is_empty())
+            .then(|| proto_opts.timestamp_tz_format.clone());
+        options.time_format =
+            (!proto_opts.time_format.is_empty()).then(|| proto_opts.time_format.clone());
+        options.null_value =
+            (!proto_opts.null_value.is_empty()).then(|| proto_opts.null_value.clone());
+        options.null_regex =
+            (!proto_opts.null_regex.is_empty()).then(|| proto_opts.null_regex.clone());
+        options.comment = proto_opts.comment.first().copied();
+        options.truncated_rows = proto_opts.truncated_rows.first().map(|h| *h != 0);
+        options.quote_style = proto_opts.quote_style().into();
+        options.ignore_leading_whitespace = proto_opts
+            .ignore_leading_whitespace
+            .first()
+            .map(|h| *h != 0);
+        options.ignore_trailing_whitespace = proto_opts
+            .ignore_trailing_whitespace
+            .first()
+            .map(|h| *h != 0);
+        options.match_columns_by_header =
+            proto_opts.match_columns_by_header.first().map(|h| *h != 0);
+        Ok(options)
     }
 }
 
@@ -1179,124 +1178,152 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
     ) -> datafusion_common::Result<Self, Self::Error> {
         let to_usize =
             |value: u64, field: &str| usize_from_wire(value, "ParquetOptions", field);
-        Ok(ParquetOptions {
-            enable_page_index: value.enable_page_index,
-            pruning: value.pruning,
-            skip_metadata: value.skip_metadata,
-            metadata_size_hint: value
-                .metadata_size_hint_opt
-                .map(|opt| match opt {
-                    protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => {
-                        to_usize(v, "metadata_size_hint")
-                    }
-                })
-                .transpose()?,
-            pushdown_filters: value.pushdown_filters,
-            reorder_filters: value.reorder_filters,
-            force_filter_selections: value.force_filter_selections,
-            enable_exact_reverse_scan: value.enable_exact_reverse_scan,
-            data_pagesize_limit: to_usize(
-                value.data_pagesize_limit,
-                "data_pagesize_limit",
-            )?,
-            write_batch_size: to_usize(value.write_batch_size, "write_batch_size")?,
-            writer_version: value.writer_version.parse().map_err(|e| {
-                DataFusionError::Internal(format!("Failed to parse writer_version: {e}"))
-            })?,
-            compression: value.compression_opt.as_ref().map(|opt| match opt {
+        let mut options = ParquetOptions::default();
+        options.enable_page_index = value.enable_page_index;
+        options.pruning = value.pruning;
+        options.skip_metadata = value.skip_metadata;
+        options.metadata_size_hint = value
+            .metadata_size_hint_opt
+            .map(|opt| match opt {
+                protobuf::parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => {
+                    to_usize(v, "metadata_size_hint")
+                }
+            })
+            .transpose()?;
+        options.pushdown_filters = value.pushdown_filters;
+        options.reorder_filters = value.reorder_filters;
+        options.force_filter_selections = value.force_filter_selections;
+        options.enable_exact_reverse_scan = value.enable_exact_reverse_scan;
+        options.data_pagesize_limit =
+            to_usize(value.data_pagesize_limit, "data_pagesize_limit")?;
+        options.write_batch_size = to_usize(value.write_batch_size, "write_batch_size")?;
+        options.writer_version = value.writer_version.parse().map_err(|e| {
+            DataFusionError::Internal(format!("Failed to parse writer_version: {e}"))
+        })?;
+        options.compression = value
+            .compression_opt
+            .as_ref()
+            .map(|opt| match opt {
                 protobuf::parquet_options::CompressionOpt::Compression(v) => v.parse(),
-            }).transpose()?,
-            dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
-            // Continuing from where we left off in the TryFrom implementation
-            dictionary_page_size_limit: to_usize(
-                value.dictionary_page_size_limit,
-                "dictionary_page_size_limit",
-            )?,
-            statistics_enabled: value
-                .statistics_enabled_opt.as_ref()
-                .map(|opt| match opt {
-                    protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => v.parse(),
-                })
-                .transpose()?,
-            max_row_group_size: to_usize(value.max_row_group_size, "max_row_group_size")?,
-            max_in_list_size: to_usize(value.max_in_list_size, "max_in_list_size")?,
-            row_group_range_assignment: RowGroupRangeAssignment::from_proto_str(
-                &value.row_group_range_assignment,
-            )?,
-            created_by: value.created_by.clone(),
-            column_index_truncate_length: value
+            })
+            .transpose()?;
+        options.dictionary_enabled = value.dictionary_enabled_opt.as_ref().map(
+            |protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v,
+        );
+        options.dictionary_page_size_limit = to_usize(
+            value.dictionary_page_size_limit,
+            "dictionary_page_size_limit",
+        )?;
+        options.statistics_enabled = value
+            .statistics_enabled_opt
+            .as_ref()
+            .map(|opt| match opt {
+                protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v) => {
+                    v.parse()
+                }
+            })
+            .transpose()?;
+        options.max_row_group_size =
+            to_usize(value.max_row_group_size, "max_row_group_size")?;
+        options.max_in_list_size = to_usize(value.max_in_list_size, "max_in_list_size")?;
+        options.row_group_range_assignment =
+            RowGroupRangeAssignment::from_proto_str(&value.row_group_range_assignment)?;
+        options.created_by.clone_from(&value.created_by);
+        options.column_index_truncate_length = value
                 .column_index_truncate_length_opt.as_ref()
                 .map(|opt| match opt {
                     protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v) => {
                         to_usize(*v, "column_index_truncate_length")
                     }
                 })
-                .transpose()?,
-            statistics_truncate_length: value
+                .transpose()?;
+        options.statistics_truncate_length = value
                 .statistics_truncate_length_opt.as_ref()
                 .map(|opt| match opt {
                     protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v) => {
                         to_usize(*v, "statistics_truncate_length")
                     }
                 })
-                .transpose()?,
-            data_page_row_count_limit: to_usize(
-                value.data_page_row_count_limit,
-                "data_page_row_count_limit",
-            )?,
-            encoding: value
-                .encoding_opt
-                .as_ref()
-                .map(|opt| match opt {
-                    protobuf::parquet_options::EncodingOpt::Encoding(v) => v.parse(),
-                })
-                .transpose()?,
-            bloom_filter_on_read: value.bloom_filter_on_read,
-            bloom_filter_on_write: value.bloom_filter_on_write,
-            bloom_filter_fpp: value.clone()
-                .bloom_filter_fpp_opt
-                .map(|opt| match opt {
-                    protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp(v) => Some(v),
-                })
-                .unwrap_or(None),
-            bloom_filter_ndv: value.clone()
-                .bloom_filter_ndv_opt
-                .map(|opt| match opt {
-                    protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv(v) => Some(v),
-                })
-                .unwrap_or(None),
-            allow_single_file_parallelism: value.allow_single_file_parallelism,
-            maximum_parallel_row_group_writers: to_usize(
-                value.maximum_parallel_row_group_writers,
-                "maximum_parallel_row_group_writers",
-            )?,
-            maximum_buffered_record_batches_per_stream: to_usize(
-                value.maximum_buffered_record_batches_per_stream,
-                "maximum_buffered_record_batches_per_stream",
-            )?,
-            schema_force_view_types: value.schema_force_view_types,
-            binary_as_string: value.binary_as_string,
-            coerce_int96: value.coerce_int96_opt.as_ref().map(|opt| match opt {
+                .transpose()?;
+        options.data_page_row_count_limit =
+            to_usize(value.data_page_row_count_limit, "data_page_row_count_limit")?;
+        options.encoding = value
+            .encoding_opt
+            .as_ref()
+            .map(|opt| match opt {
+                protobuf::parquet_options::EncodingOpt::Encoding(v) => v.parse(),
+            })
+            .transpose()?;
+        options.bloom_filter_on_read = value.bloom_filter_on_read;
+        options.bloom_filter_on_write = value.bloom_filter_on_write;
+        options.bloom_filter_fpp = value
+            .clone()
+            .bloom_filter_fpp_opt
+            .map(|opt| match opt {
+                protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp(v) => {
+                    Some(v)
+                }
+            })
+            .unwrap_or(None);
+        options.bloom_filter_ndv = value
+            .clone()
+            .bloom_filter_ndv_opt
+            .map(|opt| match opt {
+                protobuf::parquet_options::BloomFilterNdvOpt::BloomFilterNdv(v) => {
+                    Some(v)
+                }
+            })
+            .unwrap_or(None);
+        options.allow_single_file_parallelism = value.allow_single_file_parallelism;
+        options.maximum_parallel_row_group_writers = to_usize(
+            value.maximum_parallel_row_group_writers,
+            "maximum_parallel_row_group_writers",
+        )?;
+        options.maximum_buffered_record_batches_per_stream = to_usize(
+            value.maximum_buffered_record_batches_per_stream,
+            "maximum_buffered_record_batches_per_stream",
+        )?;
+        options.schema_force_view_types = value.schema_force_view_types;
+        options.binary_as_string = value.binary_as_string;
+        options.coerce_int96 = value
+            .coerce_int96_opt
+            .as_ref()
+            .map(|opt| match opt {
                 protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v) => v.parse(),
-            }).transpose()?,
-            coerce_int96_tz: value.coerce_int96_tz_opt.as_ref().map(|opt| match opt {
-                protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => v.parse(),
-            }).transpose()?,
-            skip_arrow_metadata: value.skip_arrow_metadata,
-            write_row_group_number_distinct_values: value.write_row_group_number_distinct_values,
-            max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
+            })
+            .transpose()?;
+        options.coerce_int96_tz = value
+            .coerce_int96_tz_opt
+            .as_ref()
+            .map(|opt| match opt {
+                protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => {
+                    v.parse()
+                }
+            })
+            .transpose()?;
+        options.skip_arrow_metadata = value.skip_arrow_metadata;
+        options.write_row_group_number_distinct_values =
+            value.write_row_group_number_distinct_values;
+        options.max_predicate_cache_size = value.max_predicate_cache_size_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => {
                     to_usize(v, "max_predicate_cache_size")
                 }
-            }).transpose()?,
-            max_row_group_bytes: value.max_row_group_bytes_opt.map(|opt| match opt {
+            }).transpose()?;
+        options.max_row_group_bytes = value
+            .max_row_group_bytes_opt
+            .map(|opt| match opt {
                 protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v) => {
                     MaxRowGroupBytes::try_new(to_usize(v, "max_row_group_bytes")?)
                 }
-            }).transpose()?,
-            content_defined_chunking: value.content_defined_chunking.map(ParquetCdcOptions::try_from).transpose()?.unwrap_or_default(),
-            enable_rle_to_dictionary: value.enable_rle_to_dictionary,
-        })
+            })
+            .transpose()?;
+        options.content_defined_chunking = value
+            .content_defined_chunking
+            .map(ParquetCdcOptions::try_from)
+            .transpose()?
+            .unwrap_or_default();
+        options.enable_rle_to_dictionary = value.enable_rle_to_dictionary;
+        Ok(options)
     }
 }
 
@@ -1308,12 +1335,12 @@ impl TryFrom<protobuf::ParquetCdcOptions> for ParquetCdcOptions {
     ) -> datafusion_common::Result<Self, Self::Error> {
         let to_usize =
             |value: u64, field: &str| usize_from_wire(value, "ParquetCdcOptions", field);
-        Ok(ParquetCdcOptions {
-            enabled: value.enabled,
-            min_chunk_size: to_usize(value.min_chunk_size, "min_chunk_size")?,
-            max_chunk_size: to_usize(value.max_chunk_size, "max_chunk_size")?,
-            norm_level: value.norm_level,
-        })
+        let mut options = ParquetCdcOptions::default();
+        options.enabled = value.enabled;
+        options.min_chunk_size = to_usize(value.min_chunk_size, "min_chunk_size")?;
+        options.max_chunk_size = to_usize(value.max_chunk_size, "max_chunk_size")?;
+        options.norm_level = value.norm_level;
+        Ok(options)
     }
 }
 
@@ -1396,15 +1423,15 @@ impl TryFrom<&protobuf::JsonOptions> for JsonOptions {
         proto_opts: &protobuf::JsonOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
         let compression: protobuf::CompressionTypeVariant = proto_opts.compression();
-        Ok(JsonOptions {
-            compression: compression.into(),
-            compression_level: proto_opts.compression_level,
-            schema_infer_max_rec: proto_opts
-                .schema_infer_max_rec
-                .map(|v| usize_from_wire(v, "JsonOptions", "schema_infer_max_rec"))
-                .transpose()?,
-            newline_delimited: proto_opts.newline_delimited.unwrap_or(true),
-        })
+        let mut options = JsonOptions::default();
+        options.compression = compression.into();
+        options.compression_level = proto_opts.compression_level;
+        options.schema_infer_max_rec = proto_opts
+            .schema_infer_max_rec
+            .map(|v| usize_from_wire(v, "JsonOptions", "schema_infer_max_rec"))
+            .transpose()?;
+        options.newline_delimited = proto_opts.newline_delimited.unwrap_or(true);
+        Ok(options)
     }
 }
 
@@ -1442,9 +1469,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Display;
+
     use datafusion_common::TableReference;
     use datafusion_common::config::{
-        MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
+        ConfigField, CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions,
+        ParquetOptions, TableParquetOptions, Visit,
     };
     use datafusion_common::parquet_config::{
         DFParquetCompression, DFParquetEncoding, DFParquetStatistics, DFTimeUnit,
@@ -1664,10 +1694,8 @@ mod tests {
 
     #[test]
     fn test_parquet_options_coerce_int96_tz_without_unit_round_trip() {
-        let opts = ParquetOptions {
-            coerce_int96_tz: Some("+08".parse().unwrap()),
-            ..ParquetOptions::default()
-        };
+        let mut opts = ParquetOptions::default();
+        opts.coerce_int96_tz = Some("+08".parse().unwrap());
         let recovered = parquet_options_proto_round_trip(opts.clone());
         assert_eq!(recovered.coerce_int96, None);
         assert_eq!(recovered.coerce_int96_tz, opts.coerce_int96_tz);
@@ -1675,11 +1703,9 @@ mod tests {
 
     #[test]
     fn test_parquet_options_coerce_int96_tz_set_round_trip() {
-        let opts = ParquetOptions {
-            coerce_int96: Some(DFTimeUnit::Microsecond),
-            coerce_int96_tz: Some("UTC".parse().unwrap()),
-            ..ParquetOptions::default()
-        };
+        let mut opts = ParquetOptions::default();
+        opts.coerce_int96 = Some(DFTimeUnit::Microsecond);
+        opts.coerce_int96_tz = Some("UTC".parse().unwrap());
         let recovered = parquet_options_proto_round_trip(opts.clone());
         assert_eq!(recovered.coerce_int96, Some(DFTimeUnit::Microsecond));
         assert_eq!(recovered.coerce_int96_tz, opts.coerce_int96_tz);
@@ -1687,10 +1713,8 @@ mod tests {
 
     #[test]
     fn test_parquet_options_row_group_range_assignment_round_trip() {
-        let opts = ParquetOptions {
-            row_group_range_assignment: RowGroupRangeAssignment::Midpoint,
-            ..ParquetOptions::default()
-        };
+        let mut opts = ParquetOptions::default();
+        opts.row_group_range_assignment = RowGroupRangeAssignment::Midpoint;
         let mut proto: crate::protobuf_common::ParquetOptions =
             (&opts).try_into().expect("to_proto");
         assert_eq!(ParquetOptions::try_from(&proto).unwrap(), opts);
@@ -1705,10 +1729,8 @@ mod tests {
 
     #[test]
     fn test_parquet_statistics_round_trip() {
-        let opts = ParquetOptions {
-            statistics_enabled: Some(DFParquetStatistics::Chunk),
-            ..ParquetOptions::default()
-        };
+        let mut opts = ParquetOptions::default();
+        opts.statistics_enabled = Some(DFParquetStatistics::Chunk);
         let recovered = parquet_options_proto_round_trip(opts);
         assert_eq!(
             recovered.statistics_enabled,
@@ -1718,10 +1740,8 @@ mod tests {
 
     #[test]
     fn test_parquet_compression_round_trip() {
-        let opts = ParquetOptions {
-            compression: Some(DFParquetCompression::Gzip(6)),
-            ..ParquetOptions::default()
-        };
+        let mut opts = ParquetOptions::default();
+        opts.compression = Some(DFParquetCompression::Gzip(6));
         let recovered = parquet_options_proto_round_trip(opts);
         assert_eq!(recovered.compression, Some(DFParquetCompression::Gzip(6)));
     }
@@ -1733,10 +1753,8 @@ mod tests {
             Some(DFParquetEncoding::ByteStreamSplit),
             Some(DFParquetEncoding::Alp),
         ] {
-            let opts = ParquetOptions {
-                encoding,
-                ..ParquetOptions::default()
-            };
+            let mut opts = ParquetOptions::default();
+            opts.encoding = encoding;
             let recovered = parquet_options_proto_round_trip(opts);
             assert_eq!(recovered.encoding, encoding);
         }
@@ -1842,12 +1860,9 @@ mod tests {
 
     #[test]
     fn test_parquet_options_max_row_group_bytes_round_trip() {
-        let opts = ParquetOptions {
-            max_row_group_bytes: Some(
-                MaxRowGroupBytes::try_new(64 * 1024 * 1024).unwrap(),
-            ),
-            ..ParquetOptions::default()
-        };
+        let mut opts = ParquetOptions::default();
+        opts.max_row_group_bytes =
+            Some(MaxRowGroupBytes::try_new(64 * 1024 * 1024).unwrap());
         let recovered = parquet_options_proto_round_trip(opts.clone());
         assert_eq!(
             recovered.max_row_group_bytes.map(|v| v.get()),
@@ -1870,15 +1885,11 @@ mod tests {
 
     #[test]
     fn test_parquet_options_cdc_enabled_round_trip() {
-        let opts = ParquetOptions {
-            content_defined_chunking: ParquetCdcOptions {
-                enabled: true,
-                min_chunk_size: 128 * 1024,
-                max_chunk_size: 512 * 1024,
-                norm_level: 2,
-            },
-            ..ParquetOptions::default()
-        };
+        let mut opts = ParquetOptions::default();
+        opts.content_defined_chunking.enabled = true;
+        opts.content_defined_chunking.min_chunk_size = 128 * 1024;
+        opts.content_defined_chunking.max_chunk_size = 512 * 1024;
+        opts.content_defined_chunking.norm_level = 2;
         let recovered = parquet_options_proto_round_trip(opts.clone());
         let cdc = recovered.content_defined_chunking;
         assert!(cdc.enabled);
@@ -1889,14 +1900,9 @@ mod tests {
 
     #[test]
     fn test_parquet_options_cdc_negative_norm_level_round_trip() {
-        let opts = ParquetOptions {
-            content_defined_chunking: ParquetCdcOptions {
-                enabled: true,
-                norm_level: -3,
-                ..ParquetCdcOptions::default()
-            },
-            ..ParquetOptions::default()
-        };
+        let mut opts = ParquetOptions::default();
+        opts.content_defined_chunking.enabled = true;
+        opts.content_defined_chunking.norm_level = -3;
         let recovered = parquet_options_proto_round_trip(opts);
         assert_eq!(recovered.content_defined_chunking.norm_level, -3);
     }
@@ -1904,12 +1910,11 @@ mod tests {
     #[test]
     fn test_table_parquet_options_cdc_round_trip() {
         let mut opts = TableParquetOptions::default();
-        opts.global.content_defined_chunking = ParquetCdcOptions {
-            enabled: true,
-            min_chunk_size: 64 * 1024,
-            max_chunk_size: 2 * 1024 * 1024,
-            norm_level: -1,
-        };
+        let cdc = &mut opts.global.content_defined_chunking;
+        cdc.enabled = true;
+        cdc.min_chunk_size = 64 * 1024;
+        cdc.max_chunk_size = 2 * 1024 * 1024;
+        cdc.norm_level = -1;
 
         let recovered = table_parquet_options_proto_round_trip(opts.clone());
         let cdc = recovered.global.content_defined_chunking;
@@ -1925,5 +1930,128 @@ mod tests {
         assert!(!opts.global.content_defined_chunking.enabled);
         let recovered = table_parquet_options_proto_round_trip(opts.clone());
         assert!(!recovered.global.content_defined_chunking.enabled);
+    }
+
+    /// Names of the top-level fields of a config struct, in declaration order.
+    fn config_field_names<T: ConfigField + Default>() -> Vec<String> {
+        struct Names(Vec<String>);
+        impl Names {
+            fn push(&mut self, key: &str) {
+                // `options.<field>`, or `options.<field>.<inner>` for nested structs
+                let name = key.split('.').nth(1).unwrap().to_string();
+                if self.0.last() != Some(&name) {
+                    self.0.push(name);
+                }
+            }
+        }
+        impl Visit for Names {
+            fn some<V: Display>(&mut self, key: &str, _: V, _: &'static str) {
+                self.push(key);
+            }
+            fn none(&mut self, key: &str, _: &'static str) {
+                self.push(key);
+            }
+        }
+        let mut names = Names(vec![]);
+        T::default().visit(&mut names, "options", "");
+        names.0
+    }
+
+    /// The protobuf conversions in this file set fields one by one, so a field added to one
+    /// of these structs is silently lost in a round trip until the conversions map it. If
+    /// this test fails, map the new field in both `from_proto` and `to_proto`, then update
+    /// the list here.
+    #[test]
+    fn config_structs_fields_are_mapped_to_protobuf() {
+        assert_eq!(
+            config_field_names::<CsvOptions>(),
+            [
+                "has_header",
+                "delimiter",
+                "quote",
+                "terminator",
+                "escape",
+                "double_quote",
+                "quote_style",
+                "ignore_leading_whitespace",
+                "ignore_trailing_whitespace",
+                "newlines_in_values",
+                "compression",
+                "compression_level",
+                "schema_infer_max_rec",
+                "date_format",
+                "datetime_format",
+                "timestamp_format",
+                "timestamp_tz_format",
+                "time_format",
+                "null_value",
+                "null_regex",
+                "comment",
+                "truncated_rows",
+                "match_columns_by_header"
+            ],
+            "CsvOptions fields changed"
+        );
+        assert_eq!(
+            config_field_names::<JsonOptions>(),
+            [
+                "compression",
+                "compression_level",
+                "schema_infer_max_rec",
+                "newline_delimited"
+            ],
+            "JsonOptions fields changed"
+        );
+        assert_eq!(
+            config_field_names::<ParquetCdcOptions>(),
+            ["enabled", "min_chunk_size", "max_chunk_size", "norm_level"],
+            "ParquetCdcOptions fields changed"
+        );
+        assert_eq!(
+            config_field_names::<ParquetOptions>(),
+            [
+                "enable_page_index",
+                "pruning",
+                "skip_metadata",
+                "metadata_size_hint",
+                "pushdown_filters",
+                "reorder_filters",
+                "force_filter_selections",
+                "enable_exact_reverse_scan",
+                "schema_force_view_types",
+                "binary_as_string",
+                "coerce_int96",
+                "coerce_int96_tz",
+                "bloom_filter_on_read",
+                "max_predicate_cache_size",
+                "max_in_list_size",
+                "enable_rle_to_dictionary",
+                "row_group_range_assignment",
+                "data_pagesize_limit",
+                "write_batch_size",
+                "writer_version",
+                "skip_arrow_metadata",
+                "compression",
+                "dictionary_enabled",
+                "dictionary_page_size_limit",
+                "statistics_enabled",
+                "max_row_group_size",
+                "max_row_group_bytes",
+                "created_by",
+                "column_index_truncate_length",
+                "statistics_truncate_length",
+                "data_page_row_count_limit",
+                "encoding",
+                "bloom_filter_on_write",
+                "bloom_filter_fpp",
+                "bloom_filter_ndv",
+                "write_row_group_number_distinct_values",
+                "allow_single_file_parallelism",
+                "maximum_parallel_row_group_writers",
+                "maximum_buffered_record_batches_per_stream",
+                "content_defined_chunking"
+            ],
+            "ParquetOptions fields changed"
+        );
     }
 }

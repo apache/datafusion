@@ -551,14 +551,13 @@ impl<'a, 'b> DFParserBuilder<'a, 'b> {
             }
         };
 
+        let mut options = SqlParserOptions::default();
+        options.recursion_limit = ConfigNonZeroUsize::try_new(self.recursion_limit)?;
         Ok(DFParser {
             parser: Parser::new(self.dialect)
                 .with_tokens_with_locations(tokens)
                 .with_recursion_limit(self.recursion_limit),
-            options: SqlParserOptions {
-                recursion_limit: ConfigNonZeroUsize::try_new(self.recursion_limit)?,
-                ..Default::default()
-            },
+            options,
             supports_explain_with_utility_options: self
                 .dialect
                 .supports_explain_with_utility_options(),

@@ -65,13 +65,11 @@ use tokio::io::AsyncWriteExt;
 /// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # let file_schema = Arc::new(Schema::empty());
 ///
-/// let options = CsvOptions {
-///     has_header: Some(true),
-///     delimiter: b',',
-///     quote: b'"',
-///     newlines_in_values: Some(true), // The file contains newlines in values
-///     ..Default::default()
-/// };
+/// let mut options = CsvOptions::default();
+/// options.has_header = Some(true);
+/// options.delimiter = b',';
+/// options.quote = b'"';
+/// options.newlines_in_values = Some(true); // The file contains newlines in values
 /// let source = Arc::new(CsvSource::new(file_schema.clone())
 ///     .with_csv_options(options)
 ///     .with_terminator(Some(b'#'))
@@ -1053,15 +1051,13 @@ impl CsvSource {
 
         let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
 
-        let csv_options = CsvOptions {
-            has_header: Some(scan.has_header),
-            delimiter: proto_str_to_byte(&scan.delimiter, "delimiter")?,
-            quote: proto_str_to_byte(&scan.quote, "quote")?,
-            newlines_in_values: Some(scan.newlines_in_values),
-            truncated_rows: Some(scan.truncate_rows),
-            match_columns_by_header: Some(scan.match_columns_by_header),
-            ..Default::default()
-        };
+        let mut csv_options = CsvOptions::default();
+        csv_options.has_header = Some(scan.has_header);
+        csv_options.delimiter = proto_str_to_byte(&scan.delimiter, "delimiter")?;
+        csv_options.quote = proto_str_to_byte(&scan.quote, "quote")?;
+        csv_options.newlines_in_values = Some(scan.newlines_in_values);
+        csv_options.truncated_rows = Some(scan.truncate_rows);
+        csv_options.match_columns_by_header = Some(scan.match_columns_by_header);
         let source = Arc::new(
             CsvSource::new(table_schema)
                 .with_csv_options(csv_options)
@@ -1082,11 +1078,9 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     fn csv_source(schema: SchemaRef, null_regex: Option<&str>) -> CsvSource {
-        let options = CsvOptions {
-            has_header: Some(true),
-            null_regex: null_regex.map(str::to_string),
-            ..CsvOptions::default()
-        };
+        let mut options = CsvOptions::default();
+        options.has_header = Some(true);
+        options.null_regex = null_regex.map(str::to_string);
         let mut source = CsvSource::new(schema).with_csv_options(options);
         source.batch_size = Some(1024);
         source

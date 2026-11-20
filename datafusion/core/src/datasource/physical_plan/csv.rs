@@ -81,12 +81,10 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let options = CsvOptions {
-            has_header: Some(true),
-            delimiter: b',',
-            quote: b'"',
-            ..Default::default()
-        };
+        let mut options = CsvOptions::default();
+        options.has_header = Some(true);
+        options.delimiter = b',';
+        options.quote = b'"';
         let table_schema = TableSchema::from(&file_schema);
         let source =
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
@@ -153,12 +151,10 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let options = CsvOptions {
-            has_header: Some(true),
-            delimiter: b',',
-            quote: b'"',
-            ..Default::default()
-        };
+        let mut options = CsvOptions::default();
+        options.has_header = Some(true);
+        options.delimiter = b',';
+        options.quote = b'"';
         let table_schema = TableSchema::from(&file_schema);
         let source =
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
@@ -224,12 +220,10 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let options = CsvOptions {
-            has_header: Some(true),
-            delimiter: b',',
-            quote: b'"',
-            ..Default::default()
-        };
+        let mut options = CsvOptions::default();
+        options.has_header = Some(true);
+        options.delimiter = b',';
+        options.quote = b'"';
         let table_schema = TableSchema::from(&file_schema);
         let source =
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
@@ -294,12 +288,10 @@ mod tests {
             tmp_dir.path(),
         )?;
 
-        let options = CsvOptions {
-            has_header: Some(true),
-            delimiter: b',',
-            quote: b'"',
-            ..Default::default()
-        };
+        let mut options = CsvOptions::default();
+        options.has_header = Some(true);
+        options.delimiter = b',';
+        options.quote = b'"';
         let table_schema = TableSchema::from(&file_schema);
         let source =
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
@@ -359,12 +351,10 @@ mod tests {
 
         let num_file_schema_fields = file_schema.fields().len();
 
-        let options = CsvOptions {
-            has_header: Some(true),
-            delimiter: b',',
-            quote: b'"',
-            ..Default::default()
-        };
+        let mut options = CsvOptions::default();
+        options.has_header = Some(true);
+        options.delimiter = b',';
+        options.quote = b'"';
         let table_schema = TableSchemaBuilder::from(&file_schema)
             .with_table_partition_cols(vec![Arc::new(Field::new(
                 "date",
@@ -470,12 +460,10 @@ mod tests {
         )
         .unwrap();
 
-        let options = CsvOptions {
-            has_header: Some(true),
-            delimiter: b',',
-            quote: b'"',
-            ..Default::default()
-        };
+        let mut options = CsvOptions::default();
+        options.has_header = Some(true);
+        options.delimiter = b',';
+        options.quote = b'"';
         let table_schema = TableSchema::from(&file_schema);
         let source =
             Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
@@ -1048,11 +1036,9 @@ mod tests {
             Field::new("b", DataType::Utf8, true),
             Field::new("a", DataType::Int32, true),
         ])));
-        let options = CsvOptions {
-            has_header: Some(true),
-            comment: Some(b'#'),
-            ..Default::default()
-        };
+        let mut options = CsvOptions::default();
+        options.has_header = Some(true);
+        options.comment = Some(b'#');
         let source = Arc::new(
             CsvSource::new(table_schema)
                 .with_csv_options(options)
