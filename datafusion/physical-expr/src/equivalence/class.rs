@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use std::any::Any;
 use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -951,7 +950,7 @@ impl EquivalenceGroup {
         }
 
         // Type equality check through reflection
-        if (left as &dyn Any).type_id() != (right as &dyn Any).type_id() {
+        if left.as_ref().type_id() != right.as_ref().type_id() {
             return false;
         }
 
@@ -960,7 +959,22 @@ impl EquivalenceGroup {
             return false;
         }
 
-        // Check if all children are equal
+        // Compare properties stored on the node itself (for example, the operator
+        // of a BinaryExpr) by giving the left node the right node's children.
+        // PhysicalExpr equality then only differs if a non-child property differs.
+        let Ok(left_with_right_children) = Arc::clone(left).with_new_children(
+            right_children
+                .iter()
+                .map(|child| Arc::clone(child))
+                .collect(),
+        ) else {
+            return false;
+        };
+        if !left_with_right_children.eq(right) {
+            return false;
+        }
+
+        // Check if all children are equal, including through equivalence classes
         left_children
             .into_iter()
             .zip(right_children)
@@ -1020,7 +1034,7 @@ impl From<Vec<EquivalenceClass>> for EquivalenceGroup {
 mod tests {
     use super::*;
     use crate::equivalence::tests::create_test_params;
-    use crate::expressions::{BinaryExpr, Column, binary, col, lit};
+    use crate::expressions::{BinaryExpr, CastExpr, Column, binary, col, lit};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     use datafusion_expr::Operator;
@@ -1220,6 +1234,56 @@ mod tests {
                 )) as _,
                 expected: true,
                 description: "Binary expressions with equivalent operands should be equal",
+            },
+            TestCase {
+                left: Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_a),
+                    Operator::Plus,
+                    Arc::clone(&lit_1),
+                )) as _,
+                right: Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_a),
+                    Operator::Plus,
+                    Arc::clone(&lit_1),
+                )) as _,
+                expected: true,
+                description: "Identical binary expressions should be equal",
+            },
+            TestCase {
+                left: Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_a),
+                    Operator::Plus,
+                    Arc::clone(&lit_1),
+                )) as _,
+                right: Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_a),
+                    Operator::Modulo,
+                    Arc::clone(&lit_1),
+                )) as _,
+                expected: false,
+                description: "Binary expressions with different operators should not be equal",
+            },
+            TestCase {
+                left: Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_a),
+                    Operator::Plus,
+                    Arc::clone(&lit_1),
+                )) as _,
+                right: Arc::new(BinaryExpr::new(
+                    Arc::clone(&col_x),
+                    Operator::Modulo,
+                    Arc::clone(&lit_1),
+                )) as _,
+                expected: false,
+                description: "Different operators should not be equal when operands are equivalent",
+            },
+            TestCase {
+                left: Arc::new(CastExpr::new(Arc::clone(&col_a), DataType::Int32, None))
+                    as _,
+                right: Arc::new(CastExpr::new(Arc::clone(&col_a), DataType::Int64, None))
+                    as _,
+                expected: false,
+                description: "Casts with different target types should not be equal",
             },
             TestCase {
                 left: Arc::new(BinaryExpr::new(
