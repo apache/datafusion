@@ -327,7 +327,9 @@ join_condition:
 | USING (column_name [, ...])
 ```
 
-Joins are written inside the `FROM` clause between input relations.
+Joins are written inside the `FROM` clause between input relations. See
+[`JoinType`](https://docs.rs/datafusion/latest/datafusion/common/enum.JoinType.html)
+for a description of each join type with examples.
 
 Join conditions can use `ON` or `USING`.
 
