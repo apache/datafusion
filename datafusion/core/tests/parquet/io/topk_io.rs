@@ -46,18 +46,32 @@ async fn test_topk_io_dynamic_filter() {
     let test = topk_test(true).await;
     // Note: in practice, the default 512 KiB metadata size hint would fetch
     // the page index of a small file like this along with the footer.
-    assert_snapshot!(test.query("SELECT * FROM t ORDER BY id DESC LIMIT 2").await, @r"
-    --- Query: SELECT * FROM t ORDER BY id DESC LIMIT 2 (2 rows) ---
-    Request 1
-        Head (object size and metadata)
-    Request 2
-        Read Parquet footer (offsets 489..1402)
-    Request 3
-        Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
-    Request 4
-        Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
-        Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
-    Produce batch (2 rows)
+    let traces = test.capture_traces();
+    test.query("SELECT * FROM t ORDER BY id DESC LIMIT 2")
+        .await
+        .unwrap();
+    assert_snapshot!(traces.render(), @"
+    Query (sql=SELECT * FROM t ORDER BY id DESC LIMIT 2, rows=2)
+        ObjectStore::head (location=table.parquet)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=489..1402)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=489..1402, parquet=footer)
+        Read page index (range=286..489)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=286..489, parquet=ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2))
+        Open Parquet file (file=table.parquet, size=1402)
+        Load Parquet metadata
+            Metadata cache hit (has_page_index=true)
+        Prune row groups
+            Row groups remaining (row_groups=3, row_groups_remaining=3, pruning_predicate=false)
+        Load Bloom filters
+        Prune row groups with Bloom filters
+        Fetch column chunk data (ranges=2)
+            ObjectStore::get_ranges (location=table.parquet, ranges=2)
+                Read byte range (range=192..239, parquet=dictionary page and data page 0 for column 'id' (rg 2))
+                Read byte range (range=239..286, parquet=dictionary page and data page 0 for column 'val' (rg 2))
+        Produce batch (rows=2)
     ");
 }
 
@@ -66,24 +80,40 @@ async fn test_topk_io_dynamic_filter() {
 #[tokio::test]
 async fn test_topk_io_no_dynamic_filter() {
     let test = topk_test(false).await;
-    assert_snapshot!(test.query("SELECT * FROM t ORDER BY id DESC LIMIT 2").await, @r"
-    --- Query: SELECT * FROM t ORDER BY id DESC LIMIT 2 (2 rows) ---
-    Request 1
-        Head (object size and metadata)
-    Request 2
-        Read Parquet footer (offsets 489..1402)
-    Request 3
-        Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
-    Request 4
-        Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
-        Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
-    Request 5
-        Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
-        Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
-    Request 6
-        Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
-        Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
-    Produce batch (2 rows)
+    let traces = test.capture_traces();
+    test.query("SELECT * FROM t ORDER BY id DESC LIMIT 2")
+        .await
+        .unwrap();
+    assert_snapshot!(traces.render(), @"
+    Query (sql=SELECT * FROM t ORDER BY id DESC LIMIT 2, rows=2)
+        ObjectStore::head (location=table.parquet)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=489..1402)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=489..1402, parquet=footer)
+        Read page index (range=286..489)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=286..489, parquet=ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2))
+        Open Parquet file (file=table.parquet, size=1402)
+        Load Parquet metadata
+            Metadata cache hit (has_page_index=true)
+        Prune row groups
+            Row groups remaining (row_groups=3, row_groups_remaining=3, pruning_predicate=false)
+        Load Bloom filters
+        Prune row groups with Bloom filters
+        Fetch column chunk data (ranges=2)
+            ObjectStore::get_ranges (location=table.parquet, ranges=2)
+                Read byte range (range=192..239, parquet=dictionary page and data page 0 for column 'id' (rg 2))
+                Read byte range (range=239..286, parquet=dictionary page and data page 0 for column 'val' (rg 2))
+        Fetch column chunk data (ranges=2)
+            ObjectStore::get_ranges (location=table.parquet, ranges=2)
+                Read byte range (range=98..145, parquet=dictionary page and data page 0 for column 'id' (rg 1))
+                Read byte range (range=145..192, parquet=dictionary page and data page 0 for column 'val' (rg 1))
+        Fetch column chunk data (ranges=2)
+            ObjectStore::get_ranges (location=table.parquet, ranges=2)
+                Read byte range (range=4..51, parquet=dictionary page and data page 0 for column 'id' (rg 0))
+                Read byte range (range=51..98, parquet=dictionary page and data page 0 for column 'val' (rg 0))
+        Produce batch (rows=2)
     ");
 }
 

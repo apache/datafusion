@@ -43,22 +43,41 @@ async fn test_parquet_bloom_filter_io_matching() {
     // Note: in practice, the default 512 KiB metadata size hint often covers
     // the OffsetIndex and Bloom filters for small files, so they wouldn't
     // need separate requests.
-    assert_snapshot!(test.query("SELECT * FROM t WHERE a = 10 AND b = 100").await, @r"
-    --- Query: SELECT * FROM t WHERE a = 10 AND b = 100 (1 rows) ---
-    Request 1
-        Head (object size and metadata)
-    Request 2
-        Read Parquet footer (offsets 213..678)
-    Request 3
-        Read OffsetIndex for columns 'a', 'b' (rg 0) (offsets 192..213)
-    Request 4
-        Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
-    Request 5
-        Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
-    Request 6
-        Read dictionary page and data page 0 for column 'a' (rg 0) (offsets 4..51)
-        Read dictionary page and data page 0 for column 'b' (rg 0) (offsets 51..98)
-    Produce batch (1 rows)
+    let traces = test.capture_traces();
+    test.query("SELECT * FROM t WHERE a = 10 AND b = 100")
+        .await
+        .unwrap();
+    assert_snapshot!(traces.render(), @"
+    Query (sql=SELECT * FROM t WHERE a = 10 AND b = 100, rows=1)
+        ObjectStore::head (location=table.parquet)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=213..678)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=213..678, parquet=footer)
+        Read page index (range=192..213)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=192..213, parquet=OffsetIndex for columns 'a', 'b' (rg 0))
+        Open Parquet file (file=table.parquet, size=678)
+        Load Parquet metadata
+            Metadata cache hit (has_page_index=false)
+        Prune row groups
+            Row groups remaining (row_groups=1, row_groups_remaining=1, pruning_predicate=true)
+        Load Bloom filters
+            Read Bloom filter (column=a, row_group=0, range=98..145)
+            ObjectStore::get (location=table.parquet)
+                Read byte range (range=98..145, parquet=Bloom filter for column 'a' (rg 0))
+            Read Bloom filter (column=b, row_group=0, range=145..192)
+            ObjectStore::get (location=table.parquet)
+                Read byte range (range=145..192, parquet=Bloom filter for column 'b' (rg 0))
+        Prune row groups with Bloom filters
+            Row groups remaining (row_groups_remaining=1)
+        Prune pages with page index
+            Row groups remaining (row_groups_remaining=1)
+        Fetch column chunk data (ranges=2)
+            ObjectStore::get_ranges (location=table.parquet, ranges=2)
+                Read byte range (range=4..51, parquet=dictionary page and data page 0 for column 'a' (rg 0))
+                Read byte range (range=51..98, parquet=dictionary page and data page 0 for column 'b' (rg 0))
+        Produce batch (rows=1)
     ");
 }
 
@@ -70,18 +89,34 @@ async fn test_parquet_bloom_filter_io_pruned() {
     // loaded upfront. With incremental pruning
     // (https://github.com/apache/datafusion/issues/25811), `a` would be
     // evaluated first and the Bloom filter for `b` would not be loaded.
-    assert_snapshot!(test.query("SELECT * FROM t WHERE a = 999 AND b = 100").await, @r"
-    --- Query: SELECT * FROM t WHERE a = 999 AND b = 100 (0 rows) ---
-    Request 1
-        Head (object size and metadata)
-    Request 2
-        Read Parquet footer (offsets 213..678)
-    Request 3
-        Read OffsetIndex for columns 'a', 'b' (rg 0) (offsets 192..213)
-    Request 4
-        Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
-    Request 5
-        Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
+    let traces = test.capture_traces();
+    test.query("SELECT * FROM t WHERE a = 999 AND b = 100")
+        .await
+        .unwrap();
+    assert_snapshot!(traces.render(), @"
+    Query (sql=SELECT * FROM t WHERE a = 999 AND b = 100, rows=0)
+        ObjectStore::head (location=table.parquet)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=213..678)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=213..678, parquet=footer)
+        Read page index (range=192..213)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=192..213, parquet=OffsetIndex for columns 'a', 'b' (rg 0))
+        Open Parquet file (file=table.parquet, size=678)
+        Load Parquet metadata
+            Metadata cache hit (has_page_index=false)
+        Prune row groups
+            Row groups remaining (row_groups=1, row_groups_remaining=1, pruning_predicate=true)
+        Load Bloom filters
+            Read Bloom filter (column=a, row_group=0, range=98..145)
+            ObjectStore::get (location=table.parquet)
+                Read byte range (range=98..145, parquet=Bloom filter for column 'a' (rg 0))
+            Read Bloom filter (column=b, row_group=0, range=145..192)
+            ObjectStore::get (location=table.parquet)
+                Read byte range (range=145..192, parquet=Bloom filter for column 'b' (rg 0))
+        Prune row groups with Bloom filters
+            Row groups remaining (row_groups_remaining=0)
     ");
 }
 
