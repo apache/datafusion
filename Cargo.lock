@@ -2225,6 +2225,7 @@ name = "datafusion-expr-common"
 version = "57.0.0-dev"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "datafusion-common",
  "indexmap 2.14.2",
  "insta",
@@ -2275,6 +2276,7 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "arrow-schema",
+ "async-trait",
  "datafusion",
  "datafusion-catalog",
  "datafusion-common",
@@ -2431,8 +2433,10 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "bytes",
+ "datafusion",
  "datafusion-common",
  "datafusion-execution",
+ "datafusion-expr",
  "datafusion-physical-plan",
  "futures",
  "parking_lot 0.13.0",

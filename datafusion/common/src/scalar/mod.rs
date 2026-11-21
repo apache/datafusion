@@ -6,6 +6,7 @@
 
 mod cache;
 mod consts;
+mod null_struct;
 mod struct_builder;
 
 use std::borrow::Borrow;
@@ -1423,12 +1424,9 @@ impl ScalarValue {
             DataType::LargeListView(field_ref) => ScalarValue::LargeListView(Arc::new(
                 GenericListViewArray::new_null(Arc::clone(field_ref), 1),
             )),
-            DataType::Struct(fields) => ScalarValue::Struct(
-                new_null_array(&DataType::Struct(fields.to_owned()), 1)
-                    .as_struct()
-                    .to_owned()
-                    .into(),
-            ),
+            DataType::Struct(fields) => {
+                ScalarValue::Struct(Arc::new(null_struct::new_null_struct(fields)?))
+            }
             DataType::Map(fields, sorted) => ScalarValue::Map(
                 new_null_array(&DataType::Map(fields.to_owned(), sorted.to_owned()), 1)
                     .as_map()
@@ -1904,9 +1902,10 @@ impl ScalarValue {
 
             // List types
             DataType::List(field) => {
-                let list =
-                    ScalarValue::new_list(&[], field.data_type(), field.is_nullable());
-                Ok(ScalarValue::List(list))
+                let empty_arr = new_empty_array(field.data_type());
+                Ok(SingleRowListArrayBuilder::new(empty_arr)
+                    .with_field(field)
+                    .build_list_scalar())
             }
             DataType::FixedSizeList(field, _size) => {
                 let empty_arr = new_empty_array(field.data_type());
@@ -1918,8 +1917,10 @@ impl ScalarValue {
                 Ok(ScalarValue::FixedSizeList(values))
             }
             DataType::LargeList(field) => {
-                let list = ScalarValue::new_large_list(&[], field.data_type());
-                Ok(ScalarValue::LargeList(list))
+                let empty_arr = new_empty_array(field.data_type());
+                Ok(SingleRowListArrayBuilder::new(empty_arr)
+                    .with_field(field)
+                    .build_large_list_scalar())
             }
             DataType::ListView(field) => {
                 let empty_arr = new_empty_array(field.data_type());
@@ -11012,6 +11013,24 @@ mod tests {
             actual.starts_with(expected_prefix),
             "Expected '{actual}' to start with '{expected_prefix}'"
         );
+    }
+
+    #[test]
+    fn test_new_default_list_preserves_field() {
+        for nullable in [false, true] {
+            let field = Arc::new(
+                Field::new("element", DataType::Int64, nullable)
+                    .with_metadata(HashMap::from([("k".to_string(), "v".to_string())])),
+            );
+            for data_type in [
+                DataType::List(Arc::clone(&field)),
+                DataType::LargeList(field),
+            ] {
+                let value = ScalarValue::new_default(&data_type).unwrap();
+                assert_eq!(value.data_type(), data_type);
+                assert!(!value.is_null());
+            }
+        }
     }
 
     #[test]
