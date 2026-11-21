@@ -338,6 +338,21 @@ physical_plan
 04)------DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(1), Bytes=Exact(112), [(Col[0]: Null=Exact(0))]]
 05)------DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(5), Bytes=Exact(192), [(Col[0]: Null=Exact(2))]]
 
+# An inner join with an input known to be empty is exactly empty
+statement ok
+CREATE TABLE empty_join_input(a INT) AS SELECT * FROM null_check_join WHERE false;
+
+query TT
+EXPLAIN SELECT * FROM null_check_statistics t JOIN empty_join_input e ON t.a = e.a;
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)], projection=[a@1, a@0], statistics=[Rows=Exact(0), Bytes=Exact(0), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+02)--DataSourceExec: partitions=1, partition_sizes=[0], statistics=[Rows=Exact(0), Bytes=Exact(0), [(Col[0]: Null=Exact(0))]]
+03)--DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(5), Bytes=Exact(192), [(Col[0]: Null=Exact(2))]]
+
+statement ok
+DROP TABLE empty_join_input;
+
 # A TopK that preserves partitioning keeps up to `fetch` rows from each of its
 # partitions, so its estimate must count all of them, while the merge above it
 # keeps the global limit.
