@@ -1143,9 +1143,11 @@ config_namespace! {
         /// runtime reassignment occurs.
         pub enable_file_stream_work_stealing: bool, default = true
 
-        /// Aggregation ratio (number of distinct groups / number of input rows)
-        /// threshold for skipping partial aggregation. If the value is greater
-        /// then partial aggregation will skip aggregation for further input
+        /// Aggregation ratio (number of groups the partial aggregation creates /
+        /// number of input rows) threshold for skipping partial aggregation. A key
+        /// that returns after an early emit under memory pressure counts again.
+        /// If the value is greater then partial aggregation will skip aggregation
+        /// for further input
         pub skip_partial_aggregation_probe_ratio_threshold: f64, default = 0.8
 
         /// Number of input rows partial aggregation partition should process, before
