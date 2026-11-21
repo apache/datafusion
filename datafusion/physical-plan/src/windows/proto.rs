@@ -13,7 +13,8 @@ use datafusion_common::{
 use datafusion_expr::{
     WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
-use datafusion_physical_expr::window::SlidingAggregateWindowExpr;
+use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+use datafusion_physical_expr::window::{AggregateWindowExpr, SlidingAggregateWindowExpr};
 use datafusion_physical_expr_common::sort_expr::{
     sort_exprs_try_from_proto, sort_exprs_try_to_proto,
 };
@@ -22,66 +23,87 @@ use datafusion_proto_models::protobuf::{self, physical_window_expr_node};
 
 use super::{
     PlainAggregateWindowExpr, StandardWindowExpr, WindowExpr, WindowUDFExpr,
-    create_window_expr, schema_add_window_field,
+    new_udwf_window_expr, schema_add_window_field, window_expr_from_aggregate_expr,
 };
 
-pub(super) fn encode_physical_window_expr(
+/// Serialize a [`WindowExpr`] to protobuf.
+pub fn encode_physical_window_expr(
     window_expr: &Arc<dyn WindowExpr>,
     ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
 ) -> Result<protobuf::PhysicalWindowExprNode> {
     let expr = window_expr.as_any();
     let mut args = window_expr.expressions().to_vec();
     let window_frame = window_expr.get_window_frame();
-    let (window_function, fun_definition, ignore_nulls, distinct) =
-        if let Some(plain) = expr.downcast_ref::<PlainAggregateWindowExpr>() {
-            let aggregate_expr = plain.get_aggregate_expr();
+    let (
+        window_function,
+        fun_definition,
+        ignore_nulls,
+        distinct,
+        is_reversed,
+        ordering_req,
+        filter,
+    ) = if let Some(plain) = expr.downcast_ref::<PlainAggregateWindowExpr>() {
+        let aggregate_expr = plain.get_aggregate_expr();
+        (
+            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+                aggregate_expr.fun().name().to_string(),
+            ),
+            ctx.encode_udaf(aggregate_expr.fun())?,
+            aggregate_expr.ignore_nulls(),
+            aggregate_expr.is_distinct(),
+            aggregate_expr.is_reversed(),
+            aggregate_expr.order_bys(),
+            plain.filter_expr(),
+        )
+    } else if let Some(sliding) = expr.downcast_ref::<SlidingAggregateWindowExpr>() {
+        let aggregate_expr = sliding.get_aggregate_expr();
+        (
+            physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
+                aggregate_expr.fun().name().to_string(),
+            ),
+            ctx.encode_udaf(aggregate_expr.fun())?,
+            aggregate_expr.ignore_nulls(),
+            aggregate_expr.is_distinct(),
+            aggregate_expr.is_reversed(),
+            aggregate_expr.order_bys(),
+            sliding.filter_expr(),
+        )
+    } else if let Some(standard) = expr.downcast_ref::<StandardWindowExpr>() {
+        if let Some(window_udf) = standard
+            .get_standard_func_expr()
+            .as_any()
+            .downcast_ref::<WindowUDFExpr>()
+        {
+            // `WindowUDFExpr::args` returns the full, unfiltered argument list so
+            // every argument survives the round-trip.
+            args = window_udf.args().to_vec();
             (
-                physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
-                    aggregate_expr.fun().name().to_string(),
+                physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(
+                    window_udf.fun().name().to_string(),
                 ),
-                ctx.encode_udaf(aggregate_expr.fun())?,
-                aggregate_expr.ignore_nulls(),
-                aggregate_expr.is_distinct(),
+                ctx.encode_udwf(window_udf.fun().as_ref())?,
+                window_udf.ignore_nulls(),
+                false,
+                window_udf.is_reversed(),
+                &[][..],
+                None,
             )
-        } else if let Some(sliding) = expr.downcast_ref::<SlidingAggregateWindowExpr>() {
-            let aggregate_expr = sliding.get_aggregate_expr();
-            (
-                physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
-                    aggregate_expr.fun().name().to_string(),
-                ),
-                ctx.encode_udaf(aggregate_expr.fun())?,
-                aggregate_expr.ignore_nulls(),
-                aggregate_expr.is_distinct(),
-            )
-        } else if let Some(standard) = expr.downcast_ref::<StandardWindowExpr>() {
-            if let Some(window_udf) = standard
-                .get_standard_func_expr()
-                .as_any()
-                .downcast_ref::<WindowUDFExpr>()
-            {
-                // `WindowUDFExpr::args` returns the full, unfiltered argument list so
-                // every argument survives the round-trip.
-                args = window_udf.args().to_vec();
-                (
-                    physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(
-                        window_udf.fun().name().to_string(),
-                    ),
-                    ctx.encode_udwf(window_udf.fun().as_ref())?,
-                    false,
-                    false,
-                )
-            } else {
-                return not_impl_err!(
-                    "User-defined window function not supported: {window_expr:?}"
-                );
-            }
         } else {
-            return not_impl_err!("WindowExpr not supported: {window_expr:?}");
-        };
+            return not_impl_err!(
+                "User-defined window function not supported: {window_expr:?}"
+            );
+        }
+    } else {
+        return not_impl_err!("WindowExpr not supported: {window_expr:?}");
+    };
 
     let args = ctx.encode_expressions(&args)?;
     let partition_by = ctx.encode_expressions(window_expr.partition_by())?;
     let order_by = sort_exprs_try_to_proto(window_expr.order_by(), &ctx.expr_ctx())?;
+    let ordering_req = sort_exprs_try_to_proto(ordering_req, &ctx.expr_ctx())?;
+    let filter = filter
+        .map(|expr| ctx.encode_expr(expr).map(Box::new))
+        .transpose()?;
 
     Ok(protobuf::PhysicalWindowExprNode {
         args,
@@ -93,10 +115,14 @@ pub(super) fn encode_physical_window_expr(
         fun_definition,
         ignore_nulls,
         distinct,
+        filter,
+        is_reversed,
+        ordering_req,
     })
 }
 
-pub(super) fn decode_physical_window_expr(
+/// Deserialize a [`WindowExpr`] from protobuf.
+pub fn decode_physical_window_expr(
     proto: &protobuf::PhysicalWindowExprNode,
     ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     input_schema: &Schema,
@@ -140,18 +166,49 @@ pub(super) fn decode_physical_window_expr(
     let name = proto.name.clone();
     // TODO: Remove extended_schema if functions are all UDAF
     let extended_schema = schema_add_window_field(&args, input_schema, &function, &name)?;
-    create_window_expr(
-        &function,
-        name,
-        &args,
-        &partition_by,
-        &order_by,
-        Arc::new(window_frame),
-        extended_schema,
-        proto.ignore_nulls,
-        proto.distinct,
-        None,
-    )
+    let window_frame = Arc::new(window_frame);
+    Ok(match function {
+        WindowFunctionDefinition::AggregateUDF(fun) => {
+            let ordering_req = sort_exprs_try_from_proto(
+                &proto.ordering_req,
+                &ctx.expr_ctx(input_schema),
+            )?;
+            let filter = proto
+                .filter
+                .as_ref()
+                .map(|expr| ctx.decode_expr(expr, input_schema))
+                .transpose()?;
+            let aggregate = AggregateExprBuilder::new(fun, args)
+                .schema(extended_schema)
+                .alias(name)
+                .with_ignore_nulls(proto.ignore_nulls)
+                .with_distinct(proto.distinct)
+                .order_by(ordering_req)
+                .with_reversed(proto.is_reversed)
+                .build()
+                .map(Arc::new)?;
+            window_expr_from_aggregate_expr(
+                &partition_by,
+                &order_by,
+                window_frame,
+                aggregate,
+                filter,
+            )
+        }
+        WindowFunctionDefinition::WindowUDF(fun) => Arc::new(StandardWindowExpr::new(
+            new_udwf_window_expr(
+                &fun,
+                &args,
+                &extended_schema,
+                name,
+                proto.ignore_nulls,
+                proto.is_reversed,
+            )?,
+            &partition_by,
+            &order_by,
+            window_frame,
+        )),
+    })
 }
 
 fn encode_window_frame(window_frame: &WindowFrame) -> Result<protobuf::WindowFrame> {
