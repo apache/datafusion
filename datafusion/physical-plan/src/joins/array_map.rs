@@ -91,6 +91,7 @@ macro_rules! downcast_supported_integer {
 pub struct ArrayMap {
     // data[probSideVal-offset] -> valIdxInBuildSide + 1; 0 for absent
     data: Vec<u32>,
+    sparse: Option<Box<SparseSlots>>,
     // min val in buildSide
     offset: u64,
     // next[buildSideIdx] -> next matching valIdxInBuildSide + 1; 0 for end of chain.
@@ -98,6 +99,48 @@ pub struct ArrayMap {
     // It uses the same chain-based conflict resolution as [`JoinHashMapType`].
     next: Vec<u32>,
     num_of_distinct_key: usize,
+}
+
+// Each word's prefix counts set bits in preceding words. The first level
+// indexes occupied 64-key ranges and the second indexes individual keys.
+#[derive(Debug, Default, Clone, Copy)]
+struct RankedWord {
+    bits: u64,
+    prefix: u32,
+}
+
+impl RankedWord {
+    fn rank(&self, bit: usize) -> usize {
+        self.prefix as usize + (self.bits & ((1u64 << bit) - 1)).count_ones() as usize
+    }
+
+    fn set_prefixes(words: &mut [Self]) -> usize {
+        let mut total = 0;
+        for word in words {
+            word.prefix = total;
+            total += word.bits.count_ones();
+        }
+        total as usize
+    }
+}
+
+#[derive(Debug)]
+struct SparseSlots {
+    directory: Vec<RankedWord>,
+    leaves: Vec<RankedWord>,
+}
+
+impl SparseSlots {
+    fn slot(&self, offset: usize) -> Option<usize> {
+        let word = offset / 64;
+        let top = self.directory.get(word / 64)?;
+        if top.bits & (1 << (word % 64)) == 0 {
+            return None;
+        }
+        let leaf = &self.leaves[top.rank(word % 64)];
+        let bit = offset % 64;
+        (leaf.bits & (1 << bit) != 0).then(|| leaf.rank(bit))
+    }
 }
 
 impl ArrayMap {
@@ -184,10 +227,80 @@ impl ArrayMap {
 
         Ok(Self {
             data,
+            sparse: None,
             offset: min_val,
             next,
             num_of_distinct_key,
         })
+    }
+
+    pub(crate) fn sparse_memory_bound(range: u64, rows: usize) -> Option<usize> {
+        if !(64..=4096).contains(&rows) || range >= 1 << 24 || range / 16 < rows as u64 {
+            return None;
+        }
+        let words = (range as usize + 1).div_ceil(64);
+        Some(
+            size_of::<SparseSlots>()
+                + (words.div_ceil(64) + words.min(rows)) * size_of::<RankedWord>()
+                + rows * size_of::<u32>(),
+        )
+    }
+
+    pub(crate) fn try_sparse(
+        array: &ArrayRef,
+        lower: u64,
+        range: u64,
+    ) -> Result<Option<Self>> {
+        downcast_supported_integer!(array.data_type() => (build_sparse, array, lower, range))
+    }
+
+    fn build_sparse<T: ArrowNumericType>(
+        array: &ArrayRef,
+        lower: u64,
+        range: u64,
+    ) -> Result<Option<Self>>
+    where
+        T::Native: AsPrimitive<u64>,
+    {
+        let keys = array.as_primitive::<T>();
+        let mut directory =
+            vec![RankedWord::default(); (range as usize + 1).div_ceil(4096)];
+        for key in keys.iter().flatten() {
+            let offset = key.as_().wrapping_sub(lower);
+            if offset > range {
+                return Ok(None);
+            }
+            let word = offset as usize / 64;
+            directory[word / 64].bits |= 1 << (word % 64);
+        }
+        let mut leaves =
+            vec![RankedWord::default(); RankedWord::set_prefixes(&mut directory)];
+        for key in keys.iter().flatten() {
+            let offset = key.as_().wrapping_sub(lower) as usize;
+            let word = offset / 64;
+            let leaf = &mut leaves[directory[word / 64].rank(word % 64)];
+            let bit = 1 << (offset % 64);
+            if leaf.bits & bit != 0 {
+                return Ok(None);
+            }
+            leaf.bits |= bit;
+        }
+        let count = RankedWord::set_prefixes(&mut leaves);
+        let sparse = Box::new(SparseSlots { directory, leaves });
+        let mut data = vec![0; count];
+        for (row, key) in keys.iter().enumerate() {
+            if let Some(key) = key {
+                let offset = key.as_().wrapping_sub(lower) as usize;
+                data[sparse.slot(offset).expect("build key present")] = row as u32 + 1;
+            }
+        }
+        Ok(Some(Self {
+            data,
+            sparse: Some(sparse),
+            offset: lower,
+            next: vec![],
+            num_of_distinct_key: count,
+        }))
     }
 
     fn fill_data<T: ArrowNumericType>(
@@ -229,7 +342,12 @@ impl ArrayMap {
 
     /// Returns the memory usage of this [`ArrayMap`] in bytes.
     pub fn size(&self) -> usize {
-        self.data.capacity() * size_of::<u32>() + self.next.capacity() * size_of::<u32>()
+        (self.data.capacity() + self.next.capacity()) * size_of::<u32>()
+            + self.sparse.as_ref().map_or(0, |s| {
+                size_of::<SparseSlots>()
+                    + (s.directory.capacity() + s.leaves.capacity())
+                        * size_of::<RankedWord>()
+            })
     }
 
     pub fn get_matched_indices_with_limit_offset(
@@ -266,6 +384,10 @@ impl ArrayMap {
     /// bucket, or `None` otherwise.
     #[inline]
     fn get_value(&self, key: u64) -> Option<u32> {
+        if let Some(sparse) = &self.sparse {
+            let offset = usize::try_from(key.wrapping_sub(self.offset)).ok()?;
+            return Some(self.data[sparse.slot(offset)?]);
+        }
         let idx = Self::key_to_index(key, self.offset, self.data.len())?;
         let value = self.data[idx];
         (value != 0).then_some(value)
@@ -420,6 +542,28 @@ mod tests {
     use arrow::array::Int64Array;
     use arrow::array::UInt64Array;
     use std::sync::Arc;
+
+    #[test]
+    fn sparse_slots_preserve_row_ids_and_reject_duplicates() -> Result<()> {
+        use arrow::array::Int64Array;
+        let keys: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(10000),
+            None,
+            Some(-10),
+            Some(10001),
+        ]));
+        let lower = (-10i64) as u64;
+        let map = ArrayMap::try_sparse(&keys, lower, 10011)?.unwrap();
+        assert_eq!(map.get_value(lower), Some(3));
+        assert_eq!(map.get_value(10000), Some(1));
+        assert_eq!(map.get_value(10001), Some(4));
+        for absent in [lower.wrapping_sub(1), 0, 9999, 10002, u64::MAX] {
+            assert_eq!(map.get_value(absent), None);
+        }
+        let duplicate: ArrayRef = Arc::new(Int64Array::from(vec![2, 10000, 2]));
+        assert!(ArrayMap::try_sparse(&duplicate, 2, 9998)?.is_none());
+        Ok(())
+    }
 
     #[test]
     fn test_array_map_limit_offset_duplicate_elements() -> Result<()> {
