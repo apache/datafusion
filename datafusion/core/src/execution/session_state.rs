@@ -1746,10 +1746,16 @@ impl SessionStateBuilder {
             optimizer: optimizer.unwrap_or_else(|| {
                 let mut optimizer = Optimizer::default();
                 // Fold constant period expressions before matching the grouped inputs.
-                if let Some(pos) = optimizer
-                    .rules
-                    .iter()
-                    .position(|r| r.name() == "simplify_expressions")
+                let has_sum = aggregate_functions.as_ref().is_some_and(|functions| {
+                    functions.iter().any(|f| {
+                        f.inner().is::<datafusion_functions_aggregate::sum::Sum>()
+                    })
+                });
+                if has_sum
+                    && let Some(pos) = optimizer
+                        .rules
+                        .iter()
+                        .position(|r| r.name() == "simplify_expressions")
                 {
                     optimizer.rules.insert(
                         pos + 1,
