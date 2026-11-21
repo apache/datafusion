@@ -1745,9 +1745,17 @@ impl SessionStateBuilder {
             type_planner,
             optimizer: optimizer.unwrap_or_else(|| {
                 let mut optimizer = Optimizer::default();
-                optimizer
+                // Fold constant period expressions before matching the grouped inputs.
+                if let Some(pos) = optimizer
                     .rules
-                    .insert(0, Arc::new(super::group_slices::CombineGroupSlices));
+                    .iter()
+                    .position(|r| r.name() == "simplify_expressions")
+                {
+                    optimizer.rules.insert(
+                        pos + 1,
+                        Arc::new(super::group_slices::CombineGroupSlices),
+                    );
+                }
                 optimizer
             }),
             physical_optimizers: physical_optimizers.unwrap_or_default(),

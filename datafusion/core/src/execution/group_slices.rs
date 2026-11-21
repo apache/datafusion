@@ -11,8 +11,9 @@ use crate::{
     datasource::source_as_provider,
     functions_aggregate::expr_fn::{count, max},
     logical_expr::{
-        Expr, ExprFunctionExt, JoinType, LogicalPlan, LogicalPlanBuilder, Operator, lit,
-        logical_plan::{Filter, Projection, SubqueryAlias},
+        Expr, ExprFunctionExt, ExprSchemable, JoinType, LogicalPlan, LogicalPlanBuilder,
+        Operator, lit,
+        logical_plan::{Distinct, Filter, Projection, SubqueryAlias},
         utils::{conjunction, split_conjunction},
     },
 };
@@ -33,6 +34,46 @@ fn safe_expr(e: &Expr) -> bool {
                 && safe_expr(&b.right)
         }
         _ => false,
+    }
+}
+
+// Net measures such as quantity - COALESCE(return_quantity, 0) are
+// evaluated inside the original producer, with the original types. Only
+// deterministic exact arithmetic is repeatable across the selected periods.
+fn repeatable_measure(expr: &Expr, schema: &datafusion_common::DFSchema) -> bool {
+    match expr {
+        Expr::Alias(a) => repeatable_measure(&a.expr, schema),
+        Expr::BinaryExpr(b) if b.op == Operator::Minus => {
+            matches!(b.left.as_ref(), Expr::Column(_))
+                && expr
+                    .get_type(schema)
+                    .is_ok_and(|t| t.is_integer() || t.is_decimal())
+                && repeatable_measure(&b.right, schema)
+        }
+        Expr::Case(case) if case.expr.is_none() => {
+            let [(when, value)] = case.when_then_expr.as_slice() else {
+                return false;
+            };
+            matches!(when.as_ref(), Expr::IsNotNull(test) if test == value)
+                && repeatable_measure(value, schema)
+                && matches!(case.else_expr.as_deref(), Some(Expr::Literal(_, _)))
+        }
+        Expr::Cast(cast) => {
+            let Ok(DataType::Decimal128(from_precision, from_scale)) =
+                cast.expr.get_type(schema)
+            else {
+                return false;
+            };
+            let DataType::Decimal128(to_precision, to_scale) = cast.field.data_type()
+            else {
+                return false;
+            };
+            matches!(cast.expr.as_ref(), Expr::Column(_))
+                && *to_scale >= from_scale
+                && i16::from(*to_precision) - i16::from(*to_scale)
+                    >= i16::from(from_precision) - i16::from(from_scale)
+        }
+        other => safe_expr(other),
     }
 }
 
@@ -67,8 +108,13 @@ fn repeatable(plan: &LogicalPlan) -> Result<bool> {
                     && source_as_provider(&s.source)
                         .is_ok_and(|v| v.is::<crate::datasource::listing::ListingTable>())
             }
-            LogicalPlan::SubqueryAlias(_) => true,
-            LogicalPlan::Projection(p) => p.expr.iter().all(safe_expr),
+            LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Distinct(Distinct::All(_))
+            | LogicalPlan::Union(_) => true,
+            LogicalPlan::Projection(p) => p
+                .expr
+                .iter()
+                .all(|e| repeatable_measure(e, p.input.schema())),
             LogicalPlan::Aggregate(a) => {
                 a.group_expr.iter().all(|e| matches!(e, Expr::Column(_)))
                     && a.aggr_expr.iter().all(|e| {
@@ -79,10 +125,12 @@ fn repeatable(plan: &LogicalPlan) -> Result<bool> {
                             return false;
                         };
                         ag.func.inner().is::<crate::functions_aggregate::sum::Sum>()
-                            && a.input
-                                .schema()
-                                .field_from_column(column)
-                                .is_ok_and(|field| field.data_type().is_decimal())
+                            && a.input.schema().field_from_column(column).is_ok_and(
+                                |field| {
+                                    field.data_type().is_decimal()
+                                        || field.data_type().is_integer()
+                                },
+                            )
                             && ag.params.filter.is_none()
                             && ag.params.order_by.is_empty()
                             && !ag.params.distinct
@@ -479,6 +527,55 @@ mod tests {
                 "+---+----+----+",
                 "| 1 | 10 |    |",
                 "+---+----+----+"
+            ],
+            &df.collect().await?
+        );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn union_slices_deduplicate_before_summing() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("sales.parquet");
+        let ctx = SessionContext::new();
+        ctx.sql(&format!(
+            "COPY (SELECT * FROM (VALUES (1,2022,10,2),(1,2023,9,NULL),
+             (1,2023,7,1),(2,2022,4,0),(3,2022,NULL,0),(3,2023,5,2))
+             t(k,yr,qty,returned)) TO '{}' STORED AS PARQUET",
+            file.display()
+        ))
+        .await?
+        .collect()
+        .await?;
+        for name in ["sales", "archive"] {
+            ctx.register_parquet(
+                name,
+                file.to_str().unwrap(),
+                ParquetReadOptions::default(),
+            )
+            .await?;
+        }
+        let query = "WITH detail AS (
+            SELECT k,yr,qty-COALESCE(returned,0) AS net FROM sales
+            UNION SELECT k,yr,qty-COALESCE(returned,0) AS net FROM archive
+        ), g AS (SELECT k,yr,SUM(net) AS net FROM detail GROUP BY k,yr)
+        SELECT a.k,a.net AS prior,b.net AS current FROM g a,g b
+        WHERE a.k=b.k AND a.yr=2023-1 AND b.yr=2023 ORDER BY a.k";
+        let df = ctx.sql(query).await?;
+        assert!(
+            df.clone()
+                .into_optimized_plan()?
+                .display_indent()
+                .to_string()
+                .contains("__group_slice_")
+        );
+        assert_batches_eq!(
+            [
+                "+---+-------+---------+",
+                "| k | prior | current |",
+                "+---+-------+---------+",
+                "| 1 | 8     | 15      |",
+                "| 3 |       | 3       |",
+                "+---+-------+---------+"
             ],
             &df.collect().await?
         );
