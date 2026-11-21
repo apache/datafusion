@@ -23,6 +23,8 @@ use log::{debug, log_enabled, warn};
 use sqllogictest::DBOutput;
 use tokio::time::Instant;
 
+/// A sqllogictest engine that unparses each query's logical plan to SQL with
+/// [`plan_to_sql`] and plans that SQL again before it runs the query.
 pub struct DataFusionUnparserRoundTrip {
     ctx: SessionContext,
     relative_path: PathBuf,
