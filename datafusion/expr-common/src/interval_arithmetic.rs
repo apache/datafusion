@@ -1825,6 +1825,104 @@ pub fn cardinality_ratio(initial_interval: &Interval, final_interval: &Interval)
     }
 }
 
+/// Estimates the selectivity of a comparison between two independent, uniformly
+/// distributed discrete intervals.
+///
+/// The estimate is the fraction of pairs from the Cartesian product of the two
+/// inclusive intervals that satisfy `op`. Currently, only ordered comparisons
+/// between intervals of the same primitive integer type are supported. Returns
+/// `None` when the assumptions do not apply or the calculation cannot be
+/// performed safely.
+pub fn comparison_selectivity(
+    op: &Operator,
+    left: &Interval,
+    right: &Interval,
+) -> Result<Option<f64>> {
+    let probability = match op {
+        Operator::Lt => strict_less_selectivity(left, right),
+        Operator::LtEq => strict_less_selectivity(right, left).map(|p| 1.0 - p),
+        Operator::Gt => strict_less_selectivity(right, left),
+        Operator::GtEq => strict_less_selectivity(left, right).map(|p| 1.0 - p),
+        _ => None,
+    };
+    Ok(probability.map(|p| p.clamp(0.0, 1.0)))
+}
+
+fn strict_less_selectivity(left: &Interval, right: &Interval) -> Option<f64> {
+    if left.data_type() != right.data_type() {
+        return None;
+    }
+
+    let left_lower = integer_value(left.lower())?;
+    let left_upper = integer_value(left.upper())?;
+    let right_lower = integer_value(right.lower())?;
+    let right_upper = integer_value(right.upper())?;
+
+    if left_upper < right_lower {
+        return Some(1.0);
+    }
+    if left_lower >= right_upper {
+        return Some(0.0);
+    }
+
+    let left_count = inclusive_integer_count(left_lower, left_upper)?;
+    let right_count = inclusive_integer_count(right_lower, right_upper)?;
+    let total_pairs = left_count.checked_mul(right_count)?;
+
+    // For each right value y, the number of matching left values is
+    // clamp(y - left_lower, 0, left_count). Sum the linear and constant
+    // portions separately without enumerating the intervals.
+    let partial_lower = right_lower.max(left_lower.checked_add(1)?);
+    let partial_upper = right_upper.min(left_upper);
+    let partial_pairs = if partial_lower <= partial_upper {
+        let count = inclusive_integer_count(partial_lower, partial_upper)?;
+        let first = u128::try_from(partial_lower.checked_sub(left_lower)?).ok()?;
+        let last = u128::try_from(partial_upper.checked_sub(left_lower)?).ok()?;
+        arithmetic_series_sum(first, last, count)?
+    } else {
+        0
+    };
+
+    let full_lower = right_lower.max(left_upper.checked_add(1)?);
+    let full_values = if full_lower <= right_upper {
+        inclusive_integer_count(full_lower, right_upper)?
+    } else {
+        0
+    };
+    let full_pairs = full_values.checked_mul(left_count)?;
+    let matching_pairs = partial_pairs.checked_add(full_pairs)?;
+
+    Some((matching_pairs as f64) / (total_pairs as f64))
+}
+
+fn inclusive_integer_count(lower: i128, upper: i128) -> Option<u128> {
+    let distance = upper.checked_sub(lower)?;
+    u128::try_from(distance).ok()?.checked_add(1)
+}
+
+fn arithmetic_series_sum(first: u128, last: u128, count: u128) -> Option<u128> {
+    let endpoints = first.checked_add(last)?;
+    if count.is_multiple_of(2) {
+        (count / 2).checked_mul(endpoints)
+    } else {
+        count.checked_mul(endpoints / 2)
+    }
+}
+
+fn integer_value(value: &ScalarValue) -> Option<i128> {
+    match value {
+        ScalarValue::Int8(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::Int16(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::Int32(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::Int64(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::UInt8(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::UInt16(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::UInt32(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::UInt64(Some(value)) => Some(i128::from(*value)),
+        _ => None,
+    }
+}
+
 /// Cast scalar value to the given data type using an arrow kernel.
 fn cast_scalar_value(
     value: &ScalarValue,
@@ -2352,8 +2450,8 @@ impl NullableInterval {
 mod tests {
     use crate::{
         interval_arithmetic::{
-            Interval, cast_scalar_value, handle_overflow, next_value, prev_value,
-            satisfy_greater,
+            Interval, cast_scalar_value, comparison_selectivity, handle_overflow,
+            next_value, prev_value, satisfy_greater,
         },
         operator::Operator,
     };
@@ -2587,6 +2685,113 @@ mod tests {
                 .cast_to(&DataType::Struct(Default::default()), &safe)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_comparison_selectivity_overlapping_integer_intervals() -> Result<()> {
+        let interval = Interval::make(Some(1_i32), Some(50_i32))?;
+
+        let cases = [
+            (Operator::Lt, 0.49),
+            (Operator::LtEq, 0.51),
+            (Operator::Gt, 0.49),
+            (Operator::GtEq, 0.51),
+        ];
+        for (op, expected) in cases {
+            let actual = comparison_selectivity(&op, &interval, &interval)?.unwrap();
+            assert!((actual - expected).abs() < f64::EPSILON);
+            assert!((0.0..=1.0).contains(&actual));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_comparison_selectivity_disjoint_and_single_value_intervals() -> Result<()> {
+        let low = Interval::make(Some(1_i32), Some(10_i32))?;
+        let high = Interval::make(Some(20_i32), Some(30_i32))?;
+        assert_eq!(
+            comparison_selectivity(&Operator::Lt, &low, &high)?,
+            Some(1.0)
+        );
+        assert_eq!(
+            comparison_selectivity(&Operator::Gt, &low, &high)?,
+            Some(0.0)
+        );
+
+        let one = Interval::make(Some(7_i32), Some(7_i32))?;
+        assert_eq!(
+            comparison_selectivity(&Operator::Lt, &one, &one)?,
+            Some(0.0)
+        );
+        assert_eq!(
+            comparison_selectivity(&Operator::LtEq, &one, &one)?,
+            Some(1.0)
+        );
+        assert_eq!(
+            comparison_selectivity(&Operator::Gt, &one, &one)?,
+            Some(0.0)
+        );
+        assert_eq!(
+            comparison_selectivity(&Operator::GtEq, &one, &one)?,
+            Some(1.0)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_comparison_selectivity_unsupported_inputs() -> Result<()> {
+        let bounded = Interval::make(Some(1_i32), Some(50_i32))?;
+        assert_eq!(
+            comparison_selectivity(&Operator::Eq, &bounded, &bounded)?,
+            None
+        );
+
+        let unbounded = Interval::make(None, Some(50_i32))?;
+        assert_eq!(
+            comparison_selectivity(&Operator::Lt, &unbounded, &bounded)?,
+            None
+        );
+
+        let strings = Interval::try_new(
+            ScalarValue::Utf8(Some("a".to_owned())),
+            ScalarValue::Utf8(Some("z".to_owned())),
+        )?;
+        assert_eq!(
+            comparison_selectivity(&Operator::Lt, &strings, &strings)?,
+            None
+        );
+
+        let unsigned = Interval::make(Some(1_u32), Some(50_u32))?;
+        assert_eq!(
+            comparison_selectivity(&Operator::Lt, &bounded, &unsigned)?,
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_comparison_selectivity_probability_bounds() -> Result<()> {
+        for left_lower in -3_i32..=3 {
+            for left_upper in left_lower..=3 {
+                for right_lower in -3_i32..=3 {
+                    for right_upper in right_lower..=3 {
+                        let left = Interval::make(Some(left_lower), Some(left_upper))?;
+                        let right = Interval::make(Some(right_lower), Some(right_upper))?;
+                        for op in
+                            [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq]
+                        {
+                            let probability =
+                                comparison_selectivity(&op, &left, &right)?.unwrap();
+                            assert!(
+                                (0.0..=1.0).contains(&probability),
+                                "{left:?} {op} {right:?} produced {probability}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]

@@ -229,7 +229,7 @@ impl Count {
 
 impl AggregateUDFImpl for Count {
     fn name(&self) -> &str {
-        "COUNT"
+        "count"
     }
 
     fn signature(&self) -> &Signature {

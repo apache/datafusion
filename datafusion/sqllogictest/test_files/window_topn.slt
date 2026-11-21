@@ -1481,9 +1481,9 @@ SELECT id, pk, val FROM (
 statement ok
 DROP TABLE window_topn_dr_null_t;
 
-# Reset config to default (false)
+# Reset config to default
 statement ok
-SET datafusion.optimizer.enable_window_topn = false;
+RESET datafusion.optimizer.enable_window_topn;
 
 statement ok
 create table t(c1 int, c2 int) as values (1, 2), (3, 4);
@@ -1527,7 +1527,7 @@ statement ok
 set datafusion.execution.batch_size = 8192;
 
 statement ok
-set datafusion.optimizer.enable_window_topn = false;
+RESET datafusion.optimizer.enable_window_topn;
 
 # The filter's column index is resolved through the projection between the
 # filter and the window. Here the outer query drops `v`, so the projection
@@ -1686,7 +1686,7 @@ statement ok
 SET datafusion.explain.physical_plan_only = false;
 
 statement ok
-SET datafusion.optimizer.enable_window_topn = false;
+RESET datafusion.optimizer.enable_window_topn;
 
 statement ok
 DROP TABLE window_topn_shift;

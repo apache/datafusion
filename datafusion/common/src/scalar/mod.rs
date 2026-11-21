@@ -6,6 +6,7 @@
 
 mod cache;
 mod consts;
+mod null_struct;
 mod struct_builder;
 
 use std::borrow::Borrow;
@@ -39,6 +40,7 @@ use crate::cast::{
     as_uint16_array, as_uint32_array, as_uint64_array, as_union_array,
 };
 use crate::error::{_exec_err, _internal_err, _not_impl_err, DataFusionError, Result};
+use crate::float_semantics::{self, normalize_float};
 use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
 use crate::scalar::consts::{
@@ -1267,6 +1269,17 @@ macro_rules! eq_array_float {
     }};
 }
 
+/// Applies [`float_semantics::normalize`] to a typed array, keeping the
+/// original `Arc` when nothing needed to change
+fn normalize_array<A: Array + From<ArrayData> + 'static>(array: Arc<A>) -> Arc<A> {
+    let normalized = float_semantics::normalize(Arc::clone(&array) as ArrayRef);
+    if std::ptr::addr_eq(Arc::as_ptr(&array), Arc::as_ptr(&normalized)) {
+        array
+    } else {
+        Arc::new(downcast_array(normalized.as_ref()))
+    }
+}
+
 impl ScalarValue {
     /// Create a [`Result<ScalarValue>`] with the provided value and datatype
     ///
@@ -1411,12 +1424,9 @@ impl ScalarValue {
             DataType::LargeListView(field_ref) => ScalarValue::LargeListView(Arc::new(
                 GenericListViewArray::new_null(Arc::clone(field_ref), 1),
             )),
-            DataType::Struct(fields) => ScalarValue::Struct(
-                new_null_array(&DataType::Struct(fields.to_owned()), 1)
-                    .as_struct()
-                    .to_owned()
-                    .into(),
-            ),
+            DataType::Struct(fields) => {
+                ScalarValue::Struct(Arc::new(null_struct::new_null_struct(fields)?))
+            }
             DataType::Map(fields, sorted) => ScalarValue::Map(
                 new_null_array(&DataType::Map(fields.to_owned(), sorted.to_owned()), 1)
                     .as_map()
@@ -1892,9 +1902,10 @@ impl ScalarValue {
 
             // List types
             DataType::List(field) => {
-                let list =
-                    ScalarValue::new_list(&[], field.data_type(), field.is_nullable());
-                Ok(ScalarValue::List(list))
+                let empty_arr = new_empty_array(field.data_type());
+                Ok(SingleRowListArrayBuilder::new(empty_arr)
+                    .with_field(field)
+                    .build_list_scalar())
             }
             DataType::FixedSizeList(field, _size) => {
                 let empty_arr = new_empty_array(field.data_type());
@@ -1906,8 +1917,10 @@ impl ScalarValue {
                 Ok(ScalarValue::FixedSizeList(values))
             }
             DataType::LargeList(field) => {
-                let list = ScalarValue::new_large_list(&[], field.data_type());
-                Ok(ScalarValue::LargeList(list))
+                let empty_arr = new_empty_array(field.data_type());
+                Ok(SingleRowListArrayBuilder::new(empty_arr)
+                    .with_field(field)
+                    .build_large_list_scalar())
             }
             DataType::ListView(field) => {
                 let empty_arr = new_empty_array(field.data_type());
@@ -2762,43 +2775,90 @@ impl ScalarValue {
         )
     }
 
-    /// Applies DataFusion's floating-point equality semantics to this value,
-    /// including floats inside nested and encoded values. Negative zero becomes
-    /// positive zero; nulls, NaN payloads and other values are preserved.
+    /// Applies DataFusion's [floating-point equality semantics] to this value
     ///
-    /// See [`crate::float_semantics`] for the shared normalization rules.
-    pub fn normalize(mut self) -> Self {
-        use crate::float_semantics::{normalize_float, normalize_floats};
-
-        fn normalize_array<A: Array + From<ArrayData> + 'static>(array: &mut Arc<A>) {
-            let original: ArrayRef = Arc::clone(array) as ArrayRef;
-            let normalized = normalize_floats(&original);
-            if !Arc::ptr_eq(&original, &normalized) {
-                *array = Arc::new(downcast_array(normalized.as_ref()));
+    /// [floating-point equality semantics]: crate::float_semantics
+    pub fn normalize(self) -> Self {
+        match self {
+            ScalarValue::Float16(Some(v)) => {
+                ScalarValue::Float16(Some(normalize_float(v)))
             }
-        }
-
-        fn normalize(scalar: &mut ScalarValue) {
-            match scalar {
-                ScalarValue::Float16(Some(value)) => *value = normalize_float(*value),
-                ScalarValue::Float32(Some(value)) => *value = normalize_float(*value),
-                ScalarValue::Float64(Some(value)) => *value = normalize_float(*value),
-                ScalarValue::FixedSizeList(array) => normalize_array(array),
-                ScalarValue::List(array) => normalize_array(array),
-                ScalarValue::LargeList(array) => normalize_array(array),
-                ScalarValue::ListView(array) => normalize_array(array),
-                ScalarValue::LargeListView(array) => normalize_array(array),
-                ScalarValue::Struct(array) => normalize_array(array),
-                ScalarValue::Map(array) => normalize_array(array),
-                ScalarValue::Union(Some((_, value)), _, _)
-                | ScalarValue::Dictionary(_, value)
-                | ScalarValue::RunEndEncoded(_, _, value) => normalize(value),
-                _ => {}
+            ScalarValue::Float32(Some(v)) => {
+                ScalarValue::Float32(Some(normalize_float(v)))
             }
+            ScalarValue::Float64(Some(v)) => {
+                ScalarValue::Float64(Some(normalize_float(v)))
+            }
+            ScalarValue::FixedSizeList(array) => {
+                ScalarValue::FixedSizeList(normalize_array(array))
+            }
+            ScalarValue::List(array) => ScalarValue::List(normalize_array(array)),
+            ScalarValue::LargeList(array) => {
+                ScalarValue::LargeList(normalize_array(array))
+            }
+            ScalarValue::ListView(array) => ScalarValue::ListView(normalize_array(array)),
+            ScalarValue::LargeListView(array) => {
+                ScalarValue::LargeListView(normalize_array(array))
+            }
+            ScalarValue::Struct(array) => ScalarValue::Struct(normalize_array(array)),
+            ScalarValue::Map(array) => ScalarValue::Map(normalize_array(array)),
+            ScalarValue::Union(Some((type_id, value)), fields, mode) => {
+                ScalarValue::Union(
+                    Some((type_id, Box::new(value.normalize()))),
+                    fields,
+                    mode,
+                )
+            }
+            ScalarValue::Dictionary(key_type, value) => {
+                ScalarValue::Dictionary(key_type, Box::new(value.normalize()))
+            }
+            ScalarValue::RunEndEncoded(run_ends, values, value) => {
+                ScalarValue::RunEndEncoded(run_ends, values, Box::new(value.normalize()))
+            }
+            // Everything else holds no float, or is a null float
+            other @ (ScalarValue::Null
+            | ScalarValue::Boolean(_)
+            | ScalarValue::Float16(None)
+            | ScalarValue::Float32(None)
+            | ScalarValue::Float64(None)
+            | ScalarValue::Decimal32(..)
+            | ScalarValue::Decimal64(..)
+            | ScalarValue::Decimal128(..)
+            | ScalarValue::Decimal256(..)
+            | ScalarValue::Int8(_)
+            | ScalarValue::Int16(_)
+            | ScalarValue::Int32(_)
+            | ScalarValue::Int64(_)
+            | ScalarValue::UInt8(_)
+            | ScalarValue::UInt16(_)
+            | ScalarValue::UInt32(_)
+            | ScalarValue::UInt64(_)
+            | ScalarValue::Utf8(_)
+            | ScalarValue::Utf8View(_)
+            | ScalarValue::LargeUtf8(_)
+            | ScalarValue::Binary(_)
+            | ScalarValue::BinaryView(_)
+            | ScalarValue::FixedSizeBinary(..)
+            | ScalarValue::LargeBinary(_)
+            | ScalarValue::Date32(_)
+            | ScalarValue::Date64(_)
+            | ScalarValue::Time32Second(_)
+            | ScalarValue::Time32Millisecond(_)
+            | ScalarValue::Time64Microsecond(_)
+            | ScalarValue::Time64Nanosecond(_)
+            | ScalarValue::TimestampSecond(..)
+            | ScalarValue::TimestampMillisecond(..)
+            | ScalarValue::TimestampMicrosecond(..)
+            | ScalarValue::TimestampNanosecond(..)
+            | ScalarValue::IntervalYearMonth(_)
+            | ScalarValue::IntervalDayTime(_)
+            | ScalarValue::IntervalMonthDayNano(_)
+            | ScalarValue::DurationSecond(_)
+            | ScalarValue::DurationMillisecond(_)
+            | ScalarValue::DurationMicrosecond(_)
+            | ScalarValue::DurationNanosecond(_)
+            | ScalarValue::Union(None, ..)) => other,
         }
-
-        normalize(&mut self);
-        self
     }
 
     /// whether this value is null or not.
@@ -10953,6 +11013,24 @@ mod tests {
             actual.starts_with(expected_prefix),
             "Expected '{actual}' to start with '{expected_prefix}'"
         );
+    }
+
+    #[test]
+    fn test_new_default_list_preserves_field() {
+        for nullable in [false, true] {
+            let field = Arc::new(
+                Field::new("element", DataType::Int64, nullable)
+                    .with_metadata(HashMap::from([("k".to_string(), "v".to_string())])),
+            );
+            for data_type in [
+                DataType::List(Arc::clone(&field)),
+                DataType::LargeList(field),
+            ] {
+                let value = ScalarValue::new_default(&data_type).unwrap();
+                assert_eq!(value.data_type(), data_type);
+                assert!(!value.is_null());
+            }
+        }
     }
 
     #[test]

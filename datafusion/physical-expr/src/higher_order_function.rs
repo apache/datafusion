@@ -472,6 +472,10 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
     fn is_volatile_node(&self) -> bool {
         self.fun.signature().volatility == Volatility::Volatile
     }
+
+    fn short_circuits(&self) -> bool {
+        self.fun.short_circuits()
+    }
 }
 
 fn wrapped_lambda(expr: &Arc<dyn PhysicalExpr>) -> Option<&LambdaExpr> {
