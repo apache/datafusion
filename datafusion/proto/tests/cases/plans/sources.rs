@@ -62,6 +62,72 @@ use std::sync::Arc;
 use std::vec;
 
 #[test]
+fn parquet_decode_rejects_out_of_bounds_projection_bytes() {
+    // https://github.com/apache/datafusion/issues/27327: an empty schema with
+    // legacy projection [10] and no predicate must return an error, not panic.
+    let bytes = [0x0a, 0x06, 0x0a, 0x04, 0x12, 0x00, 0x20, 0x0a];
+    let ctx = SessionContext::new();
+    let err = datafusion_proto::bytes::physical_plan_from_bytes(&bytes, &ctx.task_ctx())
+        .unwrap_err();
+    datafusion_common::assert_contains!(
+        err.to_string(),
+        "project index 10 out of bounds, max field 0"
+    );
+}
+
+#[test]
+fn parquet_decode_validates_legacy_projection() -> Result<()> {
+    let ctx = SessionContext::new();
+    let task_ctx = ctx.task_ctx();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+    for with_predicate in [false, true] {
+        let mut source = ParquetSource::new(Arc::clone(&schema));
+        if with_predicate {
+            source = source.with_predicate(lit(true));
+        }
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(source),
+        )
+        .build();
+        let node = PhysicalPlanNode::try_from_physical_plan(
+            DataSourceExec::from_data_source(config),
+            &codec,
+        )?;
+
+        for projection in [
+            vec![],
+            vec![0],
+            vec![0, 0],
+            vec![1],
+            vec![0, 1],
+            vec![u32::MAX],
+        ] {
+            let mut node = node.clone();
+            let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) =
+                node.physical_plan_type.as_mut()
+            else {
+                return internal_err!("Expected ParquetScan node");
+            };
+            scan.base_conf.as_mut().unwrap().projection = projection.clone();
+
+            let result = node.try_into_physical_plan(&task_ctx, &codec);
+            if let Some(index) = projection.iter().find(|&&index| index >= 1) {
+                datafusion_common::assert_contains!(
+                    result.unwrap_err().to_string(),
+                    format!("project index {index} out of bounds, max field 1")
+                );
+            } else {
+                result?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn parquet_schema_provider_requires_extension_codec() -> Result<()> {
     use datafusion::parquet;
 

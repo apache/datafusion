@@ -1264,12 +1264,9 @@ impl ParquetSource {
         // must be decoded against the projected schema when a projection is
         // present.
         let predicate_schema = if !base_conf.projection.is_empty() {
-            let projected_fields: Vec<_> = base_conf
-                .projection
-                .iter()
-                .map(|&i| schema.field(i as usize).clone())
-                .collect();
-            Arc::new(Schema::new(projected_fields))
+            let projection: Vec<_> =
+                base_conf.projection.iter().map(|&i| i as usize).collect();
+            Arc::new(schema.project(&projection)?)
         } else {
             schema
         };
