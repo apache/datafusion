@@ -1193,6 +1193,28 @@ UNION ALL
 ----
 2
 
+# The first input is empty and more than one input remains, with different
+# column names. Planning must alias those inputs by position.
+query I rowsort
+SELECT a FROM (VALUES (1)) t(a) WHERE false
+UNION ALL
+SELECT b FROM (VALUES (2)) s(b)
+UNION ALL
+SELECT c FROM (VALUES (3)) u(c);
+----
+2
+3
+
+query T rowsort
+SELECT a FROM (VALUES ('left')) t(a) WHERE false
+UNION
+SELECT b FROM (VALUES ('middle')) s(b)
+UNION
+SELECT c FROM (VALUES ('right')) u(c);
+----
+middle
+right
+
 # Coercing same-named columns from different join inputs must retain their qualifiers.
 query II rowsort
 SELECT 1::BIGINT AS a, 2::BIGINT AS b
