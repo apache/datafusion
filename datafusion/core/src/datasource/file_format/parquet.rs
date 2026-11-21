@@ -287,6 +287,15 @@ mod tests {
         pub fn upcast(self: &Arc<Self>) -> Arc<dyn ObjectStore> {
             self.clone()
         }
+
+        /// Registers this store as the `file://` store of `state`, so that
+        /// [`FileFormat`] methods can key the file metadata cache by its URL.
+        pub fn register_as_local_filesystem(self: &Arc<Self>, state: &SessionState) {
+            state.runtime_env().register_object_store(
+                ObjectStoreUrl::local_filesystem().as_ref(),
+                self.upcast(),
+            );
+        }
     }
 
     #[async_trait]
@@ -364,12 +373,14 @@ mod tests {
 
         let session = SessionContext::new();
         let ctx = session.state();
+        store.register_as_local_filesystem(&ctx);
 
         // Use a size hint larger than the parquet footer but smaller than the actual metadata, requiring a second fetch
         // for the remaining metadata
         let file_metadata_cache =
             ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let df_meta = DFParquetMetadata::new(store.as_ref(), &meta[0])
+            .with_object_store_url(Some(ObjectStoreUrl::local_filesystem()))
             .with_metadata_size_hint(Some(9));
         df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 2);
@@ -423,6 +434,7 @@ mod tests {
         // Use the file size as the hint so we can get the full metadata from the first fetch
         let size_hint = meta[0].size as usize;
         let df_meta = DFParquetMetadata::new(store.as_ref(), &meta[0])
+            .with_object_store_url(Some(ObjectStoreUrl::local_filesystem()))
             .with_metadata_size_hint(Some(size_hint));
 
         df_meta.fetch_metadata().await?;
@@ -431,6 +443,7 @@ mod tests {
 
         let session = SessionContext::new();
         let ctx = session.state();
+        store.register_as_local_filesystem(&ctx);
         let file_metadata_cache =
             ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let df_meta =
@@ -476,6 +489,7 @@ mod tests {
         // Use a size hint larger than the file size to make sure we don't panic
         let size_hint = (meta[0].size + 100) as usize;
         let df_meta = DFParquetMetadata::new(store.as_ref(), &meta[0])
+            .with_object_store_url(Some(ObjectStoreUrl::local_filesystem()))
             .with_metadata_size_hint(Some(size_hint));
 
         df_meta.fetch_metadata().await?;
@@ -529,6 +543,7 @@ mod tests {
         let (files, _file_names) = store_parquet(vec![batch1], false).await?;
 
         let state = SessionContext::new().state();
+        store.register_as_local_filesystem(&state);
         // Make metadata size hint None to keep original behavior
         let format = ParquetFormat::default().with_metadata_size_hint(None);
         let _schema = format.infer_schema(&state, &store.upcast(), &files).await?;
@@ -542,6 +557,7 @@ mod tests {
             state.runtime_env().cache_manager.get_file_metadata_cache();
         let stats = DFParquetMetadata::new(store.as_ref(), &files[0])
             .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .with_object_store_url(Some(ObjectStoreUrl::local_filesystem()))
             .fetch_statistics(&schema)
             .await?;
         assert_eq!(stats.num_rows, Precision::Exact(4));
@@ -604,6 +620,7 @@ mod tests {
 
         let mut state = SessionContext::new().state();
         state = set_view_state(state, force_views);
+        store.register_as_local_filesystem(&state);
         let format = ParquetFormat::default()
             .with_force_view_types(force_views)
             .with_metadata_size_hint(None);
@@ -622,6 +639,7 @@ mod tests {
             state.runtime_env().cache_manager.get_file_metadata_cache();
         let stats = DFParquetMetadata::new(store.as_ref(), &files[0])
             .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .with_object_store_url(Some(ObjectStoreUrl::local_filesystem()))
             .fetch_statistics(&schema)
             .await?;
         assert_eq!(store.request_count(), 6);
@@ -651,6 +669,7 @@ mod tests {
         // No increase in request count because cache is not empty
         let stats = DFParquetMetadata::new(store.as_ref(), &files[1])
             .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .with_object_store_url(Some(ObjectStoreUrl::local_filesystem()))
             .fetch_statistics(&schema)
             .await?;
         assert_eq!(store.request_count(), 6);

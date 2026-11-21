@@ -74,6 +74,18 @@ impl ObjectStoreUrl {
     pub fn as_str(&self) -> &str {
         self.as_ref()
     }
+
+    /// Returns a copy of this [`ObjectStoreUrl`] with any username and
+    /// password removed, mirroring how [`DefaultObjectStoreRegistry`] ignores
+    /// credentials when selecting a store.
+    pub(crate) fn without_credentials(&self) -> Self {
+        let mut url = self.url.clone();
+        // These only fail for URLs that cannot have credentials, in which
+        // case there is nothing to remove.
+        let _ = url.set_username("");
+        let _ = url.set_password(None);
+        Self { url }
+    }
 }
 
 impl AsRef<str> for ObjectStoreUrl {
@@ -162,6 +174,21 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// the `url` and [`ObjectStoreRegistry`] implementation. An [`ObjectStore`] may be lazily
     /// created and registered.
     fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>>;
+
+    /// Returns the [`ObjectStoreUrl`] under which `store` is registered, if
+    /// it is known.
+    ///
+    /// This is the reverse of [`Self::get_store`]. It lets code that is only
+    /// handed an [`ObjectStore`], such as `FileFormat::infer_schema`, find the
+    /// identity of that store, for example to key the file metadata cache.
+    /// Returning `None` is always correct, and makes such callers skip work
+    /// that needs the store's identity.
+    ///
+    /// The default implementation returns `None`.
+    #[expect(unused_variables)]
+    fn get_store_url(&self, store: &Arc<dyn ObjectStore>) -> Option<ObjectStoreUrl> {
+        None
+    }
 }
 
 /// The default [`ObjectStoreRegistry`]
@@ -248,6 +275,19 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
                 internal_datafusion_err!("No suitable object store found for {url}. See `RuntimeEnv::register_object_store`")
             })
     }
+
+    /// Finds the registration of the same `Arc` as `store`. If it is
+    /// registered under several URLs, the smallest one is returned so the
+    /// answer is deterministic.
+    fn get_store_url(&self, store: &Arc<dyn ObjectStore>) -> Option<ObjectStoreUrl> {
+        let target = Arc::as_ptr(store).cast::<()>();
+        self.object_stores
+            .iter()
+            .filter(|entry| Arc::as_ptr(entry.value()).cast::<()>() == target)
+            .map(|entry| entry.key().clone())
+            .min()
+            .and_then(|key| ObjectStoreUrl::parse(key).ok())
+    }
 }
 
 /// Get the key of a url for object store registration.
@@ -263,6 +303,7 @@ fn get_url_key(url: &Url) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use object_store::memory::InMemory;
 
     #[test]
     fn test_object_store_url() {
@@ -302,6 +343,34 @@ mod tests {
             err.strip_backtrace(),
             "Execution error: ObjectStoreUrl must only contain scheme and authority, got: /foo"
         );
+    }
+
+    #[test]
+    fn test_get_store_url() {
+        let registry = DefaultObjectStoreRegistry::new();
+        let store_a: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let store_b: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let unregistered: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let url_a = ObjectStoreUrl::parse("memory://a").unwrap();
+        let url_b = ObjectStoreUrl::parse("memory://b").unwrap();
+        registry.register_store(url_a.as_ref(), Arc::clone(&store_a));
+        registry.register_store(url_b.as_ref(), Arc::clone(&store_b));
+
+        assert_eq!(registry.get_store_url(&store_a), Some(url_a));
+        assert_eq!(registry.get_store_url(&store_b), Some(url_b.clone()));
+        assert_eq!(registry.get_store_url(&unregistered), None);
+
+        // The store returned by `get_store` maps back to its URL
+        let fetched = registry.get_store(url_b.as_ref()).unwrap();
+        assert_eq!(registry.get_store_url(&fetched), Some(url_b));
+    }
+
+    #[test]
+    fn test_object_store_url_without_credentials() {
+        let url = ObjectStoreUrl::parse("s3://username:password@host:123").unwrap();
+        assert_eq!(url.without_credentials().as_str(), "s3://host:123/");
+        let url = ObjectStoreUrl::parse("s3://bucket").unwrap();
+        assert_eq!(url.without_credentials(), url);
     }
 
     #[test]

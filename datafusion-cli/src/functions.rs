@@ -687,6 +687,7 @@ impl TableFunctionImpl for MetadataCacheFunc {
         }
 
         let schema = Arc::new(Schema::new(vec![
+            Field::new("object_store_url", DataType::Utf8, false),
             Field::new("path", DataType::Utf8, false),
             Field::new(
                 "file_modified",
@@ -704,6 +705,7 @@ impl TableFunctionImpl for MetadataCacheFunc {
         let cached_entries = self.cache_manager.get_file_metadata_cache().list_entries();
 
         // construct record batch from metadata
+        let mut object_store_url_arr = Vec::with_capacity(cached_entries.len());
         let mut path_arr = Vec::with_capacity(cached_entries.len());
         let mut file_modified_arr = Vec::with_capacity(cached_entries.len());
         let mut file_size_bytes_arr = Vec::with_capacity(cached_entries.len());
@@ -714,8 +716,9 @@ impl TableFunctionImpl for MetadataCacheFunc {
         let mut extra_arr = Vec::with_capacity(cached_entries.len());
         let mut extra = Vec::new();
 
-        for (path, entry) in cached_entries {
-            path_arr.push(path.to_string());
+        for (key, entry) in cached_entries {
+            object_store_url_arr.push(key.object_store_url().to_string());
+            path_arr.push(key.path().to_string());
             file_modified_arr
                 .push(Some(entry.value.meta.last_modified.timestamp_millis()));
             file_size_bytes_arr.push(entry.value.meta.size);
@@ -740,6 +743,7 @@ impl TableFunctionImpl for MetadataCacheFunc {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
+                Arc::new(StringArray::from(object_store_url_arr)),
                 Arc::new(StringArray::from(path_arr)),
                 Arc::new(TimestampMillisecondArray::from(file_modified_arr)),
                 Arc::new(UInt64Array::from(file_size_bytes_arr)),

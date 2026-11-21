@@ -7,6 +7,7 @@ pub mod lru_queue;
 
 pub mod default_cache;
 
+use crate::object_store::ObjectStoreUrl;
 use datafusion_common::arrow::datatypes::{DataType, Schema};
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::instant::Instant;
@@ -152,6 +153,69 @@ impl Display for TableScopedPath {
         } else {
             write!(f, "{}", self.path)
         }
+    }
+}
+
+impl CacheKey for FileMetadataCacheKey {
+    fn size(&self) -> usize {
+        DFHeapSize::heap_size(self, &mut DFHeapSizeCtx::default())
+    }
+
+    fn table_ref(&self) -> Option<&TableReference> {
+        None
+    }
+}
+
+/// Key of the [`FileMetadataCache`]: a file's path together with the object
+/// store that holds it.
+///
+/// An [`object_store::path::Path`] is only unique within one object store,
+/// and a single cache is shared by all object stores of a `RuntimeEnv`, so
+/// the key also records the [`ObjectStoreUrl`] (scheme and authority, for
+/// example `s3://bucket`) that selects the store. This keeps, for example,
+/// `s3://bucket-a/t/x.parquet` and `s3://bucket-b/t/x.parquet` apart.
+///
+/// Any credentials in the [`ObjectStoreUrl`] are dropped, since they do not
+/// select a different store, and the key may be displayed.
+///
+/// [`FileMetadataCache`]: cache_manager::FileMetadataCache
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct FileMetadataCacheKey {
+    object_store_url: ObjectStoreUrl,
+    path: Path,
+}
+
+impl FileMetadataCacheKey {
+    /// Creates a key for the file at `path` in the object store identified by
+    /// `object_store_url`.
+    pub fn new(object_store_url: &ObjectStoreUrl, path: Path) -> Self {
+        Self {
+            object_store_url: object_store_url.without_credentials(),
+            path,
+        }
+    }
+
+    /// The URL of the object store holding the file, without credentials.
+    pub fn object_store_url(&self) -> &ObjectStoreUrl {
+        &self.object_store_url
+    }
+
+    /// The path of the file within its object store.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl DFHeapSize for FileMetadataCacheKey {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.object_store_url.as_str().heap_size(ctx) + self.path.as_ref().heap_size(ctx)
+    }
+}
+
+impl Display for FileMetadataCacheKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // `ObjectStoreUrl` always ends with `/`
+        write!(f, "{}{}", self.object_store_url, self.path)
     }
 }
 
