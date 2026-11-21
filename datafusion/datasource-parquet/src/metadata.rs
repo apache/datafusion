@@ -71,7 +71,19 @@ fn dictionary_promotion_candidates(
                     .try_fold(0_u128, |upper_bound, row_group| {
                         let row_count = u64::try_from(row_group.num_rows()).ok()?;
                         let column = row_group.column(col_idx);
-                        if row_count > 0 && column.dictionary_page_offset().is_none() {
+                        // A chunk whose dictionary outgrew the writer's page limit
+                        // continues in PLAIN pages, and reads slower as a dictionary
+                        // than as plain values.
+                        let all_dictionary_pages = column
+                            .dictionary_page_offset()
+                            .is_some()
+                            && column.page_encoding_stats_mask().is_some_and(|mask| {
+                                mask.is_only(parquet::basic::Encoding::RLE_DICTIONARY)
+                                    || mask.is_only(
+                                        parquet::basic::Encoding::PLAIN_DICTIONARY,
+                                    )
+                            });
+                        if row_count > 0 && !all_dictionary_pages {
                             return None;
                         }
                         // Non-null row counts bound missing NDVs when available,

@@ -142,6 +142,30 @@ Utf8View
 statement ok
 DROP TABLE threshold_no_dict_page;
 
+# A column whose dictionary page outgrew its size limit continues in PLAIN
+# pages, so it stays plain even when its NDV is within the cap.
+query I
+COPY (SELECT column1 AS fallback_page FROM (VALUES ('a'), ('b')))
+TO 'test_files/scratch/parquet_rle_to_dictionary/threshold_fallback_page/p.parquet'
+STORED AS PARQUET OPTIONS (
+  'format.dictionary_page_size_limit' 1,
+  'format.write_batch_size' 1,
+  'format.data_page_row_count_limit' 1
+);
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE threshold_fallback_page STORED AS PARQUET LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold_fallback_page/';
+
+query T
+SELECT DISTINCT arrow_typeof(fallback_page) FROM threshold_fallback_page;
+----
+Utf8View
+
+statement ok
+DROP TABLE threshold_fallback_page;
+
 # The exact-cap column stays dictionary encoded across files. mixed_card is
 # demoted because one file's row-group NDV sum exceeds the cap.
 query I

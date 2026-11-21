@@ -1459,7 +1459,7 @@ config_namespace! {
         pub enable_rle_to_dictionary: bool, default = false
 
         /// (reading) If set, promote top-level plain string and binary columns to
-        /// dictionaries when every nonempty row group has a dictionary page and the
+        /// dictionaries when every data page is dictionary encoded and the
         /// per-file sum of row-group cardinality upper bounds is within this cap.
         /// Missing NDVs use the non-null row count when available and the row count
         /// otherwise. Values repeated across row groups may be counted more than once.
@@ -1469,9 +1469,10 @@ config_namespace! {
         ///
         /// Large row-group dictionaries can be slower because each output batch can
         /// retain the whole dictionary. The crossover is workload-dependent: in one
-        /// 20-million-row group-by benchmark with 40-byte strings, the case with about
-        /// 100,000 distinct values per row group was faster than plain reads, while the
-        /// case with about 295,000 was slower. Use a conservative cap and benchmark
+        /// 20-million-row group-by benchmark with 40-byte strings and five row groups
+        /// per file, files with a per-file sum of about 500,000 (100,000 per row group)
+        /// were faster than plain reads, while files with about 1,460,000 (about
+        /// 295,000 per row group) were slower. Use a conservative cap and benchmark
         /// representative queries.
         pub dictionary_read_max_distinct_values: Option<usize>, default = None
 
