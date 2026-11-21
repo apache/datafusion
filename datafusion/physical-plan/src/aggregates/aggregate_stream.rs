@@ -4,7 +4,9 @@
 
 //! Aggregate without grouping columns
 
-use crate::aggregates::aggregate_argument::{AggregateArgument, AggregateFilter};
+use crate::aggregates::aggregate_argument::{
+    AggregateArgument, AggregateFilter, AggregateFilterValue,
+};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     aggregate_sub_metrics,
@@ -506,15 +508,21 @@ fn aggregate_batch(
             // 1.2 and 1.3
             let values = aggregate_argument_metrics.time(index, || {
                 let batch = match filter {
-                    Some(filter) => {
-                        let selection = filter.evaluate(batch)?;
-                        Cow::Owned(filter.select(batch, &selection)?)
-                    }
-                    None => Cow::Borrowed(batch),
+                    Some(filter) => match filter.evaluate(batch)? {
+                        AggregateFilterValue::Scalar(true) => Some(Cow::Borrowed(batch)),
+                        AggregateFilterValue::Scalar(false) => None,
+                        AggregateFilterValue::Array(selection) => {
+                            Some(Cow::Owned(filter.select(batch, &selection)?))
+                        }
+                    },
+                    None => Some(Cow::Borrowed(batch)),
                 };
                 arguments
                     .iter_mut()
-                    .map(|argument| argument.evaluate(batch.as_ref()))
+                    .map(|argument| match &batch {
+                        Some(batch) => argument.evaluate(batch.as_ref()),
+                        None => Ok(argument.null_array(0)),
+                    })
                     .collect::<Result<Vec<_>>>()
             })?;
 
