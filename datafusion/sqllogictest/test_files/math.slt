@@ -1523,6 +1523,14 @@ SELECT gcd(arrow_cast(column1, 'Decimal256(40,0)'), arrow_cast(column2, 'Decimal
 5
 15
 
+# An Int64 scalar needs more digits than Decimal32 holds
+query R
+SELECT gcd(15, arrow_cast(column1, 'Decimal32(7,0)')) FROM (VALUES (10), (25), (0));
+----
+5
+5
+15
+
 # gcd array with zero, minimum, and null scalars
 query I
 SELECT gcd(column1, 0) FROM (VALUES (1), (2), (0), (NULL));
