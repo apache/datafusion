@@ -7,16 +7,19 @@
 //! parallelization, and abort handling
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
-use super::demux::DemuxedStreamReceiver;
+use super::demux::{DemuxedStreamReceiver, FileSize};
 use super::{BatchSerializer, ObjectWriterBuilder};
 use crate::file_compression_type::FileCompressionType;
+use crate::file_sink_config::FileSinkMetrics;
 use datafusion_common::error::Result;
 use datafusion_common::{
     DataFusionError, exec_datafusion_err, internal_datafusion_err, internal_err,
 };
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_execution::TaskContext;
+use datafusion_physical_plan::metrics::Time;
 
 use arrow::array::RecordBatch;
 use bytes::Bytes;
@@ -68,10 +71,14 @@ impl SerializedRecordBatchResult {
 ///
 /// In the event of an IO error involving the ObjectStore writer,
 /// the writer is dropped to avoid calling further methods on it which might panic.
+///
+/// If `elapsed_compute` is provided, only the time spent serializing batches is
+/// recorded in it (waiting on channels and object store IO is excluded).
 pub(crate) async fn serialize_rb_stream_to_object_store(
     mut data_rx: Receiver<RecordBatch>,
     serializer: Arc<dyn BatchSerializer>,
     mut writer: WriterType,
+    elapsed_compute: Option<Time>,
 ) -> SerializedRecordBatchResult {
     let (tx, mut rx) =
         mpsc::channel::<SpawnedTask<Result<(usize, Bytes), DataFusionError>>>(100);
@@ -81,8 +88,10 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
         let mut initial = true;
         while let Some(batch) = data_rx.recv().await {
             let serializer_clone = Arc::clone(&serializer);
+            let elapsed_compute = elapsed_compute.clone();
             let task = SpawnedTask::spawn(async move {
                 let num_rows = batch.num_rows();
+                let _timer = elapsed_compute.as_ref().map(Time::timer);
                 let bytes = serializer_clone.serialize(batch, initial)?;
                 Ok((num_rows, bytes))
             });
@@ -149,6 +158,7 @@ type FileWriteBundle = (Receiver<RecordBatch>, SerializerType, WriterType);
 pub(crate) async fn stateless_serialize_and_write_files(
     mut rx: Receiver<FileWriteBundle>,
     tx: tokio::sync::oneshot::Sender<u64>,
+    elapsed_compute: Option<Time>,
 ) -> Result<()> {
     let mut row_count = 0;
     // tracks if any writers encountered an error triggering the need to abort
@@ -160,8 +170,15 @@ pub(crate) async fn stateless_serialize_and_write_files(
     let mut any_abort_errors = false;
     let mut join_set = JoinSet::new();
     while let Some((data_rx, serializer, writer)) = rx.recv().await {
+        let elapsed_compute = elapsed_compute.clone();
         join_set.spawn(async move {
-            serialize_rb_stream_to_object_store(data_rx, serializer, writer).await
+            serialize_rb_stream_to_object_store(
+                data_rx,
+                serializer,
+                writer,
+                elapsed_compute,
+            )
+            .await
         });
     }
     let mut finished_writers = Vec::with_capacity(join_set.len());
@@ -237,8 +254,70 @@ pub async fn spawn_writer_tasks_and_join(
     compression_level: Option<u32>,
     object_store: Arc<dyn ObjectStore>,
     demux_task: SpawnedTask<Result<()>>,
+    file_stream_rx: DemuxedStreamReceiver,
+) -> Result<u64> {
+    spawn_writer_tasks_and_join_with_options(
+        context,
+        serializer,
+        StatelessWriterOptions::new(compression)
+            .with_compression_level(compression_level),
+        object_store,
+        demux_task,
+        file_stream_rx,
+    )
+    .await
+}
+
+/// Options for [`spawn_writer_tasks_and_join_with_options`].
+#[derive(Debug, Clone)]
+pub struct StatelessWriterOptions {
+    compression: FileCompressionType,
+    compression_level: Option<u32>,
+    metrics: Option<FileSinkMetrics>,
+}
+
+impl StatelessWriterOptions {
+    /// Create options for the specified file compression type.
+    pub fn new(compression: FileCompressionType) -> Self {
+        Self {
+            compression,
+            compression_level: None,
+            metrics: None,
+        }
+    }
+
+    /// Set the compression level. `None` uses the default level.
+    pub fn with_compression_level(mut self, compression_level: Option<u32>) -> Self {
+        self.compression_level = compression_level;
+        self
+    }
+
+    /// Record rows written, bytes written and serialization time in `metrics`.
+    pub fn with_metrics(mut self, metrics: FileSinkMetrics) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+}
+
+/// Like [`spawn_writer_tasks_and_join`], but configured with
+/// [`StatelessWriterOptions`], which can optionally record [`FileSinkMetrics`].
+pub async fn spawn_writer_tasks_and_join_with_options(
+    context: &Arc<TaskContext>,
+    serializer: Arc<dyn BatchSerializer>,
+    options: StatelessWriterOptions,
+    object_store: Arc<dyn ObjectStore>,
+    demux_task: SpawnedTask<Result<()>>,
     mut file_stream_rx: DemuxedStreamReceiver,
 ) -> Result<u64> {
+    let StatelessWriterOptions {
+        compression,
+        compression_level,
+        metrics,
+    } = options;
+    let elapsed_compute = metrics.as_ref().map(|m| m.elapsed_compute.clone());
+    // Bytes written to each output file, after compression
+    let mut file_sizes: Vec<FileSize> = Vec::new();
+
     let rb_buffer_size = &context
         .session_config()
         .options()
@@ -248,9 +327,13 @@ pub async fn spawn_writer_tasks_and_join(
     let (tx_file_bundle, rx_file_bundle) = mpsc::channel(rb_buffer_size.get() / 2);
     let (tx_row_cnt, rx_row_cnt) = tokio::sync::oneshot::channel();
     let write_coordinator_task = SpawnedTask::spawn(async move {
-        stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt).await
+        stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt, elapsed_compute)
+            .await
     });
     while let Some((file_metadata, rb_stream)) = file_stream_rx.recv().await {
+        if metrics.is_some() {
+            file_sizes.push(Arc::clone(&file_metadata.size));
+        }
         let writer = ObjectWriterBuilder::new(
             compression,
             &file_metadata.path,
@@ -288,8 +371,19 @@ pub async fn spawn_writer_tasks_and_join(
     r1.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
     r2.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
-    // Return total row count:
-    rx_row_cnt.await.map_err(|_| {
+    let row_count = rx_row_cnt.await.map_err(|_| {
         internal_datafusion_err!("Did not receive row count from write coordinator")
-    })
+    })?;
+
+    if let Some(metrics) = metrics {
+        metrics.rows_written.add(row_count as usize);
+        let bytes_written: u64 = file_sizes
+            .iter()
+            .map(|size| size.load(Ordering::Relaxed))
+            .sum();
+        metrics.bytes_written.add(bytes_written as usize);
+    }
+
+    // Return total row count:
+    Ok(row_count)
 }

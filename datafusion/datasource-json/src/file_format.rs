@@ -33,15 +33,20 @@ use datafusion_datasource::file_format::{
     DEFAULT_SCHEMA_INFER_MAX_RECORD, FileFormat, FileFormatFactory,
 };
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
+use datafusion_datasource::file_sink_config::{
+    FileSink, FileSinkConfig, FileSinkMetrics,
+};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::write::BatchSerializer;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
-use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
+use datafusion_datasource::write::orchestration::{
+    StatelessWriterOptions, spawn_writer_tasks_and_join_with_options,
+};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
@@ -398,6 +403,8 @@ pub struct JsonSink {
     config: FileSinkConfig,
     /// Writer options for underlying Json writer
     writer_options: JsonWriterOptions,
+    /// Metrics for tracking write operations
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl Debug for JsonSink {
@@ -428,6 +435,7 @@ impl JsonSink {
         Self {
             config,
             writer_options,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -451,11 +459,12 @@ impl FileSink for JsonSink {
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
         let serializer = Arc::new(JsonSerializer::new()) as _;
-        spawn_writer_tasks_and_join(
+        spawn_writer_tasks_and_join_with_options(
             context,
             serializer,
-            self.writer_options.compression.into(),
-            self.writer_options.compression_level,
+            StatelessWriterOptions::new(self.writer_options.compression.into())
+                .with_compression_level(self.writer_options.compression_level)
+                .with_metrics(FileSinkMetrics::new(&self.metrics)),
             object_store,
             demux_task,
             file_stream_rx,
@@ -466,6 +475,10 @@ impl FileSink for JsonSink {
 
 #[async_trait]
 impl DataSink for JsonSink {
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }
@@ -492,6 +505,7 @@ impl DataSink for JsonSink {
         let Self {
             config: _,
             writer_options: _,
+            metrics: _,
         } = self;
 
         let input = ctx.encode_child(exec.input())?;
@@ -518,6 +532,8 @@ impl TryFrom<&JsonSink> for datafusion_proto_models::protobuf::JsonSink {
         let JsonSink {
             config,
             writer_options,
+            // Runtime metrics are recreated on decode.
+            metrics: _,
         } = value;
         Ok(Self {
             config: Some(config.try_into()?),
