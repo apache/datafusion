@@ -9,7 +9,7 @@ use super::{
 use crate::ExecutionPlan;
 use crate::metrics::ExecutionPlanMetricsSet;
 use crate::spill::get_record_batch_memory_size;
-use crate::spill::spill_manager::GetSlicedSize;
+use crate::spill::spill_pieces::recorded_size;
 use crate::test::TestMemoryExec;
 use arrow::array::{
     ArrayRef, Decimal128Array, DictionaryArray, FixedSizeBinaryArray, Int8Array,
@@ -1249,7 +1249,7 @@ async fn check_final_spilled_merge_releases_unused_workspace(
             .iter()
             .all(|spill| spill.max_record_batch_memory == large_spill_bytes)
     );
-    let tail_spill_bytes = sort_batch(&tail, &ordering, None)?.get_sliced_size()?;
+    let tail_spill_bytes = recorded_size(&sort_batch(&tail, &ordering, None)?, false)?;
     let single_buffer_bytes = if intermediate {
         4 * large_spill_bytes // Two intermediate files remain for the final merge.
     } else {
@@ -1625,8 +1625,12 @@ fn headroom_sort_exec(
     )))]
     .into();
     let sort = SortExec::new(ordering, input).with_preserve_partitioning(true);
+    // The sort bounds its spill batches by `sort_spill_reservation_bytes / 4`, at
+    // least 64 KiB. A batch of 1024 rows is about 135 KiB, so it is spilled in two
+    // pieces, and each run reserves half as much for the merge. The pool is sized
+    // for those runs: all of them fit without headroom, but not with it.
     let runtime = RuntimeEnvBuilder::new()
-        .with_memory_pool(Arc::new(GreedyMemoryPool::new(3500 * 1024)))
+        .with_memory_pool(Arc::new(GreedyMemoryPool::new(2700 * 1024)))
         .build_arc()?;
     let context = Arc::new(
         TaskContext::default()

@@ -24,6 +24,10 @@ use std::vec;
 use super::aggregate_hash_table::{accumulator_phases, create_group_accumulator};
 use super::order::GroupClustering;
 use super::skip_partial::SkipAggregationProbe;
+use super::spill::{
+    bound_spill_batches_by_first_spill, configured_spill_max_batch_bytes,
+    memory_pool_limit,
+};
 use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
@@ -102,6 +106,9 @@ struct SpillState {
 
     /// Manages the process of spilling and reading back intermediate data
     spill_manager: SpillManager,
+
+    /// The limit of the memory pool, see [`bound_spill_batches_by_first_spill`]
+    memory_limit: Option<usize>,
 
     // ========================================================================
     // STATES:
@@ -560,7 +567,8 @@ impl GroupedHashAggregateStream {
             metrics::SpillMetrics::new(&agg.metrics, partition),
             Arc::clone(&spill_schema),
         )
-        .with_compression_type(context.session_config().spill_compression());
+        .with_compression_type(context.session_config().spill_compression())
+        .with_max_batch_bytes(Some(configured_spill_max_batch_bytes(context)));
 
         let spill_state = SpillState {
             spills: vec![],
@@ -572,6 +580,7 @@ impl GroupedHashAggregateStream {
             peak_mem_used: MetricBuilder::new(&agg.metrics)
                 .peak_memory_usage("peak_mem_used", partition),
             spill_manager,
+            memory_limit: memory_pool_limit(context),
         };
 
         // Skip aggregation is supported if:
@@ -1250,6 +1259,13 @@ impl GroupedHashAggregateStream {
             )
         })?;
 
+        if self.spill_state.spills.is_empty() {
+            self.spill_state.spill_manager = bound_spill_batches_by_first_spill(
+                &self.spill_state.spill_manager,
+                &emit,
+                self.spill_state.memory_limit,
+            )?;
+        }
         let sorted_iter = IncrementalSortIterator::new(
             emit,
             self.spill_state.spill_expr.clone(),
@@ -1347,6 +1363,7 @@ impl GroupedHashAggregateStream {
                 .with_expressions(&self.spill_state.spill_expr)
                 .with_metrics(self.baseline_metrics.clone())
                 .with_batch_size(self.batch_size)
+                .with_max_batch_bytes(self.spill_state.spill_manager.max_batch_bytes())
                 .with_reservation(self.reservation.new_empty())
                 .with_merge_pool(Arc::clone(&self.merge_pool))
                 .with_replay_headroom()
