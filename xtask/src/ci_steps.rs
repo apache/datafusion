@@ -41,7 +41,7 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]",
+        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|unparser|extended|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
         runner: StepContext::run_test,
@@ -440,6 +440,23 @@ impl StepContext {
                     cmd_builder.args(["limit.slt"]);
                 }
             }
+            "unparser" => {
+                // Same features as the Substrait steps, which run in the same
+                // CI job, so the job builds the test binary once.
+                cmd_builder.program("cargo").args([
+                    "test",
+                    "-p",
+                    "datafusion-sqllogictest",
+                    "--test",
+                    "sqllogictests",
+                    "--features",
+                    "substrait",
+                    "--",
+                    "--unparser-round-trip",
+                    "--unparser-known-failures",
+                    "unparser_known_failures.txt",
+                ]);
+            }
             "extended" => {
                 cmd_builder.doc("Run the core extended tests.");
                 cmd_builder
@@ -581,7 +598,7 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
 
-    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]";
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|unparser|extended|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]";
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
@@ -947,6 +964,19 @@ cargo test \
 --test sqllogictests \
 --features substrait \
 -- --substrait-round-trip --substrait-optimize joins_conditionless.slt
+")
+                },
+            },
+            Cmd {
+                command: &["test", "unparser"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+cargo test \
+-p datafusion-sqllogictest \
+--test sqllogictests \
+--features substrait \
+-- --unparser-round-trip --unparser-known-failures unparser_known_failures.txt
 ")
                 },
             },

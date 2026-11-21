@@ -377,9 +377,9 @@ impl PartialHashAggregateStream {
     }
 
     /// Updates skip aggregation probe state.
-    fn update_skip_aggregation_probe(&mut self, input_rows: usize, num_groups: usize) {
+    fn update_skip_aggregation_probe(&mut self, input_rows: usize, new_groups: usize) {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-            probe.update_state(input_rows, num_groups);
+            probe.update_state(input_rows, new_groups);
         }
     }
 
@@ -437,6 +437,7 @@ impl PartialHashAggregateStream {
         // ----------------------------------
         let input_rows = batch.num_rows();
         self.reduction_factor.add_total(input_rows);
+        let groups_before = hash_table.building_group_count();
         hash_table.aggregate_evaluated(&evaluated)?;
         drop(evaluated);
 
@@ -450,7 +451,8 @@ impl PartialHashAggregateStream {
         // ----------------------------------------------
         // Step 3: Skip partial aggregation optimization
         // ----------------------------------------------
-        self.update_skip_aggregation_probe(input_rows, hash_table.building_group_count());
+        let new_groups = hash_table.building_group_count() - groups_before;
+        self.update_skip_aggregation_probe(input_rows, new_groups);
 
         // True branch: a decision has been made to skip partial aggregation.
         if self.should_skip_aggregation() {
@@ -976,14 +978,14 @@ mod tests {
     use super::*;
     use crate::aggregates::GroupClusteringMode;
     use crate::aggregates::clustered_test_util::collect_under_limit;
-    use crate::aggregates::{AggregateMode, PhysicalGroupBy};
+    use crate::aggregates::{AggregateMode, PhysicalGroupBy, StreamType};
     use crate::common::collect;
     use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
     use crate::test::exec::BarrierExec;
 
     use arrow::array::{ArrayRef, AsArray, Int32Array, Int64Array, StringViewArray};
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use arrow::datatypes::{DataType, Field, Int32Type, Int64Type, Schema};
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::{
@@ -1289,6 +1291,112 @@ mod tests {
             "Expected batch 3's rows ({batch3_rows}) to be skipped",
         );
 
+        Ok(())
+    }
+
+    /// Under a memory limit that forces early emits before the probe threshold,
+    /// both partial streams must skip unique keys but keep aggregating keys
+    /// that the table still reduces.
+    #[tokio::test]
+    async fn test_partial_aggregation_skip_probe_after_early_emits() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+        let batch_rows = 256;
+        let num_batches = 40;
+        let probe_batches = 16;
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            col("group_col", &schema)?,
+            "group_col".to_string(),
+        )]);
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("count_value")
+                .build()?,
+        )];
+
+        // Each batch has new keys, each repeated `key_repeats` times.
+        let ones: ArrayRef = Arc::new(Int64Array::from(vec![1; batch_rows]));
+        let skipped_unique = (num_batches - probe_batches) * batch_rows;
+        for (key_repeats, expected_skipped) in [(1, skipped_unique), (2, 0)] {
+            let batches = (0..num_batches)
+                .map(|i| {
+                    let start = (i * batch_rows / key_repeats) as i32;
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            Arc::new(Int32Array::from_iter_values(
+                                (0..batch_rows).map(|r| start + (r / key_repeats) as i32),
+                            )),
+                            Arc::clone(&ones),
+                        ],
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            for enable_migration_aggregate in [true, false] {
+                let session_config = SessionConfig::new()
+                    .with_batch_size(batch_rows)
+                    .set_usize(
+                        "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                        probe_batches * batch_rows,
+                    )
+                    .set_bool(
+                        "datafusion.execution.enable_migration_aggregate",
+                        enable_migration_aggregate,
+                    );
+                let runtime = RuntimeEnvBuilder::default()
+                    .with_memory_limit(64 * 1024, 1.0)
+                    .build_arc()?;
+                let task_ctx = Arc::new(
+                    TaskContext::default()
+                        .with_runtime(runtime)
+                        .with_session_config(session_config),
+                );
+                let input = TestMemoryExec::try_new_exec(
+                    std::slice::from_ref(&batches),
+                    Arc::clone(&schema),
+                    None,
+                )?;
+                let aggregate_exec = AggregateExec::try_new(
+                    AggregateMode::Partial,
+                    group_by.clone(),
+                    aggr_expr.clone(),
+                    vec![None],
+                    input,
+                    Arc::clone(&schema),
+                )?;
+
+                let stream = aggregate_exec.execute_typed(0, &task_ctx)?;
+                assert_eq!(
+                    matches!(stream, StreamType::GroupedHash(_)),
+                    !enable_migration_aggregate
+                );
+                let output = collect(stream.into()).await?;
+                // Every input row is counted once, whether skipped or aggregated.
+                let counted: i64 = output
+                    .iter()
+                    .filter_map(|b| {
+                        arrow::compute::sum(b.column(1).as_primitive::<Int64Type>())
+                    })
+                    .sum();
+                assert_eq!(counted, (num_batches * batch_rows) as i64);
+
+                let metrics = aggregate_exec.metrics().unwrap();
+                let metric = |name| metrics.sum_by_name(name).map_or(0, |m| m.as_usize());
+                // Only the new stream reports early emits.
+                if enable_migration_aggregate {
+                    assert!(metric("early_emit_count") > 0, "expected early emits");
+                }
+                assert_eq!(
+                    metric("skipped_aggregation_rows"),
+                    expected_skipped,
+                    "key_repeats={key_repeats} enable_migration_aggregate={enable_migration_aggregate}"
+                );
+            }
+        }
         Ok(())
     }
 
