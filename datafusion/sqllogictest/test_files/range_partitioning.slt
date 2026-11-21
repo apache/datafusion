@@ -1605,6 +1605,9 @@ statement ok
 set datafusion.optimizer.enable_window_topn = true;
 
 statement ok
+set datafusion.optimizer.enable_row_number_to_aggregate = false;
+
+statement ok
 set datafusion.optimizer.subset_repartition_threshold = 4;
 
 statement ok
@@ -1749,6 +1752,9 @@ reset datafusion.explain.physical_plan_only;
 
 statement ok
 reset datafusion.optimizer.enable_window_topn;
+
+statement ok
+reset datafusion.optimizer.enable_row_number_to_aggregate;
 
 ##########
 # TEST 45: Subset of Inputs Compatible Does Not Trigger InterleaveExec
