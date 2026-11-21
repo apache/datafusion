@@ -970,7 +970,7 @@ fn build_join(
             join_type,
             alias,
             &expr_map,
-            pull_up.pull_up_having_expr.as_ref(),
+            pull_up.pull_up_having_expr,
         )
         .map(|plan| {
             Some(BuiltJoin {
@@ -1296,22 +1296,20 @@ fn build_join_with_count_bug(
     join_type: JoinType,
     alias: &str,
     expr_map: &crate::decorrelate::ExprResultMap,
-    pull_up_having_expr: Option<&Expr>,
+    pull_up_having_expr: Option<Expr>,
 ) -> Result<LogicalPlan> {
     let pull_up_having_expr = pull_up_having_expr
         .map(|f| {
-            f.clone()
-                .transform_up(|e| match e {
-                    Expr::Column(c) => Ok(Transformed::yes(Expr::Column(Column::new(
-                        Some(alias),
-                        c.name,
-                    )))),
-                    _ => Ok(Transformed::no(e)),
-                })
-                .data()
+            f.transform_up(|e| match e {
+                Expr::Column(c) => Ok(Transformed::yes(Expr::Column(Column::new(
+                    Some(alias),
+                    c.name,
+                )))),
+                _ => Ok(Transformed::no(e)),
+            })
+            .data()
         })
         .transpose()?;
-    let pull_up_having_expr = pull_up_having_expr.as_ref();
 
     let joined = LogicalPlanBuilder::from(left.clone())
         .join_on(sub_query_alias, JoinType::Left, join_filter_opt)?
@@ -1326,7 +1324,9 @@ fn build_join_with_count_bug(
 
     let indicator_col = Expr::Column(Column::new(Some(alias), UN_MATCHED_ROW_INDICATOR));
 
-    let having_arm = pull_up_having_expr.map(|f| f.clone().is_not_true());
+    let having_arm = pull_up_having_expr
+        .as_ref()
+        .map(|f| f.clone().is_not_true());
 
     let mut expr_rewrite = TypeCoercionRewriter::new(joined.schema());
 
@@ -1336,7 +1336,6 @@ fn build_join_with_count_bug(
     // into it, so it cannot be assumed.
     let unmatched_having_default = match pull_up_having_expr {
         Some(f) => f
-            .clone()
             .transform_up(|e| {
                 if let Expr::Column(Column { name, .. }) = &e
                     && let Some(default_value) = expr_map.get(name)
@@ -1351,20 +1350,19 @@ fn build_join_with_count_bug(
     };
 
     // EXISTS is true by default (the groupless aggregate always
-    // produces a row), unless one of three cases holds:
+    // produces a row), unless one of two cases holds:
     // (1) the outer row joined against an inner group whose HAVING
     //     predicate failed,
     // (2) an unmatched outer row's own default aggregate values fail
     //     that same HAVING clause.
     let exists_expr = match having_arm {
-        Some(when_expr) => when(
-            indicator_col.clone().is_null(),
-            unmatched_having_default.is_true(),
-        )
-        .when(when_expr, lit(false))
-        .otherwise(lit(true))?
-        .rewrite(&mut expr_rewrite)
-        .data()?,
+        Some(when_expr) => {
+            when(indicator_col.is_null(), unmatched_having_default.is_true())
+                .when(when_expr, lit(false))
+                .otherwise(lit(true))?
+                .rewrite(&mut expr_rewrite)
+                .data()?
+        }
         None => lit(true),
     };
 
