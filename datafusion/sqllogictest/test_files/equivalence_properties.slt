@@ -262,6 +262,138 @@ statement ok
 set datafusion.execution.target_partitions = 4;
 
 ###
+### Functional dependencies through an inner join
+###
+
+# items.i_id is the primary key, so after the join on s_item = i_id each
+# s_item has one i_name: s_item determines i_name. The join keeps the order of
+# sales, its probe side, which is [s_item, s_day].
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query I
+COPY (SELECT * FROM (VALUES (1, 'apple', 'fruit'), (2, 'bread', 'bakery'), (3, 'cheese', 'dairy')) AS t(i_id, i_name, i_cat))
+TO 'test_files/scratch/equivalence_properties/items.csv'
+STORED AS CSV
+OPTIONS ('format.has_header' 'true');
+----
+3
+
+query I
+COPY (SELECT * FROM (VALUES (1, 1, 5), (1, 2, 3), (2, 1, 7), (2, 3, 1), (3, 2, 4)) AS t(s_item, s_day, s_qty))
+TO 'test_files/scratch/equivalence_properties/sales.csv'
+STORED AS CSV
+OPTIONS ('format.has_header' 'true');
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE items (i_id INT, i_name VARCHAR, i_cat VARCHAR, PRIMARY KEY (i_id))
+STORED AS CSV
+WITH ORDER (i_id ASC)
+LOCATION 'test_files/scratch/equivalence_properties/items.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE items_no_key (i_id INT, i_name VARCHAR, i_cat VARCHAR)
+STORED AS CSV
+WITH ORDER (i_id ASC)
+LOCATION 'test_files/scratch/equivalence_properties/items.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE sales (s_item INT, s_day INT, s_qty INT)
+STORED AS CSV
+WITH ORDER (s_item ASC, s_day ASC)
+LOCATION 'test_files/scratch/equivalence_properties/sales.csv'
+OPTIONS ('format.has_header' 'true');
+
+# ORDER BY needs no sort: the input is sorted by [s_item, s_day], and i_name
+# has one value for each s_item.
+query TT
+EXPLAIN SELECT s_item, i_name, s_day FROM items JOIN sales ON s_item = i_id
+ORDER BY s_item, i_name, s_day;
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(i_id@0, s_item@0)], projection=[s_item@2, i_name@1, s_day@3]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/items.csv]]}, projection=[i_id, i_name], output_ordering=[i_id@0 ASC NULLS LAST], constraints=[PrimaryKey([0])], file_type=csv, has_header=true
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/sales.csv]]}, projection=[s_item, s_day], output_ordering=[s_item@0 ASC NULLS LAST, s_day@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+query ITI
+SELECT s_item, i_name, s_day FROM items JOIN sales ON s_item = i_id
+ORDER BY s_item, i_name, s_day;
+----
+1 apple 1
+1 apple 2
+2 bread 1
+2 bread 3
+3 cheese 2
+
+# Without the primary key, i_name is not determined by s_item, and the sort stays.
+query TT
+EXPLAIN SELECT s_item, i_name, s_day FROM items_no_key JOIN sales ON s_item = i_id
+ORDER BY s_item, i_name, s_day;
+----
+physical_plan
+01)SortExec: expr=[s_item@0 ASC NULLS LAST, i_name@1 ASC NULLS LAST, s_day@2 ASC NULLS LAST], preserve_partitioning=[false]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(i_id@0, s_item@0)], projection=[s_item@2, i_name@1, s_day@3]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/items.csv]]}, projection=[i_id, i_name], output_ordering=[i_id@0 ASC NULLS LAST], file_type=csv, has_header=true
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/sales.csv]]}, projection=[s_item, s_day], output_ordering=[s_item@0 ASC NULLS LAST, s_day@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+# A GROUP BY on s_item and i_name still sees its input clustered on s_item.
+query TT
+EXPLAIN SELECT s_item, i_name, sum(s_qty) FROM items JOIN sales ON s_item = i_id
+GROUP BY s_item, i_name;
+----
+physical_plan
+01)AggregateExec: mode=Single, gby=[s_item@1 as s_item, i_name@0 as i_name], aggr=[sum(sales.s_qty)], group_clustering_mode=Full
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(i_id@0, s_item@0)], projection=[i_name@1, s_item@2, s_qty@3]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/items.csv]]}, projection=[i_id, i_name], output_ordering=[i_id@0 ASC NULLS LAST], constraints=[PrimaryKey([0])], file_type=csv, has_header=true
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/sales.csv]]}, projection=[s_item, s_qty], output_ordering=[s_item@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+query ITI
+SELECT s_item, i_name, sum(s_qty) FROM items JOIN sales ON s_item = i_id
+GROUP BY s_item, i_name ORDER BY s_item;
+----
+1 apple 8
+2 bread 8
+3 cheese 4
+
+# PARTITION BY s_item, i_name needs no sort.
+query TT
+EXPLAIN SELECT s_item, i_name, s_day, sum(s_qty) OVER (PARTITION BY s_item, i_name ORDER BY s_day)
+FROM items JOIN sales ON s_item = i_id;
+----
+physical_plan
+01)ProjectionExec: expr=[s_item@1 as s_item, i_name@0 as i_name, s_day@2 as s_day, sum(sales.s_qty) PARTITION BY [sales.s_item, items.i_name] ORDER BY [sales.s_day ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as sum(sales.s_qty) PARTITION BY [sales.s_item, items.i_name] ORDER BY [sales.s_day ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
+02)--BoundedWindowAggExec: wdw=[sum(sales.s_qty) PARTITION BY [sales.s_item, items.i_name] ORDER BY [sales.s_day ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(sales.s_qty) PARTITION BY [sales.s_item, items.i_name] ORDER BY [sales.s_day ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(i_id@0, s_item@0)], projection=[i_name@1, s_item@2, s_day@3, s_qty@4]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/items.csv]]}, projection=[i_id, i_name], output_ordering=[i_id@0 ASC NULLS LAST], constraints=[PrimaryKey([0])], file_type=csv, has_header=true
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/equivalence_properties/sales.csv]]}, projection=[s_item, s_day, s_qty], output_ordering=[s_item@0 ASC NULLS LAST, s_day@1 ASC NULLS LAST], file_type=csv, has_header=true
+
+query ITII
+SELECT s_item, i_name, s_day, sum(s_qty) OVER (PARTITION BY s_item, i_name ORDER BY s_day)
+FROM items JOIN sales ON s_item = i_id ORDER BY s_item, s_day;
+----
+1 apple 1 5
+1 apple 2 8
+2 bread 1 7
+2 bread 3 8
+3 cheese 2 4
+
+statement ok
+DROP TABLE sales;
+
+statement ok
+DROP TABLE items_no_key;
+
+statement ok
+DROP TABLE items;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+###
 ### Functions whose ordering cannot be derived from their input
 ###
 
