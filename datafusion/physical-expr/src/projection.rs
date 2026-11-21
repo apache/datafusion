@@ -8,7 +8,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
-use crate::expressions::{CastExpr, Column, Literal};
+use crate::expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr};
+use crate::intervals::utils::{is_datatype_supported, is_operator_supported};
 use crate::scalar_function::ScalarFunctionExpr;
 use crate::utils::collect_columns;
 
@@ -21,6 +22,7 @@ use datafusion_common::{
     plan_err,
 };
 
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr_common::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_expr_common::metrics::ExpressionEvaluatorMetrics;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -723,7 +725,7 @@ impl ProjectionExprs {
     ) -> Result<Statistics> {
         let mut column_statistics = Vec::with_capacity(self.exprs.len());
 
-        for proj_expr in self.exprs.iter() {
+        for (index, proj_expr) in self.exprs.iter().enumerate() {
             let expr = &proj_expr.expr;
             let col_stats = if let Some(col) = expr.downcast_ref::<Column>() {
                 column_statistics_at(&stats.column_statistics, col.index())
@@ -785,11 +787,15 @@ impl ProjectionExprs {
                     }
                 }
             } else {
-                project_column_statistics_through_expr(
-                    expr.as_ref(),
-                    &stats.column_statistics,
-                    input_schema,
-                )
+                match output_schema.fields().get(index) {
+                    Some(field) => expr_column_statistics(
+                        expr.as_ref(),
+                        &stats.column_statistics,
+                        input_schema,
+                        field.data_type(),
+                    ),
+                    None => ColumnStatistics::new_unknown(),
+                }
             };
             column_statistics.push(col_stats);
         }
@@ -853,10 +859,45 @@ impl ProjectionExprs {
     }
 }
 
-/// Propagate column statistics through CAST projections. Other expressions
-/// return unknown — generalizing via [`PhysicalExpr::evaluate_bounds`] is
-/// unsafe for aggregate folding since many impls (e.g. `sin`) return a fixed
-/// envelope rather than tight bounds on the actual inputs.
+/// Returns the statistics of the values of `expr`, computed from
+/// `column_stats`, the statistics of its input columns. `input_schema` supplies
+/// types for casts when their input bounds are absent. `data_type` is the
+/// output type of `expr`.
+///
+/// Columns and value-preserving casts keep their input statistics. Other
+/// expressions get only the inexact bounds from [`PhysicalExpr::evaluate_bounds`]
+/// when all their inputs have bounds. Bounds that do not have the type
+/// `data_type` are discarded.
+///
+/// # Public Only for Internal Use:
+///
+/// DataFusion uses this function internally. See [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub fn expr_column_statistics(
+    expr: &dyn PhysicalExpr,
+    column_stats: &[ColumnStatistics],
+    input_schema: Option<&Schema>,
+    data_type: &DataType,
+) -> ColumnStatistics {
+    let mut stats =
+        project_column_statistics_through_expr(expr, column_stats, input_schema);
+    let has_type = |bound: &Precision<ScalarValue>| {
+        bound
+            .get_value()
+            .is_none_or(|value| value.data_type() == *data_type)
+    };
+    if !has_type(&stats.min_value) || !has_type(&stats.max_value) {
+        stats.min_value = Precision::Absent;
+        stats.max_value = Precision::Absent;
+    }
+    stats
+}
+
+/// Propagate column statistics through CAST projections. Literals report
+/// their value, and other expressions report bounds as described in
+/// [`expression_bounds_statistics`].
 fn project_column_statistics_through_expr(
     expr: &dyn PhysicalExpr,
     column_stats: &[ColumnStatistics],
@@ -865,8 +906,17 @@ fn project_column_statistics_through_expr(
     if let Some(col) = expr.downcast_ref::<Column>() {
         return column_statistics_at(column_stats, col.index());
     }
+    if let Some(literal) = expr.downcast_ref::<Literal>() {
+        let value = literal.value();
+        if value.is_null() {
+            return ColumnStatistics::new_unknown();
+        }
+        return ColumnStatistics::new_unknown()
+            .with_min_value(Precision::Exact(value.clone()))
+            .with_max_value(Precision::Exact(value.clone()));
+    }
     let Some(cast_expr) = expr.downcast_ref::<CastExpr>() else {
-        return ColumnStatistics::new_unknown();
+        return expression_bounds_statistics(expr, column_stats, input_schema);
     };
     let inner_stats = project_column_statistics_through_expr(
         cast_expr.expr.as_ref(),
@@ -934,6 +984,73 @@ fn project_column_statistics_through_expr(
         distinct_count: inner_stats.distinct_count,
         sum_value: Precision::Absent,
         byte_size: Precision::Absent,
+    }
+}
+
+/// Bounds `expr` by [`PhysicalExpr::evaluate_bounds`] over the bounds of its
+/// inputs. The bounds are inexact, so that they never answer `MIN` or `MAX`
+/// queries. Floating-point intervals cannot represent NaN, which can match
+/// in SQL comparisons, so they are excluded from derived statistics here.
+fn expression_bounds_statistics(
+    expr: &dyn PhysicalExpr,
+    column_stats: &[ColumnStatistics],
+    input_schema: Option<&Schema>,
+) -> ColumnStatistics {
+    let input_bounds = expr
+        .children()
+        .into_iter()
+        .map(|child| {
+            let stats = project_column_statistics_through_expr(
+                child.as_ref(),
+                column_stats,
+                input_schema,
+            );
+            match (stats.min_value.get_value(), stats.max_value.get_value()) {
+                (Some(min), Some(max))
+                    if !min.is_null()
+                        && !max.is_null()
+                        && !min.data_type().is_floating() =>
+                {
+                    Interval::try_new(min.clone(), max.clone()).ok()
+                }
+                _ => None,
+            }
+        })
+        .collect::<Option<Vec<_>>>();
+    let bounds = input_bounds
+        .filter(|input_bounds| has_interval_support(expr, input_bounds))
+        .and_then(|input_bounds| {
+            let input_bounds = input_bounds.iter().collect::<Vec<_>>();
+            expr.evaluate_bounds(&input_bounds).ok()
+        });
+    match bounds {
+        Some(bounds) if !bounds.is_unbounded() && !bounds.data_type().is_floating() => {
+            let (min, max) = bounds.into_bounds();
+            ColumnStatistics::new_unknown()
+                .with_min_value(Precision::Inexact(min))
+                .with_max_value(Precision::Inexact(max))
+        }
+        _ => ColumnStatistics::new_unknown(),
+    }
+}
+
+/// Whether `expr` can compute bounds from `input_bounds`. Arithmetic follows
+/// the rules of interval analysis in [`check_support`]. Scalar functions
+/// decide in their own [`PhysicalExpr::evaluate_bounds`].
+///
+/// [`check_support`]: crate::intervals::utils::check_support
+fn has_interval_support(expr: &dyn PhysicalExpr, input_bounds: &[Interval]) -> bool {
+    let supported_inputs = || {
+        input_bounds
+            .iter()
+            .all(|bounds| is_datatype_supported(&bounds.data_type()))
+    };
+    if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+        is_operator_supported(binary.op()) && supported_inputs()
+    } else if expr.is::<NegativeExpr>() {
+        supported_inputs()
+    } else {
+        expr.is::<ScalarFunctionExpr>()
     }
 }
 
@@ -3303,14 +3420,12 @@ pub(crate) mod tests {
         // Should have 2 column statistics
         assert_eq!(output_stats.column_statistics.len(), 2);
 
-        // First column (expression) should have unknown statistics
+        // First column (expression) has only inexact bounds
         assert_eq!(
-            output_stats.column_statistics[0].distinct_count,
-            Precision::Absent
-        );
-        assert_eq!(
-            output_stats.column_statistics[0].max_value,
-            Precision::Absent
+            output_stats.column_statistics[0],
+            ColumnStatistics::new_unknown()
+                .with_min_value(Precision::Inexact(ScalarValue::Int64(Some(-3))))
+                .with_max_value(Precision::Inexact(ScalarValue::Int64(Some(22))))
         );
 
         // Second column (col1) should preserve statistics
@@ -3320,6 +3435,115 @@ pub(crate) mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_expr_column_statistics_bounds() {
+        let col0_plus_one: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("col0", 0)),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+        ));
+        let stats = get_stats().column_statistics;
+        let bounds = ColumnStatistics::new_unknown()
+            .with_min_value(Precision::Inexact(ScalarValue::Int64(Some(-3))))
+            .with_max_value(Precision::Inexact(ScalarValue::Int64(Some(22))));
+        assert_eq!(
+            expr_column_statistics(
+                col0_plus_one.as_ref(),
+                &stats,
+                None,
+                &DataType::Int64
+            ),
+            bounds
+        );
+
+        // Bounds of another type than the output type are discarded.
+        assert_eq!(
+            expr_column_statistics(
+                col0_plus_one.as_ref(),
+                &stats,
+                None,
+                &DataType::Int32
+            ),
+            ColumnStatistics::new_unknown()
+        );
+
+        // Every input must have bounds.
+        let mut missing_max = get_stats().column_statistics;
+        missing_max[0].max_value = Precision::Absent;
+        assert_eq!(
+            expr_column_statistics(
+                col0_plus_one.as_ref(),
+                &missing_max,
+                None,
+                &DataType::Int64
+            ),
+            ColumnStatistics::new_unknown()
+        );
+
+        // A cast keeps the bounds of its input.
+        let cast_bounds: Arc<dyn PhysicalExpr> =
+            Arc::new(CastExpr::new(col0_plus_one, DataType::Int64, None));
+        assert_eq!(
+            expr_column_statistics(cast_bounds.as_ref(), &stats, None, &DataType::Int64),
+            bounds
+        );
+
+        // Arithmetic without interval support does not compute bounds.
+        let date = |days| Precision::Exact(ScalarValue::Date32(Some(days)));
+        let interval = |days| {
+            Precision::Exact(ScalarValue::IntervalDayTime(Some(
+                arrow::datatypes::IntervalDayTime::new(days, 0),
+            )))
+        };
+        let unsupported_stats = vec![
+            ColumnStatistics::new_unknown()
+                .with_min_value(date(0))
+                .with_max_value(date(10)),
+            ColumnStatistics::new_unknown()
+                .with_min_value(interval(1))
+                .with_max_value(interval(2)),
+            ColumnStatistics::new_unknown()
+                .with_min_value(Precision::Exact(ScalarValue::from("a")))
+                .with_max_value(Precision::Exact(ScalarValue::from("b"))),
+            ColumnStatistics::new_unknown()
+                .with_min_value(Precision::Exact(ScalarValue::Decimal128(Some(1), 10, 2)))
+                .with_max_value(Precision::Exact(ScalarValue::Decimal128(
+                    Some(9),
+                    10,
+                    2,
+                ))),
+        ];
+        for (left, op, right) in [
+            (3, Operator::Plus, 3),
+            (0, Operator::Plus, 1),
+            (1, Operator::Multiply, 1),
+            (2, Operator::Minus, 2),
+            (0, Operator::Modulo, 0),
+        ] {
+            let expr = BinaryExpr::new(
+                Arc::new(Column::new("l", left)),
+                op,
+                Arc::new(Column::new("r", right)),
+            );
+            let stats =
+                project_column_statistics_through_expr(&expr, &unsupported_stats, None);
+            assert_eq!(stats, ColumnStatistics::new_unknown(), "{expr}");
+        }
+
+        // A literal input has its value as exact bounds.
+        let cast_literal: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+            DataType::Int64,
+            None,
+        ));
+        assert_eq!(
+            expr_column_statistics(cast_literal.as_ref(), &stats, None, &DataType::Int64),
+            ColumnStatistics::new_unknown()
+                .with_min_value(Precision::Exact(ScalarValue::Int64(Some(5))))
+                .with_max_value(Precision::Exact(ScalarValue::Int64(Some(5))))
+        );
     }
 
     #[test]
