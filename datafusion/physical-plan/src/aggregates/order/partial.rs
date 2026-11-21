@@ -8,6 +8,7 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::compute::SortOptions;
 use arrow_ord::partition::partition;
+use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -87,15 +88,10 @@ enum State {
 }
 
 impl State {
-    fn heap_size(&self) -> usize {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
         match self {
-            State::Taken => 0,
-            State::Start => 0,
-            State::InProgress { group_key, .. } => group_key
-                .iter()
-                .map(|scalar_value| scalar_value.size())
-                .sum(),
-            State::Complete => 0,
+            State::InProgress { group_key, .. } => group_key.heap_size(ctx),
+            State::Taken | State::Start | State::Complete => 0,
         }
     }
 }
@@ -254,13 +250,16 @@ impl GroupClusteringPartial {
     /// Returns retained heap allocations, excluding the inline descriptor
     /// already counted by [`super::GroupClustering::size`].
     pub(crate) fn heap_size(&self) -> usize {
-        self.grouping_indices.allocated_size() + self.state.heap_size()
+        self.grouping_indices.allocated_size()
+            + self.state.heap_size(&mut DFHeapSizeCtx::default())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::mem::size_of;
 
     use arrow::array::Int32Array;
 
@@ -343,6 +342,43 @@ mod tests {
             }
         );
         assert_eq!(group_clustering.emit_to(), Some(EmitTo::First(6)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn heap_size_counts_retained_sort_key_capacity() -> Result<()> {
+        // An in-progress sort key with spare capacity and a heap-owning scalar.
+        let mut group_key = Vec::with_capacity(4);
+        let key = String::from("retained sort key");
+        let key_capacity = key.capacity();
+        group_key.push(ScalarValue::Utf8(Some(key)));
+        let group_key_capacity = group_key.capacity();
+        assert!(group_key_capacity > group_key.len());
+
+        let mut grouping_indices = Vec::with_capacity(8);
+        grouping_indices.push(0);
+        let grouping_indices_capacity = grouping_indices.capacity();
+
+        let mut partial = GroupClusteringPartial::try_new(grouping_indices)?;
+        partial.state = State::InProgress {
+            current_run_start: 0,
+            group_key,
+            current: 0,
+        };
+
+        // Every scalar slot, including the spare ones, is charged; the
+        // scalar's own heap payload is charged on top of its slot.
+        let expected = grouping_indices_capacity * size_of::<usize>()
+            + group_key_capacity * size_of::<ScalarValue>()
+            + key_capacity;
+        assert_eq!(partial.heap_size(), expected);
+
+        // Accounting only the live element would miss the spare slots.
+        let live_only = grouping_indices_capacity * size_of::<usize>()
+            + size_of::<ScalarValue>()
+            + key_capacity;
+        assert!(partial.heap_size() > live_only);
 
         Ok(())
     }
