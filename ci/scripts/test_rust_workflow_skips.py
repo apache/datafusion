@@ -41,18 +41,6 @@ class RustWorkflowSkipsTest(unittest.TestCase):
             self.errors(),
         )
 
-    def test_missing_artifact_upload_guard(self):
-        upload = next(
-            step
-            for step in self.workflow["jobs"]["linux-build-lib"]["steps"]
-            if step.get("uses", "").startswith("actions/upload-artifact")
-            and step.get("with", {}).get("name") == "cargo-check"
-        )
-        del upload["if"]
-        self.assertTrue(
-            any("`cargo-check` upload step" in error for error in self.errors())
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -48,16 +48,16 @@
 name: Rust
 
 concurrency:
-  # Fork pushes cancel superseded runs on the same branch. Upstream main and
+  # Fork runs cancel superseded runs on the same branch. Upstream main and
   # merge queue runs keep separate groups for each SHA.
   group: ${{ github.repository }}-${{ github.head_ref || (github.repository == 'apache/datafusion' && github.sha || github.ref) }}-${{ github.workflow }}
   cancel-in-progress: true
 
 on:
   push:
-    branches-ignore:
-      - 'gh-readonly-queue/**'
-      - 'dependabot/**'
+    branches:
+      - main
+      - 'branch-*'
     paths-ignore:
       - "docs/**"
       - "**.md"
@@ -88,39 +88,16 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: stable
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
-        with:
-          shared-key: "amd-ci-check" # Keep cargo check artifacts separate from test builds.
-          save-if: ${{ github.ref_name == 'main' }}
+          disk-cleanup-threshold-gb: 20
+      - name: Configure compiler cache
+        uses: ./.github/actions/setup-sccache
       - name: Prepare cargo build
         # `--locked` asserts that Cargo.lock is up to date with the manifest.
         run: cargo xtask ci step check workspace
-      - name: Archive Cargo check artifacts
-        id: archive-check
-        if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
-        continue-on-error: true
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/cargo-check"
-          # Preserve source timestamps so Cargo can reuse workspace crates.
-          git ls-files -z | tar --null -T - -cf "$RUNNER_TEMP/cargo-check/check-workspace.tar" target
-          # -C incremental=false creates per-crate caches named "false".
-          tar --anchored --no-wildcards-match-slash \
-            --exclude='registry/src/*/*/false' \
-            -cf "$RUNNER_TEMP/cargo-check/check-registry.tar" -C "$CARGO_HOME" registry
-      - name: Upload Cargo check artifacts
-        if: ${{ steps.archive-check.outcome == 'success' && !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
-        with:
-          name: cargo-check
-          path: ${{ runner.temp }}/cargo-check/
-          compression-level: 1
-          retention-days: 1
-          if-no-files-found: error
-          overwrite: true
+      - &sccache-stats
+        name: Report compiler cache statistics
+        if: ${{ always() && env.RUSTC_WRAPPER == 'sccache' }}
+        run: sccache --show-stats
 
   # Check datafusion-common features
   #
@@ -138,13 +115,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
-        with:
-          save-if: false # The workspace and functions checks save this cache on main.
-          shared-key: "amd-ci-check"
+      - name: Configure compiler cache
+        uses: ./.github/actions/setup-sccache
       - name: Check datafusion-common (default features)
         run: cargo xtask ci step check datafusion-common default
       #
@@ -153,6 +125,7 @@ jobs:
       - name: Check datafusion-common (no-default-features)
         run: cargo xtask ci step check datafusion-common no-default
         # Note: don't check other feature flags as datafusion-common is not typically used standalone
+      - *sccache-stats
 
   # Check datafusion-substrait features
   #
@@ -173,20 +146,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Download Cargo check artifacts
-        id: download-check
-        continue-on-error: true
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
-        with:
-          name: cargo-check
-          path: ${{ runner.temp }}/cargo-check
-      - name: Restore Cargo check artifacts
-        if: steps.download-check.outcome == 'success'
-        run: |
-          tar -xf "$RUNNER_TEMP/cargo-check/check-workspace.tar"
-          tar -xf "$RUNNER_TEMP/cargo-check/check-registry.tar" -C "$CARGO_HOME"
+      - name: Configure compiler cache
+        uses: ./.github/actions/setup-sccache
       - name: Check datafusion-substrait (default features)
         run: cargo xtask ci step check datafusion-substrait default
         #
@@ -202,6 +163,7 @@ jobs:
           apt-get install -y cmake
       - name: Check datafusion-substrait (protoc)
         run: cargo xtask ci step check datafusion-substrait protoc
+      - *sccache-stats
 
   # Check datafusion-proto features
   #
@@ -220,13 +182,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
-        with:
-          save-if: false # The workspace and functions checks save this cache on main.
-          shared-key: "amd-ci-check"
+      - name: Configure compiler cache
+        uses: ./.github/actions/setup-sccache
       - name: Check datafusion-proto (default features)
         run: cargo xtask ci step check datafusion-proto default
       #
@@ -240,6 +197,7 @@ jobs:
         run: cargo xtask ci step check datafusion-proto parquet
       - name: Check datafusion-proto (avro)
         run: cargo xtask ci step check datafusion-proto avro
+      - *sccache-stats
 
   # Check datafusion-ffi features
   #
@@ -258,15 +216,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
-        with:
-          save-if: false # The workspace and functions checks save this cache on main.
-          shared-key: "amd-ci-check"
+      - name: Configure compiler cache
+        uses: ./.github/actions/setup-sccache
       - name: Check datafusion-ffi (no-default-features)
         run: cargo xtask ci step check datafusion-ffi no-default
+      - *sccache-stats
 
 
   # Check datafusion crate features
@@ -288,20 +242,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Download Cargo check artifacts
-        id: download-check
-        continue-on-error: true
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
-        with:
-          name: cargo-check
-          path: ${{ runner.temp }}/cargo-check
-      - name: Restore Cargo check artifacts
-        if: steps.download-check.outcome == 'success'
-        run: |
-          tar -xf "$RUNNER_TEMP/cargo-check/check-workspace.tar"
-          tar -xf "$RUNNER_TEMP/cargo-check/check-registry.tar" -C "$CARGO_HOME"
+      - name: Configure compiler cache
+        uses: ./.github/actions/setup-sccache
       - name: Check datafusion (default features)
         run: cargo xtask ci step check datafusion default
       #
@@ -345,6 +287,7 @@ jobs:
         run: cargo xtask ci step check datafusion unicode_expressions
       - name: Check parquet encryption (parquet_encryption)
         run: cargo xtask ci step check datafusion parquet_encryption
+      - *sccache-stats
 
   # Check datafusion-functions crate features
   #
@@ -362,14 +305,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
-        with:
-          # Warm GitHub's cache when linux-build-lib saves to Runs-On.
-          save-if: ${{ github.ref_name == 'main' }}
-          shared-key: "amd-ci-check"
+      - name: Configure compiler cache
+        uses: ./.github/actions/setup-sccache
       - name: Check datafusion-functions (default features)
         run: cargo xtask ci step check datafusion-functions default
       #
@@ -391,6 +328,7 @@ jobs:
         run: cargo xtask ci step check datafusion-functions string_expressions
       - name: Check datafusion-functions (unicode_expressions)
         run: cargo xtask ci step check datafusion-functions unicode_expressions
+      - *sccache-stats
 
   # Library and integration tests
   linux-test:
@@ -407,29 +345,21 @@ jobs:
       - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21  # v2.90.4
         with:
           tool: cargo-llvm-cov
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
-        with:
-          save-if: ${{ github.ref_name == 'main' }}
-          shared-key: "amd-ci"
-      - name: Run tests (excluding doctests and datafusion-cli)
+      - name: Configure compiler cache
+        uses: ./.github/actions/setup-sccache
+      - name: Run tests with workspace and SQLLogicTest coverage
         run: cargo xtask ci step test workspace
-      - name: Run SQLLogicTests with coverage
-        env:
-          RUST_BACKTRACE: 1
-        run: cargo xtask ci step test slt-coverage
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code
@@ -458,6 +388,7 @@ jobs:
           disable_search: true
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+      - *sccache-stats
 
   # datafusion-cli tests
   linux-test-datafusion-cli:
@@ -470,15 +401,13 @@ jobs:
       - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
-        run: rustup toolchain install stable
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
-        with:
-          save-if: false # set in linux-test
-          shared-key: "amd-ci"
+        run: rustup toolchain install
+      - name: Configure compiler cache
+        uses: ./.github/actions/setup-sccache
       # The storage integration tests start RustFS containers. Pulling the image
       # once up front keeps the pull off the critical path of the tests, which
       # would otherwise pull it several times concurrently and occasionally fail
@@ -498,7 +427,7 @@ jobs:
         run: cargo xtask ci step test cli
       - name: Verify Working Directory Clean
         run: git diff --exit-code
-
+      - *sccache-stats
 
   linux-test-example:
     name: cargo examples (amd64)
@@ -512,17 +441,13 @@ jobs:
       - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Rust Dependency Cache
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
-        with:
-          save-if: ${{ github.ref_name == 'main' }}
-          shared-key: "amd-ci-linux-test-example"
+      - name: Configure compiler cache
+        uses: ./.github/actions/setup-sccache
       - name: Run examples
         run: |
           # test datafusion-sql examples
@@ -531,6 +456,7 @@ jobs:
           ci/scripts/rust_example.sh
       - name: Verify Working Directory Clean
         run: git diff --exit-code
+      - *sccache-stats
 
   # Run `cargo test doc` (test documentation examples)
   linux-test-doc:
@@ -545,12 +471,11 @@ jobs:
       - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Run doctests
         run: cargo xtask ci step test doctest
       - name: Verify Working Directory Clean
@@ -570,8 +495,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Run cargo doc
         run: ci/scripts/rust_docs.sh
 
@@ -619,13 +542,12 @@ jobs:
       - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - parallel:
           - name: Setup Rust toolchain
             uses: ./.github/actions/setup-builder
-            with:
-              rust-version: stable
           - name: Generate benchmark data and expected query results
             run: |
               mkdir -p datafusion/sqllogictest/test_files/tpch/data
@@ -667,12 +589,11 @@ jobs:
       - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Run sqllogictest
         run: cargo xtask ci step test postgres
         env:
@@ -692,12 +613,11 @@ jobs:
       - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - name: Run sqllogictest
         # TODO: Right now several tests are failing in Substrait round-trip mode, so this
         #  command cannot be run for all the .slt files. Run a supported subset
@@ -739,13 +659,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Run datafusion-ffi tests
         shell: bash
         run: cargo xtask ci step test ffi
+      - *sccache-stats
 
   vendor:
     name: Verify Vendored Code
@@ -802,25 +724,17 @@ jobs:
       - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - parallel:
-          - name: Install Clippy
-            run: rustup component add clippy
-          - name: Rust Dependency Cache
-            uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
-            with:
-              save-if: ${{ github.ref_name == 'main' }}
-              shared-key: "amd-ci-clippy"
+      - name: Configure compiler cache
+        uses: ./.github/actions/setup-sccache
       - name: Install CMake
         # The all-features check builds snmalloc-sys, which requires CMake.
         run: apt-get install -y --no-install-recommends cmake
       - name: Run clippy
         run: ci/scripts/rust_clippy.sh
+      - *sccache-stats
 
   cargo-toml-formatting-checks:
     name: check Cargo.toml formatting
@@ -831,7 +745,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
       - name: Install taplo
         uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21  # v2.90.4
@@ -853,12 +766,11 @@ jobs:
       - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
+      - name: Checkout test data
+        uses: ./.github/actions/checkout-test-data
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: "24"
@@ -884,9 +796,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          submodules: true
           fetch-depth: 1
-
       - parallel:
           - name: Mark repository as safe for git
             # Required for git commands inside container (avoids "dubious ownership" error)

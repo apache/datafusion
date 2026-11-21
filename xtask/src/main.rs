@@ -20,8 +20,6 @@
 //! `xtask` is an internal Rust binary in this workspace. The `cargo xtask` alias
 //! builds and runs that binary, forwarding the remaining arguments to it.
 //!
-//! There is no external dependency required.
-//!
 //! ## Reference
 //!
 //! The [`xtask` convention](https://github.com/matklad/cargo-xtask) keeps project
@@ -35,7 +33,8 @@
 //! ## CI steps
 //!
 //! A CI step is one command used by DataFusion's CI that can also be run
-//! locally. `--explain` prints the complete shell command without executing it.
+//! locally. `--explain` prints the shell commands without executing them. Workspace
+//! coverage prints its runnable xtask entry point, with targets resolved at runtime.
 //!
 //! Use `cargo xtask ci step help` to list the available steps and
 //! `cargo xtask ci step <step-name> help` for step-specific arguments.
@@ -68,6 +67,7 @@
 
 mod ci_steps;
 mod command;
+mod coverage;
 
 use std::env;
 use std::path::PathBuf;

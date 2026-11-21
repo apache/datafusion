@@ -5,10 +5,9 @@
 name: Prepare Rust Builder
 description: 'Prepare Rust Build Environment'
 inputs:
-  rust-version:
-    description: 'version of rust to install (e.g. stable)'
-    required: true
-    default: 'stable'
+  disk-cleanup-threshold-gb:
+    description: 'Skip disk cleanup when at least this many GiB are free; 0 always cleans'
+    default: '0'
 runs:
   using: "composite"
   steps:
@@ -20,13 +19,10 @@ runs:
         "${RETRY[@]}" apt-get install -y protobuf-compiler
     - name: Setup Rust toolchain
       shell: bash
-      # rustfmt is needed for the substrait build script
+      working-directory: ${{ github.workspace }}
       run: |
         RETRY=("ci/scripts/retry" timeout 120)
-        echo "Installing ${{ inputs.rust-version }}"
-        "${RETRY[@]}" rustup toolchain install ${{ inputs.rust-version }}
-        "${RETRY[@]}" rustup default ${{ inputs.rust-version }}
-        "${RETRY[@]}" rustup component add rustfmt
+        "${RETRY[@]}" rustup toolchain install
     - name: Configure rust runtime env
       uses: ./.github/actions/setup-rust-runtime
     - name: Fixup git permissions
@@ -35,9 +31,18 @@ runs:
       run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
     - name: Remove unnecessary preinstalled software
       shell: bash
+      env:
+        DISK_CLEANUP_THRESHOLD_GB: ${{ inputs.disk-cleanup-threshold-gb }}
       run: |
         echo "Disk space before cleanup:"
-        df -h 
+        df -h
+        if (( DISK_CLEANUP_THRESHOLD_GB > 0 )); then
+          available_kib="$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR == 2 {print $4}')"
+          if (( available_kib >= DISK_CLEANUP_THRESHOLD_GB * 1024 * 1024 )); then
+            echo "Skipping disk cleanup: at least ${DISK_CLEANUP_THRESHOLD_GB} GiB are free."
+            exit 0
+          fi
+        fi
         apt-get clean
         # remove tool cache: about 8.5GB (github has host /opt/hostedtoolcache mounted as /__t)
         rm -rf /__t/* || true

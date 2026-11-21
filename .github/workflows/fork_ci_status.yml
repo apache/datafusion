@@ -118,28 +118,25 @@ jobs:
             };
 
             // The check when the fork has no run for the commit. The workflow's
-            // state on the fork says whether workflows are enabled there; a
-            // push that changes only documentation or Markdown does not start
-            // rust.yml even when they are. The scheduled update keeps looking
-            // for a run in every case.
+            // state on the fork says whether workflows are enabled there.
+            // The scheduled update also discovers manually dispatched runs.
             const missingPayload = (fork, sha, state) => {
               const disabled = typeof state === 'string' && state.startsWith('disabled');
               const active = state === 'active';
               const advice = disabled
                 ? [
                     '1. Enable workflows on your fork: open its **Actions** tab and confirm the prompt.',
-                    '2. Push again. A push that changes only documentation or Markdown does not start',
-                    '   the Rust workflow.',
+                    '2. Select the **Rust** workflow, click **Run workflow**, and choose your PR branch.',
                   ]
                 : active
                   ? [
-                      'A push that changes only documentation or Markdown does not start the Rust',
-                      'workflow, and a run can take a moment to appear. This check keeps looking for one.',
+                      'Pushes to feature branches do not start the Rust workflow. On your fork, select',
+                      '**Actions → Rust → Run workflow** and choose your PR branch. This check keeps looking for a run.',
                     ]
                   : [
                       'GitHub reports no Rust workflow on the fork, which usually means workflows are not',
-                      'enabled there. Enable them on the fork\'s **Actions** tab and push again. A push that',
-                      'changes only documentation or Markdown does not start the Rust workflow.',
+                      'enabled there. Enable them on the fork\'s **Actions** tab, then select the **Rust**',
+                      'workflow, click **Run workflow**, and choose your PR branch.',
                     ];
               return {
                 status: 'completed',
@@ -160,7 +157,7 @@ jobs:
               };
             };
 
-            // The fork creates its run a few seconds after the push.
+            // A newly dispatched run can take a few seconds to appear.
             async function findRun(fork, sha, attempts) {
               for (let attempt = 0; attempt < attempts; attempt++) {
                 try {

@@ -10,7 +10,32 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 type StepResult<T> = std::result::Result<T, StepError>;
-type StepRunner = fn(&StepContext, &[String]) -> StepResult<CommandSpec>;
+type StepRunner = fn(&StepContext, &[String]) -> StepResult<StepCommand>;
+
+enum StepCommand {
+    External(CommandSpec),
+    WorkspaceCoverage(PathBuf, EnvReader),
+}
+
+impl StepCommand {
+    fn execute(self) -> Result<()> {
+        match self {
+            Self::External(command) => command.execute(),
+            Self::WorkspaceCoverage(root, env_reader) => {
+                crate::coverage::run(&root, env_reader)
+            }
+        }
+    }
+
+    fn explanation(&self) -> Result<String> {
+        match self {
+            Self::External(command) => Ok(command.explanation()),
+            Self::WorkspaceCoverage(root, env_reader) => {
+                crate::coverage::explanation(root, *env_reader)
+            }
+        }
+    }
+}
 
 const CI_COMMAND: &str = "cargo xtask ci step";
 const CI_SHORTCUT: &str = "cargo ci-step";
@@ -41,9 +66,9 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]",
+        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|extended-build|fuzz|fuzz-legacy|hash-collisions|sqlite> [--binary <path>] [--explain]",
         help_examples: &["test cli", "test workspace"],
-        help_description: "Run a CI test suite",
+        help_description: "Run a CI test suite (extended also accepts --binary <path>)",
         runner: StepContext::run_test,
     },
 ];
@@ -143,7 +168,7 @@ impl StepContext {
                 match action {
                     StepAction::Execute => command.execute(),
                     StepAction::Explain => {
-                        command.explain();
+                        println!("{}", command.explanation()?);
                         Ok(())
                     }
                 }
@@ -152,7 +177,7 @@ impl StepContext {
     }
 
     /// Parses a CI step into an action and its complete command description.
-    fn ci_step(&self, args: &[String]) -> Result<(StepAction, CommandSpec)> {
+    fn ci_step(&self, args: &[String]) -> Result<(StepAction, StepCommand)> {
         let (action, args) = match args.split_last() {
             Some((arg, args)) if arg == "--explain" => (StepAction::Explain, args),
             _ => (StepAction::Execute, args),
@@ -167,7 +192,7 @@ impl StepContext {
     }
 
     /// Implementation for `cargo xtask ci step check [args]`
-    fn run_check(&self, args: &[String]) -> StepResult<CommandSpec> {
+    fn run_check(&self, args: &[String]) -> StepResult<StepCommand> {
         let args = args.iter().map(String::as_str).collect::<Vec<_>>();
         let mut builder = CommandSpec::builder(self.env_reader);
         builder
@@ -222,48 +247,61 @@ impl StepContext {
             _ => return Err(StepError::Usage),
         }
 
-        builder.build().map_err(StepError::InvalidCommand)
+        builder
+            .build()
+            .map(StepCommand::External)
+            .map_err(StepError::InvalidCommand)
     }
 
     /// Implementation for `cargo xtask ci step test [args]`
-    fn run_test(&self, args: &[String]) -> StepResult<CommandSpec> {
-        let [variant] = args else {
-            return Err(StepError::Usage);
-        };
-
+    fn run_test(&self, args: &[String]) -> StepResult<StepCommand> {
         let mut cmd_builder = CommandSpec::builder(self.env_reader);
         cmd_builder
             .current_dir(&self.root)
             .failure_message("CI test step failed");
 
+        if let [variant, option, binary] = args
+            && variant == "extended"
+            && option == "--binary"
+            && !binary.is_empty()
+        {
+            let binary = self.root.join(binary);
+            let manifest_dir = self.root.join("datafusion/core");
+            cmd_builder
+                .doc("Run the prebuilt extended suite without acquiring Cargo's build lock.")
+                .program(&binary)
+                .current_dir(&manifest_dir)
+                .env("CARGO_MANIFEST_DIR", &manifest_dir)
+                .env("CARGO_MANIFEST_PATH", manifest_dir.join("Cargo.toml"))
+                .env("RUST_BACKTRACE", "1")
+                .requires_path(&binary, "build it with `cargo xtask ci step test extended-build`");
+            return cmd_builder
+                .build()
+                .map(StepCommand::External)
+                .map_err(StepError::InvalidCommand);
+        }
+        let [variant] = args else {
+            return Err(StepError::Usage);
+        };
+
         match variant.as_str() {
-            "workspace" | "slt-coverage" => {
-                cmd_builder.program("cargo").args([
-                    "llvm-cov",
-                    "--profile",
-                    "ci",
-                    "--exclude",
-                    "datafusion-examples",
-                    "--exclude",
-                    "ffi_example_table_provider",
-                    "--exclude",
-                    "datafusion-cli",
-                    "--workspace",
-                ]);
-                let output_path = if variant == "slt-coverage" {
-                    cmd_builder.args(["--test", "sqllogictests"]);
-                    "target/codecov-slt.json"
-                } else {
-                    cmd_builder.args(["--lib", "--tests", "--bins"]);
-                    "target/codecov.json"
-                };
+            "workspace" => {
+                return Ok(StepCommand::WorkspaceCoverage(
+                    self.root.clone(),
+                    self.env_reader,
+                ));
+            }
+            "slt-coverage" => {
                 cmd_builder
+                    .program("cargo")
+                    .args(["llvm-cov"])
+                    .args(crate::coverage::test_args())
                     .args([
-                        "--features",
-                        "serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait",
+                        "--test",
+                        "sqllogictests",
                         "--codecov",
                         "--output-path",
-                        output_path,
+                        "target/codecov-slt.json",
                     ])
                     .env("RUST_BACKTRACE", "1")
                     .requires_executable(
@@ -368,6 +406,7 @@ impl StepContext {
                         "datafusion-benchmarks",
                         "--profile",
                         "ci",
+                        "--lib",
                         "--features=ci",
                         "--",
                         "--test-threads=1",
@@ -382,6 +421,7 @@ impl StepContext {
             "benchmark-sqllogic" => {
                 let tpch_data = self.root.join(TPCH_DATA_DIR);
                 cmd_builder
+                    .doc("Run only the TPC-H SLT suite; other SQL logic tests run in workspace coverage.")
                     .program("cargo")
                     .args([
                         "test",
@@ -393,6 +433,8 @@ impl StepContext {
                         "datafusion-sqllogictest",
                         "--test",
                         "sqllogictests",
+                        "--",
+                        "tpch",
                     ])
                     .env("RUST_MIN_STACK", "20971520")
                     .env("TPCH_DATA", tpch_data.as_os_str())
@@ -440,8 +482,12 @@ impl StepContext {
                     cmd_builder.args(["limit.slt"]);
                 }
             }
-            "extended" => {
-                cmd_builder.doc("Run the core extended tests.");
+            "extended" | "extended-build" => {
+                cmd_builder.doc(if variant == "extended-build" {
+                    "Build the core extended tests without running them."
+                } else {
+                    "Run the core extended tests."
+                });
                 cmd_builder
                     .program("cargo")
                     .args([
@@ -458,6 +504,10 @@ impl StepContext {
                         "avro,backtrace,extended_tests,parquet_encryption",
                     ])
                     .env("RUST_BACKTRACE", "1");
+                if variant == "extended-build" {
+                    cmd_builder
+                        .args(["--no-run", "--message-format=json-render-diagnostics"]);
+                }
             }
             "fuzz" => {
                 cmd_builder.doc("Run the centralized fuzz tests.");
@@ -549,7 +599,10 @@ impl StepContext {
             _ => return Err(StepError::Usage),
         }
 
-        cmd_builder.build().map_err(StepError::InvalidCommand)
+        cmd_builder
+            .build()
+            .map(StepCommand::External)
+            .map_err(StepError::InvalidCommand)
     }
 }
 
@@ -581,7 +634,7 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
 
-    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]";
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|extended-build|fuzz|fuzz-legacy|hash-collisions|sqlite> [--binary <path>] [--explain]";
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
@@ -615,8 +668,8 @@ mod tests {
         assert_eq!(execute_action, StepAction::Execute);
         assert_eq!(explain_action, StepAction::Explain);
         assert_eq!(
-            execute_command.full_command(),
-            explain_command.full_command()
+            execute_command.explanation().unwrap(),
+            explain_command.explanation().unwrap()
         );
     }
 
@@ -681,6 +734,29 @@ mod tests {
              (see datafusion/core/Cargo.toml and datafusion/fuzz/Cargo.toml), \
              not with a `cfg` in {found:?}"
         );
+    }
+
+    #[test]
+    fn prebuilt_extended_keeps_manifest_context() {
+        let (_, command) = context()
+            .ci_step(&args(&[
+                "test",
+                "extended",
+                "--binary",
+                "target/ci/deps/extended",
+            ]))
+            .unwrap();
+        let StepCommand::External(command) = command else {
+            panic!("expected a prebuilt test command");
+        };
+        insta::assert_snapshot!(command.full_command(), @r"
+cd /workspace/datafusion/core && \
+CARGO_MANIFEST_DIR=/workspace/datafusion/core \
+CARGO_MANIFEST_PATH=/workspace/datafusion/core/Cargo.toml \
+RUST_BACKTRACE=1 \
+/workspace/target/ci/deps/extended
+");
+        assert!(command.execute().unwrap_err().contains("extended-build"));
     }
 
     #[test]
@@ -759,22 +835,11 @@ cargo check \
                 command: &["test", "workspace"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
-# Requires executable `cargo-llvm-cov` (install it with `cargo install cargo-llvm-cov --locked`)
+# Resolve coverage targets at runtime; run SLT once and write both reports.
+
 cd /workspace && \
-RUST_BACKTRACE=1 \
-cargo llvm-cov \
---profile ci \
---exclude datafusion-examples \
---exclude ffi_example_table_provider \
---exclude datafusion-cli \
---workspace \
---lib \
---tests \
---bins \
---features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
---codecov \
---output-path target/codecov.json
-")
+cargo xtask ci step test workspace
+");
                 },
             },
             Cmd {
@@ -786,12 +851,12 @@ cd /workspace && \
 RUST_BACKTRACE=1 \
 cargo llvm-cov \
 --profile ci \
+--workspace \
 --exclude datafusion-examples \
 --exclude ffi_example_table_provider \
 --exclude datafusion-cli \
---workspace \
---test sqllogictests \
 --features serde,avro,json,backtrace,integration-tests,parquet_encryption,substrait \
+--test sqllogictests \
 --codecov \
 --output-path target/codecov-slt.json
 ")
@@ -885,6 +950,7 @@ TPCH_DATA=/workspace/datafusion/sqllogictest/test_files/tpch/data \
 cargo test plan_q \
 --package datafusion-benchmarks \
 --profile ci \
+--lib \
 --features=ci \
 -- --test-threads=1
 ")
@@ -894,6 +960,8 @@ cargo test plan_q \
                 command: &["test", "benchmark-sqllogic"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
+# Run only the TPC-H SLT suite; other SQL logic tests run in workspace coverage.
+
 # Requires path `/workspace/datafusion/sqllogictest/test_files/tpch/data` (generate the TPC-H fixture data before running this step)
 cd /workspace && \
 INCLUDE_TPCH=true \
@@ -903,7 +971,8 @@ cargo test \
 --features backtrace,parquet_encryption,substrait \
 --profile ci \
 --package datafusion-sqllogictest \
---test sqllogictests
+--test sqllogictests \
+-- tpch
 ")
                 },
             },
@@ -964,6 +1033,25 @@ cargo test \
 -p datafusion-fuzz \
 --test extended_tests \
 --features avro,backtrace,extended_tests,parquet_encryption
+")
+                },
+            },
+            Cmd {
+                command: &["test", "extended-build"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+# Build the core extended tests without running them.
+
+cd /workspace && \
+RUST_BACKTRACE=1 \
+cargo test \
+--profile ci \
+-p datafusion \
+-p datafusion-fuzz \
+--test extended_tests \
+--features avro,backtrace,extended_tests,parquet_encryption \
+--no-run \
+--message-format=json-render-diagnostics
 ")
                 },
             },
@@ -1053,7 +1141,7 @@ cargo test \
             let (action, actual) = context.ci_step(&args(&explain_args)).unwrap();
 
             assert_eq!(action, StepAction::Explain);
-            expected(&actual.explanation());
+            expected(&actual.explanation().unwrap());
         }
     }
 }

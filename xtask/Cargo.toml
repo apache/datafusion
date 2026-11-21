@@ -9,8 +9,12 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[dependencies]
+serde_json = { workspace = true }
+
 [dev-dependencies]
 insta = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
