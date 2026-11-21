@@ -856,7 +856,7 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.skip_partial_aggregation_probe_ratio_threshold</p></td>
 <td><p>0.8</p></td>
-<td><p>Aggregation ratio (number of distinct groups / number of input rows) threshold for skipping partial aggregation. If the value is greater then partial aggregation will skip aggregation for further input</p></td>
+<td><p>Aggregation ratio (number of groups the partial aggregation creates / number of input rows) threshold for skipping partial aggregation. A key that returns after an early emit under memory pressure counts again. If the value is greater then partial aggregation will skip aggregation for further input</p></td>
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.skip_partial_aggregation_probe_rows_threshold</p></td>
 <td><p>100000</p></td>
