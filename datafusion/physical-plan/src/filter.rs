@@ -1765,12 +1765,13 @@ fn null_check_statistics(
     for (column_stats, input_null_count) in
         stats.column_statistics.iter_mut().zip(input_null_counts)
     {
-        column_stats.null_count = selectivity.map_or_else(
-            || cap_at_rows(input_null_count, num_rows),
-            |selectivity| {
+        column_stats.null_count = match selectivity {
+            Some(selectivity) => {
                 scale_null_count_at_rows(input_null_count, selectivity, num_rows)
-            },
-        );
+            }
+            None if input_null_count == Precision::Exact(0) => Precision::Exact(0),
+            None => cap_at_rows(input_null_count, num_rows),
+        };
         column_stats.distinct_count = cap_at_rows(column_stats.distinct_count, num_rows);
         column_stats.byte_size = scale_bytes(column_stats.byte_size);
     }
@@ -5323,7 +5324,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_filter_statistics_scales_non_predicate_null_count() -> Result<()> {
-        use Precision::{Exact, Inexact};
+        use Precision::{Absent, Exact, Inexact};
 
         let schema = Schema::new(vec![
             Field::new("k", DataType::Int32, true),
@@ -5358,7 +5359,7 @@ mod tests {
             ],
         };
         let input: Arc<dyn ExecutionPlan> =
-            Arc::new(StatisticsExec::new(base_stats, schema.clone()));
+            Arc::new(StatisticsExec::new(base_stats.clone(), schema.clone()));
 
         // Default 20% selectivity on `tag = 'hit'` -> 200 rows; `k` nulls scale 300 * 0.2 = 60.
         let tag_filter = FilterExecBuilder::new(
@@ -5382,6 +5383,27 @@ mod tests {
         assert_eq!(flag_stats.num_rows, Exact(301));
         assert_eq!(flag_stats.column_statistics[0].null_count, Inexact(91));
         assert_eq!(flag_stats.column_statistics[3].null_count, Exact(0));
+
+        // Without an exact input row count there is no selectivity to scale by,
+        // so the other columns are only capped. A column without nulls is still
+        // exactly zero over any surviving rows.
+        let absent_input: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Absent,
+                ..base_stats
+            },
+            schema.clone(),
+        ));
+        let absent_filter =
+            FilterExecBuilder::new(is_null(col("flag", &schema)?)?, absent_input)
+                .build()?;
+        let absent_stats =
+            StatisticsContext::new().compute(&absent_filter, &StatisticsArgs::new())?;
+        assert_eq!(absent_stats.num_rows, Inexact(301));
+        assert_eq!(absent_stats.column_statistics[0].null_count, Inexact(300));
+        assert_eq!(absent_stats.column_statistics[2].null_count, Inexact(301));
+        assert_eq!(absent_stats.column_statistics[1].null_count, Exact(0));
+        assert_eq!(absent_stats.column_statistics[3].null_count, Exact(0));
 
         // `k > 300` narrows `k`'s interval, so the statistics come from
         // interval analysis (`collect_new_statistics`): `k` rejects nulls and
