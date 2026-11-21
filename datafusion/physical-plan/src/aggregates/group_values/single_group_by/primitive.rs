@@ -139,6 +139,9 @@ where
                     let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
+                        // SAFETY: every group index in `map` is in bounds of `values`:
+                        // entries are inserted with their value, and `emit` and
+                        // `clear_shrink` update both together.
                         |&(g, h)| unsafe {
                             hash == h && self.values.get_unchecked(g).is_eq(key)
                         },
@@ -154,6 +157,31 @@ where
                             g
                         }
                     }
+                }
+            };
+            groups.push(group_id)
+        }
+        Ok(())
+    }
+
+    fn find(&mut self, cols: &[ArrayRef], groups: &mut Vec<Option<usize>>) -> Result<()> {
+        assert_eq!(cols.len(), 1);
+        groups.clear();
+
+        for v in cols[0].as_primitive::<T>() {
+            let group_id = match v {
+                None => self.null_group,
+                Some(key) => {
+                    let key = key.normalize_key();
+                    let hash = key.hash(&self.random_state);
+                    self.map
+                        // SAFETY: every group index in `map` is in bounds of `values`:
+                        // entries are inserted with their value, and `emit` and
+                        // `clear_shrink` update both together.
+                        .find(hash, |&(g, h)| unsafe {
+                            hash == h && self.values.get_unchecked(g).is_eq(key)
+                        })
+                        .map(|&(g, _)| g)
                 }
             };
             groups.push(group_id)
@@ -424,6 +452,33 @@ mod tests {
         let new_null_group = groups[0];
         assert_eq!(new_null_group, 0);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_does_not_insert() -> Result<()> {
+        let mut group_values = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+        let stored: ArrayRef = Arc::new(Int32Array::from(vec![Some(7), None, Some(3)]));
+        let mut groups = vec![];
+        group_values.intern(&[stored], &mut groups)?;
+
+        let probe: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(3), Some(5), None, Some(7)]));
+        let mut found = vec![];
+        group_values.find(std::slice::from_ref(&probe), &mut found)?;
+        assert_eq!(found, vec![Some(2), None, Some(1), Some(0)]);
+        assert_eq!(group_values.len(), 3);
+
+        group_values.clear_shrink(0);
+        group_values.find(&[probe], &mut found)?;
+        assert_eq!(found, vec![None; 4]);
+        assert!(group_values.is_empty());
+
+        let mut no_nulls = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+        let probe: ArrayRef = Arc::new(Int32Array::from(vec![None]));
+        no_nulls.find(&[probe], &mut found)?;
+        assert_eq!(found, vec![None]);
+        assert!(no_nulls.is_empty());
         Ok(())
     }
 }

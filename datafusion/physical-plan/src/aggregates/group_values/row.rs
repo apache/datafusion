@@ -177,6 +177,40 @@ impl GroupValues for GroupValuesRows {
         Ok(())
     }
 
+    fn find(&mut self, cols: &[ArrayRef], groups: &mut Vec<Option<usize>>) -> Result<()> {
+        groups.clear();
+        let Some(group_values) = self.group_values.as_ref() else {
+            groups.resize(cols[0].len(), None);
+            return Ok(());
+        };
+
+        // Same normalization as `intern`, so lookups agree with stored keys.
+        let normalized_cols: Vec<ArrayRef> = cols
+            .iter()
+            .map(|col| float_semantics::normalize(Arc::clone(col)))
+            .collect();
+        let cols = normalized_cols.as_slice();
+
+        let group_rows = &mut self.rows_buffer;
+        group_rows.clear();
+        self.row_converter.append(group_rows, cols)?;
+        let n_rows = group_rows.num_rows();
+
+        let batch_hashes = &mut self.hashes_buffer;
+        batch_hashes.clear();
+        batch_hashes.resize(n_rows, 0);
+        create_hashes(cols, &self.random_state, batch_hashes)?;
+
+        for (row, &target_hash) in batch_hashes.iter().enumerate() {
+            let entry = self.map.find(target_hash, |(exist_hash, group_idx)| {
+                target_hash == *exist_hash
+                    && group_rows.row(row) == group_values.row(*group_idx)
+            });
+            groups.push(entry.map(|&(_, group_idx)| group_idx));
+        }
+        Ok(())
+    }
+
     fn size(&self) -> usize {
         let group_values_size = self
             .group_values

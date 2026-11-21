@@ -404,6 +404,90 @@ where
         }
     }
 
+    /// Looks up each value in `values` without inserting anything.
+    ///
+    /// `observe_payload_fn` is called once per row, in order, with
+    /// `Some(payload)` if the value is already stored and `None` otherwise. A
+    /// null row maps to the payload of the null entry if one exists, matching
+    /// [`Self::insert_if_new`].
+    pub fn find<OP>(&mut self, values: &ArrayRef, observe_payload_fn: OP)
+    where
+        OP: FnMut(Option<V>),
+    {
+        match self.output_type {
+            OutputType::BinaryView => {
+                assert!(matches!(values.data_type(), DataType::BinaryView));
+                self.find_inner::<OP, BinaryViewType>(values, observe_payload_fn)
+            }
+            OutputType::Utf8View => {
+                assert!(matches!(values.data_type(), DataType::Utf8View));
+                self.find_inner::<OP, StringViewType>(values, observe_payload_fn)
+            }
+            _ => unreachable!("Utf8/Binary should use `ArrowBytesSet`"),
+        }
+    }
+
+    /// Generic version of [`Self::find`] that handles `ByteViewType`
+    fn find_inner<OP, B>(&mut self, values: &ArrayRef, mut observe_payload_fn: OP)
+    where
+        OP: FnMut(Option<V>),
+        B: ByteViewType,
+    {
+        let batch_hashes = &mut self.hashes_buffer;
+        batch_hashes.clear();
+        batch_hashes.resize(values.len(), 0);
+        create_hashes([values], &self.random_state, batch_hashes)
+            // hash is supported for all types and create_hashes only
+            // returns errors for unsupported types
+            .unwrap();
+
+        let values = values.as_byte_view::<B>();
+        let input_views = values.views();
+        assert_eq!(values.len(), self.hashes_buffer.len());
+
+        let completed = &self.completed;
+        let in_progress = &self.in_progress;
+        for i in 0..values.len() {
+            if values.is_null(i) {
+                observe_payload_fn(self.null.as_ref().map(|&(payload, _)| payload));
+                continue;
+            }
+
+            let view_u128 = input_views[i];
+            let hash = self.hashes_buffer[i];
+            let len = view_u128 as u32;
+
+            let payload = self
+                .map
+                .find(hash, |header| {
+                    if header.hash != hash || header.view as u32 != len {
+                        return false;
+                    }
+                    if len <= 12 {
+                        return header.view == view_u128;
+                    }
+                    let stored_prefix = (header.view >> 32) as u32;
+                    let input_prefix = (view_u128 >> 32) as u32;
+                    if stored_prefix != input_prefix {
+                        return false;
+                    }
+                    let byte_view = ByteView::from(header.view);
+                    let stored_len = byte_view.length as usize;
+                    let buffer_index = byte_view.buffer_index as usize;
+                    let offset = byte_view.offset as usize;
+                    let stored_value = if buffer_index < completed.len() {
+                        &completed[buffer_index].as_slice()[offset..offset + stored_len]
+                    } else {
+                        &in_progress[offset..offset + stored_len]
+                    };
+                    let input_value: &[u8] = values.value(i).as_ref();
+                    stored_value == input_value
+                })
+                .map(|entry| entry.payload);
+            observe_payload_fn(payload);
+        }
+    }
+
     /// Returns the bytes for the key at `index`, irrespective of nullness.
     fn key(&self, index: usize) -> &[u8] {
         let view = &self.views[index];
@@ -1093,5 +1177,17 @@ mod tests {
             "bcdefghijklmnop1234567",
         ]));
         assert_eq!(&test_map.into_array(), &expected_output);
+    }
+
+    #[cfg(feature = "force_hash_collisions")]
+    #[test]
+    fn test_find_long_value_colliding_with_inline_value() {
+        let mut test_map = TestMap::new();
+        test_map.insert(&[Some("bcdeXXXXYYYY")]);
+        let probe: ArrayRef =
+            Arc::new(StringViewArray::from(vec!["bcdefghijklmnop1234567"]));
+        test_map
+            .map
+            .find(&probe, |payload| assert_eq!(payload, None));
     }
 }
