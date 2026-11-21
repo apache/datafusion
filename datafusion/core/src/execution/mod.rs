@@ -15,3 +15,5 @@ pub use session_state_defaults::SessionStateDefaults;
 // backwards compatibility
 pub use crate::datasource::file_format::options;
 pub use datafusion_execution::*;
+
+mod grouped_extremum;
