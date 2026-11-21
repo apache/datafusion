@@ -4,9 +4,10 @@
 
 mod data_utils;
 
-use arrow::array::{Array, AsArray};
+use arrow::array::{Array, AsArray, DictionaryArray, Int32Array, StringArray};
 use arrow::datatypes::{
-    DataType, Int32Type, Int64Type, IntervalUnit, TimeUnit, TimestampNanosecondType,
+    DataType, Field, Int32Type, Int64Type, IntervalUnit, Schema, TimeUnit,
+    TimestampNanosecondType,
 };
 use criterion::{Criterion, criterion_group, criterion_main};
 use data_utils::create_table_provider;
@@ -549,5 +550,142 @@ async fn fully_ordered_context(
     Ok(Arc::new(Mutex::new(ctx)))
 }
 
-criterion_group!(benches, criterion_benchmark, fully_ordered);
+/// Compare COUNT rewrites and column pruning with nullable/encoded controls.
+/// Arrow fixtures give the dictionary non-null keys but nullable values; setup
+/// and result checks stay outside timing, which includes planning and execution.
+fn count_non_nullable(c: &mut Criterion) {
+    use arrow::array::ArrayRef;
+
+    const ROWS: usize = 131_072;
+    const BATCH_SIZE: usize = 8192;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("p", DataType::Int32, false),
+        Field::new("v", DataType::Utf8, false),
+        Field::new("nullable_v", DataType::Utf8, true),
+        Field::new(
+            "dict_v",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+        ),
+    ]));
+    let values = (0..32)
+        .map(|group| format!("{group:02}-{}", "x".repeat(250)))
+        .collect::<Vec<_>>();
+    let dictionary_values = Arc::new(StringArray::from(
+        values
+            .iter()
+            .map(|value| Some(value.as_str()))
+            .chain(std::iter::once(None))
+            .collect::<Vec<_>>(),
+    ));
+    let mut batches = Vec::new();
+    for start in (0..ROWS).step_by(BATCH_SIZE) {
+        let end = (start + BATCH_SIZE).min(ROWS);
+        let keys = (start..end)
+            .map(|row| ((row / 4) % 32) as i32)
+            .collect::<Vec<_>>();
+        let predicates = (start..end).map(|row| (row % 2) as i32).collect::<Vec<_>>();
+        let indices = (start..end)
+            .map(|row| if row % 4 == 0 { 32 } else { (row % 32) as i32 })
+            .collect::<Vec<_>>();
+        let strings = (start..end)
+            .map(|row| values[row % 32].as_str())
+            .collect::<Vec<_>>();
+        let nullable = (start..end)
+            .map(|row| (row % 4 != 0).then_some(values[row % 32].as_str()))
+            .collect::<Vec<_>>();
+        let dictionary = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(indices),
+            dictionary_values.clone(),
+        )
+        .unwrap();
+        assert_eq!(dictionary.null_count(), 0);
+        assert_eq!(dictionary.logical_null_count(), (end - start) / 4);
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(keys)),
+            Arc::new(Int32Array::from(predicates)),
+            Arc::new(StringArray::from(strings)),
+            Arc::new(StringArray::from(nullable)),
+            Arc::new(dictionary),
+        ];
+        batches.push(
+            arrow::record_batch::RecordBatch::try_new(schema.clone(), columns).unwrap(),
+        );
+    }
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new()
+            .with_target_partitions(1)
+            .with_batch_size(BATCH_SIZE),
+    );
+    ctx.register_table(
+        "t",
+        Arc::new(MemTable::try_new(schema, vec![batches]).unwrap()),
+    )
+    .unwrap();
+    let ctx = Arc::new(Mutex::new(ctx));
+    let rt = Runtime::new().unwrap();
+    let cases = [
+        ("global_v", "COUNT(v)", false),
+        ("grouped_v", "COUNT(v)", true),
+        ("global_nullable", "COUNT(nullable_v)", false),
+        ("grouped_nullable", "COUNT(nullable_v)", true),
+        ("global_dictionary", "COUNT(dict_v)", false),
+        ("grouped_dictionary", "COUNT(dict_v)", true),
+        ("global_star", "COUNT(*)", false),
+        ("grouped_star", "COUNT(*)", true),
+    ];
+    let mut group = c.benchmark_group("count_non_nullable");
+    for (name, count_expr, grouped) in cases {
+        let sql = format!(
+            "SELECT {}{count_expr} FROM t{}",
+            if grouped { "k, " } else { "" },
+            if grouped {
+                " GROUP BY k"
+            } else {
+                " WHERE p = 0"
+            }
+        );
+        let expected_count = match (grouped, count_expr) {
+            (true, "COUNT(nullable_v)" | "COUNT(dict_v)") => ROWS / 32 * 3 / 4,
+            (true, _) => ROWS / 32,
+            (false, "COUNT(nullable_v)" | "COUNT(dict_v)") => ROWS / 4,
+            (false, _) => ROWS / 2,
+        } as i64;
+        let df = rt.block_on(ctx.lock().sql(&sql)).unwrap();
+        let plan = rt.block_on(df.create_physical_plan()).unwrap();
+        let description = displayable(plan.as_ref()).indent(true).to_string();
+        assert!(description.contains("AggregateExec"), "{description}");
+        let result = rt.block_on(collect(plan, ctx.lock().task_ctx())).unwrap();
+        assert_eq!(
+            result.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            if grouped { 32 } else { 1 }
+        );
+        let mut seen_groups = [false; 32];
+        for batch in &result {
+            if grouped {
+                for key in batch.column(0).as_primitive::<Int32Type>().values() {
+                    assert!(!seen_groups[*key as usize]);
+                    seen_groups[*key as usize] = true;
+                }
+            }
+            let counts = batch
+                .column(usize::from(grouped))
+                .as_primitive::<Int64Type>();
+            assert!(counts.iter().all(|count| count == Some(expected_count)));
+        }
+        if grouped {
+            assert!(seen_groups.iter().all(|seen| *seen));
+        }
+        group.bench_function(name, |b| b.iter(|| query(Arc::clone(&ctx), &rt, &sql)));
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    criterion_benchmark,
+    fully_ordered,
+    count_non_nullable
+);
 criterion_main!(benches);
