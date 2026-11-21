@@ -352,6 +352,40 @@ impl BatchedJoinProcessor {
             return Ok(Some(batch));
         }
 
+        // A full, duplicate-free integer domain has one match per in-range key.
+        // A probe-only projection can filter its columns directly.
+        if matches!(context.kind, RegularJoinKind::Inner)
+            && context.filter.is_none()
+            && input.num_rows() <= context.batch_size
+            && context
+                .column_indices
+                .iter()
+                .all(|c| c.side == JoinSide::Right)
+            && let Map::ArrayMap(map) = &**build.data.map
+            && map.has_dense_unique_keys()
+        {
+            let mask = map.contain_keys(&probe.keys)?;
+            let columns = context
+                .column_indices
+                .iter()
+                .map(|c| Arc::clone(input.column(c.index)))
+                .collect();
+            let opts = arrow::record_batch::RecordBatchOptions::new()
+                .with_row_count(Some(input.num_rows()));
+            let projected = RecordBatch::try_new_with_options(
+                Arc::clone(&context.schema),
+                columns,
+                &opts,
+            )?;
+            let batch = arrow::compute::filter_record_batch(&projected, &mask)?;
+            let rows = batch.num_rows();
+            self.metrics.probe_hit_rate.add_part(rows);
+            self.metrics.avg_fanout.add_part(rows);
+            self.metrics.avg_fanout.add_total(rows);
+            self.probe = None;
+            return Ok(Some(batch));
+        }
+
         // Hash lookup reclaims its scratch internally. ArrayMap returns the
         // scratch as Arrow arrays, so retain their buffers until materialization.
         let mut array_map_buffers = None;
