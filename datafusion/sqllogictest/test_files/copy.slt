@@ -1010,6 +1010,34 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 statement ok
 DROP TABLE copy_reordered;
 
+# Explicit ORDER BY with non-column tie breaker preserves encodable column prefix
+query I
+COPY (
+  SELECT id, x FROM (
+    SELECT 'b' AS id, ts, x FROM union_const_src
+    UNION ALL
+    SELECT 'a' AS id, ts, x FROM union_const_src
+  ) ORDER BY id, CAST(x AS INT) % 10, ts DESC
+) TO 'test_files/scratch/copy/union_const_order/out_projected_prefix_order.parquet';
+----
+6
+
+statement ok
+CREATE EXTERNAL TABLE copy_prefix_order STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/union_const_order/out_projected_prefix_order.parquet';
+
+# Physical plan optimizes away SortExec because leading key `id` was preserved in Parquet sorting_columns
+query TT
+EXPLAIN SELECT id FROM copy_prefix_order ORDER BY id;
+----
+logical_plan
+01)Sort: copy_prefix_order.id ASC NULLS LAST
+02)--TableScan: copy_prefix_order projection=[id]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/union_const_order/out_projected_prefix_order.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+
+statement ok
+DROP TABLE copy_prefix_order;
+
 statement ok
 DROP TABLE copy_without_order;
 
