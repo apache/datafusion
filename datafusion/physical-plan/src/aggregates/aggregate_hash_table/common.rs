@@ -350,9 +350,13 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         }
     }
 
-    /// Returns an upper bound like [`Self::max_batch_growth`] for one
-    /// evaluated batch. It counts only the group keys that the table does not
-    /// store yet, so a batch of existing keys reserves no table growth.
+    /// Returns an upper bound on the bytes, above [`Self::memory_size`], that
+    /// aggregating `evaluated` may hold at its peak.
+    ///
+    /// The bound counts only the group keys that the table does not store
+    /// yet. So a batch of existing keys reserves no table growth. It does not
+    /// cover accumulator state, because [`GroupsAccumulator`] does not report
+    /// its capacity.
     pub(in crate::aggregates) fn max_evaluated_growth(
         &self,
         evaluated_batch: &EvaluatedAggregateBatch,
