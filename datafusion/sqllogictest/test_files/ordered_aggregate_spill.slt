@@ -220,6 +220,42 @@ GROUP BY round(v1, -4), v1 % 5000
 ----
 60000 values hashing to 872df6cefd51f81820fc5c6e5d7480df
 
+# ==================================================================================
+# Regression test for https://github.com/apache/datafusion/issues/26891
+#
+# Ordered aggregation emits `EmitTo::First(n)` after every batch. The struct
+# min/max accumulator must release the memory of emitted groups, otherwise its
+# reported size grows with the number of groups seen and the query fails with
+# "Resources exhausted" even though only a few groups are buffered at a time.
+# The plan uses mode=Single, which relies on target_partitions = 1 set above.
+# ==================================================================================
+
+statement ok
+SET datafusion.execution.batch_size = 64
+
+statement ok
+SET datafusion.runtime.memory_limit = '2M'
+
+query TT
+EXPLAIN ANALYZE
+SELECT v1, max(named_struct('a', v1, 's', repeat('x', 4096))) AS m
+FROM generate_series(4095) AS t(v1)
+GROUP BY v1
+----
+Plan with Metrics
+01)ProjectionExec:<slt:ignore>
+02)--AggregateExec: mode=Single,<slt:ignore>group_clustering_mode=Full, metrics=[<slt:ignore>spill_count=0,<slt:ignore>]
+<slt:ignore>
+
+query I
+SELECT sum(length(m['s'])) FROM (
+  SELECT v1, max(named_struct('a', v1, 's', repeat('x', 4096))) AS m
+  FROM generate_series(4095) AS t(v1)
+  GROUP BY v1
+)
+----
+16777216
+
 statement ok
 RESET datafusion.runtime.memory_limit
 
