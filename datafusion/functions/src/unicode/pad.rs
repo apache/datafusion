@@ -75,12 +75,17 @@ pub(crate) fn invoke_pad<S: PadSide>(args: ScalarFunctionArgs) -> Result<Columna
         args, number_rows, ..
     } = args;
 
-    const MAX_SCALAR_TARGET_LEN: usize = 16384;
+    const MAX_SCALAR_TARGET_LEN: i64 = 16384;
 
     // If target_len and fill (if specified) are constants, use the scalar
-    // fast path.
-    if let Some(target_len) = try_as_scalar_i64(&args[1]) {
-        let target_len = parse_target_len(target_len, S::NAME)?;
+    // fast path. Skip it for very large `target_len` values to avoid
+    // consuming too much memory. Such large padding values are uncommon
+    // in practice. This also leaves a length above `i32::MAX` to the array
+    // path, which returns NULL for a NULL string or fill before checking it.
+    if let Some(target_len) = try_as_scalar_i64(&args[1])
+        && target_len <= MAX_SCALAR_TARGET_LEN
+    {
+        let target_len = target_len.max(0) as usize;
 
         let fill_str = if args.len() == 3 {
             try_as_scalar_str(&args[2])
@@ -88,12 +93,7 @@ pub(crate) fn invoke_pad<S: PadSide>(args: ScalarFunctionArgs) -> Result<Columna
             Some(" ")
         };
 
-        // Skip the fast path for very large `target_len` values to avoid
-        // consuming too much memory. Such large padding values are uncommon
-        // in practice.
-        if target_len <= MAX_SCALAR_TARGET_LEN
-            && let Some(fill) = fill_str
-        {
+        if let Some(fill) = fill_str {
             let string_array = args[0].to_array_of_size(number_rows)?;
             let result = match string_array.data_type() {
                 Utf8View => pad_scalar_args::<S, _, i32>(
