@@ -57,6 +57,11 @@
 //! outer key group as a batch. Results are OR'd into the matched bitset. A
 //! short-circuit exits early when all outer rows in the group are matched.
 //!
+//! **With one cross-side column comparison**: Ordinary semi/anti joins can
+//! summarize an in-memory inner group using min/max kernels. The summary is
+//! computed lazily after initial probes, then reused across outer batches.
+//! Spilled groups, complex predicates, and mark joins use ordinary evaluation.
+//!
 //! ```text
 //!   matched bitset:  [0, 0, 1, 0, 0, ...]
 //!                     ▲── one bit per outer row ──▲
@@ -85,6 +90,8 @@
 //! - Inner key group buffer: only for filtered joins, one key group at a time.
 //!   Tracked via `MemoryReservation`; spilled to disk when the memory pool
 //!   limit is exceeded.
+//! - A completed summary replaces the buffered group in its reservation.
+//!   Temporary comparison masks and reduction values are local to a probe.
 //! - `BatchCoalescer`: output buffering to target batch size
 //!
 //! # Degenerate cases
@@ -109,6 +116,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
+use super::semi_anti_summary::{GroupSummary, SemiAntiComparison};
 use crate::EmptyRecordBatchStream;
 use crate::joins::sort_merge_join::exec::NullAwareMode;
 use crate::joins::utils::{JoinFilter, JoinKeyComparator};
@@ -276,6 +284,7 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     on_outer: Vec<PhysicalExprRef>,
     on_inner: Vec<PhysicalExprRef>,
     filter: Option<JoinFilter>,
+    semi_anti_comparison: Option<SemiAntiComparison>,
     sort_options: Vec<SortOptions>,
     null_equality: NullEquality,
     null_aware: Option<NullAwareMode>,
@@ -316,6 +325,17 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     outer_self_cmp: Option<JoinKeyComparator>,
     /// Comparator for inner self-comparison (find_key_group_end on inner)
     inner_self_cmp: Option<JoinKeyComparator>,
+}
+
+/// Below seven inner rows the ordinary filter costs less than building extrema
+/// in the small-group benchmarks.
+const MIN_SUMMARY_ROWS: usize = 7;
+
+enum SummaryCache {
+    Pending,
+    Cached(Box<GroupSummary>),
+    /// Keep scanning the buffered group without retrying the reservation.
+    Declined,
 }
 
 impl BitwiseSortMergeJoinStream {
@@ -363,6 +383,21 @@ impl BitwiseSortMergeJoinStream {
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
         );
 
+        let semi_anti_comparison = match &filter {
+            Some(filter)
+                if null_aware.is_none()
+                    && !matches!(join_type, JoinType::LeftMark | JoinType::RightMark) =>
+            {
+                SemiAntiComparison::try_new(
+                    filter,
+                    outer_is_left,
+                    outer.schema().as_ref(),
+                    inner.schema().as_ref(),
+                )?
+            }
+            _ => None,
+        };
+
         let join_time = MetricBuilder::new(metrics).subset_time("join_time", partition);
         let input_batches =
             MetricBuilder::new(metrics).counter("input_batches", partition);
@@ -386,6 +421,7 @@ impl BitwiseSortMergeJoinStream {
             on_outer,
             on_inner,
             filter,
+            semi_anti_comparison,
             sort_options,
             null_equality,
             null_aware,
@@ -576,6 +612,10 @@ impl BitwiseSortMergeJoinStream {
                     // Release the inner input pipeline's resources.
                     let inner_schema = self.inner.schema();
                     self.inner = Box::pin(EmptyRecordBatchStream::new(inner_schema));
+                    // The exhausted cursor and its comparators own the last batch's keys.
+                    self.inner_key_arrays.clear();
+                    self.inner_self_cmp = None;
+                    self.outer_inner_cmp = None;
                     return Ok(false);
                 }
                 Some(Err(e)) => return Err(e),
@@ -779,6 +819,64 @@ impl BitwiseSortMergeJoinStream {
         }
     }
 
+    /// Apply the recognized comparison to this slice and cache a completed
+    /// summary when a later slice can reuse it within the group's reservation.
+    fn apply_summary(
+        &mut self,
+        comparison: SemiAntiComparison,
+        outer: &RecordBatch,
+        cache: &mut SummaryCache,
+        may_continue: bool,
+    ) -> Result<()> {
+        let matchable =
+            outer.num_rows() - outer.column(comparison.outer_column).null_count();
+        if matchable == 0 {
+            return Ok(());
+        }
+        if let SummaryCache::Cached(values) = cache {
+            merge_matches(
+                &mut self.matched,
+                self.outer_offset,
+                &comparison.evaluate(values, outer)?,
+            );
+            return Ok(());
+        }
+
+        let start = self.outer_offset;
+        let matched = &mut self.matched;
+        let values = comparison.scan(&self.inner_key_buffer, outer, |mask| {
+            merge_matches(matched, start, mask);
+            UnalignedBitChunk::new(matched.as_slice(), start, outer.num_rows())
+                .count_ones()
+                == matchable
+        })?;
+        if let Some(values) = values
+            && may_continue
+            && matches!(cache, SummaryCache::Pending)
+        {
+            let retained = values.memory_size();
+            // A skewed string can exceed this group's prorated buffer charge.
+            // Keep the buffer in that case so a later outer batch cannot hold
+            // more of the shared pool than the buffered join would have held.
+            if retained > self.reservation.size() {
+                *cache = SummaryCache::Declined;
+                return Ok(());
+            }
+            if matches!(values, GroupSummary::String(Some(_))) {
+                // The input and its owned copy coexist until the buffer is cleared.
+                if self.reservation.try_grow(retained).is_err() {
+                    *cache = SummaryCache::Declined;
+                    return Ok(());
+                }
+                self.peak_mem_used.set_max(self.reservation.size());
+            }
+            *cache = SummaryCache::Cached(Box::new(values.into_owned()));
+            self.clear_inner_key_group();
+            self.reservation.resize(retained);
+        }
+        Ok(())
+    }
+
     /// Process a key match with a filter. For each inner row in the buffered
     /// key group — the spilled slices in `spill` plus the in-memory
     /// `inner_key_buffer` — evaluates the filter against the outer key group
@@ -787,12 +885,16 @@ impl BitwiseSortMergeJoinStream {
     async fn process_key_match_with_filter(
         &mut self,
         spill: Option<&Arc<dyn SpillFile>>,
+        cache: &mut SummaryCache,
+        group_comparison: Option<SemiAntiComparison>,
     ) -> Result<()> {
         let num_outer = self.outer_batch.as_ref().unwrap().num_rows();
 
         // buffer_inner_key_group must be called before this function
         debug_assert!(
-            !self.inner_key_buffer.is_empty() || spill.is_some(),
+            !self.inner_key_buffer.is_empty()
+                || spill.is_some()
+                || matches!(cache, SummaryCache::Cached(_)),
             "process_key_match_with_filter called with no inner key data"
         );
         debug_assert!(
@@ -809,9 +911,21 @@ impl BitwiseSortMergeJoinStream {
             find_key_group_end(self.get_outer_self_cmp()?, outer_group_start, num_outer);
         let outer_group_len = outer_group_end - outer_group_start;
 
-        let filter = self.filter.as_ref().unwrap();
         let outer_batch = self.outer_batch.as_ref().unwrap();
         let outer_slice = outer_batch.slice(outer_group_start, outer_group_len);
+
+        if let Some(comparison) = group_comparison {
+            self.apply_summary(
+                comparison,
+                &outer_slice,
+                cache,
+                outer_group_end == num_outer,
+            )?;
+            self.outer_offset = outer_group_end;
+            return Ok(());
+        }
+
+        let filter = self.filter.as_ref().unwrap();
 
         // Count already-matched bits using popcnt on u64 chunks (zero-copy).
         let mut matched_count = UnalignedBitChunk::new(
@@ -895,8 +1009,24 @@ impl BitwiseSortMergeJoinStream {
         spill: Option<Arc<dyn SpillFile>>,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
+        let mut cache = SummaryCache::Pending;
+        let group_comparison = self.semi_anti_comparison.filter(|_| {
+            spill.is_none()
+                && self
+                    .inner_key_buffer
+                    .iter()
+                    .take(MIN_SUMMARY_ROWS)
+                    .map(RecordBatch::num_rows)
+                    .sum::<usize>()
+                    >= MIN_SUMMARY_ROWS
+        });
         loop {
-            self.process_key_match_with_filter(spill.as_ref()).await?;
+            self.process_key_match_with_filter(
+                spill.as_ref(),
+                &mut cache,
+                group_comparison,
+            )
+            .await?;
 
             let outer_batch = self.outer_batch.as_ref().unwrap();
             if self.outer_offset < outer_batch.num_rows() {
@@ -924,6 +1054,9 @@ impl BitwiseSortMergeJoinStream {
             }
         }
 
+        if matches!(cache, SummaryCache::Cached(_)) {
+            self.reservation.free();
+        }
         self.clear_inner_key_group();
         Ok(())
     }
@@ -1281,23 +1414,7 @@ fn eval_filter_for_inner_slice(
             inner_row,
         )?;
 
-        // OR filter results into the matched bitset. Both sides are
-        // bit-packed [u8] buffers, so apply_bitwise_binary_op
-        // processes 64 bits per loop iteration (not 1 bit at a time).
-        //
-        // The offsets handle alignment: outer_offset is the bit
-        // position within matched where this key group starts,
-        // and filter_buf.offset() is the BooleanBuffer's internal
-        // bit offset (usually 0, but not guaranteed by Arrow).
-        let filter_buf = filter_result.values();
-        apply_bitwise_binary_op(
-            matched.as_slice_mut(),
-            outer_offset,
-            filter_buf.inner().as_slice(),
-            filter_buf.offset(),
-            outer_group_len,
-            |a, b| a | b,
-        );
+        merge_matches(matched, outer_offset, &filter_result);
 
         // Recount matched bits after the OR. UnalignedBitChunk is
         // zero-copy — it reads the bytes in place and uses popcnt.
@@ -1306,6 +1423,23 @@ fn eval_filter_for_inner_slice(
                 .count_ones();
     }
     Ok(matched_count)
+}
+
+/// OR a filter mask into the corresponding range of the outer batch's bitset.
+fn merge_matches(
+    matched: &mut BooleanBufferBuilder,
+    outer_offset: usize,
+    result: &BooleanArray,
+) {
+    let values = result.values();
+    apply_bitwise_binary_op(
+        matched.as_slice_mut(),
+        outer_offset,
+        values.inner().as_slice(),
+        values.offset(),
+        result.len(),
+        |a, b| a | b,
+    );
 }
 
 /// Slice each key array to a single row at `idx`.

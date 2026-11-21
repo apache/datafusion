@@ -6,6 +6,7 @@ use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
 use clap::Args;
 use datafusion::physical_plan::execute_stream;
 use datafusion::{error::Result, prelude::SessionContext};
+use datafusion_common::cast::as_int64_array;
 use datafusion_common::instant::Instant;
 use datafusion_common::{DataFusionError, exec_datafusion_err, exec_err};
 
@@ -26,7 +27,7 @@ use futures::StreamExt;
 #[derive(Debug, Args, Clone)]
 #[command(verbatim_doc_comment)]
 pub struct RunOpt {
-    /// Query number (between 1 and 26). If not specified, runs all queries
+    /// One-based query number. If not specified, runs all queries
     #[arg(short, long)]
     query: Option<usize>,
 
@@ -509,6 +510,8 @@ const SMJ_QUERIES: &[&str] = &[
               AND t2_sorted.data % 10 <> 0
         )
     "#,
+    // Q27: LEFT ANTI | 1024 documents × 128 versions | one latest version per key
+    include_str!("../sql_benchmarks/smj/queries/q27.sql"),
 ];
 
 impl RunOpt {
@@ -543,10 +546,7 @@ impl RunOpt {
 
             let sql = SMJ_QUERIES[query_index];
             benchmark_run.start_new_case(&format!("Query {query_id}"));
-            let expect_mark = query_id >= 24;
-            let query_run = self
-                .benchmark_query(sql, &query_id.to_string(), expect_mark, &ctx)
-                .await;
+            let query_run = self.benchmark_query(sql, query_id, &ctx).await;
             match query_run {
                 Ok(query_results) => {
                     for iter in query_results {
@@ -569,8 +569,7 @@ impl RunOpt {
     async fn benchmark_query(
         &self,
         sql: &str,
-        query_name: &str,
-        expect_mark: bool,
+        query_id: usize,
         ctx: &SessionContext,
     ) -> Result<Vec<QueryResult>> {
         let mut query_results = vec![];
@@ -582,13 +581,13 @@ impl RunOpt {
 
         if !plan_string.contains("SortMergeJoinExec") {
             return Err(exec_datafusion_err!(
-                "Query {query_name} does not use Sort Merge Join. Physical plan: {plan_string}"
+                "Query {query_id} does not use Sort Merge Join. Physical plan: {plan_string}"
             ));
         }
 
-        if expect_mark && !plan_string.contains("LeftMark") {
+        if (24..=26).contains(&query_id) && !plan_string.contains("LeftMark") {
             return Err(exec_datafusion_err!(
-                "Query {query_name} expected LeftMark join. Physical plan: {plan_string}"
+                "Query {query_id} expected LeftMark join. Physical plan: {plan_string}"
             ));
         }
 
@@ -598,12 +597,35 @@ impl RunOpt {
             let row_count = Self::execute_sql_without_result_buffering(sql, ctx).await?;
 
             let elapsed = start.elapsed();
+            if query_id == 27 && row_count != 1024 {
+                return exec_err!(
+                    "Query {query_id} returned {row_count} latest versions, expected 1024"
+                );
+            }
 
             println!(
-                "Query {query_name} iteration {i} returned {row_count} rows in {elapsed:?}"
+                "Query {query_id} iteration {i} returned {row_count} rows in {elapsed:?}"
             );
 
             query_results.push(QueryResult { elapsed, row_count });
+        }
+
+        if query_id == 27 {
+            let mut rows = Vec::with_capacity(1024);
+            let mut stream = execute_stream(physical_plan, ctx.task_ctx())?;
+            while let Some(batch) = stream.next().await {
+                let batch = batch?;
+                let ids = as_int64_array(batch.column(0).as_ref())?;
+                let versions = as_int64_array(batch.column(1).as_ref())?;
+                rows.extend(ids.iter().zip(versions.iter()));
+            }
+            rows.sort_unstable();
+            let expected = (0..1024).map(|id| (Some(id), Some(127)));
+            if rows.into_iter().ne(expected) {
+                return exec_err!(
+                    "Query 27 expected version 127 exactly once for each document ID from 0 through 1023"
+                );
+            }
         }
 
         Ok(query_results)
