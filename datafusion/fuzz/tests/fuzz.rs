@@ -83,6 +83,48 @@ async fn sort_topk() -> Result<()> {
     .await
 }
 
+#[tokio::test]
+async fn equivalence_ordering_satisfy_with_equivalence() -> Result<()> {
+    let fuzzer = &suites::equivalence::ORDERING_SATISFY_WITH_EQUIVALENCE;
+    run_suite(fuzzer, fuzzer.run_config()).await
+}
+
+#[tokio::test]
+async fn equivalence_ordering_satisfy_with_equivalence_complex() -> Result<()> {
+    let fuzzer = &suites::equivalence::ORDERING_SATISFY_WITH_EQUIVALENCE_COMPLEX;
+    run_suite(fuzzer, fuzzer.run_config()).await
+}
+
+#[tokio::test]
+async fn equivalence_ordering_satisfy_with_casts_and_windows() -> Result<()> {
+    let fuzzer = &suites::equivalence::ORDERING_SATISFY_WITH_CASTS_AND_WINDOWS;
+    run_suite(fuzzer, fuzzer.run_config()).await
+}
+
+#[tokio::test]
+async fn equivalence_project_orderings() -> Result<()> {
+    let fuzzer = &suites::equivalence::PROJECT_ORDERINGS;
+    run_suite(fuzzer, fuzzer.run_config()).await
+}
+
+#[tokio::test]
+async fn equivalence_ordering_satisfy_after_projection() -> Result<()> {
+    let fuzzer = &suites::equivalence::ORDERING_SATISFY_AFTER_PROJECTION;
+    run_suite(fuzzer, fuzzer.run_config()).await
+}
+
+#[tokio::test]
+async fn equivalence_find_longest_permutation() -> Result<()> {
+    let fuzzer = &suites::equivalence::FIND_LONGEST_PERMUTATION;
+    run_suite(fuzzer, fuzzer.run_config()).await
+}
+
+#[tokio::test]
+async fn equivalence_find_longest_permutation_with_casts_and_windows() -> Result<()> {
+    let fuzzer = &suites::equivalence::FIND_LONGEST_PERMUTATION_WITH_CASTS_AND_WINDOWS;
+    run_suite(fuzzer, fuzzer.run_config()).await
+}
+
 async fn run_suite<T: FuzzTest>(test: &T, config: RunConfig) -> Result<()> {
     eprintln!("Running fuzz suite: {}", test.name());
     let stats = run(test, config).await?;

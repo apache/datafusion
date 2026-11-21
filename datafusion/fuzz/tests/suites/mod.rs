@@ -4,6 +4,8 @@
 
 //! Implementation for fuzz test cases.
 
+#[expect(clippy::needless_pass_by_value)]
+pub(crate) mod equivalence;
 pub(crate) mod key_range_bitmap;
 pub(crate) mod limit;
 pub(crate) mod lru_queue;
