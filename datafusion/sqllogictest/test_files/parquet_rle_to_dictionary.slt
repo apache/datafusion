@@ -2,9 +2,10 @@
 # SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 # SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-# Tests for datafusion.execution.parquet.enable_rle_to_dictionary. The flag
-# applies only when DataFusion infers the table schema; explicit schemas are
-# not promoted.
+# Tests for datafusion.execution.parquet.enable_rle_to_dictionary and
+# datafusion.execution.parquet.dictionary_read_max_distinct_values. They
+# apply only when DataFusion infers the table schema; explicit schemas are not
+# promoted.
 
 # Write with dictionary_enabled=true to guarantee RLE_DICTIONARY encoding.
 query I
@@ -99,6 +100,123 @@ Dictionary(Int32, Utf8) Int64
 
 statement ok
 DROP TABLE products_dict;
+
+statement ok
+set datafusion.execution.parquet.enable_rle_to_dictionary = false;
+
+statement ok
+set datafusion.execution.parquet.dictionary_read_max_distinct_values = 6;
+
+# Without NDV statistics, the row count is the conservative estimate.
+statement ok
+CREATE EXTERNAL TABLE threshold_no_ndv STORED AS PARQUET LOCATION 'test_files/scratch/parquet_rle_to_dictionary/products.parquet';
+
+query TT
+SELECT DISTINCT arrow_typeof(product_category), arrow_typeof(status) FROM threshold_no_ndv;
+----
+Dictionary(Int32, Utf8) Dictionary(Int32, Utf8)
+
+statement ok
+set datafusion.execution.parquet.dictionary_read_max_distinct_values = 2;
+
+statement ok
+set datafusion.execution.parquet.write_row_group_number_distinct_values = true;
+
+# A column without dictionary pages stays plain even when its row count is
+# within the cap.
+query I
+COPY (SELECT column1 AS no_dict_page FROM (VALUES ('x'), ('x')))
+TO 'test_files/scratch/parquet_rle_to_dictionary/threshold_no_dict_page/p.parquet'
+STORED AS PARQUET OPTIONS ('format.dictionary_enabled' false);
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE threshold_no_dict_page STORED AS PARQUET LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold_no_dict_page/';
+
+query T
+SELECT DISTINCT arrow_typeof(no_dict_page) FROM threshold_no_dict_page;
+----
+Utf8View
+
+statement ok
+DROP TABLE threshold_no_dict_page;
+
+# A column whose dictionary page outgrew its size limit continues in PLAIN
+# pages, so it stays plain even when its NDV is within the cap.
+query I
+COPY (SELECT column1 AS fallback_page FROM (VALUES ('a'), ('b')))
+TO 'test_files/scratch/parquet_rle_to_dictionary/threshold_fallback_page/p.parquet'
+STORED AS PARQUET OPTIONS (
+  'format.dictionary_page_size_limit' 1,
+  'format.write_batch_size' 1,
+  'format.data_page_row_count_limit' 1
+);
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE threshold_fallback_page STORED AS PARQUET LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold_fallback_page/';
+
+query T
+SELECT DISTINCT arrow_typeof(fallback_page) FROM threshold_fallback_page;
+----
+Utf8View
+
+statement ok
+DROP TABLE threshold_fallback_page;
+
+# The exact-cap column stays dictionary encoded across files. mixed_card is
+# demoted because one file's row-group NDV sum exceeds the cap.
+query I
+COPY (SELECT column1 AS exact_cap, column2 AS mixed_card FROM (VALUES ('x','a'),('x','b'))) TO 'test_files/scratch/parquet_rle_to_dictionary/threshold/low.parquet' STORED AS PARQUET OPTIONS ('format.dictionary_enabled' true, 'format.max_row_group_size' 2);
+----
+2
+
+query I
+COPY (SELECT column1 AS exact_cap, column2 AS mixed_card FROM (VALUES ('x','a'),('x','b'),('x','c'))) TO 'test_files/scratch/parquet_rle_to_dictionary/threshold/high.parquet' STORED AS PARQUET OPTIONS ('format.dictionary_enabled' true, 'format.max_row_group_size' 2);
+----
+3
+
+# The cap remains authoritative when the legacy flag is also enabled.
+statement ok
+set datafusion.execution.parquet.enable_rle_to_dictionary = true;
+
+statement ok
+CREATE EXTERNAL TABLE thresholded STORED AS PARQUET LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold/';
+
+query TT
+SELECT DISTINCT arrow_typeof(exact_cap), arrow_typeof(mixed_card) FROM thresholded;
+----
+Dictionary(Int32, Utf8) Utf8View
+
+# A dictionary type from the file's Arrow schema is kept above the cap.
+query I
+COPY (
+  SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS declared_dict
+  FROM (VALUES ('a'), ('b'), ('c'))
+)
+TO 'test_files/scratch/parquet_rle_to_dictionary/threshold_declared/d.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE threshold_declared STORED AS PARQUET LOCATION 'test_files/scratch/parquet_rle_to_dictionary/threshold_declared/';
+
+query T
+SELECT DISTINCT arrow_typeof(declared_dict) FROM threshold_declared;
+----
+Dictionary(Int32, Utf8)
+
+statement ok
+DROP TABLE threshold_declared;
+
+statement ok
+reset datafusion.execution.parquet.write_row_group_number_distinct_values;
+
+statement ok
+reset datafusion.execution.parquet.dictionary_read_max_distinct_values;
 
 # Per-column writer options: only columns with dictionary pages are promoted.
 

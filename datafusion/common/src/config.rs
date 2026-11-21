@@ -1462,8 +1462,30 @@ config_namespace! {
         /// This applies only when DataFusion infers the table schema. Tables with
         /// a user-supplied schema are not promoted because the Parquet footer is
         /// not read at DDL time, so dictionary pages cannot be detected per column.
+        ///
+        /// Setting `dictionary_read_max_distinct_values` also enables dictionary
+        /// reads. When both options are set, the cap controls which plain columns
+        /// are promoted.
         /// See <https://github.com/apache/datafusion/issues/24112>
         pub enable_rle_to_dictionary: bool, default = false
+
+        /// (reading) If set, promote top-level plain string and binary columns to
+        /// dictionaries when every data page is dictionary encoded and the
+        /// per-file sum of row-group cardinality upper bounds is within this cap.
+        /// Missing NDVs use the non-null row count when available and the row count
+        /// otherwise. Values repeated across row groups may be counted more than once.
+        /// The cap does not demote a dictionary declared by the same file; mixed
+        /// dictionary/plain schemas across files still merge as plain. Computed during
+        /// schema inference.
+        ///
+        /// Large row-group dictionaries can be slower because each output batch can
+        /// retain the whole dictionary. The crossover is workload-dependent: in one
+        /// 20-million-row group-by benchmark with 40-byte strings and five row groups
+        /// per file, files with a per-file sum of about 500,000 (100,000 per row group)
+        /// were faster than plain reads, while files with about 1,460,000 (about
+        /// 295,000 per row group) were slower. Use a conservative cap and benchmark
+        /// representative queries.
+        pub dictionary_read_max_distinct_values: Option<usize>, default = None
 
         /// (reading) Which byte range of a split file reads each row group.
         /// `start_offset` picks the range containing the row group's start.
