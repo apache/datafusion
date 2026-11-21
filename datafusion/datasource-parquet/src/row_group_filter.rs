@@ -7,7 +7,10 @@ use std::sync::Arc;
 
 use super::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccess};
 use crate::bloom_filter::BloomFilterStatistics;
-use crate::metadata::{has_untrusted_byte_array_stats, has_untrusted_min_max_order};
+use crate::metadata::{
+    has_untrusted_byte_array_stats, has_untrusted_min_max_order,
+    missing_null_counts_are_zero,
+};
 use crate::pruning::build_inverted_predicate;
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::compute::nullif;
@@ -19,7 +22,7 @@ use datafusion_datasource::FileRange;
 use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::basic::ColumnOrder;
-use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
+use parquet::file::metadata::{FileMetaData, ParquetMetaData, RowGroupMetaData};
 use parquet::schema::types::SchemaDescriptor;
 
 /// Reduces the [`ParquetAccessPlan`] based on row group level metadata.
@@ -324,7 +327,7 @@ impl RowGroupAccessPlanFilter {
             arrow_schema,
             file_metadata.schema_descr(),
             metadata.row_groups(),
-            file_metadata.column_orders().map(Vec::as_slice),
+            Some(file_metadata),
             predicate,
             metrics,
         );
@@ -335,10 +338,16 @@ impl RowGroupAccessPlanFilter {
         arrow_schema: &Schema,
         parquet_schema: &SchemaDescriptor,
         groups: &[RowGroupMetaData],
-        column_orders: Option<&[ColumnOrder]>,
+        file_metadata: Option<&FileMetaData>,
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
     ) {
+        // Without the footer the writer is unknown, thus stay conservative.
+        let column_orders = file_metadata
+            .and_then(FileMetaData::column_orders)
+            .map(Vec::as_slice);
+        let missing_null_counts_as_zero =
+            file_metadata.is_some_and(missing_null_counts_are_zero);
         // scoped timer updates on drop
         let _timer_guard = metrics.statistics_eval_time.timer();
 
@@ -355,6 +364,7 @@ impl RowGroupAccessPlanFilter {
             column_orders,
             row_group_metadatas,
             arrow_schema,
+            missing_null_counts_as_zero,
         };
 
         // try to prune the row groups in a single call
@@ -423,6 +433,7 @@ impl RowGroupAccessPlanFilter {
                 .map(|&i| &groups[i])
                 .collect::<Vec<_>>(),
             arrow_schema,
+            missing_null_counts_as_zero: pruning_stats.missing_null_counts_as_zero,
         };
 
         let Ok(inverted_values) = inverted_predicate.prune(&inverted_pruning_stats)
@@ -511,6 +522,7 @@ pub(crate) struct RowGroupPruningStatistics<'a> {
     pub(crate) column_orders: Option<&'a [ColumnOrder]>,
     pub(crate) row_group_metadatas: Vec<&'a RowGroupMetaData>,
     pub(crate) arrow_schema: &'a Schema,
+    pub(crate) missing_null_counts_as_zero: bool,
 }
 
 impl<'a> RowGroupPruningStatistics<'a> {
@@ -525,9 +537,9 @@ impl<'a> RowGroupPruningStatistics<'a> {
             self.arrow_schema,
             self.parquet_schema,
         )?
-        // Missing counts cannot rule out nulls, either when pruning groups or
-        // when proving that every row matches the predicate.
-        .with_missing_null_counts_as_zero(false))
+        // Unless the writer omits zero counts, a missing count cannot rule out nulls:
+        // when pruning groups or when proving that every row matches the predicate.
+        .with_missing_null_counts_as_zero(self.missing_null_counts_as_zero))
     }
 
     fn min_max_statistics_converter(
@@ -959,6 +971,66 @@ mod tests {
                 &parquet_file_metrics(),
             );
             assert_eq!(filter.build().row_group_indexes(), expected, "{expr}");
+        }
+    }
+
+    #[test]
+    fn row_group_pruning_missing_null_count_by_writer() {
+        use parquet::file::metadata::{FileMetaData, ParquetMetaData};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let schema_descr = get_test_schema_descr(vec![PrimitiveTypeField::new(
+            "c1",
+            PhysicalType::INT32,
+        )]);
+        let groups = [None, Some(0), Some(1)].map(|null_count| {
+            get_row_group_meta_data(
+                &schema_descr,
+                vec![ParquetStatistics::int32(
+                    Some(100),
+                    Some(101),
+                    None,
+                    null_count,
+                    false,
+                )],
+            )
+        });
+
+        for (created_by, expected_is_null) in [
+            (Some("parquet-rs version 53.0.0"), vec![2]),
+            (Some("datafusion version 42.0.0"), vec![2]),
+            (Some("parquet-rs version 53.1.0"), vec![0, 2]),
+            (Some("parquet-mr version 1.13.1"), vec![0, 2]),
+            (None, vec![0, 2]),
+        ] {
+            let metadata = ParquetMetaData::new(
+                FileMetaData::new(
+                    1,
+                    3000,
+                    created_by.map(str::to_owned),
+                    None,
+                    Arc::clone(&schema_descr),
+                    None,
+                ),
+                groups.to_vec(),
+            );
+            let predicate = build_test_pruning_predicate(
+                logical2physical(&col("c1").is_null(), &schema),
+                Arc::clone(&schema),
+            );
+            let mut filter =
+                RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(groups.len()));
+            filter.prune_by_statistics_with_metadata(
+                &schema,
+                &metadata,
+                &predicate,
+                &parquet_file_metrics(),
+            );
+            assert_eq!(
+                filter.build().row_group_indexes(),
+                expected_is_null,
+                "created_by: {created_by:?}"
+            );
         }
     }
 

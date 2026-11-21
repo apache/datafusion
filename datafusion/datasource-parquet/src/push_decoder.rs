@@ -52,6 +52,7 @@ use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 
 use crate::ParquetFileMetrics;
 use crate::decoder_projection::DecoderProjection;
+use crate::metadata::missing_null_counts_are_zero;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::row_filter::{
     PrebuiltRowFilterCandidate, prebuild_row_filter_candidates, row_filter_from_prebuilt,
@@ -240,6 +241,9 @@ impl RowGroupPruner {
                 .map(Vec::as_slice),
             row_group_metadatas,
             arrow_schema: self.arrow_schema.as_ref(),
+            missing_null_counts_as_zero: missing_null_counts_are_zero(
+                self.parquet_metadata.file_metadata(),
+            ),
         };
 
         match pp.prune(&stats) {
