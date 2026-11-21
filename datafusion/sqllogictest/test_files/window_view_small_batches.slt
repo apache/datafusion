@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# configMatrix: datafusion.execution.batch_size=1,3,8192
+
+# Window functions over Utf8View columns arriving in many small batches:
+# BoundedWindowAggExec compacts the data buffer lists of the view columns it
+# keeps across batches, and the results must not depend on the batch size.
+
+statement ok
+CREATE TABLE view_rows AS
+SELECT k,
+       arrow_cast(concat('long string value number ', lpad(CAST(k AS VARCHAR), 3, '0')), 'Utf8View') AS s,
+       arrow_cast(CASE WHEN k % 5 = 0 THEN NULL ELSE concat('another long value ', CAST(k % 7 AS VARCHAR)) END, 'Utf8View') AS t
+FROM generate_series(1, 300) AS g(k);
+
+# Pass-through column, one buffered row per batch
+query IITT
+SELECT count(*), sum(rn), max(s), min(s)
+FROM (SELECT row_number() OVER (ORDER BY k) AS rn, s FROM view_rows);
+----
+300 45150 long string value number 300 long string value number 001
+
+# Lookahead in the input buffer (default frame, lead), lag over nulls
+query IITIIT
+SELECT sum(cs), count(l), max(l), sum(length(l)), count(g), max(g)
+FROM (SELECT sum(k) OVER (ORDER BY k) AS cs,
+             lead(s, 1) OVER (ORDER BY k) AS l,
+             lag(t, 1) OVER (ORDER BY k) AS g
+      FROM view_rows);
+----
+4545100 299 long string value number 300 8372 240 another long value 6
+
+# Sliding frames read strings from the buffered rows
+query ITT
+SELECT k, f, l
+FROM (SELECT k,
+             first_value(s) OVER (ORDER BY k ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS f,
+             last_value(t) OVER (ORDER BY k ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS l
+      FROM view_rows)
+WHERE k IN (1, 2, 150, 299, 300)
+ORDER BY k;
+----
+1 long string value number 001 another long value 1
+2 long string value number 001 another long value 2
+150 long string value number 148 NULL
+299 long string value number 297 another long value 5
+300 long string value number 298 NULL
+
+# Sorted partitions
+query IITT
+SELECT p, count(*), max(f), min(l)
+FROM (SELECT k % 3 AS p,
+             first_value(s) OVER (PARTITION BY k % 3 ORDER BY k) AS f,
+             lag(s, 1) OVER (PARTITION BY k % 3 ORDER BY k) AS l
+      FROM view_rows)
+GROUP BY p
+ORDER BY p;
+----
+0 100 long string value number 003 long string value number 003
+1 100 long string value number 001 long string value number 001
+2 100 long string value number 002 long string value number 002
+
+# lead waits for the next row, a causal last_value or lag does not: one string
+# result per batch is kept across batches
+query IITTIT
+SELECT count(*), sum(l), max(v), min(v), count(g), max(g)
+FROM (SELECT lead(k, 1) OVER (ORDER BY k) AS l,
+             last_value(s) OVER (ORDER BY k ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS v,
+             lag(s, 1) OVER (ORDER BY k) AS g
+      FROM view_rows);
+----
+300 45149 long string value number 300 long string value number 001 299 long string value number 299
+
+statement ok
+DROP TABLE view_rows;
