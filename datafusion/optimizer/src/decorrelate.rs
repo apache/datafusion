@@ -599,12 +599,6 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     self.can_pull_up = false;
                     return Ok(Transformed::new(plan, false, TreeNodeRecursion::Stop));
                 }
-                // If the aggregation is from a distinct it will not change the result for
-                // exists/in subqueries so we can still pull up all predicates.
-                let is_distinct = aggregate.aggr_expr.is_empty();
-                if !is_distinct {
-                    self.can_pull_up = self.can_pull_up && self.can_pull_over_aggregation;
-                }
                 let mut local_correlated_cols = BTreeSet::new();
                 collect_local_correlated_cols(
                     &plan,
@@ -670,6 +664,31 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         aggregate.input.schema(),
                     )?
                 };
+                // A DISTINCT may skip this check under EXISTS/IN, or when the pull
+                // up adds no group key that splits a group. An added key only adds
+                // duplicate rows, which EXISTS/IN ignore; elsewhere, e.g. LATERAL,
+                // they reach the result (#25808). A key that a correlated equality
+                // pins to one value per outer row splits no group.
+                let is_distinct = aggregate.aggr_expr.is_empty();
+                let is_exists_or_in =
+                    self.exists_sub_query || self.in_predicate_opt.is_some();
+                let pinned_cols: Vec<&Expr> = self
+                    .join_filters
+                    .iter()
+                    .filter(|f| is_partitionable_equality(f, aggregate.input.schema()))
+                    .filter_map(|f| split_column_equality(f).map(|(col, _)| col))
+                    .map(|col| match col {
+                        Expr::Cast(Cast { expr, .. }) => expr.as_ref(),
+                        _ => col,
+                    })
+                    .collect();
+                let adds_group_keys = missing_exprs.iter().any(|expr| {
+                    !aggregate.group_expr.contains(expr) && !pinned_cols.contains(&expr)
+                });
+                let can_skip_check = is_distinct && (is_exists_or_in || !adds_group_keys);
+                if !can_skip_check {
+                    self.can_pull_up = self.can_pull_up && self.can_pull_over_aggregation;
+                }
 
                 // if the original group expressions are empty, need to handle the Count bug
                 let mut expr_result_map_for_count_bug = HashMap::new();
