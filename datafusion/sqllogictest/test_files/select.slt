@@ -1743,13 +1743,25 @@ select coalesce(1, y/x), coalesce(2, y/x) from t;
 1 2
 1 2
 
-# due to the reason describe in https://github.com/apache/datafusion/issues/8927,
-# the following queries will fail
-query error
+# `1 / y` and `1 / x` are only evaluated on the rows that need them, so the
+# division by zero is short-circuited (https://github.com/apache/datafusion/issues/8927)
+query BB
 SELECT y > 0 and 1 / y < 1, x > 0 and y > 0 and 1 / y < 1 / x from t;
+----
+false false
+true false
+true false
+false false
+false false
 
-query error
+query BB
 SELECT y = 0 or 1 / y < 1, x = 0 or y = 0 or 1 / y < 1 / x from t;
+----
+false false
+true false
+true false
+true true
+true true
 
 statement ok
 DROP TABLE t;
