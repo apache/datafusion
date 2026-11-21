@@ -21,7 +21,6 @@ extended_tests = []
 [dev-dependencies]
 arrow = { workspace = true }
 bytes = { workspace = true }
-chrono = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
