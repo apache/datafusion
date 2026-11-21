@@ -6,7 +6,10 @@ use std::collections::HashMap;
 
 use super::*;
 use arrow::array::AsArray;
-use datafusion_common::{ParamValues, ScalarValue, metadata::ScalarAndMetadata};
+use arrow::datatypes::Metadata;
+use datafusion_common::{
+    DataFusionError, ParamValues, ScalarValue, metadata::ScalarAndMetadata,
+};
 use insta::assert_snapshot;
 
 #[tokio::test]
@@ -584,64 +587,424 @@ async fn test_recursive_cte_batch_schema_stable_with_order_by_limit() -> Result<
 
 #[tokio::test]
 async fn test_coalesce_struct_field_metadata() -> Result<()> {
-    use arrow::array::StructArray;
+    use arrow::array::{Int64Array, NullArray, StructArray};
     use arrow::buffer::NullBuffer;
     use datafusion::logical_expr::{Volatility, create_udf};
+
     let ctx = SessionContext::new();
-    let mut columns: Vec<ArrayRef> = Vec::new();
-    for (origin, nullable, values, nulls) in [
-        (
-            "a",
-            false,
-            vec![Some(1), Some(2), Some(3)],
-            Some(NullBuffer::from(vec![true, false, true])),
-        ),
-        ("b", true, vec![Some(4), None, Some(6)], None),
-    ] {
-        let field = Field::new("v", DataType::Int32, nullable)
-            .with_metadata(HashMap::from([("origin".to_string(), origin.to_string())]));
-        columns.push(Arc::new(StructArray::new(
-            vec![field].into(),
-            vec![Arc::new(Int32Array::from(values))],
-            nulls,
-        )));
-    }
-    let source_type = columns[0].data_type().clone();
-    ctx.register_udf(create_udf(
-        "volatile_identity",
-        vec![source_type.clone()],
-        source_type,
-        Volatility::Volatile,
-        Arc::new(|args| Ok(args[0].clone())),
-    ));
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", columns[0].data_type().clone(), true),
-        Field::new("b", columns[1].data_type().clone(), false),
-    ]));
-    ctx.register_batch("t", RecordBatch::try_new(schema, columns)?)?;
-    let expected = DataType::Struct(
+    let first_ordinary = Metadata::new()
+        .with("origin", "first")
+        .with("only_first", "1");
+    let first_extension = first_ordinary
+        .clone()
+        .with("ARROW:extension:name", "example.id")
+        .with("ARROW:extension:metadata", "{}");
+    let second_ordinary = Metadata::new()
+        .with("origin", "second")
+        .with("only_second", "2");
+
+    let i32_ext: ArrayRef = Arc::new(StructArray::new(
         vec![
-            Field::new("v", DataType::Int32, true)
-                .with_metadata(HashMap::from([("origin".to_string(), "a".to_string())])),
+            Field::new("v", DataType::Int32, false)
+                .with_metadata(first_extension.clone()),
         ]
         .into(),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4]))],
+        Some(NullBuffer::from(vec![true, false, false, false])),
+    ));
+    let i32_plain: ArrayRef = Arc::new(StructArray::new(
+        vec![
+            Field::new("v", DataType::Int32, true).with_metadata(second_ordinary.clone()),
+        ]
+        .into(),
+        vec![Arc::new(Int32Array::from(vec![
+            Some(10),
+            None,
+            Some(30),
+            Some(40),
+        ]))],
+        None,
+    ));
+    let i64_opt: ArrayRef = Arc::new(StructArray::new(
+        vec![
+            Field::new("v", DataType::Int64, true).with_metadata(second_ordinary.clone()),
+        ]
+        .into(),
+        vec![Arc::new(Int64Array::from(vec![
+            Some(100),
+            None,
+            Some(300),
+            Some(400),
+        ]))],
+        Some(NullBuffer::from(vec![false, true, true, false])),
+    ));
+    let null_child: ArrayRef = Arc::new(StructArray::new(
+        vec![
+            Field::new("v", DataType::Null, true).with_metadata(
+                Metadata::new()
+                    .with("ARROW:extension:name", "example.null")
+                    .with("origin", "ignored")
+                    .with("null_only", "ignored"),
+            ),
+        ]
+        .into(),
+        vec![Arc::new(NullArray::new(4))],
+        Some(NullBuffer::from(vec![false, false, true, false])),
+    ));
+
+    for (udf_name, data_type) in [
+        ("volatile_i32_ext", i32_ext.data_type().clone()),
+        ("volatile_i64_opt", i64_opt.data_type().clone()),
+        ("volatile_null_child", null_child.data_type().clone()),
+    ] {
+        ctx.register_udf(create_udf(
+            udf_name,
+            vec![data_type.clone()],
+            data_type,
+            Volatility::Volatile,
+            Arc::new(|args| Ok(args[0].clone())),
+        ));
+    }
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("i32_ext", i32_ext.data_type().clone(), true),
+        Field::new("i32_plain", i32_plain.data_type().clone(), false),
+        Field::new("i64_opt", i64_opt.data_type().clone(), true),
+        Field::new("null_child", null_child.data_type().clone(), true),
+    ]));
+    ctx.register_batch(
+        "t",
+        RecordBatch::try_new(schema, vec![i32_ext, i32_plain, i64_opt, null_child])?,
+    )?;
+
+    let cases = [
+        (
+            [
+                "SELECT coalesce(i32_ext, i32_plain) FROM t",
+                "SELECT coalesce(volatile_i32_ext(i32_ext), i32_plain) FROM t",
+            ],
+            false,
+            StructArray::new(
+                vec![
+                    Field::new("v", DataType::Int32, true)
+                        .with_metadata(first_extension.clone().with("only_second", "2")),
+                ]
+                .into(),
+                vec![Arc::new(Int32Array::from(vec![
+                    Some(1),
+                    None,
+                    Some(30),
+                    Some(40),
+                ]))],
+                None,
+            ),
+        ),
+        (
+            [
+                "SELECT coalesce(NULL, i32_ext, i64_opt) FROM t",
+                "SELECT coalesce(NULL, volatile_i32_ext(i32_ext), i64_opt) FROM t",
+            ],
+            true,
+            StructArray::new(
+                vec![
+                    Field::new("v", DataType::Int64, true)
+                        .with_metadata(first_ordinary.with("only_second", "2")),
+                ]
+                .into(),
+                vec![Arc::new(Int64Array::from(vec![
+                    Some(1),
+                    None,
+                    Some(300),
+                    None,
+                ]))],
+                Some(NullBuffer::from(vec![true, true, true, false])),
+            ),
+        ),
+        (
+            [
+                "SELECT coalesce(i64_opt, i32_ext) FROM t",
+                "SELECT coalesce(volatile_i64_opt(i64_opt), i32_ext) FROM t",
+            ],
+            true,
+            StructArray::new(
+                vec![
+                    Field::new("v", DataType::Int64, true)
+                        .with_metadata(second_ordinary.with("only_first", "1")),
+                ]
+                .into(),
+                vec![Arc::new(Int64Array::from(vec![
+                    Some(1),
+                    None,
+                    Some(300),
+                    None,
+                ]))],
+                Some(NullBuffer::from(vec![true, true, true, false])),
+            ),
+        ),
+        (
+            [
+                "SELECT coalesce(null_child, i32_ext) FROM t",
+                "SELECT coalesce(volatile_null_child(null_child), i32_ext) FROM t",
+            ],
+            true,
+            StructArray::new(
+                vec![
+                    Field::new("v", DataType::Int32, true).with_metadata(first_extension),
+                ]
+                .into(),
+                vec![Arc::new(Int32Array::from(vec![Some(1), None, None, None]))],
+                Some(NullBuffer::from(vec![true, false, true, false])),
+            ),
+        ),
+    ];
+
+    for (queries, expected_nullable, expected) in cases {
+        for sql in queries {
+            let df = ctx.sql(sql).await?;
+            assert_eq!(
+                df.schema().field(0).data_type(),
+                expected.data_type(),
+                "{sql}"
+            );
+            assert_eq!(
+                df.schema().field(0).is_nullable(),
+                expected_nullable,
+                "{sql}"
+            );
+            let batches = df.collect().await?;
+            let actual = batches[0].column(0).as_struct();
+            assert_eq!(actual.data_type(), expected.data_type(), "{sql}");
+            assert_eq!(actual.nulls(), expected.nulls(), "{sql}");
+            assert_eq!(actual, &expected, "{sql}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_reordered_struct_coercion_field_metadata() -> Result<()> {
+    use arrow::array::{Int64Array, StringArray, StructArray};
+    use arrow::buffer::NullBuffer;
+    use datafusion::logical_expr::{Volatility, create_udf};
+
+    let ctx = SessionContext::new();
+    let a_first = Metadata::new()
+        .with("ARROW:extension:name", "example.id")
+        .with("ARROW:extension:metadata", "{}")
+        .with("origin", "first")
+        .with("only_first", "1");
+    let a_second = Metadata::new()
+        .with("origin", "second")
+        .with("only_second", "2");
+    let b_left = Metadata::new()
+        .with("ARROW:extension:name", "example.label")
+        .with("ARROW:extension:metadata", "{}")
+        .with("label", "left");
+    let b_right = Metadata::new()
+        .with("ARROW:extension:name", "example.label")
+        .with("ARROW:extension:metadata", "{}")
+        .with("label", "right");
+
+    let inner_ab = StructArray::new(
+        vec![
+            Field::new("a", DataType::Int32, false).with_metadata(a_first),
+            Field::new("b", DataType::Utf8, true).with_metadata(b_left.clone()),
+        ]
+        .into(),
+        vec![
+            Arc::new(Int32Array::from(vec![10, 20])),
+            Arc::new(StringArray::from(vec![None, Some("unused")])),
+        ],
+        None,
+    );
+    let s_ab: ArrayRef = Arc::new(StructArray::new(
+        inner_ab.fields().clone(),
+        inner_ab.columns().to_vec(),
+        Some(NullBuffer::from(vec![true, false])),
+    ));
+    let s_ba: ArrayRef = Arc::new(StructArray::new(
+        vec![
+            Field::new("b", DataType::Utf8, false).with_metadata(b_right),
+            Field::new("a", DataType::Int64, true).with_metadata(a_second),
+        ]
+        .into(),
+        vec![
+            Arc::new(StringArray::from(vec!["x", "y"])),
+            Arc::new(Int64Array::from(vec![Some(30), None])),
+        ],
+        None,
+    ));
+    let nested_ab: ArrayRef = Arc::new(StructArray::new(
+        vec![Field::new("nested", inner_ab.data_type().clone(), false)].into(),
+        vec![Arc::new(inner_ab)],
+        Some(NullBuffer::from(vec![true, false])),
+    ));
+    let nested_ba: ArrayRef = Arc::new(StructArray::new(
+        vec![Field::new("nested", s_ba.data_type().clone(), true)].into(),
+        vec![Arc::clone(&s_ba)],
+        None,
+    ));
+
+    for (udf_name, data_type) in [
+        ("volatile_s_ab", s_ab.data_type().clone()),
+        ("volatile_nested_ab", nested_ab.data_type().clone()),
+    ] {
+        ctx.register_udf(create_udf(
+            udf_name,
+            vec![data_type.clone()],
+            data_type,
+            Volatility::Volatile,
+            Arc::new(|args| Ok(args[0].clone())),
+        ));
+    }
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("s_ab", s_ab.data_type().clone(), true),
+        Field::new("s_ba", s_ba.data_type().clone(), false),
+        Field::new("nested_ab", nested_ab.data_type().clone(), true),
+        Field::new("nested_ba", nested_ba.data_type().clone(), false),
+    ]));
+    ctx.register_batch(
+        "t",
+        RecordBatch::try_new(schema, vec![s_ab, s_ba, nested_ab, nested_ba])?,
+    )?;
+
+    let expected_a = Field::new("a", DataType::Int64, true).with_metadata(
+        Metadata::new()
+            .with("origin", "first")
+            .with("only_first", "1")
+            .with("only_second", "2"),
+    );
+    let expected_b = Field::new("b", DataType::Utf8, true).with_metadata(b_left);
+
+    let expected_top = StructArray::new(
+        vec![expected_b.clone(), expected_a.clone()].into(),
+        vec![
+            Arc::new(StringArray::from(vec![None, Some("y")])),
+            Arc::new(Int64Array::from(vec![Some(10), None])),
+        ],
+        None,
     );
     for sql in [
-        "SELECT coalesce(a, b) FROM t",
-        "SELECT coalesce(volatile_identity(a), b) FROM t",
+        "SELECT coalesce(s_ab, s_ba) FROM t",
+        "SELECT coalesce(volatile_s_ab(s_ab), s_ba) FROM t",
     ] {
         let df = ctx.sql(sql).await?;
-        assert_eq!(df.schema().field(0).data_type(), &expected, "{sql}");
-        assert!(!df.schema().field(0).is_nullable(), "{sql}");
-        let batches = df.collect().await?;
-        let values = batches[0].column(0).as_struct();
-        assert_eq!(values.data_type(), &expected, "{sql}");
-        assert_eq!(values.null_count(), 0, "{sql}");
         assert_eq!(
-            values.column(0).as_ref(),
-            &Int32Array::from(vec![Some(1), None, Some(3)]),
+            df.schema().field(0).data_type(),
+            expected_top.data_type(),
             "{sql}"
         );
+        assert!(!df.schema().field(0).is_nullable(), "{sql}");
+        let batches = df.collect().await?;
+        let actual = batches[0].column(0).as_struct();
+        assert_eq!(actual.data_type(), expected_top.data_type(), "{sql}");
+        assert_eq!(actual.null_count(), 0, "{sql}");
+        assert_eq!(actual, &expected_top, "{sql}");
+    }
+
+    // An enclosing ordered Struct keeps the first inner field order.
+    let expected_inner = StructArray::new(
+        vec![expected_a.clone(), expected_b.clone()].into(),
+        vec![
+            Arc::new(Int64Array::from(vec![Some(10), None])),
+            Arc::new(StringArray::from(vec![None, Some("y")])),
+        ],
+        None,
+    );
+    let expected_nested = StructArray::new(
+        vec![Field::new(
+            "nested",
+            expected_inner.data_type().clone(),
+            true,
+        )]
+        .into(),
+        vec![Arc::new(expected_inner)],
+        None,
+    );
+    for sql in [
+        "SELECT coalesce(nested_ab, nested_ba) FROM t",
+        "SELECT coalesce(volatile_nested_ab(nested_ab), nested_ba) FROM t",
+    ] {
+        let df = ctx.sql(sql).await?;
+        assert_eq!(
+            df.schema().field(0).data_type(),
+            expected_nested.data_type(),
+            "{sql}"
+        );
+        assert!(!df.schema().field(0).is_nullable(), "{sql}");
+        let batches = df.collect().await?;
+        let actual = batches[0].column(0).as_struct();
+        assert_eq!(actual.data_type(), expected_nested.data_type(), "{sql}");
+        assert_eq!(actual.null_count(), 0, "{sql}");
+        assert_eq!(actual, &expected_nested, "{sql}");
+    }
+
+    let expected_array_values = StructArray::new(
+        vec![expected_b, expected_a].into(),
+        vec![
+            Arc::new(StringArray::from(vec![None, Some("x"), None, Some("y")])),
+            Arc::new(Int64Array::from(vec![Some(10), Some(30), None, None])),
+        ],
+        Some(NullBuffer::from(vec![true, true, false, true])),
+    );
+    let expected_list_type =
+        DataType::new_list(expected_array_values.data_type().clone(), true);
+    let df = ctx.sql("SELECT make_array(s_ab, s_ba) FROM t").await?;
+    assert_eq!(df.schema().field(0).data_type(), &expected_list_type);
+    let batches = df.collect().await?;
+    let list = batches[0].column(0).as_list::<i32>();
+    assert_eq!(list.data_type(), &expected_list_type);
+    assert_eq!(list.value_offsets(), &[0, 2, 4]);
+    assert_eq!(
+        list.values().as_struct().data_type(),
+        expected_array_values.data_type()
+    );
+    assert_eq!(list.values().as_ref(), &expected_array_values);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_struct_coercion_field_metadata_conflict() -> Result<()> {
+    let ctx = SessionContext::new();
+    let struct_field = |col_name: &str, ext_name: &str| {
+        let child = Field::new("v", DataType::Utf8, true)
+            .with_metadata(Metadata::new().with("ARROW:extension:name", ext_name));
+        Field::new(col_name, DataType::Struct(vec![child].into()), true)
+    };
+    let s1 = struct_field("s1", "example.first");
+    let s2 = struct_field("s2", "example.second");
+    let n1 = Field::new(
+        "n1",
+        DataType::Struct(vec![Field::new("nested", s1.data_type().clone(), true)].into()),
+        true,
+    );
+    let n2 = Field::new(
+        "n2",
+        DataType::Struct(vec![Field::new("nested", s2.data_type().clone(), true)].into()),
+        true,
+    );
+    ctx.register_batch(
+        "t",
+        RecordBatch::new_empty(Arc::new(Schema::new(vec![s1, s2, n1, n2]))),
+    )?;
+
+    for sql in [
+        "SELECT coalesce(s1, s2) FROM t",
+        "SELECT coalesce(NULL, s1, s2) FROM t",
+        "SELECT coalesce(n1, n2) FROM t",
+        "SELECT make_array(s1, s2) FROM t",
+        "SELECT make_array(n1, n2) FROM t",
+    ] {
+        let err = ctx.sql(sql).await.unwrap_err();
+        assert!(matches!(err, DataFusionError::Plan(_)), "{sql}: {err}");
+        for expected in [
+            "Cannot merge field metadata",
+            "example.first",
+            "example.second",
+        ] {
+            assert!(err.to_string().contains(expected), "{sql}: {err}");
+        }
     }
     Ok(())
 }
