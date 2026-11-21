@@ -249,6 +249,7 @@ impl AggregateSpill {
         self.spills.push(SortedSpillFile {
             file,
             max_record_batch_memory,
+            shared_dictionary_bytes: 0,
         });
         self.min_spill_batch_rows = self.min_spill_batch_rows.min(max_batch_rows);
 
