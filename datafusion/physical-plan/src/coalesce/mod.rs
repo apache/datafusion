@@ -107,6 +107,39 @@ impl LimitedBatchCoalescer {
         Ok(PushBatchStatus::Continue)
     }
 
+    /// Pushes the rows selected by `indices` from the next [`RecordBatch`]
+    /// into the coalescer and returns its status.
+    pub fn push_batch_with_indices(
+        &mut self,
+        batch: RecordBatch,
+        indices: &dyn Array,
+    ) -> Result<PushBatchStatus> {
+        assert_or_internal_err!(
+            !self.finished,
+            "LimitedBatchCoalescer: cannot push batch after finish"
+        );
+
+        if let Some(fetch) = self.fetch {
+            if self.total_rows >= fetch {
+                return Ok(PushBatchStatus::LimitReached);
+            }
+
+            if self.total_rows + indices.len() >= fetch {
+                let remaining = fetch - self.total_rows;
+                debug_assert!(remaining > 0);
+                let indices = indices.slice(0, remaining);
+                self.total_rows += remaining;
+                self.inner
+                    .push_batch_with_indices(batch, indices.as_ref())?;
+                return Ok(PushBatchStatus::LimitReached);
+            }
+        }
+
+        self.total_rows += indices.len();
+        self.inner.push_batch_with_indices(batch, indices)?;
+        Ok(PushBatchStatus::Continue)
+    }
+
     /// Pushes the next [`RecordBatch`] into the coalescer after applying `filter`,
     /// avoiding a separate materialization pass compared to calling
     /// [`filter_record_batch`] followed by [`Self::push_batch`].
@@ -299,6 +332,20 @@ mod tests {
         );
         coalescer.finish().unwrap();
         assert_next_batch_values(&mut coalescer, vec![1, 4, 5]);
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_and_fetch() {
+        let batch = uint32_batch(0..8);
+        let indices = UInt32Array::from(vec![7, 1, 5, 3]);
+        let mut coalescer = LimitedBatchCoalescer::new(batch.schema(), 100, Some(3));
+
+        assert_eq!(
+            coalescer.push_batch_with_indices(batch, &indices).unwrap(),
+            PushBatchStatus::LimitReached,
+        );
+        coalescer.finish().unwrap();
+        assert_next_batch_values(&mut coalescer, vec![7, 1, 5]);
     }
 
     #[test]
