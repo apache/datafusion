@@ -1984,6 +1984,7 @@ dependencies = [
  "object_store",
  "parking_lot 0.13.0",
  "pin-project-lite",
+ "prost",
  "rand 0.9.4",
  "tempfile",
  "tokio",

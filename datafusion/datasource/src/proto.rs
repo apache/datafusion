@@ -2,6 +2,10 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+//! Serialization support for data sources.
+//!
+//! Custom sources use the name-keyed decoder API in [`registry`](crate::proto::registry).
+//!
 //! Protobuf conversions for the file-scan leaf types owned by this crate:
 //! [`FileRange`], [`PartitionedFile`] and [`FileGroup`].
 //!
@@ -16,6 +20,14 @@
 //! configs: the standard trait can express a conversion that takes nothing but
 //! the value, and the orphan rule allows it here because one side of each
 //! conversion is a type this crate owns.
+
+pub mod registry;
+
+pub use datafusion_proto_models::ProtoDecoderRegistry;
+pub use registry::{
+    ExtensionDataSourceFromProto, data_source_names, extension_data_source_node,
+    register_data_source,
+};
 
 use std::sync::Arc;
 
