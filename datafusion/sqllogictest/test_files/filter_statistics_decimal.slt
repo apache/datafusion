@@ -283,8 +283,8 @@ physical_plan
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/lineitem.parquet]]}, projection=[l_orderkey, l_quantity], file_type=parquet
 07)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(o_orderkey@2, l_orderkey@0)], projection=[c_custkey@0, c_name@1, o_orderkey@2, o_totalprice@3, o_orderdate@4, l_quantity@6]
 08)--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c_custkey@0, o_custkey@1)], projection=[c_custkey@0, c_name@1, o_orderkey@2, o_totalprice@4, o_orderdate@5]
-09)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/customer.parquet]]}, projection=[c_custkey, c_name], output_ordering=[c_custkey@0 ASC NULLS LAST], file_type=parquet
-10)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/orders.parquet]]}, projection=[o_orderkey, o_custkey, o_totalprice, o_orderdate], output_ordering=[o_orderkey@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+09)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/customer.parquet]]}, projection=[c_custkey, c_name], file_type=parquet
+10)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/orders.parquet]]}, projection=[o_orderkey, o_custkey, o_totalprice, o_orderdate], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 11)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/lineitem.parquet]]}, projection=[l_orderkey, l_quantity], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
 statement ok
