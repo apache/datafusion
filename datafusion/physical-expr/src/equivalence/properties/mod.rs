@@ -1567,9 +1567,26 @@ impl EquivalenceProperties {
 
     /// Projects constraints according to the given projection mapping.
     ///
-    /// This function takes a projection mapping and extracts column indices of
-    /// target columns. It then projects the constraints to only include
-    /// relationships between columns that exist in the projected output.
+    /// A primary key or unique constraint is propagated only when the projection
+    /// includes every column that forms the key as a plain column reference.
+    /// Their indices are remapped to their positions in the output schema.
+    ///
+    /// # Example
+    ///
+    /// The original scan has columns `[a, b]`, with `a` as the primary key.
+    ///
+    /// The required projection is `[b, a]`, so the constraints must be updated.
+    /// Column `a` remains the primary key, but the constraint's physical
+    /// representation is updated to match the projected schema:
+    ///
+    /// ```text
+    /// Original:  [a, b]  constraints=[PrimaryKey([0])]
+    /// Projected: [b, a]  constraints=[PrimaryKey([1])]
+    /// ```
+    ///
+    /// Projecting `[b, a + 1]` instead drops the constraint because `a` is not
+    /// projected directly. This function does not infer constraints on computed
+    /// expressions.
     ///
     /// # Parameters
     ///
@@ -1578,18 +1595,27 @@ impl EquivalenceProperties {
     ///
     /// # Returns
     ///
-    /// Returns an optional `Constraints` object containing only the constraints
-    /// that are valid for the projected columns (if any exists).
+    /// Returns `Some` containing the propagated constraints if at least one
+    /// constraint survives the projection, or `None` if none do.
     fn projected_constraints(&self, mapping: &ProjectionMapping) -> Option<Constraints> {
-        let indices = mapping
-            .iter()
-            .flat_map(|(_, targets)| {
-                targets.iter().filter_map(|(target, _)| {
-                    target.downcast_ref::<Column>().map(|c| c.index())
-                })
-            })
-            .collect::<Vec<_>>();
-        self.constraints.project(&indices)
+        // Source column index of each output column, `usize::MAX` if the
+        // output is not a plain column
+        let mut source_indices = vec![];
+        for (source, targets) in mapping.iter() {
+            let Some(source) = source.downcast_ref::<Column>() else {
+                continue;
+            };
+            for (target, _) in targets.iter() {
+                if let Some(target) = target.downcast_ref::<Column>() {
+                    let index = target.index();
+                    if source_indices.len() <= index {
+                        source_indices.resize(index + 1, usize::MAX);
+                    }
+                    source_indices[index] = source.index();
+                }
+            }
+        }
+        self.constraints.project(&source_indices)
     }
 
     /// Projects these equivalence properties onto `output_schema` according to
