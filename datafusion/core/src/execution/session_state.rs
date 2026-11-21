@@ -1743,7 +1743,18 @@ impl SessionStateBuilder {
             relation_planners: relation_planners.unwrap_or_default(),
             #[cfg(feature = "sql")]
             type_planner,
-            optimizer: optimizer.unwrap_or_default(),
+            optimizer: optimizer.unwrap_or_else(|| {
+                let mut optimizer = Optimizer::default();
+                if window_functions
+                    .as_ref()
+                    .is_some_and(|functions| !functions.is_empty())
+                {
+                    optimizer
+                        .rules
+                        .insert(0, Arc::new(super::ranked_neighbors::RankedNeighbors));
+                }
+                optimizer
+            }),
             physical_optimizers: physical_optimizers.unwrap_or_default(),
             query_planner: query_planner
                 .unwrap_or_else(|| Arc::new(DefaultQueryPlanner {})),
