@@ -256,6 +256,17 @@ impl ParquetFileReader {
     }
 }
 
+// Adjacent ranges are already coalesced by the local object store. Bridge a small
+// unrequested gap only when it is cheap relative to the next requested payload.
+fn can_read_together(left: &Range<u64>, right: &Range<u64>) -> bool {
+    right.start.checked_sub(left.end).is_some_and(|gap| {
+        gap > 0
+            && gap <= 4096
+            && gap <= (right.end - right.start) / 8
+            && right.end - left.start <= 2 * 1024 * 1024
+    })
+}
+
 impl AsyncFileReader for ParquetFileReader {
     fn get_bytes(
         &mut self,
@@ -276,6 +287,43 @@ impl AsyncFileReader for ParquetFileReader {
     where
         Self: Send,
     {
+        // Each group stays within one decoder request. Never fetch later-stage payloads.
+        if ranges.windows(2).any(|w| can_read_together(&w[0], &w[1]))
+            && ranges.windows(2).all(|w| w[0].end <= w[1].start)
+        {
+            let mut groups = Vec::<Range<u64>>::new();
+            let mut index = Vec::with_capacity(ranges.len());
+            for range in &ranges {
+                if let Some(last) = groups.last_mut()
+                    && can_read_together(last, range)
+                {
+                    last.end = range.end;
+                } else {
+                    groups.push(range.clone());
+                }
+                index.push(groups.len() - 1);
+            }
+            let total: u64 = groups.iter().map(|r| r.end - r.start).sum();
+            self.file_metrics.bytes_scanned.add(total as usize);
+
+            return async move {
+                let buffers = self
+                    .store
+                    .get_ranges(&self.partitioned_file.object_meta.location, &groups)
+                    .await
+                    .map_err(|e| ParquetError::External(Box::new(e)))?;
+                Ok(ranges
+                    .into_iter()
+                    .zip(index)
+                    .map(|(r, i)| {
+                        let base = groups[i].start;
+                        buffers[i]
+                            .slice((r.start - base) as usize..(r.end - base) as usize)
+                    })
+                    .collect())
+            }
+            .boxed();
+        }
         let total: u64 = ranges.iter().map(|r| r.end - r.start).sum();
         self.file_metrics.bytes_scanned.add(total as usize);
         async move {
@@ -363,5 +411,19 @@ impl FileMetadata for CachedParquetMetaData {
             .page_index()
             .is_some_and(|page_index| page_index.is_complete());
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
+    }
+}
+
+#[cfg(test)]
+mod nearby_read_tests {
+    use super::*;
+
+    #[test]
+    fn only_bridge_small_gaps_with_sufficient_payload() {
+        assert!(can_read_together(&(0..100), &(102..202)));
+        assert!(!can_read_together(&(0..100), &(100..200)));
+        assert!(!can_read_together(&(100..200), &(0..10)));
+        assert!(!can_read_together(&(0..100), &(120..130)));
+        assert!(!can_read_together(&(0..100), &(102..3_000_000)));
     }
 }
