@@ -532,7 +532,7 @@ pub async fn from_substrait_sorts(
             },
             None => not_impl_err!("Sort without sort kind is invalid"),
         };
-        let (asc, nulls_first) = asc_nullfirst.unwrap();
+        let (asc, nulls_first) = asc_nullfirst?;
         sorts.push(Sort {
             expr,
             asc,
