@@ -855,6 +855,42 @@ async fn test_make_array_nested_field_metadata() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_make_array_constructor_field_metadata_conflict() -> Result<()> {
+    let ctx = SessionContext::new();
+    let fields = ["example.first", "example.second"]
+        .into_iter()
+        .enumerate()
+        .map(|(i, name)| {
+            Field::new(format!("c{i}"), DataType::Int32, true).with_metadata(
+                HashMap::from([("ARROW:extension:name".to_string(), name.to_string())]),
+            )
+        })
+        .collect::<Vec<_>>();
+    ctx.register_batch("t", RecordBatch::new_empty(Arc::new(Schema::new(fields))))?;
+    for expression in [
+        "make_array(c0, c1)",
+        "make_array(named_struct('v', c0), named_struct('v', c1))",
+        "make_array(named_struct('v', c0), NULL, named_struct('v', c1))",
+        "make_array(named_struct('v', named_struct('w', c0)), named_struct('v', named_struct('w', c1)))",
+        "make_array(named_struct('v', c0, 'other', 0), named_struct('other', 0, 'v', c1))",
+        "coalesce(named_struct('v', c0), named_struct('v', c1))",
+    ] {
+        let err = ctx
+            .sql(&format!("SELECT {expression} FROM t"))
+            .await
+            .unwrap_err();
+        for expected in [
+            "Cannot merge field metadata",
+            "example.first",
+            "example.second",
+        ] {
+            assert!(err.to_string().contains(expected), "{expression}: {err}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_coalesce_struct_field_metadata() -> Result<()> {
     use arrow::array::{Int64Array, NullArray, StructArray};
     use arrow::buffer::NullBuffer;
@@ -1279,42 +1315,6 @@ async fn test_struct_coercion_field_metadata_conflict() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_make_array_constructor_field_metadata_conflict() -> Result<()> {
-    let ctx = SessionContext::new();
-    let fields = ["example.first", "example.second"]
-        .into_iter()
-        .enumerate()
-        .map(|(i, name)| {
-            Field::new(format!("c{i}"), DataType::Int32, true).with_metadata(
-                HashMap::from([("ARROW:extension:name".to_string(), name.to_string())]),
-            )
-        })
-        .collect::<Vec<_>>();
-    ctx.register_batch("t", RecordBatch::new_empty(Arc::new(Schema::new(fields))))?;
-    for expression in [
-        "make_array(c0, c1)",
-        "make_array(named_struct('v', c0), named_struct('v', c1))",
-        "make_array(named_struct('v', c0), NULL, named_struct('v', c1))",
-        "make_array(named_struct('v', named_struct('w', c0)), named_struct('v', named_struct('w', c1)))",
-        "make_array(named_struct('v', c0, 'other', 0), named_struct('other', 0, 'v', c1))",
-        "coalesce(named_struct('v', c0), named_struct('v', c1))",
-    ] {
-        let err = ctx
-            .sql(&format!("SELECT {expression} FROM t"))
-            .await
-            .unwrap_err();
-        for expected in [
-            "Cannot merge field metadata",
-            "example.first",
-            "example.second",
-        ] {
-            assert!(err.to_string().contains(expected), "{expression}: {err}");
-        }
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn test_conditional_functions_field_metadata() -> Result<()> {
     let ctx = SessionContext::new();
     let a_metadata = HashMap::from([
@@ -1351,5 +1351,38 @@ async fn test_conditional_functions_field_metadata() -> Result<()> {
         let df = ctx.sql(sql).await?;
         assert_eq!(df.schema().field(0).metadata(), expected, "{sql}");
     }
+    Ok(())
+}
+
+/// An optimized plan with a materialized CTE whose scans read columns that
+/// are not a prefix of the body can be analyzed and optimized again.
+#[tokio::test]
+async fn materialized_cte_optimized_plan_plans_again() -> Result<()> {
+    let config =
+        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "PostgreSQL");
+    let ctx = SessionContext::new_with_config(config);
+    ctx.sql("CREATE TABLE t(a INT, b INT, c INT, d VARCHAR) AS VALUES (1, 2, 3, 'x'), (4, 5, 3, 'y')")
+        .await?
+        .collect()
+        .await?;
+    let sql = "WITH w AS MATERIALIZED (SELECT a, b, c, d FROM t) \
+               SELECT x.c, y.b FROM w x JOIN w y ON x.c = y.c ORDER BY y.b";
+    let expected = ctx.sql(sql).await?.collect().await?;
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    let again = ctx.execute_logical_plan(plan).await?.collect().await?;
+    assert_eq!(
+        arrow::util::pretty::pretty_format_batches(&again)?.to_string(),
+        arrow::util::pretty::pretty_format_batches(&expected)?.to_string()
+    );
+    assert_snapshot!(arrow::util::pretty::pretty_format_batches(&again)?, @r"
+    +---+---+
+    | c | b |
+    +---+---+
+    | 3 | 2 |
+    | 3 | 2 |
+    | 3 | 5 |
+    | 3 | 5 |
+    +---+---+
+    ");
     Ok(())
 }

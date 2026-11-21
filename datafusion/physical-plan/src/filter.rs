@@ -42,7 +42,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, internal_datafusion_err, internal_err,
     plan_err, project_schema,
@@ -53,7 +53,7 @@ use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{
     BinaryExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr, LikeExpr, Literal, lit,
 };
-use datafusion_physical_expr::intervals::utils::check_support;
+use datafusion_physical_expr::intervals::utils::check_statistics_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
     AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
@@ -333,8 +333,9 @@ impl FilterExec {
     }
 
     /// Calculates `Statistics` for `FilterExec` by applying the filter's
-    /// selectivity (estimated from interval analysis or string statistics, with
-    /// a configurable fallback) to the input statistics.
+    /// selectivity (estimated from interval analysis, string statistics, or the
+    /// distinct values of an `IN` list column, with a configurable fallback) to
+    /// the input statistics.
     ///
     /// The estimated output row count is used to keep the per-column statistics
     /// consistent with it:
@@ -389,15 +390,60 @@ impl FilterExec {
         } else {
             let null_rejecting_columns = collect_null_rejecting_columns(predicate);
 
-            if check_support(predicate, schema) {
+            let analysis_ctx = if check_statistics_support(predicate, schema)
+                && !has_decimal_equality(predicate, schema)
+            {
                 let input_analysis_ctx = AnalysisContext::try_from_statistics(
                     schema,
                     &input_stats.column_statistics,
                 )?;
-                let analysis_ctx = analyze(predicate, input_analysis_ctx, schema)?;
-                let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-                let filtered_num_rows =
-                    input_num_rows.with_estimated_selectivity(selectivity);
+                Some(analyze(predicate, input_analysis_ctx, schema)?)
+            } else {
+                None
+            };
+
+            // Interval analysis gives no selectivity when it cannot tell how
+            // many values of a column in the predicate pass, e.g. for an
+            // aggregate output without min/max, as in `HAVING sum(l_quantity)
+            // > 300` in TPC-H Q18. The heuristic estimate below is used then,
+            // while the analyzed bounds still narrow the column statistics.
+            let selectivity = analysis_ctx
+                .as_ref()
+                .and_then(|analysis_ctx| analysis_ctx.selectivity)
+                .unwrap_or_else(|| {
+                    // String predicates and `IN` lists cannot use interval analysis.
+                    // Estimate a string comparison from distinct counts and pattern
+                    // form, and an `IN` list from the share of the column's distinct
+                    // values it names, when possible. Then apply the row-count
+                    // constraints implied by the predicate.
+                    //
+                    // Without interval boundaries, attempt a heuristic fallback for selectivities.
+                    // For instance, an equality filter against an unresolved scalar subquery will
+                    // fail `check_support`, but we can still estimate selectivity as `1.0 / NDV`.
+                    let default_selectivity_f64 = default_selectivity as f64 / 100.0;
+                    string_selectivity(
+                        predicate,
+                        schema,
+                        &input_stats,
+                        default_selectivity_f64,
+                    )
+                    .or_else(|| {
+                        predicate.downcast_ref::<InListExpr>().and_then(|in_list| {
+                            in_list_selectivity(in_list, &input_stats)
+                        })
+                    })
+                    .unwrap_or_else(|| {
+                        compute_fallback_selectivity(
+                            predicate,
+                            &input_stats.column_statistics,
+                            default_selectivity,
+                        )
+                    })
+                });
+            let filtered_num_rows =
+                input_num_rows.with_estimated_selectivity(selectivity);
+
+            if let Some(analysis_ctx) = analysis_ctx {
                 let cs = collect_new_statistics(
                     schema,
                     &input_stats.column_statistics,
@@ -408,29 +454,6 @@ impl FilterExec {
                 );
                 (selectivity, filtered_num_rows, cs)
             } else {
-                // String predicates cannot use interval analysis. Estimate them
-                // from distinct counts and pattern form when possible, then
-                // apply the row-count constraints implied by the predicate.
-                //
-                // Without interval boundaries, attempt a heuristic fallback for selectivities.
-                // For instance, an equality filter against an unresolved scalar subquery will
-                // fail `check_support`, but we can still estimate selectivity as `1.0 / NDV`.
-                let default_selectivity_f64 = default_selectivity as f64 / 100.0;
-                let selectivity = string_selectivity(
-                    predicate,
-                    schema,
-                    &input_stats,
-                    default_selectivity_f64,
-                )
-                .unwrap_or_else(|| {
-                    compute_fallback_selectivity(
-                        predicate,
-                        &input_stats.column_statistics,
-                        default_selectivity,
-                    )
-                });
-                let filtered_num_rows =
-                    input_num_rows.with_estimated_selectivity(selectivity);
                 let mut cs = input_stats.to_inexact().column_statistics;
                 for (idx, col_stat) in cs.iter_mut().enumerate() {
                     col_stat.byte_size = scale_byte_size_at_rows(
@@ -1156,15 +1179,8 @@ fn restricted_column(expr: &Arc<dyn PhysicalExpr>) -> Option<(usize, usize)> {
         if in_list.negated() {
             return None;
         }
-        let column = in_list.expr().downcast_ref::<Column>()?;
-        let mut values: Vec<&ScalarValue> = Vec::with_capacity(in_list.list().len());
-        for expr in in_list.list() {
-            let value = expr.downcast_ref::<Literal>()?.value();
-            if !value.is_null() && !values.contains(&value) {
-                values.push(value);
-            }
-        }
-        return Some((column.index(), values.len()));
+        let (index, values, _) = literal_in_list(in_list)?;
+        return Some((index, values.len()));
     }
 
     let binary = expr.downcast_ref::<BinaryExpr>()?;
@@ -1181,6 +1197,27 @@ fn restricted_column(expr: &Arc<dyn PhysicalExpr>) -> Option<(usize, usize)> {
     };
     let value = literal.downcast_ref::<Literal>()?.value();
     (!value.is_null()).then_some((column.index(), 1))
+}
+
+/// The column a literal `IN` list tests, its distinct non-null values, and
+/// whether the list holds a NULL. The list must test a bare column and hold
+/// only literals.
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
+fn literal_in_list(
+    in_list: &InListExpr,
+) -> Option<(usize, impl ExactSizeIterator<Item = &ScalarValue>, bool)> {
+    let column = in_list.expr().downcast_ref::<Column>()?;
+    let mut values = HashSet::with_capacity(in_list.len());
+    let mut has_null = false;
+    for expr in in_list.list() {
+        let value = expr.downcast_ref::<Literal>()?.value();
+        if value.is_null() {
+            has_null = true;
+        } else {
+            values.insert(value);
+        }
+    }
+    Some((column.index(), values.into_iter(), has_null))
 }
 
 /// Whether the column has as many distinct values as it has non-null rows, so each
@@ -1247,6 +1284,29 @@ fn compute_fallback_selectivity(
     }
 
     selectivity
+}
+
+/// Returns true if `predicate` compares a decimal value with `=`.
+///
+/// Interval analysis estimates an equality from the number of values in the
+/// column's range, and for a decimal that counts every step of its scale.
+/// Decimal columns often hold far fewer distinct values. For example, TPC-DS
+/// stores whole-hour time zone offsets in `ca_gmt_offset DECIMAL(5, 2)`:
+/// `ca_gmt_offset = -5` matches over a third of the rows, but the range
+/// [-10.00, -5.00] holds 501 values. These predicates keep the estimate they
+/// had before interval analysis supported decimals.
+fn has_decimal_equality(predicate: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
+    predicate
+        .exists(|expr| {
+            Ok(expr.downcast_ref::<BinaryExpr>().is_some_and(|binary| {
+                *binary.op() == Operator::Eq
+                    && [binary.left(), binary.right()].iter().any(|side| {
+                        side.data_type(schema)
+                            .is_ok_and(|data_type| data_type.is_decimal())
+                    })
+            }))
+        })
+        .unwrap_or(false)
 }
 
 /// Extracts the NDV from a [`Column`] reference, if the expression is a bare
@@ -1323,10 +1383,12 @@ fn collect_equality_columns(predicate: &Arc<dyn PhysicalExpr>) -> (HashSet<usize
 ///
 /// A filter keeps only rows where the predicate is TRUE, so a column is
 /// null-rejecting if some top-level AND conjunct evaluates to NULL or FALSE
-/// whenever that column is NULL. Two such conjuncts are recognized:
+/// whenever that column is NULL. These conjuncts are recognized:
 ///
 /// - a binary operator that returns NULL on NULL input, applied directly to the
 ///   column (e.g. `a = 10`, `a < b`);
+/// - a `LIKE` with the column as either operand (e.g. `a LIKE 'x%'`);
+/// - a non-empty `IN` list that tests the column (e.g. `a NOT IN (1, 2)`);
 /// - an `IS NOT NULL` check on the column (e.g. `a IS NOT NULL`).
 ///
 /// This analysis is conservative; for example, OR clauses are not considered
@@ -1342,6 +1404,16 @@ fn collect_null_rejecting_columns(predicate: &Arc<dyn PhysicalExpr>) -> HashSet<
                 if let Some(col) = operand.downcast_ref::<Column>() {
                     columns.insert(col.index());
                 }
+            }
+            continue;
+        }
+
+        // `NULL [NOT] IN (...)` is NULL unless the list is empty.
+        if let Some(in_list) = expr.downcast_ref::<InListExpr>() {
+            if !in_list.is_empty()
+                && let Some(col) = in_list.expr().downcast_ref::<Column>()
+            {
+                columns.insert(col.index());
             }
             continue;
         }
@@ -1437,18 +1509,27 @@ fn string_selectivity(
     } else {
         positive_selectivity
     };
+    Some(scale_to_non_null_rows(
+        selectivity,
+        &input_stats.num_rows,
+        &column_stats.null_count,
+    ))
+}
 
-    // Apply the complement within the non-null rows, not across all input
-    // rows. Unknown null counts use the usual assumption of no nulls.
-    match (
-        input_stats.num_rows.get_value(),
-        column_stats.null_count.get_value(),
-    ) {
+/// Applies a selectivity, complement included, within the non-null rows of
+/// a column, not across all input rows. Unknown null counts use the usual
+/// assumption of no nulls.
+fn scale_to_non_null_rows(
+    selectivity: f64,
+    num_rows: &Precision<usize>,
+    null_count: &Precision<usize>,
+) -> f64 {
+    match (num_rows.get_value(), null_count.get_value()) {
         (Some(&rows), Some(&nulls)) if rows > 0 => {
-            Some(rows.saturating_sub(nulls) as f64 * selectivity / rows as f64)
+            rows.saturating_sub(nulls) as f64 * selectivity / rows as f64
         }
-        (Some(0), _) => Some(0.0),
-        _ => Some(selectivity),
+        (Some(0), _) => 0.0,
+        _ => selectivity,
     }
 }
 
@@ -1499,6 +1580,89 @@ fn like_selectivity(
         let end_factor = if ends_with_percent { 1.0 } else { 0.5 };
         default_selectivity * start_factor * end_factor
     }
+}
+
+/// Estimates `col [NOT] IN (literals)` as the share of the column's distinct
+/// values that the list names, within the non-null rows. Returns `None`, so
+/// that the default applies, for other lists and when the column has no
+/// usable statistics.
+///
+/// Like an equality, each distinct value is assumed to hold the same number of
+/// rows, and a listed value between the column's min and max is assumed to
+/// occur in the column.
+fn in_list_selectivity(in_list: &InListExpr, statistics: &Statistics) -> Option<f64> {
+    let (index, values, has_null) = literal_in_list(in_list)?;
+    let column = statistics.column_statistics.get(index)?;
+    // `col NOT IN (.., NULL)` is never TRUE: it is FALSE when `col` is listed
+    // and NULL otherwise. A list of only NULLs matches nothing either.
+    if has_null && (in_list.negated() || values.len() == 0) {
+        return Some(0.0);
+    }
+    let distinct = estimated_distinct_count(column, &statistics.num_rows)?;
+    let listed = values.filter(|value| may_hold(column, value)).count();
+    let matched = (listed as f64 / distinct as f64).min(1.0);
+    let selectivity = if in_list.negated() {
+        1.0 - matched
+    } else {
+        matched
+    };
+    Some(scale_to_non_null_rows(
+        selectivity,
+        &statistics.num_rows,
+        &column.null_count,
+    ))
+}
+
+/// The column's distinct count or, for integer and `Date32` columns without
+/// one, the number of values from min to max. Never more than the non-null
+/// rows, when they are known.
+///
+/// Other types do not use min and max: a float, decimal, `Date64`, or
+/// timestamp range holds many more values than a column usually does.
+fn estimated_distinct_count(
+    column: &ColumnStatistics,
+    num_rows: &Precision<usize>,
+) -> Option<usize> {
+    let distinct = match column.distinct_count {
+        Precision::Exact(ndv) | Precision::Inexact(ndv) if ndv > 0 => ndv,
+        _ => {
+            let min = column.min_value.get_value()?;
+            let max = column.max_value.get_value()?;
+            let data_type = min.data_type();
+            if !(data_type.is_integer() || data_type == DataType::Date32)
+                || min.is_null()
+                || max.is_null()
+                || min > max
+            {
+                return None;
+            }
+            let span = max.distance_u64(min)?.saturating_add(1);
+            usize::try_from(span).unwrap_or(usize::MAX)
+        }
+    };
+    let non_null_rows = num_rows.get_value().map(|&rows| {
+        rows.saturating_sub(column.null_count.get_value().copied().unwrap_or(0))
+    });
+    Some(match non_null_rows {
+        Some(rows) if rows > 0 => distinct.min(rows),
+        _ => distinct,
+    })
+}
+
+/// Whether `value` can lie between the column's min and max. Values that
+/// cannot be compared with a bound count as inside it.
+fn may_hold(column: &ColumnStatistics, value: &ScalarValue) -> bool {
+    // A typed NULL bound is unknown, not a bound: `Int32(NULL)` orders below
+    // every value.
+    let below_min = column
+        .min_value
+        .get_value()
+        .is_some_and(|min| !min.is_null() && value < min);
+    let above_max = column
+        .max_value
+        .get_value()
+        .is_some_and(|max| !max.is_null() && value > max);
+    !below_min && !above_max
 }
 
 /// Returns the checked column index, and whether the check is `IS NULL`, when
@@ -2171,8 +2335,8 @@ mod tests {
         assert_eq!(rows(vec!["a", "b", "c"], false)?, Precision::Inexact(3));
         // Repeats ask for the same row twice.
         assert_eq!(rows(vec!["a", "b", "a"], false)?, Precision::Inexact(2));
-        // `NOT IN` selects nearly everything, so the default applies.
-        assert_eq!(rows(vec!["a", "b", "c"], true)?, Precision::Inexact(20));
+        // `NOT IN` excludes one row for each distinct value it names.
+        assert_eq!(rows(vec!["a", "b", "c"], true)?, Precision::Inexact(97));
 
         Ok(())
     }
@@ -2218,6 +2382,355 @@ mod tests {
                 null_count: Precision::Exact(0),
                 min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
                 max_value: Precision::Inexact(ScalarValue::Int32(Some(25))),
+                ..Default::default()
+            }]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_decimal_expr() -> Result<()> {
+        // Table:
+        //      a: Decimal128(15, 2), min=0.00, max=0.10
+        let decimal = |v: i128| ScalarValue::Decimal128(Some(v), 15, 2);
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::Decimal128(15, 2), false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1100),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(decimal(0)),
+                    max_value: Precision::Inexact(decimal(10)),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        // a >= 0.05 AND a < 0.08
+        let predicate: Arc<dyn PhysicalExpr> = binary(
+            binary(col("a", &schema)?, Operator::GtEq, lit(decimal(5)), &schema)?,
+            Operator::And,
+            binary(col("a", &schema)?, Operator::Lt, lit(decimal(8)), &schema)?,
+            &schema,
+        )?;
+
+        // WHERE a >= 0.05 AND a < 0.08
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+
+        // The strict bound tightens to 0.07, so [0.05, 0.07] keeps 3 of the 11
+        // representable values in [0.00, 0.10].
+        let statistics =
+            StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
+        assert_eq!(statistics.num_rows, Precision::Inexact(300));
+        assert_eq!(
+            statistics.column_statistics,
+            vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                min_value: Precision::Inexact(decimal(5)),
+                max_value: Precision::Inexact(decimal(7)),
+                ..Default::default()
+            }]
+        );
+
+        Ok(())
+    }
+
+    /// Arithmetic changes the precision and scale of decimal results, so it must
+    /// not narrow decimal columns: these predicates fall back to the default
+    /// selectivity and keep the input bounds in the column's own type.
+    #[tokio::test]
+    async fn test_filter_statistics_decimal_arithmetic_expr() -> Result<()> {
+        // Table:
+        //      a: Decimal128(15, 2), min=1.00, max=10.00
+        let decimal = |v: i128| ScalarValue::Decimal128(Some(v), 15, 2);
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::Decimal128(15, 2), false)]);
+        let input_stats = Statistics {
+            num_rows: Precision::Inexact(1000),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                min_value: Precision::Inexact(decimal(100)),
+                max_value: Precision::Inexact(decimal(1000)),
+                ..Default::default()
+            }],
+        };
+
+        // a * 2.00 > 5.0000 and a - 2.00 > 5.00
+        for (op, rhs) in [
+            (Operator::Multiply, 50_000_i128), // 5.0000 at the product's scale 4
+            (Operator::Minus, 500_i128),       // 5.00 at the difference's scale 2
+        ] {
+            let arithmetic =
+                Arc::new(BinaryExpr::new(col("a", &schema)?, op, lit(decimal(200))))
+                    as Arc<dyn PhysicalExpr>;
+            let DataType::Decimal128(precision, scale) = arithmetic.data_type(&schema)?
+            else {
+                unreachable!()
+            };
+            let predicate = Arc::new(BinaryExpr::new(
+                arithmetic,
+                Operator::Gt,
+                lit(ScalarValue::Decimal128(Some(rhs), precision, scale)),
+            ));
+            let input =
+                Arc::new(StatisticsExec::new(input_stats.clone(), schema.clone()));
+            let filter: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(predicate, input)?);
+
+            let statistics = StatisticsContext::new()
+                .compute(filter.as_ref(), &StatisticsArgs::new())?;
+            assert_eq!(statistics.num_rows, Precision::Inexact(200), "{op}");
+            let column = &statistics.column_statistics[0];
+            assert_eq!(column.min_value, Precision::Inexact(decimal(100)), "{op}");
+            assert_eq!(column.max_value, Precision::Inexact(decimal(1000)), "{op}");
+            for bound in [&column.min_value, &column.max_value] {
+                let value = bound.get_value().unwrap();
+                assert_eq!(value.data_type(), DataType::Decimal128(15, 2), "{op}");
+            }
+        }
+
+        // Negation keeps the decimal type, so -a >= -5.00 still narrows `a` to
+        // [1.00, 5.00]: 401 of the 901 representable values in [1.00, 10.00],
+        // rounded up.
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(NegativeExpr::new(col("a", &schema)?)),
+            Operator::GtEq,
+            lit(decimal(-500)),
+        ));
+        let input = Arc::new(StatisticsExec::new(input_stats, schema.clone()));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let statistics =
+            StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
+        assert_eq!(statistics.num_rows, Precision::Inexact(446));
+        let column = &statistics.column_statistics[0];
+        assert_eq!(column.min_value, Precision::Inexact(decimal(100)));
+        assert_eq!(column.max_value, Precision::Inexact(decimal(500)));
+
+        Ok(())
+    }
+
+    /// Interval analysis cannot tell how many values of a column without
+    /// min/max statistics, such as an aggregate output, pass a predicate.
+    /// Predicates on such columns use the default selectivity.
+    #[tokio::test]
+    async fn test_filter_statistics_without_bounds() -> Result<()> {
+        // Table:
+        //      a: Decimal128(15, 2), bounds vary per case
+        //      b: Int32, min=0, max=99
+        //      c: Int64, bounds vary per case
+        let decimal = |v: i128| ScalarValue::Decimal128(Some(v), 15, 2);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Decimal128(15, 2), true),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int64, true),
+        ]);
+        let b_stats = ColumnStatistics {
+            min_value: Precision::Inexact(ScalarValue::Int32(Some(0))),
+            max_value: Precision::Inexact(ScalarValue::Int32(Some(99))),
+            ..Default::default()
+        };
+
+        // a > 3.00
+        let a_gt = binary(col("a", &schema)?, Operator::Gt, lit(decimal(300)), &schema)?;
+        // c > 3
+        let c_gt = binary(col("c", &schema)?, Operator::Gt, lit(3i64), &schema)?;
+        // b < 50 AND a > 3.00
+        let b_lt_and_a_gt = binary(
+            binary(col("b", &schema)?, Operator::Lt, lit(50i32), &schema)?,
+            Operator::And,
+            Arc::clone(&a_gt),
+            &schema,
+        )?;
+
+        for (a_stats, c_stats) in [
+            (
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ),
+            // Only a lower bound
+            (
+                ColumnStatistics {
+                    min_value: Precision::Inexact(decimal(100)),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Int64(Some(1))),
+                    ..Default::default()
+                },
+            ),
+            // Null bounds
+            (
+                ColumnStatistics {
+                    min_value: Precision::Exact(ScalarValue::Decimal128(None, 15, 2)),
+                    max_value: Precision::Exact(ScalarValue::Decimal128(None, 15, 2)),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Precision::Exact(ScalarValue::Int64(None)),
+                    max_value: Precision::Exact(ScalarValue::Int64(None)),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            for predicate in [&a_gt, &c_gt, &b_lt_and_a_gt] {
+                let input = Arc::new(StatisticsExec::new(
+                    Statistics {
+                        num_rows: Precision::Inexact(1000),
+                        total_byte_size: Precision::Absent,
+                        column_statistics: vec![
+                            a_stats.clone(),
+                            b_stats.clone(),
+                            c_stats.clone(),
+                        ],
+                    },
+                    schema.clone(),
+                ));
+                let filter: Arc<dyn ExecutionPlan> =
+                    Arc::new(FilterExec::try_new(Arc::clone(predicate), input)?);
+                let statistics = StatisticsContext::new()
+                    .compute(filter.as_ref(), &StatisticsArgs::new())?;
+                assert_eq!(statistics.num_rows, Precision::Inexact(200), "{predicate}");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Equality on a decimal column keeps the estimate it had before decimals
+    /// were analyzed: 1 / NDV when the distinct count is known, otherwise the
+    /// default selectivity. Ranges on the same column still use interval
+    /// analysis.
+    #[tokio::test]
+    async fn test_filter_statistics_decimal_equality() -> Result<()> {
+        // Table:
+        //      a: Decimal128(5, 2), min=-10.00, max=-5.00
+        let decimal = |v: i128| ScalarValue::Decimal128(Some(v), 5, 2);
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::Decimal128(5, 2), false)]);
+        let a_stats = ColumnStatistics {
+            min_value: Precision::Inexact(decimal(-1000)),
+            max_value: Precision::Inexact(decimal(-500)),
+            ..Default::default()
+        };
+        // a = -5.00
+        let a_eq = binary(
+            col("a", &schema)?,
+            Operator::Eq,
+            lit(decimal(-500)),
+            &schema,
+        )?;
+        // a >= -6.00
+        let a_gt_eq = binary(
+            col("a", &schema)?,
+            Operator::GtEq,
+            lit(decimal(-600)),
+            &schema,
+        )?;
+
+        let cases = [
+            // The default 20%, not 1 of the 501 values in [-10.00, -5.00]
+            (a_stats.clone(), Arc::clone(&a_eq), 200),
+            // 1 of 6 distinct values, rounded up
+            (
+                ColumnStatistics {
+                    distinct_count: Precision::Inexact(6),
+                    ..a_stats.clone()
+                },
+                Arc::clone(&a_eq),
+                167,
+            ),
+            // 101 of the 501 values in the range, rounded up
+            (a_stats, a_gt_eq, 202),
+        ];
+        for (a_stats, predicate, expected_rows) in cases {
+            let input = Arc::new(StatisticsExec::new(
+                Statistics {
+                    num_rows: Precision::Inexact(1000),
+                    total_byte_size: Precision::Absent,
+                    column_statistics: vec![a_stats],
+                },
+                schema.clone(),
+            ));
+            let filter: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(Arc::clone(&predicate), input)?);
+            let statistics = StatisticsContext::new()
+                .compute(filter.as_ref(), &StatisticsArgs::new())?;
+            assert_eq!(
+                statistics.num_rows,
+                Precision::Inexact(expected_rows),
+                "{predicate}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_decimal_mixed_scale_expr() -> Result<()> {
+        // Table:
+        //      a: Decimal128(15, 2), min=0.00, max=0.10
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::Decimal128(15, 2), false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1100),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Decimal128(
+                        Some(0),
+                        15,
+                        2,
+                    )),
+                    max_value: Precision::Inexact(ScalarValue::Decimal128(
+                        Some(10),
+                        15,
+                        2,
+                    )),
+                    ..Default::default()
+                }],
+            },
+            schema.clone(),
+        ));
+
+        // Type coercion compares `a` with the float literals as Decimal128(30, 15),
+        // so the column is cast to the literals' scale:
+        // CAST(a AS Decimal128(30, 15)) >= 0.055 AND CAST(a AS Decimal128(30, 15)) < 0.085
+        let coerced = DataType::Decimal128(30, 15);
+        let literal = |v: i128| lit(ScalarValue::Decimal128(Some(v), 30, 15));
+        let predicate: Arc<dyn PhysicalExpr> = binary(
+            binary(
+                cast(col("a", &schema)?, &schema, coerced.clone())?,
+                Operator::GtEq,
+                literal(55_000_000_000_000),
+                &schema,
+            )?,
+            Operator::And,
+            binary(
+                cast(col("a", &schema)?, &schema, coerced)?,
+                Operator::Lt,
+                literal(85_000_000_000_000),
+                &schema,
+            )?,
+            &schema,
+        )?;
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+
+        let statistics =
+            StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
+        // The bounds are cast back to scale 2 as [0.06, 0.08], keeping 3 of the
+        // 11 representable values in [0.00, 0.10].
+        assert_eq!(statistics.num_rows, Precision::Inexact(300));
+        assert_eq!(
+            statistics.column_statistics,
+            vec![ColumnStatistics {
+                min_value: Precision::Inexact(ScalarValue::Decimal128(Some(6), 15, 2)),
+                max_value: Precision::Inexact(ScalarValue::Decimal128(Some(8), 15, 2)),
                 ..Default::default()
             }]
         );
@@ -2868,9 +3381,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_custom_filter_selectivity() -> Result<()> {
-        // Need a decimal to trigger inexact selectivity
-        let schema =
-            Schema::new(vec![Field::new("a", DataType::Decimal128(2, 3), false)]);
+        // Need a type unsupported by interval analysis to trigger the default
+        // selectivity
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
         let input = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Precision::Inexact(1000),
@@ -2879,11 +3392,11 @@ mod tests {
             },
             schema,
         ));
-        // WHERE a = 10
+        // WHERE a = '10'
         let predicate = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
             Operator::Eq,
-            Arc::new(Literal::new(ScalarValue::Decimal128(Some(10), 10, 10))),
+            Arc::new(Literal::new(ScalarValue::from("10"))),
         ));
         let filter = FilterExec::try_new(predicate, input)?;
         let statistics =
@@ -4920,6 +5433,261 @@ mod tests {
                 assert_eq!(column.null_count, Precision::Exact(0));
             }
         }
+    }
+
+    /// Output statistics of `a [NOT] IN (list)` on a single column `a` of the
+    /// list's type.
+    fn in_list_filter_statistics(
+        num_rows: Precision<usize>,
+        column: ColumnStatistics,
+        list: &[ScalarValue],
+        negated: bool,
+    ) -> Result<Arc<Statistics>> {
+        use datafusion_physical_expr::expressions::in_list;
+
+        let schema = Schema::new(vec![Field::new("a", list[0].data_type(), true)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows,
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![column],
+            },
+            schema.clone(),
+        ));
+        let list = list.iter().map(|value| lit(value.clone())).collect();
+        let predicate = in_list(col("a", &schema)?, list, &negated, &schema)?;
+        let filter = FilterExec::try_new(predicate, input)?;
+        StatisticsContext::new().compute(&filter, &StatisticsArgs::new())
+    }
+
+    fn int32_column(
+        min: i32,
+        max: i32,
+        null_count: Precision<usize>,
+    ) -> ColumnStatistics {
+        ColumnStatistics {
+            null_count,
+            min_value: Precision::Exact(ScalarValue::Int32(Some(min))),
+            max_value: Precision::Exact(ScalarValue::Int32(Some(max))),
+            ..Default::default()
+        }
+    }
+
+    fn int32_list(values: &[Option<i32>]) -> Vec<ScalarValue> {
+        values
+            .iter()
+            .map(|&value| ScalarValue::Int32(value))
+            .collect()
+    }
+
+    /// An integer column without a distinct count has the values from min to
+    /// max as its distinct values (#25621).
+    #[test]
+    fn test_filter_statistics_in_list_values() -> Result<()> {
+        for (list, in_rows, not_in_rows) in [
+            (vec![Some(2), Some(3)], 200, 800),
+            ((1..=10).map(Some).collect(), 1000, 0),
+            // A value outside min and max matches nothing.
+            (vec![Some(5), Some(50)], 100, 900),
+            // A repeated value counts once.
+            (vec![Some(2), Some(2), Some(3)], 200, 800),
+            // A NULL item matches nothing, and `NOT IN` with one is never TRUE.
+            (vec![Some(2), None], 100, 0),
+            (vec![None], 0, 0),
+        ] {
+            for (negated, expected_rows) in [(false, in_rows), (true, not_in_rows)] {
+                let statistics = in_list_filter_statistics(
+                    Precision::Exact(1000),
+                    int32_column(1, 10, Precision::Exact(0)),
+                    &int32_list(&list),
+                    negated,
+                )?;
+                assert_eq!(
+                    statistics.num_rows,
+                    Precision::Inexact(expected_rows),
+                    "list={list:?}, negated={negated}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_statistics_in_list_null_and_row_counts() -> Result<()> {
+        use Precision::{Absent, Exact, Inexact};
+
+        let list = int32_list(&[Some(1), Some(2)]);
+        for (rows, nulls, in_rows, not_in_rows) in [
+            // The estimate applies within the non-null rows.
+            (Exact(1000), Exact(200), Inexact(160), Inexact(640)),
+            // An unknown null count is taken as zero.
+            (Exact(1000), Absent, Inexact(200), Inexact(800)),
+        ] {
+            for (negated, expected_rows) in [(false, in_rows), (true, not_in_rows)] {
+                let statistics = in_list_filter_statistics(
+                    rows,
+                    int32_column(1, 10, nulls),
+                    &list,
+                    negated,
+                )?;
+                assert_eq!(
+                    statistics.num_rows, expected_rows,
+                    "rows={rows:?}, nulls={nulls:?}, negated={negated}"
+                );
+                assert_eq!(statistics.column_statistics[0].null_count, Exact(0));
+            }
+        }
+
+        // A range wider than the non-null rows holds no more distinct values
+        // than there are rows.
+        for (negated, expected_rows) in [(false, 2), (true, 98)] {
+            let statistics = in_list_filter_statistics(
+                Exact(100),
+                int32_column(1, 1000, Exact(0)),
+                &list,
+                negated,
+            )?;
+            assert_eq!(statistics.num_rows, Inexact(expected_rows));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_statistics_in_list_with_a_distinct_count() -> Result<()> {
+        let strings = ["a", "b", "c", "d"].map(ScalarValue::from);
+        let integers = int32_list(&[Some(5), Some(6)]);
+        for (column, list, in_rows, not_in_rows) in [
+            (
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    distinct_count: Precision::Inexact(50),
+                    ..Default::default()
+                },
+                &strings[..],
+                80,
+                920,
+            ),
+            // A typed NULL bound is unknown. It does not place every value
+            // outside the column's range.
+            (
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    distinct_count: Precision::Exact(10),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    max_value: Precision::Exact(ScalarValue::Int32(None)),
+                    ..Default::default()
+                },
+                &integers[..],
+                200,
+                800,
+            ),
+        ] {
+            for (negated, expected_rows) in [(false, in_rows), (true, not_in_rows)] {
+                let statistics = in_list_filter_statistics(
+                    Precision::Exact(1000),
+                    column.clone(),
+                    list,
+                    negated,
+                )?;
+                assert_eq!(
+                    statistics.num_rows,
+                    Precision::Inexact(expected_rows),
+                    "list={list:?}, negated={negated}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Without a distinct count, only integer and `Date32` columns count the
+    /// values from min to max. Other types keep the default selectivity.
+    #[test]
+    fn test_filter_statistics_in_list_by_type_without_a_distinct_count() -> Result<()> {
+        // The min 1, the max 10, and the list (2, 3, 4), in days.
+        for ([min, max, list @ ..], in_rows, not_in_rows) in [
+            (
+                [1, 10, 2, 3, 4].map(|day| ScalarValue::Date32(Some(day))),
+                300,
+                700,
+            ),
+            (
+                [1, 10, 2, 3, 4].map(|day| ScalarValue::Date64(Some(day * 86_400_000))),
+                200,
+                200,
+            ),
+        ] {
+            let column = ColumnStatistics {
+                null_count: Precision::Exact(0),
+                min_value: Precision::Exact(min),
+                max_value: Precision::Exact(max),
+                ..Default::default()
+            };
+            for (negated, expected_rows) in [(false, in_rows), (true, not_in_rows)] {
+                let statistics = in_list_filter_statistics(
+                    Precision::Exact(1000),
+                    column.clone(),
+                    &list,
+                    negated,
+                )?;
+                assert_eq!(
+                    statistics.num_rows,
+                    Precision::Inexact(expected_rows),
+                    "list={list:?}, negated={negated}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Only a predicate that is one `IN` list of literals gets an estimate.
+    #[test]
+    fn test_filter_statistics_in_list_keeps_the_default_otherwise() -> Result<()> {
+        use datafusion_physical_expr::expressions::in_list;
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let predicates = [
+            // A list item that is not a literal.
+            in_list(
+                Arc::clone(&a),
+                vec![lit(1i32), Arc::clone(&b)],
+                &false,
+                &schema,
+            )?,
+            // An `IN` list inside an AND.
+            binary(
+                in_list(Arc::clone(&a), vec![lit(1i32), lit(2i32)], &false, &schema)?,
+                Operator::And,
+                binary(b, Operator::Gt, lit(5i32), &schema)?,
+                &schema,
+            )?,
+        ];
+        for predicate in predicates {
+            let input = Arc::new(StatisticsExec::new(
+                Statistics {
+                    num_rows: Precision::Exact(1000),
+                    total_byte_size: Precision::Absent,
+                    column_statistics: vec![
+                        int32_column(1, 10, Precision::Exact(0)),
+                        int32_column(1, 10, Precision::Exact(0)),
+                    ],
+                },
+                schema.clone(),
+            ));
+            let filter = FilterExec::try_new(Arc::clone(&predicate), input)?;
+            let statistics =
+                StatisticsContext::new().compute(&filter, &StatisticsArgs::new())?;
+            assert_eq!(
+                statistics.num_rows,
+                Precision::Inexact(200),
+                "predicate={predicate}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

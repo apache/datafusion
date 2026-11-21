@@ -19,6 +19,7 @@ use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
 use datafusion_common::{Result, not_impl_err};
+use datafusion_expr_common::casts::is_lossless_decimal_cast;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -723,11 +724,18 @@ impl PhysicalExpr for CastExpr {
 /// Many-to-one casts, such as Float64 to Int32, cannot generally be inverted this way:
 /// an output of 0 does not imply an input of 0.0.
 /// Returns false for unrecognized conversions so the input range remains unchanged.
-fn can_propagate_cast_constraints(source: &DataType, target: &DataType) -> bool {
+pub(crate) fn can_propagate_cast_constraints(
+    source: &DataType,
+    target: &DataType,
+) -> bool {
     CastExpr::check_bigger_cast(target, source)
         || (source.is_integer() && target.is_integer())
         // NaN bounds are unbounded; finite Float32 values widen exactly.
         || (*source == Float32 && *target == Float64)
+        // An integer or decimal cast to a decimal that keeps every value.
+        // Casting bounds back to the source then rounds to a neighboring
+        // representable value, which never excludes a valid input.
+        || is_lossless_decimal_cast(source, target)
 }
 
 #[cfg(feature = "proto")]
@@ -949,6 +957,16 @@ mod tests {
             (Int32, Float64, true),
             (Float32, Float64, true),
             (Decimal128(4, 1), Decimal128(4, 1), true),
+            (Decimal128(4, 1), Decimal128(6, 2), true),
+            (Decimal128(15, 2), Decimal128(30, 15), true),
+            (Decimal32(9, 2), Decimal128(20, 4), true),
+            (Decimal128(6, 2), Decimal128(6, 3), false),
+            (Decimal128(6, 2), Decimal128(8, 1), false),
+            (Int32, Decimal128(11, 1), true),
+            (Int32, Decimal128(10, 1), false),
+            (Int64, Decimal128(19, 0), true),
+            (Int64, Decimal128(18, 0), false),
+            (UInt64, Decimal128(20, 0), true),
         ] {
             let schema = Schema::new(vec![Field::new("x", source.clone(), true)]);
             let expr = CastExpr::new(col("x", &schema)?, target.clone(), None);
@@ -965,6 +983,83 @@ mod tests {
                 Some(expected),
                 "{source} -> {target}"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal_widening_constraint_boundaries() -> Result<()> {
+        fn scalar(data_type: &DataType, value: i128) -> ScalarValue {
+            match data_type {
+                Int8 => ScalarValue::Int8(Some(value as i8)),
+                Int32 => ScalarValue::Int32(Some(value as i32)),
+                Int64 => ScalarValue::Int64(Some(value as i64)),
+                Decimal32(p, s) => ScalarValue::Decimal32(Some(value as i32), *p, *s),
+                Decimal64(p, s) => ScalarValue::Decimal64(Some(value as i64), *p, *s),
+                Decimal128(p, s) => ScalarValue::Decimal128(Some(value), *p, *s),
+                Decimal256(p, s) => {
+                    ScalarValue::Decimal256(Some(i256::from_i128(value)), *p, *s)
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        // (source, target, scale factor, extreme unscaled source value)
+        for (source, target, factor, extreme) in [
+            (Decimal128(3, 2), Decimal128(5, 3), 10, 999),
+            // Cross-width widening:
+            (Decimal32(4, 2), Decimal128(10, 4), 100, 9999),
+            (Decimal64(5, 1), Decimal256(10, 3), 100, 99999),
+            // Negative scale:
+            (Decimal128(3, -1), Decimal128(5, 0), 10, 999),
+            // Integer sources:
+            (Int8, Decimal128(5, 2), 100, i8::MAX as i128),
+            (Int32, Decimal128(11, 1), 10, i32::MAX as i128),
+            (Int64, Decimal128(21, 2), 100, i64::MAX as i128),
+        ] {
+            // Source values near zero and near the extremes of the precision:
+            let values: Vec<i128> = (-5..=5)
+                .chain(extreme - 5..=extreme)
+                .chain(-extreme..=-extreme + 5)
+                .collect();
+            // Output bounds at, between, and just past the widened values,
+            // including past the source's extremes, so casting back rounds in
+            // both directions and overflows:
+            let mut bounds: Vec<i128> = values
+                .iter()
+                .flat_map(|v| {
+                    let w = v * factor;
+                    [w - factor, w - 1, w, w + 1, w + factor / 2, w + factor]
+                })
+                .collect();
+            bounds.sort_unstable();
+            bounds.dedup();
+
+            let schema =
+                Arc::new(Schema::new(vec![Field::new("x", source.clone(), false)]));
+            let expr = CastExpr::new(col("x", &schema)?, target.clone(), None);
+            let input = Interval::make_unbounded(&source)?;
+            for (i, lower) in bounds.iter().enumerate() {
+                for upper in &bounds[i..] {
+                    let output = Interval::try_new(
+                        scalar(&target, *lower),
+                        scalar(&target, *upper),
+                    )?;
+                    let propagated =
+                        expr.propagate_constraints(&output, &[&input])?.unwrap();
+                    assert_eq!(propagated.len(), 1);
+                    for value in &values {
+                        if output.contains_value(scalar(&target, value * factor))? {
+                            assert!(
+                                propagated[0].contains_value(scalar(&source, *value))?,
+                                "{source} -> {target}: input={value}, output={output}, \
+                                 propagated={:?}",
+                                propagated[0]
+                            );
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }
