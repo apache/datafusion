@@ -5320,6 +5320,7 @@ _Alias of [string_to_array](#string_to_array)._
 - [named_struct](#named_struct)
 - [row](#row)
 - [struct](#struct)
+- [to_json](#to_json)
 
 ### `named_struct`
 
@@ -5414,6 +5415,29 @@ select struct(a as field_a, b) from t;
 #### Aliases
 
 - row
+
+### `to_json`
+
+Returns the JSON text of a value: a struct becomes an object keyed by its field names, a list an array, a map an object, and a scalar its JSON form. The text is what DataFusion's JSON writer (`COPY ... TO 'file.json'`) produces: NULL struct fields and NULL map entries are omitted, non-finite floats are `null`, binary is hexadecimal, and timestamps are written in RFC 3339 form. A NULL input returns NULL.
+
+```sql
+to_json(expression)
+```
+
+#### Arguments
+
+- **expression**: Value to serialize: a struct, list, map or scalar expression. Types without a JSON form, such as unions or maps with non-string keys, are rejected when the query is planned.
+
+#### Example
+
+```sql
+> select to_json(named_struct('a', 1, 'b', 'x', 'c', NULL)) as s, to_json([1, 2]) as l, to_json('text') as t;
++-----------------+-------+--------+
+| s               | l     | t      |
++-----------------+-------+--------+
+| {"a":1,"b":"x"} | [1,2] | "text" |
++-----------------+-------+--------+
+```
 
 ## Map Functions
 

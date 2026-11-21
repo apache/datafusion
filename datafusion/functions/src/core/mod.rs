@@ -28,6 +28,7 @@ pub mod nvl2;
 pub mod overlay;
 pub mod planner;
 pub mod r#struct;
+pub mod to_json;
 pub mod try_cast_to_type;
 pub mod union_extract;
 pub mod union_tag;
@@ -46,6 +47,7 @@ make_udf_function!(overlay::OverlayFunc, overlay);
 make_udf_function!(arrowtypeof::ArrowTypeOfFunc, arrow_typeof);
 make_udf_function!(r#struct::StructFunc, r#struct);
 make_udf_function!(named_struct::NamedStructFunc, named_struct);
+make_udf_function!(to_json::ToJsonFunc, to_json);
 make_udf_function!(getfield::GetFieldFunc, get_field);
 make_udf_function!(coalesce::CoalesceFunc, coalesce);
 make_udf_function!(greatest::GreatestFunc, greatest);
@@ -124,6 +126,10 @@ pub mod expr_fn {
         "Returns a struct with the given names and arguments pairs",
         args,
     ),(
+        to_json,
+        "Returns the JSON text of a struct, list, map or scalar value",
+        arg1
+    ),(
         coalesce,
         "Returns `coalesce(args...)`, which evaluates to the value of the first expr which is not NULL",
         args,
@@ -180,6 +186,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         overlay(),
         arrow_typeof(),
         named_struct(),
+        to_json(),
         // Note: most users invoke `get_field` indirectly via field access
         // syntax like `my_struct_col['field_name']`, which results in a call to
         // `get_field(my_struct_col, "field_name")`.
