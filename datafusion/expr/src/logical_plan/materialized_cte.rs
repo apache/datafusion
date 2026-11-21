@@ -82,13 +82,13 @@ pub enum MaterializedCtePlan {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MaterializedCte {
     /// Binds the scans in `continuation` to this node
-    pub id: MaterializedCteId,
+    pub(crate) id: MaterializedCteId,
     /// Name of the CTE, used for display and error messages only
-    pub name: String,
+    pub(crate) name: String,
     /// The body of the CTE
-    pub cte: Arc<LogicalPlan>,
+    pub(crate) cte: Arc<LogicalPlan>,
     /// The query that declared the CTE and reads it
-    pub continuation: Arc<LogicalPlan>,
+    pub(crate) continuation: Arc<LogicalPlan>,
 }
 
 impl MaterializedCte {
@@ -149,6 +149,18 @@ impl MaterializedCte {
     /// expressions. See [`MaterializedCteScan::find_in`].
     pub fn scans(&self) -> Result<Vec<MaterializedCteScan>> {
         MaterializedCteScan::find_in(&self.continuation, self.id)
+    }
+
+    /// The body and the continuation, in this order, for a rule that changes
+    /// them in place. The schemas of the scans are not checked again.
+    pub fn inputs_mut(&mut self) -> (&mut Arc<LogicalPlan>, &mut Arc<LogicalPlan>) {
+        (&mut self.cte, &mut self.continuation)
+    }
+
+    /// The body and the continuation, in this order. Build a node again with
+    /// [`Self::try_new`].
+    pub fn into_inputs(self) -> (Arc<LogicalPlan>, Arc<LogicalPlan>) {
+        (self.cte, self.continuation)
     }
 
     /// Return a node with the same id and name, and new inputs. The schemas

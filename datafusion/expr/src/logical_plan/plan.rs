@@ -530,11 +530,9 @@ impl LogicalPlan {
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
-            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
-                cte,
-                continuation,
-                ..
-            })) => vec![cte, continuation],
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+                vec![cte.body(), cte.continuation()]
+            }
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => vec![],
             LogicalPlan::Union(Union { inputs, .. }) => {
                 inputs.iter().map(|arc| arc.as_ref()).collect()
@@ -673,7 +671,7 @@ impl LogicalPlan {
             }
             // A materialized CTE outputs the output of its continuation.
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
-                cte.continuation.head_output_expr()
+                cte.continuation().head_output_expr()
             }
             LogicalPlan::Extension(_)
             | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => Ok(None),
