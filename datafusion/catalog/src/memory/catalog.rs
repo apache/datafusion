@@ -90,12 +90,12 @@ impl Default for MemoryCatalogProvider {
 }
 
 impl CatalogProvider for MemoryCatalogProvider {
-    fn schema_names(&self) -> Vec<String> {
-        self.schemas.iter().map(|s| s.key().clone()).collect()
+    fn schema_names(&self) -> Result<Vec<String>> {
+        Ok(self.schemas.iter().map(|s| s.key().clone()).collect())
     }
 
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        self.schemas.get(name).map(|s| Arc::clone(s.value()))
+    fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        Ok(self.schemas.get(name).map(|s| Arc::clone(s.value())))
     }
 
     fn register_schema(
@@ -111,11 +111,14 @@ impl CatalogProvider for MemoryCatalogProvider {
         name: &str,
         cascade: bool,
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
-        if let Some(schema) = self.schema(name) {
-            let table_names = schema.table_names();
+        if let Some(schema) = self.schema(name)? {
+            let table_names = schema.table_names()?;
             match (table_names.is_empty(), cascade) {
                 (true, _) | (false, true) => {
-                    let (_, removed) = self.schemas.remove(name).unwrap();
+                    let (_, removed) = self
+                        .schemas
+                        .remove(name)
+                        .expect("schema should exist after successful lookup");
                     Ok(Some(removed))
                 }
                 (false, false) => exec_err!(
@@ -133,7 +136,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         if !cascade && !self.schemas.is_empty() {
             return exec_err!(
                 "Cannot drop catalog containing schemas: {}",
-                itertools::join(self.schema_names().iter(), ", ")
+                itertools::join(self.schema_names()?.iter(), ", ")
             );
         }
 
