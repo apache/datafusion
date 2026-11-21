@@ -103,21 +103,87 @@ fn supports_collect_by_thresholds(
     threshold_num_rows: usize,
     context: &dyn PhysicalOptimizerContext,
 ) -> bool {
-    let Ok(stats) = get_stats(plan, context) else {
-        return false;
-    };
+    let stats = get_stats(plan, context).ok();
 
     // Stats use `Precision<T>` to represent stats, where `Absent` means unknown.
     // `Exact(0)` and `Inexact(0)` are both valid stats, and we should not treat
     // them as unknown, `Absent` will return None (this is in regards to why
     // `!=0` is not checked)
-    if let Some(byte_size) = stats.total_byte_size.get_value() {
-        *byte_size < threshold_byte_size
-    } else if let Some(num_rows) = stats.num_rows.get_value() {
-        *num_rows < threshold_num_rows
-    } else {
-        false
+    let fits = stats.is_some_and(|stats| {
+        if let Some(byte_size) = stats.total_byte_size.get_value() {
+            *byte_size < threshold_byte_size
+        } else {
+            stats
+                .num_rows
+                .get_value()
+                .is_some_and(|&rows| rows < threshold_num_rows)
+        }
+    });
+    fits || bounded_inner_lookup(plan, threshold_byte_size, threshold_num_rows, context)
+}
+
+/// A unique-key inner lookup produces at most one result per row on
+/// the opposite side. Its own output statistics may be missing or may
+/// estimate a many-to-many join. Use the input estimate as a second way
+/// to satisfy the configured broadcast limits for fixed-width payloads.
+fn bounded_inner_lookup(
+    plan: &Arc<dyn ExecutionPlan>,
+    threshold_bytes: usize,
+    threshold_rows: usize,
+    context: &dyn PhysicalOptimizerContext,
+) -> bool {
+    use datafusion_common::{Constraint, NullEquality};
+
+    let Some(join) = plan.downcast_ref::<HashJoinExec>() else {
+        return false;
+    };
+    let [(left_key, right_key)] = join.on() else {
+        return false;
+    };
+    if join.join_type() != &JoinType::Inner
+        || join.null_equality() != NullEquality::NullEqualsNothing
+    {
+        return false;
     }
+    // Allow one validity bit per column (rounded up) and space for a hash
+    // entry per row. A variable-width field has no bound from its type.
+    let schema = plan.schema();
+    let Some(row_bytes) = schema
+        .fields()
+        .iter()
+        .try_fold(24 + schema.fields().len().div_ceil(8), |width, field| {
+            width.checked_add(field.data_type().primitive_width()?)
+        })
+    else {
+        return false;
+    };
+    [
+        (join.left(), left_key, join.right()),
+        (join.right(), right_key, join.left()),
+    ]
+    .into_iter()
+    .any(|(dimension, key, fact)| {
+        let Some(column) = key.downcast_ref::<Column>() else {
+            return false;
+        };
+        let unique =
+            dimension
+                .equivalence_properties()
+                .constraints()
+                .iter()
+                .any(|constraint| {
+                    let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) =
+                        constraint;
+                    indices.as_slice() == [column.index()]
+                });
+        unique
+            && get_stats(fact, context).is_ok_and(|stats| {
+                stats.num_rows.get_value().is_some_and(|&rows| {
+                    rows < threshold_rows
+                        && rows.saturating_mul(row_bytes) < threshold_bytes
+                })
+            })
+    })
 }
 
 impl PhysicalOptimizerRule for JoinSelection {

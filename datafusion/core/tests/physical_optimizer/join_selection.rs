@@ -132,6 +132,83 @@ fn create_big_and_small() -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
     (big, small)
 }
 
+struct ContextWithRegistry {
+    config: ConfigOptions,
+    registry: StatisticsRegistry,
+}
+
+impl PhysicalOptimizerContext for ContextWithRegistry {
+    fn config_options(&self) -> &ConfigOptions {
+        &self.config
+    }
+
+    fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+        Some(&self.registry)
+    }
+}
+
+#[test]
+fn unique_lookup_bounds_broadcast_build() -> Result<()> {
+    use datafusion_common::{Constraint, Constraints};
+    for (unique, expected) in [
+        (true, PartitionMode::CollectLeft),
+        (false, PartitionMode::Partitioned),
+    ] {
+        let mut dim = StatisticsExec::new(
+            big_statistics(),
+            Schema::new(vec![Field::new("dim", DataType::Int32, false)]),
+        );
+        if unique {
+            dim.cache = Arc::new(dim.cache.as_ref().clone().with_constraints(
+                Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]),
+            ));
+        }
+        let (probe, fact) = create_big_and_small();
+        let key = |name| Arc::new(Column::new(name, 0)) as PhysicalExprRef;
+        let lookup = HashJoinExec::try_new(
+            Arc::new(dim),
+            fact,
+            vec![(key("dim"), key("small_col"))],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        let outer = HashJoinExec::try_new(
+            Arc::new(lookup),
+            probe,
+            vec![(key("dim"), key("big_col"))],
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        let mut config = ConfigOptions::new();
+        config.optimizer.join_reordering = false;
+        // Simulate an intermediate join for which the provider reports a
+        // pessimistic many-to-many estimate.
+        let mut registry = StatisticsRegistry::new();
+        registry.register(Arc::new(ClosureStatisticsProvider::with_matches(
+            |plan| plan.downcast_ref::<HashJoinExec>().is_some(),
+            |_plan, _| Ok(StatisticsResult::Computed(big_statistics().into())),
+        )));
+        let context = ContextWithRegistry { config, registry };
+        let plan =
+            JoinSelection::new().optimize_with_context(Arc::new(outer), &context)?;
+        assert_eq!(
+            plan.downcast_ref::<HashJoinExec>()
+                .unwrap()
+                .partition_mode(),
+            &expected
+        );
+    }
+    Ok(())
+}
+
 /// Create a column statistics vector for a single column
 /// that has the given min/max/distinct_count properties.
 ///
@@ -663,21 +740,6 @@ async fn test_join_swap_uses_context_statistics_registry() -> Result<()> {
         |plan| plan.schema().field(0).name() == "right_col",
         |_plan, _child_stats| Ok(StatisticsResult::Computed(small_statistics().into())),
     )));
-
-    struct ContextWithRegistry {
-        config: ConfigOptions,
-        registry: StatisticsRegistry,
-    }
-
-    impl PhysicalOptimizerContext for ContextWithRegistry {
-        fn config_options(&self) -> &ConfigOptions {
-            &self.config
-        }
-
-        fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
-            Some(&self.registry)
-        }
-    }
 
     let context = ContextWithRegistry {
         config: ConfigOptions::new(),
