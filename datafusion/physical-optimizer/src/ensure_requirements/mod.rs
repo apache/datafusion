@@ -150,7 +150,13 @@ use enforce_distribution::{replace_interleave_with_union, resolve_auto_join_mode
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_physical_expr::Distribution;
+use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::ExecutionPlanProperties;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+
+use crate::output_requirements::OutputRequirementExec;
 
 /// Optimizer rule that enforces both distribution and sorting requirements.
 ///
@@ -273,6 +279,7 @@ impl PhysicalOptimizerRule for EnsureRequirements {
             .plan
             .transform_up(|p| Ok(Transformed::yes(replace_with_partial_sort(p)?)))
             .data()
+            .map(|plan| ensure_global_output_ordering(plan))
     }
 
     fn name(&self) -> &str {
@@ -282,6 +289,81 @@ impl PhysicalOptimizerRule for EnsureRequirements {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// The distribution that accompanies the query's global ordering requirement,
+/// if the plan carries one.
+///
+/// [`OutputRequirements`] (add mode) wraps the operator that establishes the
+/// query's global ordering — usually the `SortExec` of an `ORDER BY` — in an
+/// [`OutputRequirementExec`] carrying that ordering and the distribution that
+/// operator requires. A wrapper without an ordering requirement is a marker
+/// for queries that do not require a global ordering, and a plain
+/// `SortExec`/`SortPreservingMergeExec` below order-preserving operators (for
+/// example in a user-built plan that never went through the add-mode rule) is
+/// not a global requirement either.
+fn global_ordering_requirement(plan: &Arc<dyn ExecutionPlan>) -> Option<Distribution> {
+    if let Some(requirement) = plan.downcast_ref::<OutputRequirementExec>() {
+        let ordering = requirement.required_input_ordering();
+        if ordering[0].as_ref().is_some_and(|ordering| match ordering {
+            OrderingRequirements::Hard(requirements)
+            | OrderingRequirements::Soft(requirements) => !requirements.is_empty(),
+        }) {
+            return Some(
+                requirement
+                    .input_distribution_requirements()
+                    .into_per_child()
+                    .swap_remove(0),
+            );
+        }
+    }
+    plan.children()
+        .iter()
+        .find_map(|child| global_ordering_requirement(child))
+}
+
+/// Restores the global ordering at the plan root when the query carries a
+/// global ordering requirement (see [`global_ordering_requirement`]).
+///
+/// Operators above the operator that establishes the query's ordering
+/// preserve it *within each partition* — that is also all
+/// `required_input_ordering` asks for. Distribution enforcement may however
+/// insert a partition-count-increasing exchange between that operator and the
+/// plan root, for example a round-robin `RepartitionExec` above an ordered
+/// limit to parallelise a computed projection. The root then has several
+/// output partitions that are each sorted, but whose concatenation is not,
+/// and since nothing above re-merges them the query returns rows out of
+/// order (https://github.com/apache/datafusion/issues/27550).
+///
+/// When the optimized plan ends up in that state, merge its ordered
+/// partitions with a [`SortPreservingMergeExec`] so the root again produces
+/// the rows in global order.
+///
+/// This leaves plans alone whose global ordering requirement also requires a
+/// partitioned output (a stage fragment of a distributed engine, for
+/// example): their consumers consume partition by partition, and the
+/// requirement explicitly asks to keep the output partitioned. Queries
+/// without a global ordering requirement, and plans whose root already has a
+/// single output partition, are unchanged as well.
+#[expect(
+    deprecated,
+    reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+)]
+fn ensure_global_output_ordering(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+    let Some(distribution) = global_ordering_requirement(&plan) else {
+        return plan;
+    };
+    if matches!(
+        distribution,
+        Distribution::KeyPartitioned(_) | Distribution::HashPartitioned(_)
+    ) || plan.output_partitioning().partition_count() <= 1
+    {
+        return plan;
+    }
+    let Some(ordering) = plan.output_ordering().cloned() else {
+        return plan;
+    };
+    Arc::new(SortPreservingMergeExec::new(ordering, plan))
 }
 
 // See tests in datafusion/core/tests/physical_optimizer/ensure_requirements.rs
