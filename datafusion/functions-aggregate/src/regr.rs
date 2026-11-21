@@ -759,12 +759,16 @@ impl Accumulator for RegrAccumulator {
             }
             RegrType::Count => Ok(ScalarValue::UInt64(Some(self.count))),
             RegrType::R2 => {
-                // Only 0/1 point or all x(or y) is the same
-                let nullif_cond = self.count <= 1 || var_pop_x == 0.0 || var_pop_y == 0.0;
-                nullif_or_stat(
-                    nullif_cond,
-                    (cov_pop_x_y * cov_pop_x_y) / (var_pop_x * var_pop_y),
-                )
+                // Only 0/1 point or all x is the same (a vertical line)
+                let nullif_cond = self.count <= 1 || var_pop_x == 0.0;
+                // All y is the same: the horizontal line fits every point, so
+                // R2 is 1, as in the SQL standard and PostgreSQL
+                let r2 = if var_pop_y == 0.0 {
+                    1.0
+                } else {
+                    (cov_pop_x_y * cov_pop_x_y) / (var_pop_x * var_pop_y)
+                };
+                nullif_or_stat(nullif_cond, r2)
             }
             RegrType::AvgX => nullif_or_stat(self.count < 1, self.mean_x),
             RegrType::AvgY => nullif_or_stat(self.count < 1, self.mean_y),
