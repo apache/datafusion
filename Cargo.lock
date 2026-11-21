@@ -2435,6 +2435,7 @@ dependencies = [
  "bytes",
  "datafusion",
  "datafusion-common",
+ "datafusion-datasource",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-physical-plan",

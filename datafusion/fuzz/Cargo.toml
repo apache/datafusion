@@ -23,6 +23,7 @@ arrow = { workspace = true }
 bytes = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-datasource = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
