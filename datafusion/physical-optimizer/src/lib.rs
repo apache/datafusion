@@ -41,3 +41,5 @@ pub mod utils;
 pub mod window_topn;
 
 pub use optimizer::{ConfigOnlyContext, PhysicalOptimizerContext, PhysicalOptimizerRule};
+
+mod join_key_bounds;
