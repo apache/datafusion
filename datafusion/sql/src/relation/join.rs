@@ -159,6 +159,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .asof_join_on(right, None, match_condition)?
                 .build(),
             JoinConstraint::Natural => plan_err!("NATURAL ASOF JOIN is not supported"),
+            JoinConstraint::UsingAlias(_, _) => {
+                not_impl_err!("USING (...) AS alias is not supported")
+            }
         }
     }
 
@@ -217,6 +220,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 LogicalPlanBuilder::from(left)
                     .join_using(right, join_type, keys)?
                     .build()
+            }
+            JoinConstraint::UsingAlias(_, _) => {
+                not_impl_err!("USING (...) AS alias is not supported")
             }
             JoinConstraint::Natural => {
                 let left_cols: HashSet<&String> =

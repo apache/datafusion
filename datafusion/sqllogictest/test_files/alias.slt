@@ -110,3 +110,35 @@ from (select "B.C" from t) as t_("x.y");
 
 statement ok
 drop table t;
+
+statement ok
+CREATE TABLE "only" AS SELECT 100 AS id;
+
+statement ok
+CREATE TABLE t AS SELECT 200 AS id;
+
+query I
+SELECT t.id FROM only t;
+----
+100
+
+query I
+SELECT * FROM only;
+----
+100
+
+query I
+SELECT t.id FROM only AS t;
+----
+100
+
+query I
+SELECT * FROM public.only;
+----
+100
+
+statement ok
+DROP TABLE "only";
+
+statement ok
+DROP TABLE t;

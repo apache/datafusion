@@ -590,7 +590,7 @@ pub struct TableRelationBuilder {
     with_hints: Vec<ast::Expr>,
     version: Option<ast::TableVersion>,
     partitions: Vec<ast::Ident>,
-    index_hints: Vec<ast::TableIndexHints>,
+    index_directives: Vec<ast::TableIndexDirective>,
 }
 
 impl TableRelationBuilder {
@@ -618,8 +618,11 @@ impl TableRelationBuilder {
         self.partitions = value;
         self
     }
-    pub fn index_hints(&mut self, value: Vec<ast::TableIndexHints>) -> &mut Self {
-        self.index_hints = value;
+    pub fn index_directives(
+        &mut self,
+        value: Vec<ast::TableIndexDirective>,
+    ) -> &mut Self {
+        self.index_directives = value;
         self
     }
     pub fn build(&self) -> Result<ast::TableFactor, BuilderError> {
@@ -639,7 +642,8 @@ impl TableRelationBuilder {
             with_ordinality: false,
             json_path: None,
             sample: None,
-            index_hints: self.index_hints.clone(),
+            index_directives: self.index_directives.clone(),
+            inheritance: None,
         })
     }
     fn create_empty() -> Self {
@@ -650,7 +654,7 @@ impl TableRelationBuilder {
             with_hints: Default::default(),
             version: Default::default(),
             partitions: Default::default(),
-            index_hints: Default::default(),
+            index_directives: Default::default(),
         }
     }
 }
