@@ -222,6 +222,15 @@ fn repeat(string_array: &ArrayRef, count_array: &ArrayRef) -> Result<ArrayRef> {
             let string_arr = string_array.as_string::<i32>();
             let (total_capacity, max_item_capacity) =
                 calculate_capacities(&string_arr, number_array, i32::MAX as usize)?;
+            // The builder allocates the whole output up front, so the cap must
+            // also bound the total, not only each row.
+            if total_capacity > i32::MAX as usize {
+                return exec_err!(
+                    "string size overflow on repeat, max size is {}, but got {}",
+                    i32::MAX,
+                    total_capacity
+                );
+            }
             let builder = GenericStringArrayBuilder::<i32>::with_capacity(
                 string_array.len(),
                 total_capacity,
@@ -566,6 +575,51 @@ mod tests {
                 "Execution error: string size overflow on repeat, max size is {}, but got {}",
                 u32::MAX,
                 n * u32::MAX as usize
+            )
+        );
+    }
+
+    #[test]
+    fn test_repeat_string_array_total_exceeds_max_size() {
+        // Each row is at the cap, but the total is larger than any allocation
+        // can satisfy, so a missing total check fails at once.
+        let n = 1 << 17;
+        let strings: ArrayRef = Arc::new(StringArray::from(vec![Some("a"); n]));
+        let counts: ArrayRef = Arc::new(Int64Array::from(vec![Some(i32::MAX as i64); n]));
+
+        let err = super::repeat(&strings, &counts)
+            .unwrap_err()
+            .strip_backtrace();
+        assert_eq!(
+            err,
+            format!(
+                "Execution error: string size overflow on repeat, max size is {}, but got {}",
+                i32::MAX,
+                n * i32::MAX as usize
+            )
+        );
+    }
+
+    #[test]
+    fn test_repeat_string_array_total_overflow_small_batch() {
+        // Two rows of ~1 GiB each: each row fits in Utf8 (<= i32::MAX), but their
+        // combined output exceeds i32::MAX by one byte, which cannot be represented
+        // in an Arrow Utf8 array.
+        let strings: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), Some("a")]));
+        let counts: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(1_i64 << 30),
+            Some((1_i64 << 30) + 1),
+        ]));
+
+        let err = super::repeat(&strings, &counts)
+            .unwrap_err()
+            .strip_backtrace();
+        assert_eq!(
+            err,
+            format!(
+                "Execution error: string size overflow on repeat, max size is {}, but got {}",
+                i32::MAX,
+                (1usize << 30) + (1usize << 30) + 1
             )
         );
     }
