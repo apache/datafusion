@@ -93,6 +93,7 @@ lateral_join.slt
 limit.slt
 map.slt
 math.slt
+metadata.slt
 min_max/fixed_size_list.slt
 negative_zero.slt
 nested_loop_join_existence.slt
@@ -160,4 +161,5 @@ volatile_evaluations.slt
 window.slt
 window_ignore_nulls_matrix.slt
 window_limits.slt
+window_ordering.slt
 window_topn.slt
