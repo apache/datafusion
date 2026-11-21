@@ -72,11 +72,17 @@ SELECT regexp_instr('12 abc def ghi 34 abc def ghi 56', '(abc) (def) (ghi)', 1, 
 ----
 0
 
-statement error DataFusion error: Execution error: regexp_instr\(\) requires start to be 1-based
+statement error
 SELECT regexp_instr('123123123123', '123', 0);
+----
+DataFusion error: Execution error: regexp_instr() requires start to be 1-based
 
-statement error DataFusion error: Execution error: regexp_instr\(\) requires start to be 1-based
+
+statement error
 SELECT regexp_instr('123123123123', '123', -3);
+----
+DataFusion error: Execution error: regexp_instr() requires start to be 1-based
+
 
 statement error DataFusion error: Execution error: N must be 1 or greater
 SELECT regexp_instr('abcabcabc', 'abc', 1, 0);
@@ -258,8 +264,11 @@ SELECT regexp_instr('abc', 'a(b');
 query error DataFusion error: Execution error: Regular expression did not compile: regex parse error:
 SELECT regexp_instr('abc', 'a', 1, 1, 'z');
 
-query error DataFusion error: Error during planning: regexp_instr\(\) does not support the "global" option
+query error
 SELECT regexp_instr('abc', 'a', 1, 1, 'g');
+----
+DataFusion error: Error during planning: regexp_instr() does not support the "global" option
+
 
 # A pattern that varies per row is reported in the same way.
 statement ok
