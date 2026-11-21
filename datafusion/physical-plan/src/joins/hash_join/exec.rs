@@ -21,12 +21,14 @@ use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::batched_join_processor::{
     BatchedJoinProcessorConfig, RegularJoinKind,
 };
+use crate::joins::hash_join::bloom_filter;
 use crate::joins::hash_join::build::{HashJoinBuild, RegularJoinLeftData};
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::not_in::{NotIn, NotInBuild};
 use crate::joins::hash_join::regular_join::RegularHashJoinStream;
 use crate::joins::hash_join::shared_bounds::{
-    ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
+    ColumnBounds, GlobalFilterOptions, PartitionBounds, PushdownStrategy,
+    SharedBuildAccumulator,
 };
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
@@ -45,7 +47,6 @@ use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join_with_column_indices,
 };
-use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::statistics::{ChildStats, StatisticsArgs, with_per_partition_fetch};
 use crate::{
     ChildrenPropertiesMode, ExecutionPlanProperties, ReplaceChildrenOptions,
@@ -63,9 +64,10 @@ use crate::{
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
+use parquet::bloom_filter::Sbbf;
 
 use arrow::array::{Array, ArrayData, ArrayRef, BooleanBufferBuilder};
-use arrow::compute::concat_batches;
+use arrow::compute::{concat_batches, take};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
@@ -264,6 +266,9 @@ pub(super) struct JoinBuildData {
     /// Used for pre-filter probing, similar to [`Self::bounds`], but in different
     /// representations: IN-list values or a hash-table reference.
     pub(super) membership: PushdownStrategy,
+    /// Bloom filter of the build keys, for the global dynamic filter. `None`
+    /// when no bloom filter is possible for this build.
+    pub(super) bloom_filter: Option<Arc<Sbbf>>,
     // Keep the reservation after the allocations it accounts for.
     reservation: MemoryReservation,
 }
@@ -363,6 +368,11 @@ impl JoinLeftData {
     /// returns a reference to the InList values for filter pushdown
     pub(super) fn membership(&self) -> &PushdownStrategy {
         &self.build.membership
+    }
+
+    /// Bloom filter of the build keys, for the dynamic filter.
+    pub(super) fn bloom_filter(&self) -> Option<&Arc<Sbbf>> {
+        self.build.bloom_filter.as_ref()
     }
 
     /// Borrow bounds without sharing a consuming join's dynamic-filter state.
@@ -1154,55 +1164,10 @@ impl HashJoinExec {
             return false;
         }
 
-        // Under `preserve_file_partitions`, file groups can report Hash without following
-        // the dynamic filter hash router and look like a real hash repartition, so reject
-        // Hash. Range inputs with matching split points are safe.
-        // Follow-up work: enable dynamic filtering for preserve_file_partitioned scans (issue #20195).
-        // https://github.com/apache/datafusion/issues/20195
-        if config.optimizer.preserve_file_partitions > 0
-            && self.mode == PartitionMode::Partitioned
-            && matches!(
-                (
-                    self.left.output_partitioning(),
-                    self.right.output_partitioning()
-                ),
-                (Partitioning::Hash(_, _), Partitioning::Hash(_, _))
-            )
-        {
-            return false;
-        }
-
-        if self.mode == PartitionMode::Partitioned
-            && !self.has_partitioned_dynamic_filter_routing()
-        {
-            return false;
-        }
-
+        // The partitioning of the inputs does not matter. The filter holds the
+        // keys of all build partitions, so it passes every probe row that any
+        // build partition can match.
         true
-    }
-
-    fn has_partitioned_dynamic_filter_routing(&self) -> bool {
-        match (
-            self.left.output_partitioning(),
-            self.right.output_partitioning(),
-        ) {
-            (
-                Partitioning::Hash(_, left_partition_count),
-                Partitioning::Hash(_, right_partition_count),
-            ) => left_partition_count == right_partition_count,
-            (Partitioning::Range(_), Partitioning::Range(_)) => {
-                let children = [self.left.as_ref(), self.right.as_ref()];
-                matches!(
-                    self.input_distribution_requirements()
-                        .unsatisfied_co_partitioned_children(self.name(), &children),
-                    Ok(unsatisfied) if unsatisfied.is_empty()
-                )
-            }
-            (left_partitioning, right_partitioning) => {
-                left_partitioning.partition_count() == 1
-                    && right_partitioning.partition_count() == 1
-            }
-        }
     }
 
     /// left (build) side which gets hashed
@@ -1776,8 +1741,6 @@ impl ExecutionPlan for HashJoinExec {
             .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
 
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
-        // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
-        let repartition_random_state = REPARTITION_RANDOM_STATE;
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
@@ -1794,10 +1757,10 @@ impl ExecutionPlan for HashJoinExec {
                             self.right.as_ref(),
                             filter,
                             on_right,
-                            repartition_random_state,
                             self.null_equality,
                             not_in,
-                            &context.session_config().options().optimizer,
+                            GlobalFilterOptions::new(context.session_config().options())
+                                .with_memory_pool(Arc::clone(context.memory_pool())),
                         ))
                     })))
                 })
@@ -1821,6 +1784,10 @@ impl ExecutionPlan for HashJoinExec {
 
         // Both paths share collection, then create their own left-side data inside
         // the once-only future before sibling probes can access it.
+        let num_build_partitions = match self.mode {
+            PartitionMode::CollectLeft => 1,
+            _ => self.left.output_partitioning().partition_count(),
+        };
         let collect = |build_partition, probe_partitions| {
             let left_stream = self.left.execute(build_partition, Arc::clone(&context))?;
             let name = match self.mode {
@@ -1842,6 +1809,7 @@ impl ExecutionPlan for HashJoinExec {
                 not_in,
                 array_map_created_count.clone(),
                 BuildMode::Ordinary,
+                num_build_partitions,
             ))
         };
 
@@ -3239,6 +3207,7 @@ async fn collect_left_input(
     not_in: Option<NotIn>,
     array_map_created_count: Count,
     mode: BuildMode,
+    num_build_partitions: usize,
 ) -> Result<CollectedBuild> {
     let schema = left_stream.schema();
     let prepared = mode == BuildMode::Prepared;
@@ -3332,6 +3301,7 @@ async fn collect_left_input(
         not_in,
         &array_map_created_count,
         prepared,
+        num_build_partitions,
     )
 }
 
@@ -3363,6 +3333,7 @@ fn build_in_memory(
     not_in: Option<NotIn>,
     array_map_created_count: &Count,
     prepared: bool,
+    num_build_partitions: usize,
 ) -> Result<CollectedBuild> {
     let is_phj_candidate = is_perfect_hash_join_candidate(on_left, schema)?;
 
@@ -3509,7 +3480,6 @@ fn build_in_memory(
         PushdownStrategy::Empty
     } else {
         // If the build side is small enough we can use IN list pushdown.
-        // If it's too big we fall back to pushing down a reference to the hash table.
         // See `PushdownStrategy` for more details.
         let estimated_size = left_values
             .iter()
@@ -3553,13 +3523,58 @@ fn build_in_memory(
                 }
                 ok
             });
-            PushdownStrategy::Map(Arc::clone(&map), pruning_bitmap)
+            PushdownStrategy::Large(pruning_bitmap)
         }
     };
 
     if is_phj_candidate && !should_compute_dynamic_filters {
         bounds = None;
     }
+
+    // Fill the bloom filter of this partition's keys here, in its build task,
+    // so the finalizing task only ORs the partition filters. Partitions hold
+    // disjoint keys of similar counts, so the filter is sized for the keys of
+    // all partitions estimated from this one.
+    let bloom_filter = if !should_compute_dynamic_filters
+        || matches!(membership, PushdownStrategy::Empty)
+        || left_values.is_empty()
+    {
+        None
+    } else {
+        let num_distinct = map
+            .num_of_distinct_key()
+            .saturating_mul(num_build_partitions);
+        let options = GlobalFilterOptions::new(config).bloom_filter;
+        // Insert one hash per distinct key, not one per build row.
+        let filter = match &**map {
+            // The map hashes the keys with `random_state`, which is
+            // `HASH_JOIN_SEED`, the seed the filter is probed with. Keys whose
+            // hashes collide share an entry, and also share their filter bits.
+            Map::HashMap(hash_map) => bloom_filter::partition_filter_from_hashes(
+                |f| hash_map.for_each_entry_hash(f),
+                num_distinct,
+                options,
+                &reservation,
+            ),
+            Map::ArrayMap(array_map) => {
+                let rows = array_map.distinct_rows();
+                let keys = left_values
+                    .iter()
+                    .map(|values| take(values.as_ref(), &rows, None))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                bloom_filter::partition_filter(
+                    &keys,
+                    num_distinct,
+                    options,
+                    &reservation,
+                )?
+            }
+        };
+        if let Some(filter) = &filter {
+            metrics.build_mem_used.add(filter.num_blocks() * 32);
+        }
+        filter.map(Arc::new)
+    };
 
     if prepared {
         batches.clear();
@@ -3581,6 +3596,7 @@ fn build_in_memory(
             values: normalized_values,
             bounds,
             membership,
+            bloom_filter,
             reservation,
         }),
         not_in,
@@ -3812,16 +3828,45 @@ mod tests {
         Ok(())
     }
 
-    /// The dynamic filter shares the build map and can outlive the join's
-    /// stream and plan, so the map stays reserved until the last holder drops
-    /// it, not only until the partition's stream ends.
+    /// Bytes of the bloom filters in `expr`.
+    fn bloom_filter_bytes(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
+        let mut bytes = 0;
+        expr.apply(|e| {
+            if let Some(bloom) = e.downcast_ref::<bloom_filter::BloomFilterExpr>() {
+                bytes += bloom.filter_bytes();
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(bytes)
+    }
+
+    /// The dynamic filter can outlive the join's streams and plan. It holds
+    /// its own bloom filter, not the build map, so after the plan is dropped
+    /// the pool holds only the bloom filter, until the filter is dropped.
     #[rstest]
+    #[case::collect_left(PartitionMode::CollectLeft, 1)]
+    #[case::partitioned(PartitionMode::Partitioned, 1)]
+    #[case::two_hash_partitions(PartitionMode::Partitioned, 2)]
     #[tokio::test]
-    async fn build_map_stays_reserved_with_dynamic_filter(
-        #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
-        mode: PartitionMode,
+    async fn dynamic_filter_reserves_only_its_bloom_filter(
+        #[case] mode: PartitionMode,
+        #[case] partitions: usize,
     ) -> Result<()> {
-        let SparseKeyJoinInputs { build, probe, on } = sparse_key_join_inputs()?;
+        let SparseKeyJoinInputs {
+            mut build,
+            mut probe,
+            on,
+        } = sparse_key_join_inputs()?;
+        if partitions > 1 {
+            let repartition = |input, key: &PhysicalExprRef| {
+                let partitioning = Partitioning::Hash(vec![Arc::clone(key)], partitions);
+                Ok::<_, datafusion_common::DataFusionError>(Arc::new(
+                    RepartitionExec::try_new(input, partitioning)?,
+                ) as _)
+            };
+            build = repartition(build, &on[0].0)?;
+            probe = repartition(probe, &on[0].1)?;
+        }
         let (join, filter) = hash_join_with_dynamic_filter_and_mode(
             build,
             probe,
@@ -3845,144 +3890,55 @@ mod tests {
                 .with_runtime(runtime)
                 .with_session_config(config),
         );
-        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+        let batches = crate::execution_plan::collect(Arc::clone(&join), task_ctx).await?;
         assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
 
-        let build_mem_used = join
-            .metrics()
-            .unwrap()
-            .sum_by_name("build_mem_used")
-            .unwrap()
-            .as_usize();
-        let keys = sparse_keys();
-        let map_bytes =
-            estimate_memory_size::<(u32, u64)>(keys.len(), size_of::<JoinHashMapU32>())?
-                + keys.len() * size_of::<u32>();
-        let keys_array: ArrayRef = Arc::new(Int64Array::from(keys.clone()));
-        let bitmap_bytes = KeyRangeBitmap::try_new(
-            &keys_array,
-            &ScalarValue::Int64(Some(0)),
-            &ScalarValue::Int64(Some(keys[keys.len() - 1])),
-            keys.len(),
-        )
-        .map_or(0, |bitmap| bitmap.size());
-        let expected = match mode {
-            // The stream is gone; only the map and its bitmap are still held.
-            PartitionMode::Partitioned => map_bytes + bitmap_bytes,
-            PartitionMode::CollectLeft => build_mem_used,
-            PartitionMode::Auto => unreachable!(),
-        };
-        assert_eq!(pool.reserved(), expected);
-
-        // The filter is the last holder.
+        let bloom_bytes = bloom_filter_bytes(&filter.current()?)?;
+        assert!(bloom_bytes > 0);
         drop(join);
-        assert_eq!(pool.reserved(), map_bytes + bitmap_bytes);
+        assert_eq!(pool.reserved(), bloom_bytes);
         drop(filter);
         assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 
-    /// Dense keys build an `ArrayMap`, which is charged to the map's own
-    /// reservation in `array_map_key_range` rather than the build's.
-    #[rstest]
+    /// A hash map build fills the bloom filter from the hashes stored in the
+    /// map, and the filter is probed with `HASH_JOIN_SEED`. String keys take
+    /// the hash map path, so this fails if the build map uses another seed.
     #[tokio::test]
-    async fn array_map_stays_reserved_with_dynamic_filter(
-        #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
-        mode: PartitionMode,
-    ) -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
-        let batch = |keys: Vec<i64>| {
-            let column = Arc::new(Int64Array::from(keys)) as ArrayRef;
-            let batch = RecordBatch::try_new(Arc::clone(&schema), vec![column])?;
-            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+    async fn bloom_filter_from_hash_map_keeps_every_build_key() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Utf8, false)]));
+        let keys: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..1000).map(|i| format!("key-{i}")),
+        ));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&keys)])?;
+        let exec = || {
+            TestMemoryExec::try_new_exec(
+                &[vec![batch.clone()]],
+                Arc::clone(&schema),
+                None,
+            )
         };
         let on = vec![(
             Arc::new(Column::new_with_schema("k", &schema)?) as _,
             Arc::new(Column::new_with_schema("k", &schema)?) as _,
         )];
-        let (join, filter) = hash_join_with_dynamic_filter_and_mode(
-            batch((0..20_000).collect())?,
-            batch(vec![0, 5, 15])?,
-            on,
-            JoinType::Inner,
-            mode,
-        )?;
-        let join: Arc<dyn ExecutionPlan> = Arc::new(join);
+        let (join, filter) =
+            hash_join_with_dynamic_filter(exec()?, exec()?, on, JoinType::Inner)?;
 
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 22));
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::clone(&pool))
-            .build_arc()?;
         let mut config = SessionConfig::new();
         config
             .options_mut()
             .optimizer
             .hash_join_inlist_pushdown_max_size = 0;
-        let task_ctx = Arc::new(
-            TaskContext::default()
-                .with_runtime(runtime)
-                .with_session_config(config),
-        );
-        let batches = common::collect(join.execute(0, task_ctx)?).await?;
-        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
-        assert_phj_used(&join.metrics().unwrap(), true);
+        let task_ctx = Arc::new(TaskContext::default().with_session_config(config));
+        let batches = crate::execution_plan::collect(Arc::new(join), task_ctx).await?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1000);
 
-        drop(join);
-        assert_eq!(
-            pool.reserved(),
-            ArrayMap::estimate_memory_size(0, 19_999, 20_000)
-        );
-        drop(filter);
-        assert_eq!(pool.reserved(), 0);
-        Ok(())
-    }
-
-    /// With rows in more than one build partition, the filter is a routed lookup
-    /// that holds every partition's map, so the maps stay reserved until it is
-    /// dropped.
-    #[cfg(not(feature = "force_hash_collisions"))]
-    #[tokio::test]
-    async fn routed_maps_stay_reserved_with_dynamic_filter() -> Result<()> {
-        let SparseKeyJoinInputs { build, probe, on } = sparse_key_join_inputs()?;
-        let repartition = |input: Arc<dyn ExecutionPlan>, key: &PhysicalExprRef| {
-            let partitioning = Partitioning::Hash(vec![Arc::clone(key)], 2);
-            RepartitionExec::try_new(input, partitioning)
-        };
-        let (join, filter) = hash_join_with_dynamic_filter_and_mode(
-            Arc::new(repartition(build, &on[0].0)?),
-            Arc::new(repartition(probe, &on[0].1)?),
-            on,
-            JoinType::Inner,
-            PartitionMode::Partitioned,
-        )?;
-        let join: Arc<dyn ExecutionPlan> = Arc::new(join);
-
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::clone(&pool))
-            .build_arc()?;
-        let mut config = SessionConfig::new();
-        config
-            .options_mut()
-            .optimizer
-            .hash_join_inlist_pushdown_max_size = 0;
-        let task_ctx = Arc::new(
-            TaskContext::default()
-                .with_runtime(runtime)
-                .with_session_config(config),
-        );
-        let batches = crate::execution_plan::collect(Arc::clone(&join), task_ctx).await?;
-        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
-        assert!(format!("{:?}", filter.current()?).contains("routed by"));
-
-        // Every stream is gone; only the maps and their bitmaps are still held.
-        let reserved = pool.reserved();
-        assert!(reserved > 0);
-        // The filter is the last holder.
-        drop(join);
-        assert_eq!(pool.reserved(), reserved);
-        drop(filter);
-        assert_eq!(pool.reserved(), 0);
+        let current = filter.current()?;
+        assert!(bloom_filter_bytes(&current)? > 0);
+        let kept = current.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(kept.as_boolean().true_count(), 1000);
         Ok(())
     }
 
@@ -4658,6 +4614,7 @@ mod tests {
             None,
             Count::new(),
             BuildMode::Ordinary,
+            1,
         )
         .await?
         .into_legacy_left_data();
@@ -9540,7 +9497,7 @@ mod tests {
                 &child_right_schema,
             )?) as _,
         )];
-        let (child_join, _child_dynamic_filter) = hash_join_with_dynamic_filter_and_mode(
+        let (child_join, child_dynamic_filter) = hash_join_with_dynamic_filter_and_mode(
             child_left,
             child_right,
             child_on,
@@ -9583,6 +9540,8 @@ mod tests {
             ],
             &batches
         );
+        // The parent drops child partitions 1 and 3, so their keys are unknown.
+        assert_eq!(child_dynamic_filter.current()?.to_string(), "true");
 
         Ok(())
     }
@@ -10713,9 +10672,7 @@ mod tests {
     ///
     /// Here the build-side logical NULL lives in exactly one build partition, so
     /// the `keys_have_null` flag has to survive the per-partition aggregation in
-    /// `build_partitioned_filter` and widen the *routed* filter as a whole: the
-    /// probe NULL is routed to a single partition, and OR-ing `IS NULL` into
-    /// that one partition's check would still drop it for every other route.
+    /// `build_partitioned_filter` and widen the global filter as a whole.
     #[tokio::test]
     async fn test_partitioned_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null()
     -> Result<()> {
@@ -10768,7 +10725,7 @@ mod tests {
 
         // The FilterExec sits above the repartition so each probe partition is only
         // read after the join has waited for every partition's build report, which
-        // makes the finalized (routed and widened) filter the one actually applied.
+        // makes the finalized (widened) filter the one actually applied.
         let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
         let consumer: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
         let right_filtered: Arc<dyn ExecutionPlan> =
@@ -10794,11 +10751,11 @@ mod tests {
 
         dynamic_filter.wait_complete().await;
         let filter = dynamic_filter.current()?.to_string();
-        // The aggregated build-side NULL must widen the whole merged filter once,
-        // at the top: `c2 IS NULL OR <membership over every partition>`.
+        // The aggregated build-side NULL must widen the global filter once, at the
+        // top: `c2 IS NULL OR <filter of all partitions>`.
         assert!(
             filter.starts_with("c2@0 IS NULL OR"),
-            "expected the IS NULL disjunct to wrap the whole routed filter, got: {filter}"
+            "expected the IS NULL disjunct to wrap the whole filter, got: {filter}"
         );
 
         // The NULL-NULL row (d1 = 200, d2 = 20) is only produced if the probe
@@ -12476,52 +12433,32 @@ mod tests {
             .build()
     }
 
+    /// The filter holds the keys of all build partitions, so it does not
+    /// depend on how the inputs are partitioned.
     #[test]
-    fn test_partitioned_dynamic_filter_pushdown_allows_supported_partitioning()
-    -> Result<()> {
-        let (range_join, on) = range_partitioned_dynamic_filter_test_join(10, 10)?;
-        let hash_join = with_hash_partitioned_children(&range_join, &on)?;
-        let mut session_config = SessionConfig::default();
-        session_config
-            .options_mut()
-            .optimizer
-            .enable_join_dynamic_filter_pushdown = true;
-
-        assert!(range_join.allow_join_dynamic_filter_pushdown(session_config.options()));
-        assert!(hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
-
-        session_config
-            .options_mut()
-            .optimizer
-            .preserve_file_partitions = 1;
-        assert!(range_join.allow_join_dynamic_filter_pushdown(session_config.options()));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_partitioned_dynamic_filter_pushdown_rejects_unsupported_partitioning()
-    -> Result<()> {
+    fn test_partitioned_dynamic_filter_pushdown_allows_any_partitioning() -> Result<()> {
         let (range_join, on) = range_partitioned_dynamic_filter_test_join(10, 10)?;
         let hash_join = with_hash_partitioned_children(&range_join, &on)?;
         let (mismatched_range_join, _) =
             range_partitioned_dynamic_filter_test_join(10, 11)?;
+        let joins = [&range_join, &hash_join, &mismatched_range_join];
         let mut session_config = SessionConfig::default();
         session_config
             .options_mut()
             .optimizer
             .enable_join_dynamic_filter_pushdown = true;
 
-        assert!(
-            !mismatched_range_join
-                .allow_join_dynamic_filter_pushdown(session_config.options())
-        );
-
-        session_config
-            .options_mut()
-            .optimizer
-            .preserve_file_partitions = 1;
-        assert!(!hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
+        for preserve_file_partitions in [0, 1] {
+            session_config
+                .options_mut()
+                .optimizer
+                .preserve_file_partitions = preserve_file_partitions;
+            for join in joins {
+                assert!(
+                    join.allow_join_dynamic_filter_pushdown(session_config.options())
+                );
+            }
+        }
 
         Ok(())
     }

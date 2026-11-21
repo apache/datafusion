@@ -19,7 +19,7 @@ use parking_lot::Mutex;
 use super::exec::JoinBuildData;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::shared_bounds::{
-    PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
+    BuildKeys, PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::utils::{BuildProbeJoinMetrics, OnceFut};
 
@@ -145,17 +145,24 @@ impl HashJoinBuild {
                 .values
                 .iter()
                 .any(|array| array.logical_null_count() > 0);
+            let build_keys = BuildKeys {
+                keys: data.values.to_vec(),
+                bloom_filter: data.bloom_filter.clone(),
+                num_distinct: data.map.num_of_distinct_key(),
+            };
             let report = match self.mode {
                 PartitionMode::Partitioned => PartitionBuildData::Partitioned {
                     partition_id: self.partition,
                     pushdown,
                     bounds,
                     keys_have_null,
+                    build_keys,
                 },
                 PartitionMode::CollectLeft => PartitionBuildData::CollectLeft {
                     pushdown,
                     bounds,
                     keys_have_null,
+                    build_keys,
                 },
                 PartitionMode::Auto => {
                     return internal_err!(

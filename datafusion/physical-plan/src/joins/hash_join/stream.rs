@@ -30,7 +30,7 @@ use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::JoinLeftData;
 use crate::joins::hash_join::not_in::NotInProbe;
 use crate::joins::hash_join::shared_bounds::{
-    PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
+    BuildKeys, PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::join_hash_map::ProbeOffset;
 use crate::joins::join_hash_map::ProbeOffset::AtRow;
@@ -677,17 +677,25 @@ impl HashJoinStream {
             .iter()
             .any(|array| array.logical_null_count() > 0);
 
+        let build_keys = BuildKeys {
+            keys: left_data.values().to_vec(),
+            bloom_filter: left_data.bloom_filter().cloned(),
+            num_distinct: left_data.map().num_of_distinct_key(),
+        };
+
         let build_data = match self.mode {
             PartitionMode::Partitioned => PartitionBuildData::Partitioned {
                 partition_id: self.partition,
                 pushdown,
                 bounds,
                 keys_have_null,
+                build_keys,
             },
             PartitionMode::CollectLeft => PartitionBuildData::CollectLeft {
                 pushdown,
                 bounds,
                 keys_have_null,
+                build_keys,
             },
             PartitionMode::Auto => unreachable!(
                 "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
@@ -1277,6 +1285,7 @@ mod tests {
             pushdown: PushdownStrategy::Empty,
             bounds: PartitionBounds::new(vec![]),
             keys_have_null: false,
+            build_keys: Default::default(),
         }
     }
 

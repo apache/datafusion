@@ -42,6 +42,10 @@ use hashbrown::HashTable;
 
 /// Implementation of `JoinHashMapType` for `PruningJoinHashMap`.
 impl JoinHashMapType for PruningJoinHashMap {
+    fn for_each_entry_hash(&self, f: &mut dyn FnMut(u64)) {
+        self.map.iter().for_each(|&(hash, _)| f(hash));
+    }
+
     // Extend with zero
     fn extend_zero(&mut self, len: usize) {
         self.next.resize(self.next.len() + len, 0)

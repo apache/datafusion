@@ -398,3 +398,24 @@ incremental = false
 [profile.ci-bench]
 inherits = "ci"
 opt-level = 1
+
+# TODO: remove once arrow-rs releases the `Sbbf` APIs of
+# https://github.com/apache/arrow-rs/pull/11641 (used by the hash join bloom filter)
+[patch.crates-io]
+arrow = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-arith = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-array = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-avro = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-buffer = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-cast = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-csv = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-data = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-flight = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-ipc = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-json = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-ord = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-row = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-schema = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-select = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+arrow-string = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }
+parquet = { git = "https://github.com/pydantic/arrow-rs.git", rev = "69c009af0c45d6ccac8a62c9991d8b57b28cce1e" }

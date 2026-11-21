@@ -152,6 +152,9 @@ pub trait JoinHashMapType: Send + Sync {
 
     /// Returns the number of entries in the join hash map.
     fn len(&self) -> usize;
+
+    /// Calls `f` with the hash of each entry: one hash per distinct key hash.
+    fn for_each_entry_hash(&self, f: &mut dyn FnMut(u64));
 }
 
 pub struct JoinHashMapU32 {
@@ -186,6 +189,10 @@ impl Debug for JoinHashMapU32 {
 }
 
 impl JoinHashMapType for JoinHashMapU32 {
+    fn for_each_entry_hash(&self, f: &mut dyn FnMut(u64)) {
+        self.map.iter().for_each(|&(hash, _)| f(hash));
+    }
+
     fn extend_zero(&mut self, _: usize) {}
 
     fn update_from_iter<'a>(
@@ -272,6 +279,10 @@ impl Debug for JoinHashMapU64 {
 }
 
 impl JoinHashMapType for JoinHashMapU64 {
+    fn for_each_entry_hash(&self, f: &mut dyn FnMut(u64)) {
+        self.map.iter().for_each(|&(hash, _)| f(hash));
+    }
+
     fn extend_zero(&mut self, _: usize) {}
 
     fn update_from_iter<'a>(
