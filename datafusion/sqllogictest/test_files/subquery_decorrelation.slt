@@ -827,13 +827,11 @@ statement ok
 CREATE TABLE t2(a INT, b INT) AS VALUES (1,1),(3,30);
 
 # exists_with_two_equal_subplans
-# Wrong today. Expected (DuckDB):
+# Errors instead of the wrong single row. Expected (DuckDB):
 # 1
 # 1
-query I
+query error This feature is not implemented: Physical plan does not support logical expression Exists
 SELECT t.a FROM t, t2 AS s WHERE EXISTS (SELECT 1 FROM (SELECT * FROM t2 AS s WHERE s.a = t.a) x CROSS JOIN t2 AS s) ORDER BY 1;
-----
-1
 
 statement ok
 DROP TABLE t;
