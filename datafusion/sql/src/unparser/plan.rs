@@ -288,6 +288,23 @@ impl Unparser<'_> {
         Ok(SetExpr::Select(Box::new(select_builder.build()?)))
     }
 
+    /// Returns `true` when `plan` is one or more `Filter` nodes directly over a
+    /// `TableScan` without a pushed `fetch` (crossing no `Projection`, `Join`,
+    /// `Distinct`, `Window`, or `SubqueryAlias` boundaries).
+    fn is_filtered_table_scan_without_fetch(plan: &LogicalPlan) -> bool {
+        let mut cur = plan;
+        let mut saw_filter = false;
+        while let LogicalPlan::Filter(filter) = cur {
+            saw_filter = true;
+            cur = filter.input.as_ref();
+        }
+        saw_filter
+            && matches!(
+                cur,
+                LogicalPlan::TableScan(scan) if scan.fetch.is_none()
+            )
+    }
+
     /// Reconstructs a SELECT SQL statement from a logical plan by
     /// unprojecting column expressions found in a [Projection] node. This
     /// requires scanning the plan tree for relevant Aggregate and Window
@@ -311,7 +328,11 @@ impl Unparser<'_> {
         select: &mut SelectBuilder,
         fully_absorbed: bool,
     ) -> Result<bool> {
-        let mut exprs = p.expr.clone();
+        let mut exprs = if p.expr.is_empty() {
+            self.empty_projection_fallback()
+        } else {
+            p.expr.clone()
+        };
 
         // If an Unnest node is found within the select, find and unproject the unnest column
         let flatten_alias = select.current_flatten_alias();
@@ -944,7 +965,23 @@ impl Unparser<'_> {
                     );
                 }
 
-                if let Some(scope) = Self::derived_input_scope(plan, select) {
+                let can_absorb_filtered_scan = {
+                    let mut node = p.input.as_ref();
+                    let mut saw_sort_or_limit = false;
+                    while let LogicalPlan::Limit(_) | LogicalPlan::Sort(_) = node {
+                        saw_sort_or_limit = true;
+                        node = match node {
+                            LogicalPlan::Limit(l) => l.input.as_ref(),
+                            LogicalPlan::Sort(s) => s.input.as_ref(),
+                            _ => unreachable!(),
+                        };
+                    }
+                    saw_sort_or_limit && Self::is_filtered_table_scan_without_fetch(node)
+                };
+
+                if !can_absorb_filtered_scan
+                    && let Some(scope) = Self::derived_input_scope(plan, select)
+                {
                     // The input is about to enter a new SQL scope. Preserve that
                     // boundary explicitly and make the outer expressions resolve
                     // against the relation that will actually be visible there.
@@ -1141,13 +1178,15 @@ impl Unparser<'_> {
 
                 // Whether to bother emitting the absorbed clauses: only
                 // if there's an Aggregate either claimed in this SELECT
-                // or about to live in a derived subquery below us. If
-                // there's nothing aggregate-like to fold over, fall
-                // through and let the normal recursion handle the
-                // Projection's input.
+                // or about to live in a derived subquery below us, or a
+                // complete Limit/Sort chain over a filtered TableScan. If
+                // there's nothing to fold over, fall through and let the
+                // normal recursion handle the Projection's input.
                 let agg_below =
                     !fully_absorbed && find_agg_node_within_select(plan, true).is_some();
-                if !(found_agg || agg_below) {
+                let absorbed_filtered_scan =
+                    fully_absorbed && Self::is_filtered_table_scan_without_fetch(cur);
+                if !(found_agg || agg_below || absorbed_filtered_scan) {
                     return self.select_to_sql_recursively(
                         p.input.as_ref(),
                         query,
