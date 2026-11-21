@@ -148,6 +148,10 @@ pub trait GroupValues: Send {
 ///
 ///   - Otherwise, the general implementation `GroupValuesRows` will be chosen.
 ///
+/// A schema with [`DataType::LargeUtf8`] or [`DataType::LargeBinary`] keys
+/// also accepts [`DataType::Utf8`] or [`DataType::Binary`] input arrays.
+/// Only [`GroupValuesRows`] needs to change these input arrays to the schema types.
+///
 /// `GroupColumn`:  crate::aggregates::group_values::multi_group_by::GroupColumn
 /// `GroupValuesColumn`: crate::aggregates::group_values::multi_group_by::GroupValuesColumn
 /// `GroupValuesRows`: crate::aggregates::group_values::GroupValuesRows
@@ -212,13 +216,15 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        ArrayRef, AsArray, BooleanArray, Int32Array, StringArray, StringViewArray,
+        ArrayRef, AsArray, BinaryArray, BooleanArray, Int32Array, NullArray, StringArray,
+        StringViewArray,
     };
+    use arrow::compute::cast;
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_expr::{EmitTo, GroupSelection};
 
-    use super::new_group_values;
-    use crate::aggregates::order::GroupClustering;
+    use super::{multi_group_by, new_group_values};
+    use crate::aggregates::order::{GroupClustering, GroupClusteringMode};
 
     #[test]
     fn preserving_values_keep_group_indices_valid() {
@@ -276,6 +282,103 @@ mod tests {
 
         let actual = group_values.emit(EmitTo::All).unwrap();
         assert_eq!(actual[0].as_primitive::<Int32Type>(), &expected);
+    }
+
+    #[rstest::rstest]
+    #[case::string(vec![DataType::LargeUtf8], GroupClusteringMode::None)]
+    #[case::binary(vec![DataType::LargeBinary], GroupClusteringMode::None)]
+    #[case::columns(
+        vec![DataType::LargeUtf8, DataType::LargeBinary],
+        GroupClusteringMode::None
+    )]
+    #[case::partially_clustered_columns(
+        vec![DataType::LargeUtf8, DataType::LargeBinary],
+        GroupClusteringMode::Partial(vec![0])
+    )]
+    #[case::clustered_columns(
+        vec![DataType::LargeUtf8, DataType::LargeBinary],
+        GroupClusteringMode::Full
+    )]
+    #[case::rows(vec![DataType::LargeUtf8, DataType::Null], GroupClusteringMode::None)]
+    fn large_offset_columns_accept_32_bit_input_offsets(
+        #[case] data_types: Vec<DataType>,
+        #[case] group_clustering_mode: GroupClusteringMode,
+    ) {
+        let fields = data_types
+            .iter()
+            .enumerate()
+            .map(|(index, data_type)| {
+                Field::new(format!("group{index}"), data_type.clone(), true)
+            })
+            .collect::<Vec<_>>();
+        let schema = Arc::new(Schema::new(fields));
+        if data_types.contains(&DataType::Null) {
+            assert!(!multi_group_by::supported_schema(&schema));
+        }
+
+        let input = |keys: &[Option<&str>]| -> Vec<ArrayRef> {
+            data_types
+                .iter()
+                .map(|data_type| match data_type {
+                    DataType::LargeUtf8 => {
+                        Arc::new(StringArray::from(keys.to_vec())) as ArrayRef
+                    }
+                    DataType::LargeBinary => Arc::new(BinaryArray::from_iter(
+                        keys.iter().map(|key| key.map(str::as_bytes)),
+                    )),
+                    _ => Arc::new(NullArray::new(keys.len())),
+                })
+                .collect()
+        };
+        let stored = |input: &[ArrayRef]| -> Vec<ArrayRef> {
+            input
+                .iter()
+                .zip(schema.fields())
+                .map(|(array, field)| cast(array, field.data_type()).unwrap())
+                .collect()
+        };
+
+        let group_clustering = GroupClustering::try_new(&group_clustering_mode).unwrap();
+        let mut group_values =
+            new_group_values(Arc::clone(&schema), &group_clustering).unwrap();
+        let mut expected_group_values =
+            new_group_values(Arc::clone(&schema), &group_clustering).unwrap();
+        let mut groups = vec![];
+
+        // Equal keys must be next to each other for the implementations that use the group order.
+        let long_key = "a key longer than sixteen bytes";
+        type Step<'a> = (&'a [Option<&'a str>], &'a [usize], Option<EmitTo>);
+        let steps: [Step; 3] = [
+            (
+                &[Some("a"), Some("a"), None, Some(long_key)],
+                &[0, 0, 1, 2],
+                None,
+            ),
+            (
+                &[Some(long_key), Some("c")],
+                &[2, 3],
+                Some(EmitTo::First(2)),
+            ),
+            (&[Some("c"), Some("d")], &[1, 2], Some(EmitTo::All)),
+        ];
+        for (keys, expected_groups, emit_to) in steps {
+            let input = input(keys);
+            group_values.intern(&input, &mut groups).unwrap();
+            assert_eq!(groups, expected_groups);
+            expected_group_values
+                .intern(&stored(&input), &mut groups)
+                .unwrap();
+            assert_eq!(groups, expected_groups);
+
+            // After `EmitTo::First`, a single column stores the remaining keys again with 64-bit input offsets.
+            if let Some(emit_to) = emit_to {
+                let values = group_values.emit(emit_to).unwrap();
+                assert_eq!(values, expected_group_values.emit(emit_to).unwrap());
+                for (value, field) in values.iter().zip(schema.fields()) {
+                    assert_eq!(value.data_type(), field.data_type());
+                }
+            }
+        }
     }
 
     #[test]

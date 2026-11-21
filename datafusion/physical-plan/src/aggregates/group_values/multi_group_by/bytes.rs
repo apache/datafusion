@@ -12,7 +12,9 @@ use arrow::array::{
     types::GenericStringType,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::{ByteArrayType, DataType, GenericBinaryType};
+use arrow::datatypes::{
+    BinaryType, ByteArrayType, DataType, GenericBinaryType, Utf8Type,
+};
 use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, exec_datafusion_err};
@@ -21,6 +23,11 @@ use datafusion_physical_expr_common::binary_map::{INITIAL_BUFFER_CAPACITY, Outpu
 use std::mem::size_of;
 use std::sync::Arc;
 use std::vec;
+
+#[inline]
+fn uses_smaller_input_offsets<O: OffsetSizeTrait>(array: &ArrayRef) -> bool {
+    O::IS_LARGE && matches!(array.data_type(), DataType::Utf8 | DataType::Binary)
+}
 
 fn checked_output_offset<O: OffsetSizeTrait>(
     current_len: usize,
@@ -39,6 +46,9 @@ fn checked_output_offset<O: OffsetSizeTrait>(
 ///
 /// 1. Efficient comparison of incoming rows to existing rows
 /// 2. Efficient construction of the final output array
+///
+/// A builder with 64-bit offsets also accepts 32-bit input offsets.
+/// This allows more than 2 GiB of stored keys without input conversion.
 pub struct ByteGroupValueBuilder<O>
 where
     O: OffsetSizeTrait,
@@ -74,19 +84,54 @@ where
         }
     }
 
-    fn equal_to_inner<B>(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool
+    fn equal_to_inner<Input32, Stored>(
+        &self,
+        lhs_row: usize,
+        array: &ArrayRef,
+        rhs_row: usize,
+    ) -> bool
     where
-        B: ByteArrayType,
+        Input32: ByteArrayType<Offset = i32>,
+        Stored: ByteArrayType<Offset = O, Native = Input32::Native>,
     {
-        let array = array.as_bytes::<B>();
+        // The type check also gets the array. A separate check would add a call for each row.
+        let array = array.as_any();
+        if O::IS_LARGE
+            && let Some(array) = array.downcast_ref::<GenericByteArray<Input32>>()
+        {
+            return self.do_equal_to_inner(lhs_row, array, rhs_row);
+        }
+        let array: &GenericByteArray<Stored> = array.downcast_ref().expect("byte array");
         self.do_equal_to_inner(lhs_row, array, rhs_row)
     }
 
-    fn append_val_inner<B>(&mut self, array: &ArrayRef, row: usize) -> Result<()>
+    fn append_val_inner<Input32, Stored>(
+        &mut self,
+        array: &ArrayRef,
+        row: usize,
+    ) -> Result<()>
+    where
+        Input32: ByteArrayType<Offset = i32>,
+        Stored: ByteArrayType<Offset = O, Native = Input32::Native>,
+    {
+        let array = array.as_any();
+        if O::IS_LARGE
+            && let Some(array) = array.downcast_ref::<GenericByteArray<Input32>>()
+        {
+            return self.do_append_row_inner(array, row);
+        }
+        let array: &GenericByteArray<Stored> = array.downcast_ref().expect("byte array");
+        self.do_append_row_inner(array, row)
+    }
+
+    fn do_append_row_inner<B>(
+        &mut self,
+        arr: &GenericByteArray<B>,
+        row: usize,
+    ) -> Result<()>
     where
         B: ByteArrayType,
     {
-        let arr = array.as_bytes::<B>();
         if arr.is_null(row) {
             self.nulls.append_null();
             // nulls need a zero length in the offset buffer
@@ -146,7 +191,7 @@ where
         match all_null_or_non_null {
             Nulls::Some => {
                 for &row in rows {
-                    self.append_val_inner::<B>(array, row)?
+                    self.do_append_row_inner(arr, row)?
                 }
             }
 
@@ -230,14 +275,18 @@ where
                     column.data_type(),
                     DataType::Binary | DataType::LargeBinary
                 ));
-                self.equal_to_inner::<GenericBinaryType<O>>(lhs_row, column, rhs_row)
+                self.equal_to_inner::<BinaryType, GenericBinaryType<O>>(
+                    lhs_row, column, rhs_row,
+                )
             }
             OutputType::Utf8 => {
                 debug_assert!(matches!(
                     column.data_type(),
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
-                self.equal_to_inner::<GenericStringType<O>>(lhs_row, column, rhs_row)
+                self.equal_to_inner::<Utf8Type, GenericStringType<O>>(
+                    lhs_row, column, rhs_row,
+                )
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
@@ -251,14 +300,14 @@ where
                     column.data_type(),
                     DataType::Binary | DataType::LargeBinary
                 ));
-                self.append_val_inner::<GenericBinaryType<O>>(column, row)?
+                self.append_val_inner::<BinaryType, GenericBinaryType<O>>(column, row)?
             }
             OutputType::Utf8 => {
                 debug_assert!(matches!(
                     column.data_type(),
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
-                self.append_val_inner::<GenericStringType<O>>(column, row)?
+                self.append_val_inner::<Utf8Type, GenericStringType<O>>(column, row)?
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
@@ -280,24 +329,42 @@ where
                     array.data_type(),
                     DataType::Binary | DataType::LargeBinary
                 ));
-                self.vectorized_equal_to_inner::<GenericBinaryType<O>>(
-                    lhs_rows,
-                    array,
-                    rhs_rows,
-                    equal_to_results,
-                );
+                if uses_smaller_input_offsets::<O>(array) {
+                    self.vectorized_equal_to_inner::<BinaryType>(
+                        lhs_rows,
+                        array,
+                        rhs_rows,
+                        equal_to_results,
+                    );
+                } else {
+                    self.vectorized_equal_to_inner::<GenericBinaryType<O>>(
+                        lhs_rows,
+                        array,
+                        rhs_rows,
+                        equal_to_results,
+                    );
+                }
             }
             OutputType::Utf8 => {
                 debug_assert!(matches!(
                     array.data_type(),
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
-                self.vectorized_equal_to_inner::<GenericStringType<O>>(
-                    lhs_rows,
-                    array,
-                    rhs_rows,
-                    equal_to_results,
-                );
+                if uses_smaller_input_offsets::<O>(array) {
+                    self.vectorized_equal_to_inner::<Utf8Type>(
+                        lhs_rows,
+                        array,
+                        rhs_rows,
+                        equal_to_results,
+                    );
+                } else {
+                    self.vectorized_equal_to_inner::<GenericStringType<O>>(
+                        lhs_rows,
+                        array,
+                        rhs_rows,
+                        equal_to_results,
+                    );
+                }
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
@@ -310,14 +377,22 @@ where
                     column.data_type(),
                     DataType::Binary | DataType::LargeBinary
                 ));
-                self.vectorized_append_inner::<GenericBinaryType<O>>(column, rows)?
+                if uses_smaller_input_offsets::<O>(column) {
+                    self.vectorized_append_inner::<BinaryType>(column, rows)?
+                } else {
+                    self.vectorized_append_inner::<GenericBinaryType<O>>(column, rows)?
+                }
             }
             OutputType::Utf8 => {
                 debug_assert!(matches!(
                     column.data_type(),
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
-                self.vectorized_append_inner::<GenericStringType<O>>(column, rows)?
+                if uses_smaller_input_offsets::<O>(column) {
+                    self.vectorized_append_inner::<Utf8Type>(column, rows)?
+                } else {
+                    self.vectorized_append_inner::<GenericStringType<O>>(column, rows)?
+                }
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }

@@ -9,7 +9,7 @@ use arrow::array::{
     Array, ArrayRef, BufferBuilder, GenericBinaryArray, GenericStringArray,
     NullBufferBuilder, OffsetSizeTrait,
     cast::AsArray,
-    types::{ByteArrayType, GenericBinaryType, GenericStringType},
+    types::{BinaryType, ByteArrayType, GenericBinaryType, GenericStringType, Utf8Type},
 };
 use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -348,7 +348,9 @@ where
     ///
     /// # Arguments:
     ///
-    /// `values`: array whose values are inserted
+    /// `values`: the input array. A map with 64-bit offsets also accepts
+    /// 32-bit input offsets. The map can store more than 2 GiB of values
+    /// without input conversion.
     ///
     /// `make_payload_fn`:  invoked for each value that is not already present
     /// to create the payload, in order of the values in `values`
@@ -374,6 +376,8 @@ where
         MP: FnMut(Option<&[u8]>) -> V,
         OP: FnMut(V),
     {
+        let reads_32_bit_offsets = O::IS_LARGE
+            && matches!(values.data_type(), DataType::Utf8 | DataType::Binary);
         // Sanity array type
         match self.output_type {
             OutputType::Binary => {
@@ -381,22 +385,38 @@ where
                     values.data_type(),
                     DataType::Binary | DataType::LargeBinary
                 ));
-                self.insert_if_new_inner::<MP, OP, GenericBinaryType<O>>(
-                    values,
-                    make_payload_fn,
-                    observe_payload_fn,
-                )
+                if reads_32_bit_offsets {
+                    self.insert_if_new_inner::<MP, OP, BinaryType>(
+                        values,
+                        make_payload_fn,
+                        observe_payload_fn,
+                    )
+                } else {
+                    self.insert_if_new_inner::<MP, OP, GenericBinaryType<O>>(
+                        values,
+                        make_payload_fn,
+                        observe_payload_fn,
+                    )
+                }
             }
             OutputType::Utf8 => {
                 assert!(matches!(
                     values.data_type(),
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
-                self.insert_if_new_inner::<MP, OP, GenericStringType<O>>(
-                    values,
-                    make_payload_fn,
-                    observe_payload_fn,
-                )
+                if reads_32_bit_offsets {
+                    self.insert_if_new_inner::<MP, OP, Utf8Type>(
+                        values,
+                        make_payload_fn,
+                        observe_payload_fn,
+                    )
+                } else {
+                    self.insert_if_new_inner::<MP, OP, GenericStringType<O>>(
+                        values,
+                        make_payload_fn,
+                        observe_payload_fn,
+                    )
+                }
             }
             _ => unreachable!("View types should use `ArrowBytesViewMap`"),
         }
@@ -736,7 +756,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{BinaryArray, LargeBinaryArray, StringArray};
+    use arrow::array::{BinaryArray, LargeBinaryArray, LargeStringArray, StringArray};
     use std::collections::HashMap;
 
     /// A lower bound on the bytes a hashbrown table holding `entries` entries
@@ -1198,6 +1218,52 @@ mod tests {
 
         let mut set = ArrowBytesSet::<i64>::new(OutputType::Binary);
         set.insert(&values);
+        assert_eq!(&set.into_state(), &expected);
+    }
+
+    #[test]
+    fn large_offset_set_inserts_arrays_with_32_bit_offsets() {
+        let mut set = ArrowBytesSet::<i64>::new(OutputType::Utf8);
+        let values: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("a"),
+            Some("CXCCCCCCCC"),
+            None,
+            Some("CXCCCCCCCC"),
+        ]));
+        set.insert(&values);
+        let values: ArrayRef = Arc::new(LargeStringArray::from(vec![
+            Some("CXCCCCCCCC"),
+            Some("b"),
+            None,
+        ]));
+        set.insert(&values);
+        let expected: ArrayRef = Arc::new(LargeStringArray::from(vec![
+            Some("a"),
+            Some("CXCCCCCCCC"),
+            None,
+            Some("b"),
+        ]));
+        assert_eq!(&set.into_state(), &expected);
+
+        let mut set = ArrowBytesSet::<i64>::new(OutputType::Binary);
+        let values: ArrayRef = Arc::new(BinaryArray::from_opt_vec(vec![
+            Some(b"a"),
+            Some(b"CXCCCCCCCC"),
+            None,
+            Some(b"CXCCCCCCCC"),
+        ]));
+        set.insert(&values);
+        let values: ArrayRef = Arc::new(LargeBinaryArray::from_opt_vec(vec![
+            Some(b"CXCCCCCCCC"),
+            Some(b"b"),
+        ]));
+        set.insert(&values);
+        let expected: ArrayRef = Arc::new(LargeBinaryArray::from_opt_vec(vec![
+            Some(b"a"),
+            Some(b"CXCCCCCCCC"),
+            None,
+            Some(b"b"),
+        ]));
         assert_eq!(&set.into_state(), &expected);
     }
 
