@@ -151,8 +151,11 @@ SELECT array_filter([[NULL], [1], NULL], v -> v IS NOT NULL);
 ----
 [[NULL], [1]]
 
-query error DataFusion error: Error during planning: The function 'array_filter' expected 2 argument\(s\) but received 0
+query error
 SELECT array_filter();
+----
+DataFusion error: Error during planning: The function 'array_filter' expected 2 argument(s) but received 0
+
 
 query error DataFusion error: Error during planning: array_filter expected a list as first argument, got Int64
 SELECT array_filter(1, v -> v > 0);

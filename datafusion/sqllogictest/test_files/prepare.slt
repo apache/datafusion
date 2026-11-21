@@ -590,8 +590,11 @@ EXPLAIN EXECUTE my_plan(10*2 + 1, 'Foo');
 ----
 logical_plan Execute: my_plan params=[Int64(21), Utf8("Foo")]
 
-query error DataFusion error: Schema error: No field named a\.
+query error
 EXPLAIN EXECUTE my_plan(a);
+----
+DataFusion error: Schema error: No field named a.
+
 
 statement ok
 SET datafusion.explain.logical_plan_only=false;

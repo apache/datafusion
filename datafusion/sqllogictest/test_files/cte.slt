@@ -1142,12 +1142,15 @@ EXPLAIN WITH RECURSIVE my_cte AS (
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have different number of columns
-query error DataFusion error: Error during planning: Non\-recursive term and recursive term must have the same number of columns \(1 != 3\)
+query error
 WITH RECURSIVE my_cte AS (
     SELECT 1::bigint AS a
     UNION ALL
     SELECT a+2, 'a','c' FROM my_cte WHERE a<3
 ) SELECT * FROM my_cte;
+----
+DataFusion error: Error during planning: Non-recursive term and recursive term must have the same number of columns (1 != 3)
+
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have incompatible types.
@@ -1232,8 +1235,11 @@ query I rowsort
 3
 400
 
-query error DataFusion error: Error during planning: table 'datafusion\.public\.cte' not found
+query error
 (WITH cte AS (SELECT 400) SELECT * FROM cte) UNION (SELECT * FROM cte);
+----
+DataFusion error: Error during planning: table 'datafusion.public.cte' not found
+
 
 # Test duplicate CTE names in different subqueries in the FROM clause.
 query III rowsort

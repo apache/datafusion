@@ -181,20 +181,32 @@ query error DataFusion error: Execution error: named_struct requires an even num
 select named_struct('a', 1, 'b');
 
 # error on even argument not a string literal #1
-query error DataFusion error: Execution error: named_struct requires 0\-th \(0\-indexed\) field name as non\-empty constant string
+query error
 select named_struct(1, 'a');
+----
+DataFusion error: Execution error: named_struct requires 0-th (0-indexed) field name as non-empty constant string
+
 
 # error on even argument not a string literal #2
-query error DataFusion error: Execution error: named_struct requires 2\-th \(0\-indexed\) field name as non\-empty constant string
+query error
 select named_struct('corret', 1, 0, 'wrong');
+----
+DataFusion error: Execution error: named_struct requires 2-th (0-indexed) field name as non-empty constant string
+
 
 # error on even argument not a string literal #3
-query error DataFusion error: Execution error: named_struct requires 0\-th \(0\-indexed\) field name as non\-empty constant string
+query error
 select named_struct(values.a, 'a') from values;
+----
+DataFusion error: Execution error: named_struct requires 0-th (0-indexed) field name as non-empty constant string
+
 
 # error on even argument not a string literal #4
-query error DataFusion error: Execution error: named_struct requires 0\-th \(0\-indexed\) field name as non\-empty constant string
+query error
 select named_struct(values.c, 'c') from values;
+----
+DataFusion error: Execution error: named_struct requires 0-th (0-indexed) field name as non-empty constant string
+
 
 # named_struct with mixed scalar and array values #1
 query ?

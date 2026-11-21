@@ -362,11 +362,17 @@ SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Times
 ----
 
 # Bounds outside the nanosecond range
-statement error DataFusion error: Error during planning: First argument for generate_series is out of range of nanosecond timestamps: 9223372036854775807 \(Timestamp\(Second, None\)\) is outside 1677\-09\-21T00:12:43\.145224192 to 2262\-04\-11T23:47:16\.854775807
+statement error
 SELECT * FROM generate_series(arrow_cast(9223372036854775807, 'Timestamp(Second, None)'), arrow_cast(0, 'Timestamp(Second, None)'), INTERVAL '-1' DAY)
+----
+DataFusion error: Error during planning: First argument for generate_series is out of range of nanosecond timestamps: 9223372036854775807 (Timestamp(Second, None)) is outside 1677-09-21T00:12:43.145224192 to 2262-04-11T23:47:16.854775807
 
-statement error DataFusion error: Error during planning: Second argument for generate_series is out of range of nanosecond timestamps: \-9223372036854775808 \(Timestamp\(Millisecond, None\)\) is outside 1677\-09\-21T00:12:43\.145224192 to 2262\-04\-11T23:47:16\.854775807
+
+statement error
 SELECT * FROM generate_series(arrow_cast(0, 'Timestamp(Millisecond, None)'), arrow_cast(-9223372036854775808, 'Timestamp(Millisecond, None)'), INTERVAL '-1' DAY)
+----
+DataFusion error: Error during planning: Second argument for generate_series is out of range of nanosecond timestamps: -9223372036854775808 (Timestamp(Millisecond, None)) is outside 1677-09-21T00:12:43.145224192 to 2262-04-11T23:47:16.854775807
+
 
 statement error DataFusion error: Error during planning: First argument for range is out of range of nanosecond timestamps: 9223372036854775807 \(Timestamp\(Microsecond, None\)\) is outside
 SELECT * FROM range(arrow_cast(9223372036854775807, 'Timestamp(Microsecond, None)'), arrow_cast(0, 'Timestamp(Microsecond, None)'), INTERVAL '-1' DAY)
@@ -430,8 +436,11 @@ SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Times
 statement error DataFusion error: Error during planning: Second argument for generate_series must be a DATE or NULL constant, got Int64
 SELECT * FROM generate_series(DATE '2024-01-01', 5, INTERVAL '1' DAY)
 
-statement error DataFusion error: Error during planning: Second argument for generate_series must be a TIMESTAMP or NULL constant, got \(<subquery>\)
+statement error
 SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Second, None)'), (SELECT TIMESTAMP '2024-01-03T00:00:00'), INTERVAL '1' DAY)
+----
+DataFusion error: Error during planning: Second argument for generate_series must be a TIMESTAMP or NULL constant, got (<subquery>)
+
 
 # UDF and UDTF `generate_series` can be used simultaneously
 query ? rowsort
@@ -574,8 +583,11 @@ SELECT * FROM range(1, 2, 3, 4)
 statement error DataFusion error: Error during planning: Argument \#1 must be an INTEGER, TIMESTAMP, DATE or NULL, got Utf8
 SELECT * FROM range('foo', 'bar')
 
-statement error DataFusion error: Error during planning: Argument #2 must be an INTEGER or NULL, got Literal\(Utf8\("bar"\), None\)
+statement error
 SELECT * FROM range(1, 'bar')
+----
+DataFusion error: Error during planning: Argument #2 must be an INTEGER or NULL, got Literal(Utf8("bar"), None)
+
 
 # UDF and UDTF `range` can be used simultaneously
 query ? rowsort
@@ -801,8 +813,15 @@ LIMIT 10;
 statement error DataFusion error: Error during planning: Unsupported function argument type: start => 1
 SELECT * FROM generate_series(start => 1, stop => 5)
 
-statement error DataFusion error: Error during planning: Unsupported function argument type: \*
+statement error
 SELECT * FROM generate_series(*)
+----
+DataFusion error: Error during planning: Unsupported function argument type: *
 
-statement error DataFusion error: Error during planning: Unsupported function argument type: t\.\*
+
+statement error
 SELECT * FROM generate_series(t.*)
+----
+DataFusion error: Error during planning: Unsupported function argument type: t.*
+
+
