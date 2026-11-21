@@ -2012,6 +2012,12 @@ pub fn check_not_null_constraints(
 /// However, if the data of the left table is derived from the work table, it will become outdated
 /// as the work table changes. When the next iteration executes this plan again, we must clear the left table.
 ///
+/// # Serializing an executed plan
+///
+/// Serialization (for example with `datafusion-proto`) keeps runtime state that is
+/// stored in the plan, such as dynamic filters. To run a decoded plan from the start,
+/// call this function before you serialize a plan that already executed.
+///
 /// # Limitations
 ///
 /// While this function enables plan reuse, it does not allow the same plan to be executed if it (OR):
