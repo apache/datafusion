@@ -2282,14 +2282,36 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut aggregate = (*self).clone();
+        // Our dynamic filter, its bounds and execution metrics are the state
+        // we need to reset.
         if let Some(dynamic_filter) = &self.dynamic_filter {
+            // A scan below keeps the filter it was given at planning time, so
+            // clear its bounds before the plan runs again.
             dynamic_filter.filter.reset();
             for accumulator_filter in &dynamic_filter.accumulator_dyn_filter_info {
                 *accumulator_filter.shared_bound.lock() = ScalarValue::Null;
             }
+            // Each copy gets its own filter and bounds, so a copy that runs
+            // first cannot tighten the filter another copy reads. See
+            // <https://github.com/apache/datafusion/issues/27452>.
+            aggregate.dynamic_filter = Some(Arc::new(AggrDynFilter {
+                filter: Arc::new(DynamicFilterPhysicalExpr::new(
+                    self.cols_for_dynamic_filter(
+                        &dynamic_filter.accumulator_dyn_filter_info,
+                    ),
+                    lit(true),
+                )),
+                accumulator_dyn_filter_info: dynamic_filter
+                    .accumulator_dyn_filter_info
+                    .iter()
+                    .map(|info| PerAccumulatorDynFilter {
+                        shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
+                        ..info.clone()
+                    })
+                    .collect(),
+            }));
         }
-
-        let mut aggregate = (*self).clone();
         aggregate.metrics = ExecutionPlanMetricsSet::new();
         Ok(Arc::new(aggregate))
     }
