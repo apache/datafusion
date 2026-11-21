@@ -464,11 +464,6 @@ async fn test_join_with_swap_semi() {
 /// which keeps the number of `NOT IN` value keys and the key order, and a
 /// filtered one (a decorrelated correlated `NOT IN`), whose filter sides are
 /// swapped with the inputs.
-///
-/// `PartitionMode::Partitioned` is deliberately not a case here: a null-aware
-/// `LeftAnti` cannot be constructed in that mode at all, so there is no input
-/// plan to optimize. See
-/// `HashJoinExec::not_in`/`NotIn::try_new`.
 #[rstest]
 #[case::collect_left(PartitionMode::CollectLeft, 1, 1, false)]
 #[case::auto(PartitionMode::Auto, 1, 1, false)]
@@ -560,6 +555,59 @@ async fn test_null_aware_auto_large_inputs_swaps_to_collect_left() -> Result<()>
     assert!(swapped_join.null_aware);
     assert_eq!(swapped_join.left().schema().field(0).name(), "big_col");
     assert_eq!(swapped_join.right().schema().field(0).name(), "bigger_col");
+
+    Ok(())
+}
+
+#[rstest]
+#[case::left_mark(JoinType::LeftMark, false, PartitionMode::CollectLeft)]
+#[case::large_left_mark(JoinType::LeftMark, true, PartitionMode::Partitioned)]
+#[case::large_left_anti(JoinType::LeftAnti, true, PartitionMode::Partitioned)]
+#[tokio::test]
+async fn test_null_aware_swaps_to_right_mark_and_partitions_with_scope_keys(
+    #[case] join_type: JoinType,
+    #[case] large: bool,
+    #[case] expected_mode: PartitionMode,
+) -> Result<()> {
+    let (left_statistics, right_statistics) = if large {
+        (bigger_statistics(), big_statistics())
+    } else {
+        (big_statistics(), small_statistics())
+    };
+    let left: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        left_statistics,
+        Schema::new(vec![Field::new("left_col", DataType::Int32, false)]),
+    ));
+    let right: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+        right_statistics,
+        Schema::new(vec![Field::new("right_col", DataType::Int32, false)]),
+    ));
+    let left_col = Arc::new(Column::new_with_schema("left_col", &left.schema())?) as _;
+    let right_col = Arc::new(Column::new_with_schema("right_col", &right.schema())?) as _;
+    let join = HashJoinExecBuilder::new(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        vec![(left_col, right_col); 2],
+        join_type,
+    )
+    .with_partition_mode(PartitionMode::Auto)
+    .with_null_aware(true)
+    .with_null_aware_value_keys(1)
+    .build()?;
+    let original_schema = join.schema();
+
+    let optimized_join =
+        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+    let swapped_join = optimized_join
+        .downcast_ref::<HashJoinExec>()
+        .expect("swapping a semi, anti or mark join should not require a projection");
+
+    assert_eq!(*swapped_join.join_type(), join_type.swap());
+    assert_eq!(*swapped_join.partition_mode(), expected_mode);
+    assert!(swapped_join.null_aware);
+    assert_eq!(swapped_join.null_aware_value_keys, 1);
+    assert_eq!(swapped_join.left().schema().field(0).name(), "right_col");
+    assert_eq!(swapped_join.schema(), original_schema);
 
     Ok(())
 }
