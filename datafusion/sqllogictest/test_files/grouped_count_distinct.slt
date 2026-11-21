@@ -2,8 +2,8 @@
 # SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 # SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-# With the opt-in enabled and one target partition, grouped integer DISTINCT
-# counts keep their specialized accumulator. Multiple target partitions retain
+# With the opt-in enabled and one target partition, grouped all-DISTINCT aggregates
+# with fixed-width, non-float arguments stay native. Multiple target partitions retain
 # distributed deduplication.
 # String and floating-point DISTINCT arguments still use the two-phase rewrite.
 
@@ -80,15 +80,20 @@ logical_plan
 03)----Aggregate: groupBy=[[numeric_counts.g, numeric_counts.x AS alias1]], aggr=[[sum(CAST(numeric_counts.x AS Int64)) AS alias2]]
 04)------TableScan: numeric_counts projection=[g, x]
 
-# `sum` does not report specialized DISTINCT support, so it keeps the rewrite.
+# `sum` with integer DISTINCT argument stays native.
 query TT
 EXPLAIN SELECT g, sum(DISTINCT x) FROM numeric_counts GROUP BY g;
 ----
 logical_plan
-01)Projection: numeric_counts.g, sum(alias1) AS sum(DISTINCT numeric_counts.x)
-02)--Aggregate: groupBy=[[numeric_counts.g]], aggr=[[sum(alias1)]]
-03)----Aggregate: groupBy=[[numeric_counts.g, CAST(numeric_counts.x AS Int64) AS alias1]], aggr=[[]]
-04)------TableScan: numeric_counts projection=[g, x]
+01)Aggregate: groupBy=[[numeric_counts.g]], aggr=[[sum(DISTINCT CAST(numeric_counts.x AS Int64))]]
+02)--TableScan: numeric_counts projection=[g, x]
+
+query II rowsort
+SELECT g, sum(DISTINCT x) FROM numeric_counts GROUP BY g;
+----
+1 3
+2 NULL
+3 3
 
 # The global aggregate does not use a GroupsAccumulator.
 query TT

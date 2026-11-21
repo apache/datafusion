@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use arrow::datatypes::DataType;
 
 use datafusion_common::{
     DFSchema, DataFusionError, HashSet, Result, assert_or_internal_err,
@@ -17,7 +18,7 @@ use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::expr_schema::ExprSchemable;
 use datafusion_expr::{
-    AggregateUDF, Expr, cast, col,
+    AggregateUDF, DistinctHandling, Expr, cast, col,
     expr::AggregateFunction,
     lit,
     logical_plan::{Aggregate, LogicalPlan},
@@ -68,9 +69,20 @@ use datafusion_expr::{
 /// `sum` of no rows is NULL.
 ///
 /// See `rewrite_pays_for_count` for when the `count` is allowed.
+///
+/// # Memory vs Performance Tradeoffs (`single_distinct_prefer_native`)
+///
 /// With `single_distinct_prefer_native` enabled and one target partition, grouped
-/// all-DISTINCT aggregates stay native if every function explicitly supports a
-/// specialized `GroupsAccumulator` for its argument types.
+/// all-DISTINCT aggregates stay native when every DISTINCT argument is a
+/// fixed-width, non-float type (such as integers, decimals, dates).
+///
+/// Skipping the two-phase rewrite avoids materializing intermediate
+/// `(group, distinct value)` pairs, lowering peak memory when there are few
+/// groups with many distinct values each. With many small groups it can use
+/// more memory and run slower, because functions without a specialized DISTINCT
+/// `GroupsAccumulator` maintain one accumulator per group. Queries without
+/// `GROUP BY`, multi-partition queries, or queries with float/variable-length
+/// arguments continue to use the two-phase rewrite.
 #[derive(Default, Debug)]
 pub struct SingleDistinctToGroupBy {}
 
@@ -110,7 +122,49 @@ impl CountRollup {
     }
 }
 
-/// Check whether all aggregate exprs are distinct on a single field.
+/// Returns `true` for fixed-width primitive types where single-phase distinct
+/// accumulation avoids heap allocation churn **and** where bit-identity equals
+/// value-equality, so that skipping the GROUP BY rewrite cannot silently change
+/// query results.
+///
+/// Float types are deliberately excluded: IEEE 754 defines `-0.0 == 0.0`, so a
+/// `GROUP BY` on floats merges those two bit-patterns into one group. The
+/// native distinct accumulators hash raw bits and therefore count them
+/// separately. Keeping floats in this list would let `single_distinct_prefer_native`
+/// skip the rewrite for a float column, producing a different answer than the
+/// non-rewritten path — a silent correctness regression.
+///
+/// `Duration` is also excluded: `avg` has no native DISTINCT accumulator for duration
+/// types, so skipping the rewrite would cause a runtime error.
+fn is_fixed_width_type(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Boolean
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Timestamp(_, _)
+            | DataType::Interval(_)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
+    )
+}
+
+/// Check whether all aggregate exprs are eligible for the single-distinct-to-group-by rewrite.
+///
+/// When `use_native_grouped_distinct` is set, all-DISTINCT queries on fixed-width,
+/// non-float types skip the rewrite and run natively to reduce intermediate memory.
+/// All other queries (un-grouped, multi-partition, mixed distinct, unsupported UDAFs,
+/// floats, or variable-width types) proceed with the rewrite.
 fn is_single_distinct_agg(
     aggr_expr: &[Expr],
     input_schema: &DFSchema,
@@ -158,8 +212,17 @@ fn is_single_distinct_agg(
     if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
         return Ok(false);
     }
-    // With one target partition, a native GroupsAccumulator avoids building an
-    // extra aggregate with a row per (group, distinct value) pair. With multiple
+    // Aggregates with DistinctHandling::Unsupported (e.g. approx_median) cannot
+    // run natively with DISTINCT; they must always be rewritten.
+    if distinct_aggs
+        .iter()
+        .any(|(func, _)| func.distinct_handling() == DistinctHandling::Unsupported)
+    {
+        return Ok(true);
+    }
+
+    // With one target partition, native accumulation avoids building an extra
+    // aggregate with a row per (group, distinct value) pair. With multiple
     // partitions, the rewrite also distributes deduplication by both keys;
     // keeping DISTINCT instead repartitions lists of values by group and merges
     // them in the final accumulator. That can concentrate work on a few groups.
@@ -167,15 +230,23 @@ fn is_single_distinct_agg(
     // ALL or an existing partitioned table), requiring Partial/Final state merging.
     // This is opt-in: the rule cannot see memory limits or cost the input, and
     // native DISTINCT must fit each group's distinct values in memory.
-    if use_native_grouped_distinct
-        && distinct_aggs.len() == aggregate_count
-        // An unknown answer must preserve the existing rewrite.
-        && distinct_groups_support(&distinct_aggs, input_schema)?
+    //
+    // The rewrite is skipped only when every aggregate is a DISTINCT aggregate
+    // over fixed-width primitive types (integers, decimals, dates, etc.) where
+    // bit-identity equals value-equality. Floats are excluded to avoid -0.0 vs
+    // 0.0 IEEE 754 discrepancy, and variable-length types (strings, binary) are
+    // excluded to prevent heap allocation churn.
+    if use_native_grouped_distinct && distinct_aggs.len() == aggregate_count {
+        let arg_types = distinct_aggs
             .iter()
-            .all(|support| *support == Some(true))
-    {
-        return Ok(false);
+            .flat_map(|(_, args)| args.iter())
+            .map(|arg| arg.get_type(input_schema))
+            .collect::<Result<Vec<_>>>()?;
+        if arg_types.iter().all(is_fixed_width_type) {
+            return Ok(false);
+        }
     }
+
     if has_count_rollup && !rewrite_pays_for_count(&distinct_aggs, input_schema)? {
         return Ok(false);
     }
