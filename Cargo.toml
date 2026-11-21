@@ -398,18 +398,3 @@ incremental = false
 [profile.ci-bench]
 inherits = "ci"
 opt-level = 1
-
-[patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "5d46410e46b2f5c09fc5dbdef856efcc28541c85" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "5d46410e46b2f5c09fc5dbdef856efcc28541c85" }
-arrow-avro = { git = "https://github.com/apache/arrow-rs.git", rev = "5d46410e46b2f5c09fc5dbdef856efcc28541c85" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "5d46410e46b2f5c09fc5dbdef856efcc28541c85" }
-arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "5d46410e46b2f5c09fc5dbdef856efcc28541c85" }
-arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "5d46410e46b2f5c09fc5dbdef856efcc28541c85" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "5d46410e46b2f5c09fc5dbdef856efcc28541c85" }
-arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "5d46410e46b2f5c09fc5dbdef856efcc28541c85" }
-arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "5d46410e46b2f5c09fc5dbdef856efcc28541c85" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "5d46410e46b2f5c09fc5dbdef856efcc28541c85" }
-arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "5d46410e46b2f5c09fc5dbdef856efcc28541c85" }
-arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "5d46410e46b2f5c09fc5dbdef856efcc28541c85" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "5d46410e46b2f5c09fc5dbdef856efcc28541c85" }
