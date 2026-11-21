@@ -1099,3 +1099,165 @@ drop table cast_preimage_tz;
 
 statement ok
 drop table cast_preimage_tz_ms;
+
+# Date32 -> timestamp: midnight literals unwrap to a date comparison.
+statement ok
+CREATE TABLE cast_preimage_date32 AS
+SELECT id, arrow_cast(v, 'Date32') AS d
+FROM (VALUES (1, -2), (2, -1), (3, 0), (4, 1), (5, 2), (6, NULL)) AS t(id, v);
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_date32
+WHERE CAST(d AS TIMESTAMP(0)) = arrow_cast(-86400, 'Timestamp(s)');
+----
+logical_plan
+01)Filter: cast_preimage_date32.d = Date32("1969-12-31")
+02)--TableScan: cast_preimage_date32 projection=[id, d]
+physical_plan
+01)FilterExec: d@1 = 1969-12-31
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A non-midnight literal rounds up to the next day, including before the epoch.
+query TT
+EXPLAIN SELECT * FROM cast_preimage_date32
+WHERE TIMESTAMP '1969-12-31 23:59:59.999999999' < d;
+----
+logical_plan
+01)Filter: cast_preimage_date32.d >= Date32("1970-01-01")
+02)--TableScan: cast_preimage_date32 projection=[id, d]
+physical_plan
+01)FilterExec: d@1 >= 1970-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# IN lists use the exact-preimage path rather than the comparison range path.
+query TT
+EXPLAIN SELECT * FROM cast_preimage_date32
+WHERE CAST(d AS TIMESTAMP(3)) IN
+  (arrow_cast(-86400000, 'Timestamp(ms)'), arrow_cast(86400000, 'Timestamp(ms)'));
+----
+logical_plan
+01)Filter: cast_preimage_date32.d = Date32("1969-12-31") OR cast_preimage_date32.d = Date32("1970-01-02")
+02)--TableScan: cast_preimage_date32 projection=[id, d]
+physical_plan
+01)FilterExec: d@1 = 1969-12-31 OR d@1 = 1970-01-02
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IB
+SELECT id, CAST(d AS TIMESTAMP(3)) IN
+  (arrow_cast(-86400000, 'Timestamp(ms)'), arrow_cast(86400000, 'Timestamp(ms)'))
+FROM cast_preimage_date32 ORDER BY id;
+----
+1 false
+2 true
+3 false
+4 true
+5 false
+6 NULL
+
+query IBBB
+SELECT id,
+  d = TIMESTAMP '1969-12-31 00:00:00',
+  d = TIMESTAMP '1969-12-31 23:59:59.999999999',
+  d > TIMESTAMP '1969-12-31 23:59:59.999999999'
+FROM cast_preimage_date32 ORDER BY id;
+----
+1 false false false
+2 true false false
+3 false false true
+4 false false true
+5 false false true
+6 NULL NULL NULL
+
+statement ok
+DROP TABLE cast_preimage_date32;
+
+# Date64 preserves sub-day milliseconds. EXPLAIN only displays dates, so the
+# result checks below also verify the millisecond precision of the bounds.
+statement ok
+CREATE TABLE cast_preimage_date64 AS
+SELECT id, arrow_cast(v, 'Date64') AS d
+FROM (VALUES (1, -2000), (2, -1999), (3, -1000), (4, -999), (5, -1),
+             (6, 0), (7, 1), (8, 999), (9, 1000), (10, 1999),
+             (11, 2000), (12, NULL)) AS t(id, v);
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_date64
+WHERE CAST(d AS TIMESTAMP(6)) = arrow_cast(-1000, 'Timestamp(us)');
+----
+logical_plan
+01)Filter: cast_preimage_date64.d = Date64("1970-01-01")
+02)--TableScan: cast_preimage_date64 projection=[id, d]
+physical_plan
+01)FilterExec: d@1 = 1970-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Non-millisecond literals round up to the next millisecond.
+query TT
+EXPLAIN SELECT * FROM cast_preimage_date64
+WHERE CAST(d AS TIMESTAMP(6)) <= arrow_cast(-1, 'Timestamp(us)');
+----
+logical_plan
+01)Filter: cast_preimage_date64.d < Date64("1970-01-01")
+02)--TableScan: cast_preimage_date64 projection=[id, d]
+physical_plan
+01)FilterExec: d@1 < 1970-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Seconds truncate toward zero: -1s is [-1999ms, -999ms), 0s is
+# [-999ms, 1000ms), and 1s is [1000ms, 2000ms).
+query TT
+EXPLAIN SELECT * FROM cast_preimage_date64
+WHERE CAST(d AS TIMESTAMP(0)) = arrow_cast(-1, 'Timestamp(s)');
+----
+logical_plan
+01)Filter: cast_preimage_date64.d >= Date64("1970-01-01") AND cast_preimage_date64.d < Date64("1970-01-01")
+02)--TableScan: cast_preimage_date64 projection=[id, d]
+physical_plan
+01)FilterExec: d@1 >= 1970-01-01 AND d@1 < 1970-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IBBBBB
+SELECT id,
+  CAST(d AS TIMESTAMP(6)) = arrow_cast(-1000, 'Timestamp(us)'),
+  CAST(d AS TIMESTAMP(6)) <= arrow_cast(-1, 'Timestamp(us)'),
+  CAST(d AS TIMESTAMP(0)) = arrow_cast(-1, 'Timestamp(s)'),
+  CAST(d AS TIMESTAMP(0)) = arrow_cast(0, 'Timestamp(s)'),
+  CAST(d AS TIMESTAMP(0)) = arrow_cast(1, 'Timestamp(s)')
+FROM cast_preimage_date64 ORDER BY id;
+----
+1 false true false false false
+2 false true true false false
+3 false true true false false
+4 false true false true false
+5 true true false true false
+6 false false false true false
+7 false false false true false
+8 false false false true false
+9 false false false false true
+10 false false false false true
+11 false false false false false
+12 NULL NULL NULL NULL NULL
+
+statement ok
+DROP TABLE cast_preimage_date64;
+
+# The year 2500 fits in Date32 and Date64 but overflows a nanosecond timestamp.
+statement ok
+CREATE TABLE cast_preimage_date_overflow AS
+SELECT id, d AS d32, arrow_cast(d, 'Date64') AS d64
+FROM (VALUES (1, DATE '1969-12-31'), (2, DATE '2500-01-01'), (3, NULL)) AS t(id, d);
+
+query IBBBB
+SELECT id,
+  CAST(d32 AS TIMESTAMP(9)) > TIMESTAMP '1970-01-01 00:00:00' AS d32_gt,
+  TRY_CAST(d32 AS TIMESTAMP(9)) > TIMESTAMP '1970-01-01 00:00:00' AS try_d32_gt,
+  CAST(d64 AS TIMESTAMP(9)) > TIMESTAMP '1970-01-01 00:00:00' AS d64_gt,
+  TRY_CAST(d64 AS TIMESTAMP(9)) > TIMESTAMP '1970-01-01 00:00:00' AS try_d64_gt
+FROM cast_preimage_date_overflow ORDER BY id;
+----
+1 false false false false
+2 true true true true
+3 NULL NULL NULL NULL
+
+statement ok
+DROP TABLE cast_preimage_date_overflow;
