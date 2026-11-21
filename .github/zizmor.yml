@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+rules:
+  dangerous-triggers:
+    ignore:
+      # These workflows intentionally use workflow_run or issue_comment
+      # to safely handle fork CI, labeling, and community comments.
+      - breaking_changes_detector_comment.yml
+      - fork_ci_status.yml
+      - labeler.yml
+      - take.yml
+  artipacked:
+    ignore:
+      # These steps check out the asf-site branch to commit and push generated docs
+      - docs.yaml
+      - docs_versions.yaml
+  github-env:
+    ignore:
+      # Toolchain installers intentionally append cargo and protoc binaries to GITHUB_PATH
+      - action.yaml
+  self-repository:
+    # GitHub self-repository syntax ($/...) relies on archive tarball downloads
+    # which are blocked by .gitattributes .github/ export-ignore in DataFusion.
+    # In-repo composite actions are checked out via actions/checkout and invoked via ./
+    disable: true

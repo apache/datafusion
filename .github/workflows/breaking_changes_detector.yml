@@ -50,6 +50,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 2
+          persist-credentials: false
 
       # Compare against the base branch commit the PR was merged into, not the
       # base branch's current tip, which may include changes the PR is not

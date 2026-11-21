@@ -30,4 +30,4 @@ runs:
         rustup default stable
         rustup component add rustfmt
     - name: Configure rust runtime env
-      uses: ./.github/actions/setup-rust-runtime        
+      uses: ./.github/actions/setup-rust-runtime
