@@ -44,12 +44,10 @@ async fn csv_opener() -> Result<()> {
     let csv_path = dataset.path();
     let schema = dataset.schema();
 
-    let options = CsvOptions {
-        has_header: Some(true),
-        delimiter: b',',
-        quote: b'"',
-        ..Default::default()
-    };
+    let mut options = CsvOptions::default();
+    options.has_header = Some(true);
+    options.delimiter = b',';
+    options.quote = b'"';
 
     let source = CsvSource::new(Arc::clone(&schema))
         .with_csv_options(options)

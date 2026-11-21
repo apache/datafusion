@@ -1237,10 +1237,8 @@ mod tests {
         );
 
         let mut session = SessionConfig::default();
-        let mut parquet_opts = ParquetOptions {
-            allow_single_file_parallelism: true,
-            ..Default::default()
-        };
+        let mut parquet_opts = ParquetOptions::default();
+        parquet_opts.allow_single_file_parallelism = true;
         parquet_opts.allow_single_file_parallelism = true;
         session.options_mut().execution.parquet = parquet_opts;
 
@@ -1288,12 +1286,10 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_sink_parallel_write() -> Result<()> {
-        let opts = ParquetOptions {
-            allow_single_file_parallelism: true,
-            maximum_parallel_row_group_writers: 2,
-            maximum_buffered_record_batches_per_stream: 2,
-            ..Default::default()
-        };
+        let mut opts = ParquetOptions::default();
+        opts.allow_single_file_parallelism = true;
+        opts.maximum_parallel_row_group_writers = 2;
+        opts.maximum_buffered_record_batches_per_stream = 2;
 
         let parquet_sink =
             create_written_parquet_sink_using_config("file:///", opts).await?;
@@ -1398,48 +1394,40 @@ mod tests {
         .concat();
 
         // single threaded write, skip insert
-        let opts = ParquetOptions {
-            allow_single_file_parallelism: false,
-            skip_arrow_metadata: true,
-            ..Default::default()
-        };
+        let mut opts = ParquetOptions::default();
+        opts.allow_single_file_parallelism = false;
+        opts.skip_arrow_metadata = true;
         let parquet_sink =
             create_written_parquet_sink_using_config("file:///", opts).await?;
         let (_, file_metadata) = get_written(parquet_sink)?;
         assert_file_metadata(file_metadata, &expected_without);
 
         // single threaded write, do not skip insert
-        let opts = ParquetOptions {
-            allow_single_file_parallelism: false,
-            skip_arrow_metadata: false,
-            ..Default::default()
-        };
+        let mut opts = ParquetOptions::default();
+        opts.allow_single_file_parallelism = false;
+        opts.skip_arrow_metadata = false;
         let parquet_sink =
             create_written_parquet_sink_using_config("file:///", opts).await?;
         let (_, file_metadata) = get_written(parquet_sink)?;
         assert_file_metadata(file_metadata, &expected_with);
 
         // multithreaded write, skip insert
-        let opts = ParquetOptions {
-            allow_single_file_parallelism: true,
-            maximum_parallel_row_group_writers: 2,
-            maximum_buffered_record_batches_per_stream: 2,
-            skip_arrow_metadata: true,
-            ..Default::default()
-        };
+        let mut opts = ParquetOptions::default();
+        opts.allow_single_file_parallelism = true;
+        opts.maximum_parallel_row_group_writers = 2;
+        opts.maximum_buffered_record_batches_per_stream = 2;
+        opts.skip_arrow_metadata = true;
         let parquet_sink =
             create_written_parquet_sink_using_config("file:///", opts).await?;
         let (_, file_metadata) = get_written(parquet_sink)?;
         assert_file_metadata(file_metadata, &expected_without);
 
         // multithreaded write, do not skip insert
-        let opts = ParquetOptions {
-            allow_single_file_parallelism: true,
-            maximum_parallel_row_group_writers: 2,
-            maximum_buffered_record_batches_per_stream: 2,
-            skip_arrow_metadata: false,
-            ..Default::default()
-        };
+        let mut opts = ParquetOptions::default();
+        opts.allow_single_file_parallelism = true;
+        opts.maximum_parallel_row_group_writers = 2;
+        opts.maximum_buffered_record_batches_per_stream = 2;
+        opts.skip_arrow_metadata = false;
         let parquet_sink =
             create_written_parquet_sink_using_config("file:///", opts).await?;
         let (_, file_metadata) = get_written(parquet_sink)?;
@@ -1771,30 +1759,24 @@ mod tests {
             Ok(())
         }
 
-        let write_opts = ParquetOptions {
-            allow_single_file_parallelism: false,
-            ..Default::default()
-        };
+        let mut write_opts = ParquetOptions::default();
+        write_opts.allow_single_file_parallelism = false;
         test_memory_reservation(write_opts)
             .await
             .expect("should track for non-parallel writes");
 
-        let row_parallel_write_opts = ParquetOptions {
-            allow_single_file_parallelism: true,
-            maximum_parallel_row_group_writers: 10,
-            maximum_buffered_record_batches_per_stream: 1,
-            ..Default::default()
-        };
+        let mut row_parallel_write_opts = ParquetOptions::default();
+        row_parallel_write_opts.allow_single_file_parallelism = true;
+        row_parallel_write_opts.maximum_parallel_row_group_writers = 10;
+        row_parallel_write_opts.maximum_buffered_record_batches_per_stream = 1;
         test_memory_reservation(row_parallel_write_opts)
             .await
             .expect("should track for row-parallel writes");
 
-        let col_parallel_write_opts = ParquetOptions {
-            allow_single_file_parallelism: true,
-            maximum_parallel_row_group_writers: 1,
-            maximum_buffered_record_batches_per_stream: 2,
-            ..Default::default()
-        };
+        let mut col_parallel_write_opts = ParquetOptions::default();
+        col_parallel_write_opts.allow_single_file_parallelism = true;
+        col_parallel_write_opts.maximum_parallel_row_group_writers = 1;
+        col_parallel_write_opts.maximum_buffered_record_batches_per_stream = 2;
         test_memory_reservation(col_parallel_write_opts)
             .await
             .expect("should track for column-parallel writes");

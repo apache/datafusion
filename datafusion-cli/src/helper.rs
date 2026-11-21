@@ -327,9 +327,10 @@ mod tests {
         let nested = |depth: usize| {
             format!("select {}1{};", "abs(".repeat(depth), ")".repeat(depth))
         };
-        let with_limit = |limit: usize| SqlParserOptions {
-            recursion_limit: ConfigNonZeroUsize::try_new(limit).unwrap(),
-            ..Default::default()
+        let with_limit = |limit: usize| {
+            let mut options = SqlParserOptions::default();
+            options.recursion_limit = ConfigNonZeroUsize::try_new(limit).unwrap();
+            options
         };
 
         // exceeds the default recursion limit

@@ -453,12 +453,10 @@ fn csv_exec() -> Arc<DataSourceExec> {
 fn csv_exec_with_sort(output_ordering: Vec<LexOrdering>) -> Arc<DataSourceExec> {
     let config =
         FileScanConfigBuilder::new(ObjectStoreUrl::parse("test:///").unwrap(), {
-            let options = CsvOptions {
-                has_header: Some(false),
-                delimiter: b',',
-                quote: b'"',
-                ..Default::default()
-            };
+            let mut options = CsvOptions::default();
+            options.has_header = Some(false);
+            options.delimiter = b',';
+            options.quote = b'"';
             Arc::new(CsvSource::new(schema()).with_csv_options(options))
         })
         .with_file(PartitionedFile::new("x".to_string(), 100))
@@ -476,12 +474,10 @@ fn csv_exec_multiple() -> Arc<DataSourceExec> {
 fn csv_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<DataSourceExec> {
     let config =
         FileScanConfigBuilder::new(ObjectStoreUrl::parse("test:///").unwrap(), {
-            let options = CsvOptions {
-                has_header: Some(false),
-                delimiter: b',',
-                quote: b'"',
-                ..Default::default()
-            };
+            let mut options = CsvOptions::default();
+            options.has_header = Some(false);
+            options.delimiter = b',';
+            options.quote = b'"';
             Arc::new(CsvSource::new(schema()).with_csv_options(options))
         })
         .with_file_groups(vec![
@@ -5027,12 +5023,10 @@ fn parallelization_compressed_csv() -> Result<()> {
             let plan = aggregate_exec_with_alias(
                 DataSourceExec::from_data_source(
                     FileScanConfigBuilder::new(ObjectStoreUrl::parse("test:///").unwrap(), {
-                        let options = CsvOptions {
-                            has_header: Some(false),
-                            delimiter: b',',
-                            quote: b'"',
-                            ..Default::default()
-                        };
+                        let mut options = CsvOptions::default();
+                        options.has_header = Some(false);
+                        options.delimiter = b',';
+                        options.quote = b'"';
                         Arc::new(CsvSource::new(schema()).with_csv_options(options))
                     })
                     .with_file(PartitionedFile::new("x".to_string(), 100))

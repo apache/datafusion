@@ -70,12 +70,10 @@ fn csv_exec_sorted(
     schema: &SchemaRef,
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
 ) -> Arc<dyn ExecutionPlan> {
-    let options = CsvOptions {
-        has_header: Some(false),
-        delimiter: 0,
-        quote: 0,
-        ..Default::default()
-    };
+    let mut options = CsvOptions::default();
+    options.has_header = Some(false);
+    options.delimiter = 0;
+    options.quote = 0;
     let mut builder = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
         Arc::new(CsvSource::new(schema.clone()).with_csv_options(options)),

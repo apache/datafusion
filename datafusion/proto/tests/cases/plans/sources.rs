@@ -574,18 +574,17 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
     for newlines_in_values in [Some(true), Some(false), None] {
         let table_schema = TableSchema::from(&file_schema);
+        let mut csv_options = CsvOptions::default();
+        csv_options.has_header = Some(false);
+        csv_options.delimiter = b'|';
+        csv_options.quote = b'\'';
+        csv_options.escape = Some(b'\\');
+        csv_options.comment = Some(b'#');
+        csv_options.terminator = Some(0xff);
+        csv_options.newlines_in_values = newlines_in_values;
+        csv_options.truncated_rows = Some(true);
         let file_source =
-            Arc::new(CsvSource::new(table_schema).with_csv_options(CsvOptions {
-                has_header: Some(false),
-                delimiter: b'|',
-                quote: b'\'',
-                escape: Some(b'\\'),
-                comment: Some(b'#'),
-                terminator: Some(0xff),
-                newlines_in_values,
-                truncated_rows: Some(true),
-                ..Default::default()
-            }));
+            Arc::new(CsvSource::new(table_schema).with_csv_options(csv_options));
 
         let scan_config =
             FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)

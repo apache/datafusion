@@ -84,12 +84,10 @@ pub fn scan_partitioned_csv(
         FileCompressionType::UNCOMPRESSED,
         work_dir,
     )?;
-    let options = CsvOptions {
-        has_header: Some(true),
-        delimiter: b',',
-        quote: b'"',
-        ..Default::default()
-    };
+    let mut options = CsvOptions::default();
+    options.has_header = Some(true);
+    options.delimiter = b',';
+    options.quote = b'"';
     let table_schema = TableSchema::from(schema);
     let source = Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
     let config =

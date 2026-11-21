@@ -181,114 +181,116 @@ impl TryFrom<&CsvOptionsProto> for CsvOptions {
     type Error = datafusion_common::DataFusionError;
 
     fn try_from(proto: &CsvOptionsProto) -> datafusion_common::Result<Self, Self::Error> {
-        Ok(CsvOptions {
-            has_header: if !proto.has_header.is_empty() {
-                Some(proto.has_header[0] != 0)
-            } else {
-                None
-            },
-            delimiter: proto.delimiter.first().copied().unwrap_or(b','),
-            quote: proto.quote.first().copied().unwrap_or(b'"'),
-            terminator: if !proto.terminator.is_empty() {
-                Some(proto.terminator[0])
-            } else {
-                None
-            },
-            escape: if !proto.escape.is_empty() {
-                Some(proto.escape[0])
-            } else {
-                None
-            },
-            double_quote: if !proto.double_quote.is_empty() {
-                Some(proto.double_quote[0] != 0)
-            } else {
-                None
-            },
-            compression: match proto.compression {
-                0 => CompressionTypeVariant::GZIP,
-                1 => CompressionTypeVariant::BZIP2,
-                2 => CompressionTypeVariant::XZ,
-                3 => CompressionTypeVariant::ZSTD,
-                _ => CompressionTypeVariant::UNCOMPRESSED,
-            },
-            schema_infer_max_rec: proto
-                .schema_infer_max_rec
-                .map(|value| usize_from_wire(value, "CsvOptions", "schema_infer_max_rec"))
-                .transpose()?,
-            date_format: if proto.date_format.is_empty() {
-                None
-            } else {
-                Some(proto.date_format.clone())
-            },
-            datetime_format: if proto.datetime_format.is_empty() {
-                None
-            } else {
-                Some(proto.datetime_format.clone())
-            },
-            timestamp_format: if proto.timestamp_format.is_empty() {
-                None
-            } else {
-                Some(proto.timestamp_format.clone())
-            },
-            timestamp_tz_format: if proto.timestamp_tz_format.is_empty() {
-                None
-            } else {
-                Some(proto.timestamp_tz_format.clone())
-            },
-            time_format: if proto.time_format.is_empty() {
-                None
-            } else {
-                Some(proto.time_format.clone())
-            },
-            null_value: if proto.null_value.is_empty() {
-                None
-            } else {
-                Some(proto.null_value.clone())
-            },
-            null_regex: if proto.null_regex.is_empty() {
-                None
-            } else {
-                Some(proto.null_regex.clone())
-            },
-            comment: if !proto.comment.is_empty() {
-                Some(proto.comment[0])
-            } else {
-                None
-            },
-            newlines_in_values: if proto.newlines_in_values.is_empty() {
-                None
-            } else {
-                Some(proto.newlines_in_values[0] != 0)
-            },
-            truncated_rows: if proto.truncated_rows.is_empty() {
-                None
-            } else {
-                Some(proto.truncated_rows[0] != 0)
-            },
-            compression_level: proto.compression_level,
-            quote_style: match CsvQuoteStyleProto::try_from(proto.quote_style) {
-                Ok(CsvQuoteStyleProto::Always) => CsvQuoteStyle::Always,
-                Ok(CsvQuoteStyleProto::NonNumeric) => CsvQuoteStyle::NonNumeric,
-                Ok(CsvQuoteStyleProto::Never) => CsvQuoteStyle::Never,
-                Ok(CsvQuoteStyleProto::Necessary) => CsvQuoteStyle::Necessary,
-                _ => CsvQuoteStyle::Necessary,
-            },
-            ignore_leading_whitespace: if proto.ignore_leading_whitespace.is_empty() {
-                None
-            } else {
-                Some(proto.ignore_leading_whitespace[0] != 0)
-            },
-            ignore_trailing_whitespace: if proto.ignore_trailing_whitespace.is_empty() {
+        let mut options = CsvOptions::default();
+        options.has_header = if !proto.has_header.is_empty() {
+            Some(proto.has_header[0] != 0)
+        } else {
+            None
+        };
+        options.delimiter = proto.delimiter.first().copied().unwrap_or(b',');
+        options.quote = proto.quote.first().copied().unwrap_or(b'"');
+        options.terminator = if !proto.terminator.is_empty() {
+            Some(proto.terminator[0])
+        } else {
+            None
+        };
+        options.escape = if !proto.escape.is_empty() {
+            Some(proto.escape[0])
+        } else {
+            None
+        };
+        options.double_quote = if !proto.double_quote.is_empty() {
+            Some(proto.double_quote[0] != 0)
+        } else {
+            None
+        };
+        options.compression = match proto.compression {
+            0 => CompressionTypeVariant::GZIP,
+            1 => CompressionTypeVariant::BZIP2,
+            2 => CompressionTypeVariant::XZ,
+            3 => CompressionTypeVariant::ZSTD,
+            _ => CompressionTypeVariant::UNCOMPRESSED,
+        };
+        options.schema_infer_max_rec = proto
+            .schema_infer_max_rec
+            .map(|value| usize_from_wire(value, "CsvOptions", "schema_infer_max_rec"))
+            .transpose()?;
+        options.date_format = if proto.date_format.is_empty() {
+            None
+        } else {
+            Some(proto.date_format.clone())
+        };
+        options.datetime_format = if proto.datetime_format.is_empty() {
+            None
+        } else {
+            Some(proto.datetime_format.clone())
+        };
+        options.timestamp_format = if proto.timestamp_format.is_empty() {
+            None
+        } else {
+            Some(proto.timestamp_format.clone())
+        };
+        options.timestamp_tz_format = if proto.timestamp_tz_format.is_empty() {
+            None
+        } else {
+            Some(proto.timestamp_tz_format.clone())
+        };
+        options.time_format = if proto.time_format.is_empty() {
+            None
+        } else {
+            Some(proto.time_format.clone())
+        };
+        options.null_value = if proto.null_value.is_empty() {
+            None
+        } else {
+            Some(proto.null_value.clone())
+        };
+        options.null_regex = if proto.null_regex.is_empty() {
+            None
+        } else {
+            Some(proto.null_regex.clone())
+        };
+        options.comment = if !proto.comment.is_empty() {
+            Some(proto.comment[0])
+        } else {
+            None
+        };
+        options.newlines_in_values = if proto.newlines_in_values.is_empty() {
+            None
+        } else {
+            Some(proto.newlines_in_values[0] != 0)
+        };
+        options.truncated_rows = if proto.truncated_rows.is_empty() {
+            None
+        } else {
+            Some(proto.truncated_rows[0] != 0)
+        };
+        options.compression_level = proto.compression_level;
+        options.quote_style = match CsvQuoteStyleProto::try_from(proto.quote_style) {
+            Ok(CsvQuoteStyleProto::Always) => CsvQuoteStyle::Always,
+            Ok(CsvQuoteStyleProto::NonNumeric) => CsvQuoteStyle::NonNumeric,
+            Ok(CsvQuoteStyleProto::Never) => CsvQuoteStyle::Never,
+            Ok(CsvQuoteStyleProto::Necessary) => CsvQuoteStyle::Necessary,
+            _ => CsvQuoteStyle::Necessary,
+        };
+        options.ignore_leading_whitespace = if proto.ignore_leading_whitespace.is_empty()
+        {
+            None
+        } else {
+            Some(proto.ignore_leading_whitespace[0] != 0)
+        };
+        options.ignore_trailing_whitespace =
+            if proto.ignore_trailing_whitespace.is_empty() {
                 None
             } else {
                 Some(proto.ignore_trailing_whitespace[0] != 0)
-            },
-            match_columns_by_header: if proto.match_columns_by_header.is_empty() {
-                None
-            } else {
-                Some(proto.match_columns_by_header[0] != 0)
-            },
-        })
+            };
+        options.match_columns_by_header = if proto.match_columns_by_header.is_empty() {
+            None
+        } else {
+            Some(proto.match_columns_by_header[0] != 0)
+        };
+        Ok(options)
     }
 }
 
@@ -298,23 +300,21 @@ impl TryFrom<&JsonOptionsProto> for JsonOptions {
     fn try_from(
         proto: &JsonOptionsProto,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        Ok(JsonOptions {
-            compression: match proto.compression {
-                0 => CompressionTypeVariant::GZIP,
-                1 => CompressionTypeVariant::BZIP2,
-                2 => CompressionTypeVariant::XZ,
-                3 => CompressionTypeVariant::ZSTD,
-                _ => CompressionTypeVariant::UNCOMPRESSED,
-            },
-            schema_infer_max_rec: proto
-                .schema_infer_max_rec
-                .map(|value| {
-                    usize_from_wire(value, "JsonOptions", "schema_infer_max_rec")
-                })
-                .transpose()?,
-            compression_level: proto.compression_level,
-            newline_delimited: proto.newline_delimited.unwrap_or(true),
-        })
+        let mut options = JsonOptions::default();
+        options.compression = match proto.compression {
+            0 => CompressionTypeVariant::GZIP,
+            1 => CompressionTypeVariant::BZIP2,
+            2 => CompressionTypeVariant::XZ,
+            3 => CompressionTypeVariant::ZSTD,
+            _ => CompressionTypeVariant::UNCOMPRESSED,
+        };
+        options.schema_infer_max_rec = proto
+            .schema_infer_max_rec
+            .map(|value| usize_from_wire(value, "JsonOptions", "schema_infer_max_rec"))
+            .transpose()?;
+        options.compression_level = proto.compression_level;
+        options.newline_delimited = proto.newline_delimited.unwrap_or(true);
+        Ok(options)
     }
 }
 
@@ -326,12 +326,12 @@ impl TryFrom<ParquetCdcOptionsProto> for ParquetCdcOptions {
     ) -> datafusion_common::Result<Self, Self::Error> {
         let to_usize =
             |value: u64, field: &str| usize_from_wire(value, "ParquetCdcOptions", field);
-        Ok(ParquetCdcOptions {
-            enabled: value.enabled,
-            min_chunk_size: to_usize(value.min_chunk_size, "min_chunk_size")?,
-            max_chunk_size: to_usize(value.max_chunk_size, "max_chunk_size")?,
-            norm_level: value.norm_level,
-        })
+        let mut options = ParquetCdcOptions::default();
+        options.enabled = value.enabled;
+        options.min_chunk_size = to_usize(value.min_chunk_size, "min_chunk_size")?;
+        options.max_chunk_size = to_usize(value.max_chunk_size, "max_chunk_size")?;
+        options.norm_level = value.norm_level;
+        Ok(options)
     }
 }
 
@@ -351,66 +351,63 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
         let to_usize =
             |value: u64, field: &str| usize_from_wire(value, "ParquetOptions", field);
 
-        Ok(ParquetOptions {
-            enable_page_index: proto.enable_page_index,
-            pruning: proto.pruning,
-            skip_metadata: proto.skip_metadata,
-            metadata_size_hint: proto
-                .metadata_size_hint_opt
-                .as_ref()
-                .map(|opt| match opt {
-                    parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size) => {
-                        to_usize(*size, "metadata_size_hint")
-                    }
-                })
-                .transpose()?,
-            pushdown_filters: proto.pushdown_filters,
-            reorder_filters: proto.reorder_filters,
-            force_filter_selections: proto.force_filter_selections,
-            enable_exact_reverse_scan: proto.enable_exact_reverse_scan,
-            data_pagesize_limit: to_usize(
-                proto.data_pagesize_limit,
-                "data_pagesize_limit",
-            )?,
-            write_batch_size: to_usize(proto.write_batch_size, "write_batch_size")?,
-            writer_version,
-            compression: proto
-                .compression_opt
-                .as_ref()
-                .map(|opt| match opt {
-                    parquet_options::CompressionOpt::Compression(compression) => {
-                        compression.parse()
-                    }
-                })
-                .transpose()?,
-            enable_rle_to_dictionary: proto.enable_rle_to_dictionary,
-            dictionary_enabled: proto.dictionary_enabled_opt.as_ref().map(|opt| {
-                match opt {
-                    parquet_options::DictionaryEnabledOpt::DictionaryEnabled(
-                        enabled,
-                    ) => *enabled,
+        let mut options = ParquetOptions::default();
+        options.enable_page_index = proto.enable_page_index;
+        options.pruning = proto.pruning;
+        options.skip_metadata = proto.skip_metadata;
+        options.metadata_size_hint = proto
+            .metadata_size_hint_opt
+            .as_ref()
+            .map(|opt| match opt {
+                parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size) => {
+                    to_usize(*size, "metadata_size_hint")
                 }
-            }),
-            dictionary_page_size_limit: to_usize(
-                proto.dictionary_page_size_limit,
-                "dictionary_page_size_limit",
-            )?,
-            statistics_enabled: proto
-                .statistics_enabled_opt
-                .as_ref()
-                .map(|opt| match opt {
-                    parquet_options::StatisticsEnabledOpt::StatisticsEnabled(
-                        statistics,
-                    ) => statistics.parse(),
-                })
-                .transpose()?,
-            max_row_group_size: to_usize(proto.max_row_group_size, "max_row_group_size")?,
-            max_in_list_size: to_usize(proto.max_in_list_size, "max_in_list_size")?,
-            row_group_range_assignment: RowGroupRangeAssignment::from_proto_str(
-                &proto.row_group_range_assignment,
-            )?,
-            created_by: proto.created_by.clone(),
-            column_index_truncate_length: proto
+            })
+            .transpose()?;
+        options.pushdown_filters = proto.pushdown_filters;
+        options.reorder_filters = proto.reorder_filters;
+        options.force_filter_selections = proto.force_filter_selections;
+        options.enable_exact_reverse_scan = proto.enable_exact_reverse_scan;
+        options.data_pagesize_limit =
+            to_usize(proto.data_pagesize_limit, "data_pagesize_limit")?;
+        options.write_batch_size = to_usize(proto.write_batch_size, "write_batch_size")?;
+        options.writer_version = writer_version;
+        options.compression = proto
+            .compression_opt
+            .as_ref()
+            .map(|opt| match opt {
+                parquet_options::CompressionOpt::Compression(compression) => {
+                    compression.parse()
+                }
+            })
+            .transpose()?;
+        options.enable_rle_to_dictionary = proto.enable_rle_to_dictionary;
+        options.dictionary_enabled =
+            proto.dictionary_enabled_opt.as_ref().map(|opt| match opt {
+                parquet_options::DictionaryEnabledOpt::DictionaryEnabled(enabled) => {
+                    *enabled
+                }
+            });
+        options.dictionary_page_size_limit = to_usize(
+            proto.dictionary_page_size_limit,
+            "dictionary_page_size_limit",
+        )?;
+        options.statistics_enabled = proto
+            .statistics_enabled_opt
+            .as_ref()
+            .map(|opt| match opt {
+                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(statistics) => {
+                    statistics.parse()
+                }
+            })
+            .transpose()?;
+        options.max_row_group_size =
+            to_usize(proto.max_row_group_size, "max_row_group_size")?;
+        options.max_in_list_size = to_usize(proto.max_in_list_size, "max_in_list_size")?;
+        options.row_group_range_assignment =
+            RowGroupRangeAssignment::from_proto_str(&proto.row_group_range_assignment)?;
+        options.created_by.clone_from(&proto.created_by);
+        options.column_index_truncate_length = proto
                 .column_index_truncate_length_opt
                 .as_ref()
                 .map(|opt| match opt {
@@ -418,8 +415,8 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                         to_usize(*length, "column_index_truncate_length")
                     }
                 })
-                .transpose()?,
-            statistics_truncate_length: proto
+                .transpose()?;
+        options.statistics_truncate_length = proto
                 .statistics_truncate_length_opt
                 .as_ref()
                 .map(|opt| match opt {
@@ -427,86 +424,80 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                         to_usize(*length, "statistics_truncate_length")
                     }
                 })
-                .transpose()?,
-            data_page_row_count_limit: to_usize(
-                proto.data_page_row_count_limit,
-                "data_page_row_count_limit",
-            )?,
-            encoding: proto
-                .encoding_opt
-                .as_ref()
-                .map(|opt| match opt {
-                    parquet_options::EncodingOpt::Encoding(encoding) => encoding.parse(),
-                })
-                .transpose()?,
-            bloom_filter_on_read: proto.bloom_filter_on_read,
-            bloom_filter_on_write: proto.bloom_filter_on_write,
-            bloom_filter_fpp: proto
-                .bloom_filter_fpp_opt
-                .as_ref()
-                .map(|opt| match opt {
-                    parquet_options::BloomFilterFppOpt::BloomFilterFpp(fpp) => *fpp,
-                }),
-            bloom_filter_ndv: proto
-                .bloom_filter_ndv_opt
-                .as_ref()
-                .map(|opt| match opt {
-                    parquet_options::BloomFilterNdvOpt::BloomFilterNdv(ndv) => *ndv,
-                }),
-            allow_single_file_parallelism: proto.allow_single_file_parallelism,
-            maximum_parallel_row_group_writers: to_usize(
-                proto.maximum_parallel_row_group_writers,
-                "maximum_parallel_row_group_writers",
-            )?,
-            maximum_buffered_record_batches_per_stream: to_usize(
-                proto.maximum_buffered_record_batches_per_stream,
-                "maximum_buffered_record_batches_per_stream",
-            )?,
-            schema_force_view_types: proto.schema_force_view_types,
-            binary_as_string: proto.binary_as_string,
-            skip_arrow_metadata: proto.skip_arrow_metadata,
-            write_row_group_number_distinct_values: proto
-                .write_row_group_number_distinct_values,
-            coerce_int96: proto
-                .coerce_int96_opt
-                .as_ref()
-                .map(|opt| match opt {
-                    parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => {
-                        coerce_int96.parse()
-                    }
-                })
-                .transpose()?,
-            coerce_int96_tz: proto
-                .coerce_int96_tz_opt
-                .as_ref()
-                .map(|opt| match opt {
-                    parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz) => tz.parse(),
-                })
-                .transpose()?,
-            max_predicate_cache_size: proto
-                .max_predicate_cache_size_opt
-                .as_ref()
-                .map(|opt| match opt {
-                    parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(
-                        size,
-                    ) => to_usize(*size, "max_predicate_cache_size"),
-                })
-                .transpose()?,
-            max_row_group_bytes: proto
-                .max_row_group_bytes_opt
-                .as_ref()
-                .map(|opt| match opt {
-                    parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size) => {
-                        MaxRowGroupBytes::try_new(to_usize(*size, "max_row_group_bytes")?)
-                    }
-                })
-                .transpose()?,
-            content_defined_chunking: proto
-                .content_defined_chunking
-                .map(ParquetCdcOptions::try_from)
-                .transpose()?
-                .unwrap_or_default(),
-        })
+                .transpose()?;
+        options.data_page_row_count_limit =
+            to_usize(proto.data_page_row_count_limit, "data_page_row_count_limit")?;
+        options.encoding = proto
+            .encoding_opt
+            .as_ref()
+            .map(|opt| match opt {
+                parquet_options::EncodingOpt::Encoding(encoding) => encoding.parse(),
+            })
+            .transpose()?;
+        options.bloom_filter_on_read = proto.bloom_filter_on_read;
+        options.bloom_filter_on_write = proto.bloom_filter_on_write;
+        options.bloom_filter_fpp =
+            proto.bloom_filter_fpp_opt.as_ref().map(|opt| match opt {
+                parquet_options::BloomFilterFppOpt::BloomFilterFpp(fpp) => *fpp,
+            });
+        options.bloom_filter_ndv =
+            proto.bloom_filter_ndv_opt.as_ref().map(|opt| match opt {
+                parquet_options::BloomFilterNdvOpt::BloomFilterNdv(ndv) => *ndv,
+            });
+        options.allow_single_file_parallelism = proto.allow_single_file_parallelism;
+        options.maximum_parallel_row_group_writers = to_usize(
+            proto.maximum_parallel_row_group_writers,
+            "maximum_parallel_row_group_writers",
+        )?;
+        options.maximum_buffered_record_batches_per_stream = to_usize(
+            proto.maximum_buffered_record_batches_per_stream,
+            "maximum_buffered_record_batches_per_stream",
+        )?;
+        options.schema_force_view_types = proto.schema_force_view_types;
+        options.binary_as_string = proto.binary_as_string;
+        options.skip_arrow_metadata = proto.skip_arrow_metadata;
+        options.write_row_group_number_distinct_values =
+            proto.write_row_group_number_distinct_values;
+        options.coerce_int96 = proto
+            .coerce_int96_opt
+            .as_ref()
+            .map(|opt| match opt {
+                parquet_options::CoerceInt96Opt::CoerceInt96(coerce_int96) => {
+                    coerce_int96.parse()
+                }
+            })
+            .transpose()?;
+        options.coerce_int96_tz = proto
+            .coerce_int96_tz_opt
+            .as_ref()
+            .map(|opt| match opt {
+                parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz) => tz.parse(),
+            })
+            .transpose()?;
+        options.max_predicate_cache_size = proto
+            .max_predicate_cache_size_opt
+            .as_ref()
+            .map(|opt| match opt {
+                parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(
+                    size,
+                ) => to_usize(*size, "max_predicate_cache_size"),
+            })
+            .transpose()?;
+        options.max_row_group_bytes = proto
+            .max_row_group_bytes_opt
+            .as_ref()
+            .map(|opt| match opt {
+                parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size) => {
+                    MaxRowGroupBytes::try_new(to_usize(*size, "max_row_group_bytes")?)
+                }
+            })
+            .transpose()?;
+        options.content_defined_chunking = proto
+            .content_defined_chunking
+            .map(ParquetCdcOptions::try_from)
+            .transpose()?
+            .unwrap_or_default();
+        Ok(options)
     }
 }
 
@@ -576,6 +567,8 @@ impl TryFrom<&TableParquetOptionsProto> for TableParquetOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::{ConfigField, Visit};
+    use std::fmt::Display;
 
     #[test]
     fn rejects_invalid_parquet_encoding() {
@@ -642,6 +635,129 @@ mod tests {
             err.to_string()
                 .contains("Invalid time zone: Not/A_Timezone."),
             "unexpected error: {err}"
+        );
+    }
+
+    /// Names of the top-level fields of a config struct, in declaration order.
+    fn config_field_names<T: ConfigField + Default>() -> Vec<String> {
+        struct Names(Vec<String>);
+        impl Names {
+            fn push(&mut self, key: &str) {
+                // `options.<field>`, or `options.<field>.<inner>` for nested structs
+                let name = key.split('.').nth(1).unwrap().to_string();
+                if self.0.last() != Some(&name) {
+                    self.0.push(name);
+                }
+            }
+        }
+        impl Visit for Names {
+            fn some<V: Display>(&mut self, key: &str, _: V, _: &'static str) {
+                self.push(key);
+            }
+            fn none(&mut self, key: &str, _: &'static str) {
+                self.push(key);
+            }
+        }
+        let mut names = Names(vec![]);
+        T::default().visit(&mut names, "options", "");
+        names.0
+    }
+
+    /// The protobuf conversions in this file set fields one by one, so a field added to one
+    /// of these structs is silently lost in a round trip until the conversions map it. If
+    /// this test fails, map the new field in both `from_proto` and `to_proto`, then update
+    /// the list here.
+    #[test]
+    fn config_structs_fields_are_mapped_to_protobuf() {
+        assert_eq!(
+            config_field_names::<CsvOptions>(),
+            [
+                "has_header",
+                "delimiter",
+                "quote",
+                "terminator",
+                "escape",
+                "double_quote",
+                "quote_style",
+                "ignore_leading_whitespace",
+                "ignore_trailing_whitespace",
+                "newlines_in_values",
+                "compression",
+                "compression_level",
+                "schema_infer_max_rec",
+                "date_format",
+                "datetime_format",
+                "timestamp_format",
+                "timestamp_tz_format",
+                "time_format",
+                "null_value",
+                "null_regex",
+                "comment",
+                "truncated_rows",
+                "match_columns_by_header"
+            ],
+            "CsvOptions fields changed"
+        );
+        assert_eq!(
+            config_field_names::<JsonOptions>(),
+            [
+                "compression",
+                "compression_level",
+                "schema_infer_max_rec",
+                "newline_delimited"
+            ],
+            "JsonOptions fields changed"
+        );
+        assert_eq!(
+            config_field_names::<ParquetCdcOptions>(),
+            ["enabled", "min_chunk_size", "max_chunk_size", "norm_level"],
+            "ParquetCdcOptions fields changed"
+        );
+        assert_eq!(
+            config_field_names::<ParquetOptions>(),
+            [
+                "enable_page_index",
+                "pruning",
+                "skip_metadata",
+                "metadata_size_hint",
+                "pushdown_filters",
+                "reorder_filters",
+                "force_filter_selections",
+                "enable_exact_reverse_scan",
+                "schema_force_view_types",
+                "binary_as_string",
+                "coerce_int96",
+                "coerce_int96_tz",
+                "bloom_filter_on_read",
+                "max_predicate_cache_size",
+                "max_in_list_size",
+                "enable_rle_to_dictionary",
+                "row_group_range_assignment",
+                "data_pagesize_limit",
+                "write_batch_size",
+                "writer_version",
+                "skip_arrow_metadata",
+                "compression",
+                "dictionary_enabled",
+                "dictionary_page_size_limit",
+                "statistics_enabled",
+                "max_row_group_size",
+                "max_row_group_bytes",
+                "created_by",
+                "column_index_truncate_length",
+                "statistics_truncate_length",
+                "data_page_row_count_limit",
+                "encoding",
+                "bloom_filter_on_write",
+                "bloom_filter_fpp",
+                "bloom_filter_ndv",
+                "write_row_group_number_distinct_values",
+                "allow_single_file_parallelism",
+                "maximum_parallel_row_group_writers",
+                "maximum_buffered_record_batches_per_stream",
+                "content_defined_chunking"
+            ],
+            "ParquetOptions fields changed"
         );
     }
 }
