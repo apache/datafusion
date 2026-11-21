@@ -29,6 +29,29 @@ mod tests {
         Ok(())
     }
 
+    /// Exercises the `Result`-returning catalog and schema lookups across the
+    /// cdylib boundary.
+    #[tokio::test]
+    async fn test_catalog_schema_lookups() -> datafusion_common::Result<()> {
+        let module = get_module()?;
+        let (_ctx, codec) = crate::utils::ctx_and_codec();
+
+        let ffi_catalog = (module.create_catalog)(codec);
+        let foreign_catalog: Arc<dyn CatalogProvider> = (&ffi_catalog).into();
+
+        assert_eq!(foreign_catalog.schema_names()?, vec!["apple".to_string()]);
+        assert!(foreign_catalog.schema("nope")?.is_none());
+
+        let schema = foreign_catalog
+            .schema("apple")?
+            .expect("fixture catalog should contain schema apple");
+        assert_eq!(schema.table_names()?, vec!["purchases".to_string()]);
+        assert!(schema.table_exist("purchases")?);
+        assert!(!schema.table_exist("nope")?);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_catalog_list() -> datafusion_common::Result<()> {
         let module = get_module()?;

@@ -130,10 +130,10 @@ impl CatalogProviderList for EmptyCatalogProviderList {
 /// [`TableProvider`]: crate::TableProvider
 pub trait CatalogProvider: Any + Debug + Sync + Send {
     /// Retrieves the list of available schema names in this catalog.
-    fn schema_names(&self) -> Vec<String>;
+    fn schema_names(&self) -> Result<Vec<String>>;
 
     /// Retrieves a specific schema from the catalog by name, provided it exists.
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>>;
+    fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>>;
 
     /// Adds a new schema to this catalog.
     ///

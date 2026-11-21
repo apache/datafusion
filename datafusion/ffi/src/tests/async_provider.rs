@@ -133,7 +133,7 @@ impl TableProvider for AsyncTableProvider {
         let catalog = state.catalog_list().catalog("datafusion").ok_or_else(|| {
             datafusion_common::exec_datafusion_err!("missing datafusion catalog")
         })?;
-        let schema = catalog.schema("public").ok_or_else(|| {
+        let schema = catalog.schema("public")?.ok_or_else(|| {
             datafusion_common::exec_datafusion_err!("missing public schema")
         })?;
         if schema.table("external_table").await?.is_none() {

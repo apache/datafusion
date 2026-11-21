@@ -61,11 +61,12 @@ use datafusion::common::{Result, exec_err};
 
 #[async_trait]
 impl SchemaProvider for MemorySchemaProvider {
-    fn table_names(&self) -> Vec<String> {
-        self.tables
+    fn table_names(&self) -> Result<Vec<String>> {
+        Ok(self
+            .tables
             .iter()
             .map(|table| table.key().clone())
-            .collect()
+            .collect())
     }
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
@@ -77,7 +78,7 @@ impl SchemaProvider for MemorySchemaProvider {
         name: String,
         table: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        if self.table_exist(name.as_str()) {
+        if self.table_exist(name.as_str())? {
             return exec_err!(
                 "The table {name} already exists"
             );
@@ -89,8 +90,8 @@ impl SchemaProvider for MemorySchemaProvider {
         Ok(self.tables.remove(name).map(|(_, table)| table))
     }
 
-    fn table_exist(&self, name: &str) -> bool {
-        self.tables.contains_key(name)
+    fn table_exist(&self, name: &str) -> Result<bool> {
+        Ok(self.tables.contains_key(name))
     }
 }
 ```
@@ -114,11 +115,12 @@ Without getting into a `CatalogProvider` implementation, we can create a `Memory
 #
 # #[async_trait]
 # impl SchemaProvider for MemorySchemaProvider {
-#     fn table_names(&self) -> Vec<String> {
-#         self.tables
+#     fn table_names(&self) -> Result<Vec<String>> {
+#         Ok(self
+#             .tables
 #             .iter()
 #             .map(|table| table.key().clone())
-#             .collect()
+#             .collect())
 #     }
 #
 #     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
@@ -130,7 +132,7 @@ Without getting into a `CatalogProvider` implementation, we can create a `Memory
 #         name: String,
 #         table: Arc<dyn TableProvider>,
 #     ) -> Result<Option<Arc<dyn TableProvider>>> {
-#         if self.table_exist(name.as_str()) {
+#         if self.table_exist(name.as_str())? {
 #             return exec_err!(
 #                 "The table {name} already exists"
 #             );
@@ -142,8 +144,8 @@ Without getting into a `CatalogProvider` implementation, we can create a `Memory
 #         Ok(self.tables.remove(name).map(|(_, table)| table))
 #     }
 #
-#     fn table_exist(&self, name: &str) -> bool {
-#         self.tables.contains_key(name)
+#     fn table_exist(&self, name: &str) -> Result<bool> {
+#         Ok(self.tables.contains_key(name))
 #     }
 # }
 
@@ -198,8 +200,8 @@ impl SchemaProvider for Schema {
 #       todo!();
     }
 
-#    fn table_names(&self) -> Vec<std::string::String> { todo!() }
-#    fn table_exist(&self, _: &str) -> bool { todo!() }
+#    fn table_names(&self) -> Result<Vec<String>> { todo!() }
+#    fn table_exist(&self, _: &str) -> Result<bool> { todo!() }
 }
 ```
 
@@ -220,12 +222,12 @@ pub struct MemoryCatalogProvider {
 }
 
 impl CatalogProvider for MemoryCatalogProvider {
-    fn schema_names(&self) -> Vec<String> {
-        self.schemas.iter().map(|s| s.key().clone()).collect()
+    fn schema_names(&self) -> Result<Vec<String>> {
+        Ok(self.schemas.iter().map(|s| s.key().clone()).collect())
     }
 
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        self.schemas.get(name).map(|s| s.value().clone())
+    fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        Ok(self.schemas.get(name).map(|s| s.value().clone()))
     }
 
     fn register_schema(
@@ -243,7 +245,7 @@ impl CatalogProvider for MemoryCatalogProvider {
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         /// `cascade` is not used here, but can be used to control whether
         /// to delete all tables in the schema or not.
-        if let Some(schema) = self.schema(name) {
+        if let Some(schema) = self.schema(name)? {
             let (_, removed) = self.schemas.remove(name).unwrap();
             Ok(Some(removed))
         } else {
