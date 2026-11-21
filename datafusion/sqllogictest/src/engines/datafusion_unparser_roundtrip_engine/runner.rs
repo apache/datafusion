@@ -8,11 +8,11 @@ use std::{path::PathBuf, time::Duration};
 use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
 use crate::engines::datafusion_engine::Result;
 use crate::engines::output::{DFColumnType, DFOutput};
+use crate::engines::skips_round_trip;
 use crate::memory_drift::rewrap_replaced_pool;
 use crate::{DFSqlLogicTestError, convert_batches, convert_schema_to_types};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
@@ -148,25 +148,17 @@ async fn run_query_unparser_round_trip(
     // place, so plan the statement first to see the original plan.
     let state = ctx.state();
     let logical_plan = state.create_logical_plan(&sql.into()).await?;
-    let round_tripped_plan = match &logical_plan {
-        // SQL cannot express these plans as a query, so they run unchanged.
-        LogicalPlan::Ddl(_)
-        | LogicalPlan::Analyze(_)
-        | LogicalPlan::Explain(_)
-        | LogicalPlan::Dml(_)
-        | LogicalPlan::Copy(_)
-        | LogicalPlan::Show(_)
-        | LogicalPlan::Statement(_) => logical_plan,
-        logical_plan => {
-            let to_unparse = if optimize {
-                state.optimize(logical_plan)?
-            } else {
-                logical_plan.clone()
-            };
-            let unparsed_sql = plan_to_sql(&to_unparse)?.to_string();
-            debug!("Unparsed SQL: \"{unparsed_sql}\"");
-            state.create_logical_plan(&unparsed_sql).await?
-        }
+    let round_tripped_plan = if skips_round_trip(&logical_plan) {
+        logical_plan
+    } else {
+        let to_unparse = if optimize {
+            state.optimize(&logical_plan)?
+        } else {
+            logical_plan
+        };
+        let unparsed_sql = plan_to_sql(&to_unparse)?.to_string();
+        debug!("Unparsed SQL: \"{unparsed_sql}\"");
+        state.create_logical_plan(&unparsed_sql).await?
     };
 
     let df = ctx.execute_logical_plan(round_tripped_plan).await?;

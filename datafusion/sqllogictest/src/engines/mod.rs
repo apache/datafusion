@@ -23,6 +23,24 @@ pub use output::DFOutput;
 
 pub use currently_executed_sql::CurrentlyExecutingSqlTracker;
 
+use datafusion::logical_expr::LogicalPlan;
+
+/// Returns true for plans that the round-trip engines run unchanged. These
+/// plans are not queries, so the unparser and the Substrait producer both
+/// reject them.
+pub(crate) fn skips_round_trip(plan: &LogicalPlan) -> bool {
+    matches!(
+        plan,
+        LogicalPlan::Ddl(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Copy(_)
+            | LogicalPlan::Show(_)
+            | LogicalPlan::Statement(_)
+    )
+}
+
 #[cfg(feature = "postgres")]
 mod postgres_engine;
 
