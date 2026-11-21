@@ -3,3 +3,4 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod aggregate_memory_call_sequence;
+mod aggregate_peak_memory;

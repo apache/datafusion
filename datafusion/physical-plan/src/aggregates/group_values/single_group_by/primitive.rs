@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{GroupValues, hash_table_growth, vec_growth};
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
@@ -165,6 +165,36 @@ where
         size_of::<Self>() + self.map.allocation_size() + self.values.allocated_size()
     }
 
+    fn max_intern_growth(&self, num_rows: usize) -> usize {
+        hash_table_growth(&self.map, num_rows) + vec_growth(&self.values, num_rows)
+    }
+
+    fn max_intern_growth_for(&self, cols: &[ArrayRef]) -> usize {
+        let num_rows = cols[0].len();
+        // Most batches fit in the free capacity, so skip the lookups.
+        if self.max_intern_growth(num_rows) == 0 {
+            return 0;
+        }
+        // Count rows whose key is not stored yet. Repeated new keys in the
+        // batch count once per row, so this stays an upper bound.
+        let mut new_keys = 0;
+        let mut new_null = false;
+        for v in cols[0].as_primitive::<T>() {
+            match v {
+                None => new_null |= self.null_group.is_none(),
+                Some(key) => {
+                    let key = key.normalize_key();
+                    let hash = key.hash(&self.random_state);
+                    let found = self.map.find(hash, |&(g, h)| unsafe {
+                        hash == h && self.values.get_unchecked(g).is_eq(key)
+                    });
+                    new_keys += usize::from(found.is_none());
+                }
+            }
+        }
+        self.max_intern_growth(new_keys + usize::from(new_null))
+    }
+
     fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
@@ -277,6 +307,37 @@ mod tests {
     use datafusion_expr::EmitTo;
     use std::mem::size_of;
     use std::sync::Arc;
+
+    /// A full table interning only stored keys does not grow, so the bound
+    /// for those exact rows is 0. The row-count bound still assumes a
+    /// doubling, which is the over-reservation that probing removes.
+    #[test]
+    fn intern_growth_for_existing_keys_is_zero() -> Result<()> {
+        let mut gv = GroupValuesPrimitive::<Int32Type>::new(DataType::Int32);
+        let capacity = gv.map.capacity();
+        // Fill the table to its capacity, so the next new key grows it.
+        let keys: ArrayRef = Arc::new(Int32Array::from_iter_values(0..capacity as i32));
+        let mut groups = vec![];
+        gv.intern(&[Arc::clone(&keys)], &mut groups)?;
+        assert_eq!(gv.map.capacity(), capacity);
+        assert_eq!(gv.len(), capacity);
+
+        assert!(gv.max_intern_growth(keys.len()) > 0);
+        assert_eq!(gv.max_intern_growth_for(&[Arc::clone(&keys)]), 0);
+
+        // One new key among existing ones: the bound is one doubling.
+        let mixed: ArrayRef = Arc::new(Int32Array::from_iter_values(
+            (0..capacity as i32 - 1).chain([capacity as i32]),
+        ));
+        assert_eq!(
+            gv.max_intern_growth_for(&[Arc::clone(&mixed)]),
+            gv.max_intern_growth(1)
+        );
+        let before = gv.map.allocation_size();
+        gv.intern(&[mixed], &mut groups)?;
+        assert!(gv.map.allocation_size() > before);
+        Ok(())
+    }
 
     /// Mirror of the `EmitTo::take_needed` regression test, applied to the
     /// concrete `GroupValuesPrimitive` accumulator.

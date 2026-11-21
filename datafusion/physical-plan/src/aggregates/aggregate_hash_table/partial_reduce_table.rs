@@ -48,12 +48,14 @@ impl AggregateHashTable<PartialReduceMarker> {
 
     /// Partial-reduce aggregation consumes partial aggregate states and merges
     /// them into the table's partial-state accumulators.
-    pub(in crate::aggregates) fn aggregate_batch(
+    /// Aggregates one batch that `evaluate_batch` evaluated. A stream evaluates
+    /// first, so that it can reserve the batch's peak memory in between.
+    pub(in crate::aggregates) fn aggregate_evaluated(
         &mut self,
-        batch: &RecordBatch,
+        evaluated_batch: &super::common::EvaluatedAggregateBatch,
     ) -> Result<()> {
-        self.aggregate_batch_inner(
-            batch,
+        self.aggregate_evaluated_inner(
+            evaluated_batch,
             HashAggregateAccumulator::merge_batch,
             AccumulatorPhase::Merge,
         )
