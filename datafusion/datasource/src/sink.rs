@@ -64,6 +64,10 @@ pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
     ///
     /// Implementations can use `ctx` to encode the input plan, sink-specific
     /// expressions, and [`DataSinkExec::encode_sort_order`].
+    /// Custom sinks can use
+    /// [`extension_data_sink_node`](crate::proto::extension_data_sink_node) to
+    /// encode a named wrapper and register their decoder with
+    /// [`register_data_sink`](crate::proto::register_data_sink).
     ///
     /// Returning `Ok(None)` lets the caller try its extension codec instead.
     #[cfg(feature = "proto")]
