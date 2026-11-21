@@ -9,6 +9,8 @@ use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::vec::IntoIter;
 
+use arrow::datatypes::Schema;
+
 use crate::utils::{merge_and_order_indices, set_difference};
 use crate::{DFSchema, HashSet, JoinType, NullEquality};
 
@@ -20,6 +22,24 @@ pub enum Constraint {
     PrimaryKey(Vec<usize>),
     /// Columns with the given indices form a composite unique key:
     Unique(Vec<usize>),
+}
+
+impl Constraint {
+    /// Returns `true` if the constraint columns identify a row also when NULL
+    /// values are treated as equal, as when sorting: always for a primary key,
+    /// and for a unique key only if none of its columns is nullable in
+    /// `schema`. See [`FunctionalDependence::is_valid_across_nulls`].
+    pub fn is_valid_across_nulls(&self, schema: &Schema) -> bool {
+        match self {
+            Constraint::PrimaryKey(_) => true,
+            Constraint::Unique(indices) => indices.iter().all(|&idx| {
+                schema
+                    .fields()
+                    .get(idx)
+                    .is_some_and(|field| !field.is_nullable())
+            }),
+        }
+    }
 }
 
 /// This object encapsulates a list of functional constraints:
@@ -861,6 +881,8 @@ fn add_offset_to_vec<T: Copy + std::ops::Add<Output = T>>(
 mod tests {
     use super::*;
 
+    use arrow::datatypes::{DataType, Field};
+
     #[test]
     fn constraints_iter() {
         let constraints = Constraints::new_unverified(vec![
@@ -871,6 +893,18 @@ mod tests {
         assert_eq!(iter.next(), Some(&Constraint::PrimaryKey(vec![10])));
         assert_eq!(iter.next(), Some(&Constraint::Unique(vec![20])));
         assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn constraint_is_valid_across_nulls() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        assert!(Constraint::PrimaryKey(vec![0, 1]).is_valid_across_nulls(&schema));
+        assert!(Constraint::Unique(vec![0]).is_valid_across_nulls(&schema));
+        assert!(!Constraint::Unique(vec![0, 1]).is_valid_across_nulls(&schema));
+        assert!(!Constraint::Unique(vec![2]).is_valid_across_nulls(&schema));
     }
 
     #[test]

@@ -1926,6 +1926,43 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 statement ok
 drop table table_with_ordered_pk;
 
+# A UNIQUE constraint on a nullable column does not make rows unique: rows
+# with NULL in `b` tie on (a, b, c), so the sort on v must stay
+statement ok
+COPY (VALUES (1, NULL, 0, 2), (1, NULL, 0, 1))
+TO 'test_files/scratch/order/unique_nullable.csv'
+STORED AS CSV
+OPTIONS ('format.has_header' 'false');
+
+statement ok
+CREATE EXTERNAL TABLE unique_nullable (a INT NOT NULL, b INT, c INT NOT NULL, v INT NOT NULL, UNIQUE (a, b))
+STORED AS CSV
+WITH ORDER (a ASC, b ASC, c ASC)
+OPTIONS ('format.has_header' 'false')
+LOCATION 'test_files/scratch/order/unique_nullable.csv';
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query IIII
+SELECT a, b, c, v FROM unique_nullable ORDER BY a, b, c, v;
+----
+1 NULL 0 1
+1 NULL 0 2
+
+query TT
+EXPLAIN SELECT a, b, c, v FROM unique_nullable ORDER BY a, b, c, v;
+----
+logical_plan
+01)Sort: unique_nullable.a ASC NULLS LAST, unique_nullable.b ASC NULLS LAST, unique_nullable.c ASC NULLS LAST, unique_nullable.v ASC NULLS LAST
+02)--TableScan: unique_nullable projection=[a, b, c, v]
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST, v@3 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/unique_nullable.csv]]}, projection=[a, b, c, v], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], constraints=[Unique([0, 1])], file_type=csv, has_header=false
+
+statement ok
+drop table unique_nullable;
+
 statement ok
 set datafusion.execution.target_partitions = 1;
 
