@@ -34,7 +34,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
-use datafusion_common::{Result, assert_eq_or_internal_err};
+use datafusion_common::{Result, assert_eq_or_internal_err, plan_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
@@ -69,11 +69,14 @@ impl WindowAggExec {
         input: Arc<dyn ExecutionPlan>,
         can_repartition: bool,
     ) -> Result<Self> {
+        let Some(first_window_expr) = window_expr.first() else {
+            return plan_err!("WindowAggExec requires at least one window expression");
+        };
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
 
         let ordered_partition_by_indices =
-            get_ordered_partition_by_indices(window_expr[0].partition_by(), &input)?;
+            get_ordered_partition_by_indices(first_window_expr.partition_by(), &input)?;
         let cache = Self::compute_properties(&schema, &input, &window_expr)?;
         Ok(Self {
             input,
@@ -664,6 +667,20 @@ mod tests {
             window.cardinality_effect(),
             CardinalityEffect::Equal
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_window_agg_empty_window_expr() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+
+        let err = WindowAggExec::try_new(vec![], input, true).unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: WindowAggExec requires at least one window expression"
+        );
         Ok(())
     }
 }

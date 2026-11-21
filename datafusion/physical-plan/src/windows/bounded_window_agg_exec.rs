@@ -45,6 +45,7 @@ use datafusion_common::utils::{
 };
 use datafusion_common::{
     HashMap, Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err, exec_err,
+    plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::ColumnarValue;
@@ -171,15 +172,18 @@ impl BoundedWindowAggExec {
         input_order_mode: InputOrderMode,
         can_repartition: bool,
     ) -> Result<Self> {
+        let Some(first_window_expr) = window_expr.first() else {
+            return plan_err!(
+                "BoundedWindowAggExec requires at least one window expression"
+            );
+        };
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
-        let partition_by_exprs = window_expr[0].partition_by();
+        let partition_by_exprs = first_window_expr.partition_by();
         let ordered_partition_by_indices = match &input_order_mode {
             InputOrderMode::Sorted => {
-                let indices = get_ordered_partition_by_indices(
-                    window_expr[0].partition_by(),
-                    &input,
-                )?;
+                let indices =
+                    get_ordered_partition_by_indices(partition_by_exprs, &input)?;
                 if indices.len() == partition_by_exprs.len() {
                     indices
                 } else {
@@ -3130,6 +3134,22 @@ mod tests {
             plan.cardinality_effect(),
             CardinalityEffect::Equal
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_bounded_window_agg_empty_window_expr() -> Result<()> {
+        let schema = test_schema();
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+
+        let err =
+            BoundedWindowAggExec::try_new(vec![], input, InputOrderMode::Linear, false)
+                .unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: BoundedWindowAggExec requires at least one window expression"
+        );
         Ok(())
     }
 
