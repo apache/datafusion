@@ -199,10 +199,17 @@ impl LikeExpr {
     }
 }
 
-/// used for optimize Dictionary like
-fn can_like_type(from_type: &DataType) -> bool {
+/// Whether LIKE can use the encoded value without a cast.
+fn can_like_type(from_type: &DataType, pattern_type: &DataType) -> bool {
     match from_type {
         DataType::Dictionary(_, inner_type_from) => **inner_type_from == DataType::Utf8,
+        DataType::RunEndEncoded(_, values) if *pattern_type == DataType::Utf8 => {
+            match values.data_type() {
+                DataType::Utf8 => true,
+                DataType::Dictionary(_, inner) => **inner == DataType::Utf8,
+                _ => false,
+            }
+        }
         _ => false,
     }
 }
@@ -218,7 +225,7 @@ pub fn like(
     let expr_type = &expr.data_type(input_schema)?;
     let pattern_type = &pattern.data_type(input_schema)?;
     assert_or_internal_err!(
-        expr_type.eq(pattern_type) || can_like_type(expr_type),
+        expr_type.eq(pattern_type) || can_like_type(expr_type, pattern_type),
         "The type of {expr_type} AND {pattern_type} of like physical should be same"
     );
     Ok(Arc::new(LikeExpr::new(
