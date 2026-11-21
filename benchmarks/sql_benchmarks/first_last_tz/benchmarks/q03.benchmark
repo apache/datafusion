@@ -1,0 +1,27 @@
+name Q03
+group first_last_tz
+
+load sql_benchmarks/first_last_tz/init/load.sql
+
+# The time zone does not take part in the ordering: every key must pick the
+# same row as with the time zone free column.
+assert I
+WITH tz AS (
+  SELECT DISTINCT ON (k) k, v FROM first_last_tz ORDER BY k, ts DESC, o
+), naive AS (
+  SELECT DISTINCT ON (k) k, v FROM first_last_tz ORDER BY k, tsn DESC, o
+)
+SELECT NOT EXISTS (SELECT * FROM tz EXCEPT SELECT * FROM naive)
+   AND NOT EXISTS (SELECT * FROM naive EXCEPT SELECT * FROM tz);
+----
+true
+
+expect_plan AggregateExec
+
+run
+-- Latest row per key by a time zone aware timestamp (issue #27046). DISTINCT ON
+-- is planned as one first_value(... ORDER BY k, ts DESC, o) per output column.
+SELECT count(*), sum(v)
+FROM (SELECT DISTINCT ON (k) v FROM first_last_tz ORDER BY k, ts DESC, o);
+
+cleanup sql_benchmarks/first_last_tz/init/cleanup.sql
