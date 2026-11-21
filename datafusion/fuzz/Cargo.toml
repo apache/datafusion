@@ -21,12 +21,14 @@ extended_tests = []
 [dev-dependencies]
 arrow = { workspace = true }
 bytes = { workspace = true }
-datafusion = { workspace = true }
+datafusion = { workspace = true, features = ["nested_expressions", "sql"] }
 datafusion-common = { workspace = true }
+datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 futures = { workspace = true }
+half = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 test-utils = { path = "../../test-utils" }

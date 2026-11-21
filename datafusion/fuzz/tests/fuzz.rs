@@ -41,6 +41,20 @@ async fn spill_pool_scenario() -> Result<()> {
     .await
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn float_zero() -> Result<()> {
+    run_suite(
+        &suites::float_zero::FloatZeroFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: None,
+            time_limit: Some(Duration::from_secs(10)),
+            cases_per_dataset: 100,
+        },
+    )
+    .await
+}
+
 #[tokio::test]
 async fn lru_queue() -> Result<()> {
     run_suite(
