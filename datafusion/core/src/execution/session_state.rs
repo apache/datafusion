@@ -1743,7 +1743,27 @@ impl SessionStateBuilder {
             relation_planners: relation_planners.unwrap_or_default(),
             #[cfg(feature = "sql")]
             type_planner,
-            optimizer: optimizer.unwrap_or_default(),
+            optimizer: optimizer.unwrap_or_else(|| {
+                let mut optimizer = Optimizer::default();
+                // Fold constant period expressions before matching the grouped inputs.
+                let has_sum = aggregate_functions.as_ref().is_some_and(|functions| {
+                    functions.iter().any(|f| {
+                        f.inner().is::<datafusion_functions_aggregate::sum::Sum>()
+                    })
+                });
+                if has_sum
+                    && let Some(pos) = optimizer
+                        .rules
+                        .iter()
+                        .position(|r| r.name() == "simplify_expressions")
+                {
+                    optimizer.rules.insert(
+                        pos + 1,
+                        Arc::new(super::group_slices::CombineGroupSlices),
+                    );
+                }
+                optimizer
+            }),
             physical_optimizers: physical_optimizers.unwrap_or_default(),
             query_planner: query_planner
                 .unwrap_or_else(|| Arc::new(DefaultQueryPlanner {})),
