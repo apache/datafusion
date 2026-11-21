@@ -454,8 +454,17 @@ impl FilterExec {
                 );
                 (selectivity, filtered_num_rows, cs)
             } else {
+                // Read the null counts before `to_inexact` demotes them, so an
+                // exact zero null count stays exact.
+                let input_null_counts: Vec<Precision<usize>> = input_stats
+                    .column_statistics
+                    .iter()
+                    .map(|col_stat| col_stat.null_count)
+                    .collect();
                 let mut cs = input_stats.to_inexact().column_statistics;
-                for (idx, col_stat) in cs.iter_mut().enumerate() {
+                for (idx, (col_stat, input_null_count)) in
+                    cs.iter_mut().zip(input_null_counts).enumerate()
+                {
                     col_stat.byte_size = scale_byte_size_at_rows(
                         col_stat.byte_size,
                         selectivity,
@@ -464,7 +473,11 @@ impl FilterExec {
                     col_stat.null_count = if null_rejecting_columns.contains(&idx) {
                         Precision::Exact(0)
                     } else {
-                        cap_at_rows(col_stat.null_count, filtered_num_rows)
+                        scale_null_count_at_rows(
+                            input_null_count,
+                            selectivity,
+                            filtered_num_rows,
+                        )
                     };
                     col_stat.distinct_count = if eq_columns.contains(&idx) {
                         distinct_count_for_singleton_domain(filtered_num_rows)
@@ -1718,6 +1731,13 @@ fn null_check_statistics(
     num_rows: Precision<usize>,
 ) -> Statistics {
     let input_rows = input_stats.num_rows;
+    // Read the null counts before `to_inexact` demotes them, so an exact zero
+    // null count stays exact.
+    let input_null_counts: Vec<Precision<usize>> = input_stats
+        .column_statistics
+        .iter()
+        .map(|column_stats| column_stats.null_count)
+        .collect();
     let mut stats = input_stats.to_inexact();
     stats.num_rows = num_rows;
     if num_rows == Precision::Exact(0) {
@@ -1742,8 +1762,16 @@ fn null_check_statistics(
         })
     };
     stats.total_byte_size = scale_bytes(stats.total_byte_size);
-    for column_stats in &mut stats.column_statistics {
-        column_stats.null_count = cap_at_rows(column_stats.null_count, num_rows);
+    for (column_stats, input_null_count) in
+        stats.column_statistics.iter_mut().zip(input_null_counts)
+    {
+        column_stats.null_count = match selectivity {
+            Some(selectivity) => {
+                scale_null_count_at_rows(input_null_count, selectivity, num_rows)
+            }
+            None if input_null_count == Precision::Exact(0) => Precision::Exact(0),
+            None => cap_at_rows(input_null_count, num_rows),
+        };
         column_stats.distinct_count = cap_at_rows(column_stats.distinct_count, num_rows);
         column_stats.byte_size = scale_bytes(column_stats.byte_size);
     }
@@ -1807,6 +1835,23 @@ fn cap_at_rows(
         Precision::Absent => value.to_inexact(),
         Precision::Exact(0) => Precision::Exact(0),
         rows => value.to_inexact().min(&rows),
+    }
+}
+
+/// Scales a null count by the filter selectivity and caps it at the filtered
+/// row count. An exact zero null count or an exact zero row count stays exact.
+fn scale_null_count_at_rows(
+    null_count: Precision<usize>,
+    selectivity: f64,
+    filtered_num_rows: Precision<usize>,
+) -> Precision<usize> {
+    if null_count == Precision::Exact(0) || filtered_num_rows == Precision::Exact(0) {
+        Precision::Exact(0)
+    } else {
+        cap_at_rows(
+            null_count.with_estimated_selectivity(selectivity),
+            filtered_num_rows,
+        )
     }
 }
 
@@ -1898,10 +1943,14 @@ fn collect_new_statistics(
                 } else {
                     cap_at_rows(distinct_count, filtered_num_rows)
                 };
-                let capped_null_count = if null_rejecting_columns.contains(&idx) {
+                let scaled_null_count = if null_rejecting_columns.contains(&idx) {
                     Precision::Exact(0)
                 } else {
-                    cap_at_rows(input_column_stats[idx].null_count, filtered_num_rows)
+                    scale_null_count_at_rows(
+                        input_column_stats[idx].null_count,
+                        selectivity,
+                        filtered_num_rows,
+                    )
                 };
                 let byte_size = scale_byte_size_at_rows(
                     input_column_stats[idx].byte_size,
@@ -1909,7 +1958,7 @@ fn collect_new_statistics(
                     filtered_num_rows,
                 );
                 ColumnStatistics {
-                    null_count: capped_null_count,
+                    null_count: scaled_null_count,
                     max_value,
                     min_value,
                     sum_value: Precision::Absent,
@@ -2854,8 +2903,8 @@ mod tests {
                 },
                 ColumnStatistics {
                     // `b > 45` in the upstream filter zeroes b's nulls; the outer
-                    // filter then caps the (already zero) count, demoting to inexact.
-                    null_count: Precision::Inexact(0),
+                    // filter preserves an exact zero null count.
+                    null_count: Precision::Exact(0),
                     min_value: Precision::Inexact(ScalarValue::Int32(Some(46))),
                     max_value: Precision::Inexact(ScalarValue::Int32(Some(50))),
                     ..Default::default()
@@ -5082,7 +5131,7 @@ mod tests {
         assert_eq!(statistics.num_rows, Precision::Inexact(20));
         assert_eq!(
             statistics.column_statistics[0].null_count,
-            Precision::Inexact(20)
+            Precision::Inexact(16)
         );
         assert_eq!(
             statistics.column_statistics[0].byte_size,
@@ -5202,7 +5251,12 @@ mod tests {
             assert_eq!(checked.min_value, Absent);
             assert_eq!(checked.max_value, Absent);
             assert_eq!(checked.sum_value, Absent);
-            assert_eq!(stats.column_statistics[0].null_count, Inexact(30));
+            let other_nulls = if num_rows == Absent {
+                Inexact(30)
+            } else {
+                Inexact(9)
+            };
+            assert_eq!(stats.column_statistics[0].null_count, other_nulls);
             assert_eq!(stats.column_statistics[0].distinct_count, Inexact(30));
             let (total_bytes, column_bytes) = if num_rows == Absent {
                 // The null count determines rows, but not the fraction of input bytes.
@@ -5262,9 +5316,230 @@ mod tests {
         assert_eq!(checked.min_value, Inexact(ScalarValue::Int32(Some(1))));
         assert_eq!(checked.byte_size, Inexact(200));
         let other = &stats.column_statistics[1];
-        assert_eq!(other.null_count, Inexact(50));
+        assert_eq!(other.null_count, Inexact(30));
         assert_eq!(other.distinct_count, Inexact(50));
         assert_eq!(other.byte_size, Inexact(200));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_scales_non_predicate_null_count() -> Result<()> {
+        use Precision::{Absent, Exact, Inexact};
+
+        let schema = Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("tag", DataType::Utf8, true),
+            Field::new("flag", DataType::Int32, true),
+            Field::new("non_null", DataType::Int32, false),
+        ]);
+        let base_stats = Statistics {
+            num_rows: Exact(1000),
+            total_byte_size: Exact(16000),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Exact(300),
+                    min_value: Exact(ScalarValue::Int32(Some(1))),
+                    max_value: Exact(ScalarValue::Int32(Some(700))),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    null_count: Exact(0),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    null_count: Exact(301),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    null_count: Exact(0),
+                    min_value: Exact(ScalarValue::Int32(Some(1))),
+                    max_value: Exact(ScalarValue::Int32(Some(700))),
+                    ..Default::default()
+                },
+            ],
+        };
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(base_stats.clone(), schema.clone()));
+
+        // Default 20% selectivity on `tag = 'hit'` -> 200 rows; `k` nulls scale 300 * 0.2 = 60.
+        let tag_filter = FilterExecBuilder::new(
+            binary(col("tag", &schema)?, Operator::Eq, lit("hit"), &schema)?,
+            Arc::clone(&input),
+        )
+        .build()?;
+        let tag_stats =
+            StatisticsContext::new().compute(&tag_filter, &StatisticsArgs::new())?;
+        assert_eq!(tag_stats.num_rows, Inexact(200));
+        assert_eq!(tag_stats.column_statistics[0].null_count, Inexact(60));
+        // Scaling a known zero null count must not turn it inexact.
+        assert_eq!(tag_stats.column_statistics[3].null_count, Exact(0));
+
+        // `flag IS NULL` -> 301 rows (selectivity 0.301); `k` nulls scale ceil(300 * 0.301) = 91.
+        let flag_filter =
+            FilterExecBuilder::new(is_null(col("flag", &schema)?)?, Arc::clone(&input))
+                .build()?;
+        let flag_stats =
+            StatisticsContext::new().compute(&flag_filter, &StatisticsArgs::new())?;
+        assert_eq!(flag_stats.num_rows, Exact(301));
+        assert_eq!(flag_stats.column_statistics[0].null_count, Inexact(91));
+        assert_eq!(flag_stats.column_statistics[3].null_count, Exact(0));
+
+        // Without an exact input row count there is no selectivity to scale by,
+        // so the other columns are only capped. A column without nulls is still
+        // exactly zero over any surviving rows.
+        let absent_input: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Absent,
+                ..base_stats
+            },
+            schema.clone(),
+        ));
+        let absent_filter =
+            FilterExecBuilder::new(is_null(col("flag", &schema)?)?, absent_input)
+                .build()?;
+        let absent_stats =
+            StatisticsContext::new().compute(&absent_filter, &StatisticsArgs::new())?;
+        assert_eq!(absent_stats.num_rows, Inexact(301));
+        assert_eq!(absent_stats.column_statistics[0].null_count, Inexact(300));
+        assert_eq!(absent_stats.column_statistics[2].null_count, Inexact(301));
+        assert_eq!(absent_stats.column_statistics[1].null_count, Exact(0));
+        assert_eq!(absent_stats.column_statistics[3].null_count, Exact(0));
+
+        // `k > 300` narrows `k`'s interval, so the statistics come from
+        // interval analysis (`collect_new_statistics`): `k` rejects nulls and
+        // the untouched `non_null` column keeps its exact zero null count.
+        let range_filter = FilterExecBuilder::new(
+            binary(col("k", &schema)?, Operator::Gt, lit(300), &schema)?,
+            input,
+        )
+        .build()?;
+        let range_stats =
+            StatisticsContext::new().compute(&range_filter, &StatisticsArgs::new())?;
+        assert_eq!(range_stats.column_statistics[0].null_count, Exact(0));
+        assert_eq!(range_stats.column_statistics[3].null_count, Exact(0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_scale_null_count_at_rows_edge_cases() {
+        use Precision::{Absent, Exact, Inexact};
+
+        for (null_count, selectivity, filtered_num_rows, expected) in [
+            // A column with no nulls keeps its exact zero through any filter.
+            (Exact(0), 0.5, Inexact(200), Exact(0)),
+            (Exact(0), 1.0, Absent, Exact(0)),
+            (Exact(0), 0.0, Inexact(1000), Exact(0)),
+            // An exactly empty output has no nulls, whatever the input counts.
+            (Absent, 0.5, Exact(0), Exact(0)),
+            (Exact(300), 0.5, Exact(0), Exact(0)),
+            // A zero that was only estimated stays estimated.
+            (Inexact(0), 0.5, Inexact(200), Inexact(0)),
+            // A positive count scaled down to zero is only an estimate.
+            (Exact(300), 0.0, Inexact(1000), Inexact(0)),
+            (Exact(300), 1.0, Inexact(1000), Inexact(300)),
+            // An unknown row bound leaves the scaled count uncapped.
+            (Exact(300), 0.5, Absent, Inexact(150)),
+            // An unknown null count cannot be scaled.
+            (Absent, 0.5, Inexact(1000), Absent),
+        ] {
+            assert_eq!(
+                scale_null_count_at_rows(null_count, selectivity, filtered_num_rows),
+                expected,
+                "nulls={null_count:?}, selectivity={selectivity}, rows={filtered_num_rows:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_filter_scaled_null_count_prevents_join_cardinality_explosion()
+    -> Result<()> {
+        use crate::joins::{HashJoinExec, PartitionMode};
+        use Precision::{Exact, Inexact};
+        use datafusion_common::JoinType;
+
+        let schema = Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("tag", DataType::Utf8, true),
+            Field::new("flag", DataType::Int32, true),
+        ]);
+        let base_stats = Statistics {
+            num_rows: Exact(1000),
+            total_byte_size: Exact(12000),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Exact(300),
+                    min_value: Exact(ScalarValue::Int32(Some(1))),
+                    max_value: Exact(ScalarValue::Int32(Some(700))),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    null_count: Exact(0),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    null_count: Exact(301),
+                    ..Default::default()
+                },
+            ],
+        };
+        let left_base: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(base_stats.clone(), schema.clone()));
+        let right_base: Arc<dyn ExecutionPlan> =
+            Arc::new(StatisticsExec::new(base_stats, schema.clone()));
+
+        let left_filtered: Arc<dyn ExecutionPlan> = Arc::new(
+            FilterExecBuilder::new(
+                binary(col("tag", &schema)?, Operator::Eq, lit("hit"), &schema)?,
+                left_base,
+            )
+            .build()?,
+        );
+        let right_filtered: Arc<dyn ExecutionPlan> = Arc::new(
+            FilterExecBuilder::new(
+                is_null(col("flag", &schema)?)?,
+                Arc::clone(&right_base),
+            )
+            .build()?,
+        );
+
+        let on = vec![(col("k", &schema)?, col("k", &schema)?)];
+        let less_filtered_join = HashJoinExec::try_new(
+            Arc::clone(&left_filtered),
+            right_base,
+            on.clone(),
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        let more_filtered_join = HashJoinExec::try_new(
+            left_filtered,
+            right_filtered,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        let less_stats = StatisticsContext::new()
+            .compute(&less_filtered_join, &StatisticsArgs::new())?;
+        let more_stats = StatisticsContext::new()
+            .compute(&more_filtered_join, &StatisticsArgs::new())?;
+
+        // Join cardinality is estimated as (left rows * right rows) / the larger
+        // non-null NDV, where a column's NDV is bounded by its non-null row count.
+        // Less-filtered join: 200 * 1000 / max(200 - 60, 700) = 200_000 / 700 = 285.
+        // More-filtered join: 200 * 301 / max(200 - 60, 301 - 91) = 60_200 / 210 = 286.
+        // Without scaling null_count, the null counts cap at the filtered row
+        // counts 200 and 300, leaving non-null counts 0 and 1, so the join
+        // estimates 60_200 / 1 = 60_200 rows (211x).
+        assert_eq!(less_stats.num_rows, Inexact(285));
+        assert_eq!(more_stats.num_rows, Inexact(286));
         Ok(())
     }
 
