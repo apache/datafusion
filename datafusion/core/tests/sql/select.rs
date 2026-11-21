@@ -585,6 +585,311 @@ async fn test_recursive_cte_batch_schema_stable_with_order_by_limit() -> Result<
     Ok(())
 }
 
+fn constructor_field_metadata(origin: &str) -> Metadata {
+    Metadata::new()
+        .with("ARROW:extension:name", "example.id")
+        .with("ARROW:extension:metadata", "{}")
+        .with("origin", origin)
+        .with(format!("only_{origin}"), origin)
+}
+
+fn constructor_metadata_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true)
+            .with_metadata(constructor_field_metadata("a")),
+        Field::new("b", DataType::Int32, true)
+            .with_metadata(constructor_field_metadata("b")),
+    ]));
+    ctx.register_batch(
+        "t",
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), None])),
+                Arc::new(Int32Array::from(vec![Some(2), Some(3)])),
+            ],
+        )?,
+    )?;
+    Ok(ctx)
+}
+
+async fn assert_list_query(
+    ctx: &SessionContext,
+    sql: &str,
+    expected_type: &DataType,
+    expected_values: &dyn Array,
+    expected_offsets: &[i32],
+) -> Result<()> {
+    let df = ctx.sql(sql).await?;
+    assert_eq!(df.schema().field(0).data_type(), expected_type, "{sql}");
+    let batches = df.collect().await?;
+    let array = batches[0].column(0).as_list::<i32>();
+    assert_eq!(array.data_type(), expected_type, "{sql}");
+    assert_eq!(array.values().as_ref(), expected_values, "{sql}");
+    assert_eq!(array.value_offsets(), expected_offsets, "{sql}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_named_struct_constructor_field_metadata() -> Result<()> {
+    let ctx = constructor_metadata_context()?;
+    let df = ctx
+        .sql("SELECT named_struct('left', a, 'right', b) AS s FROM t")
+        .await?;
+    let expected = DataType::Struct(
+        vec![
+            Field::new("left", DataType::Int32, true)
+                .with_metadata(constructor_field_metadata("a")),
+            Field::new("right", DataType::Int32, true)
+                .with_metadata(constructor_field_metadata("b")),
+        ]
+        .into(),
+    );
+    assert_eq!(df.schema().field(0).data_type(), &expected);
+    let batches = df.collect().await?;
+    let values = batches[0].column(0).as_struct();
+    assert_eq!(values.data_type(), &expected);
+    assert_eq!(
+        values.column(0).as_ref(),
+        &Int32Array::from(vec![Some(1), None])
+    );
+    assert_eq!(
+        values.column(1).as_ref(),
+        &Int32Array::from(vec![Some(2), Some(3)])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_array_constructor_field_metadata() -> Result<()> {
+    use arrow::array::{Int64Array, StructArray};
+    let ctx = constructor_metadata_context()?;
+    let cases: Vec<(_, _, ArrayRef)> = vec![
+        (
+            ["a", "b"],
+            constructor_field_metadata("a").with("only_b", "b"),
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(3)])),
+        ),
+        (
+            ["b", "a"],
+            constructor_field_metadata("b").with("only_a", "a"),
+            Arc::new(Int32Array::from(vec![Some(2), Some(1), Some(3), None])),
+        ),
+        (
+            ["NULL", "a"],
+            constructor_field_metadata("a"),
+            Arc::new(Int32Array::from(vec![None, Some(1), None, None])),
+        ),
+        (
+            ["a", "CAST(2 AS BIGINT)"],
+            Metadata::new().with("origin", "a").with("only_a", "a"),
+            Arc::new(Int64Array::from(vec![Some(1), Some(2), None, Some(2)])),
+        ),
+        (
+            ["CAST(2 AS BIGINT)", "a"],
+            Metadata::new().with("origin", "a").with("only_a", "a"),
+            Arc::new(Int64Array::from(vec![Some(2), Some(1), Some(2), None])),
+        ),
+    ];
+    for (args, metadata, values) in cases {
+        // Apply the same value/metadata contract directly and through Struct layers.
+        for depth in 0..=2 {
+            let args = args.map(|arg| {
+                (0..depth).fold(arg.to_string(), |arg, _| {
+                    format!("named_struct('v', {arg})")
+                })
+            });
+            let mut values = Arc::clone(&values);
+            let mut field = Field::new_list_field(values.data_type().clone(), true)
+                .with_metadata(metadata.clone());
+            for _ in 0..depth {
+                values = Arc::new(StructArray::new(
+                    vec![field.with_name("v")].into(),
+                    vec![values],
+                    None,
+                ));
+                field = Field::new_list_field(values.data_type().clone(), true);
+            }
+            assert_list_query(
+                &ctx,
+                &format!("SELECT make_array({}, {}) FROM t", args[0], args[1]),
+                &DataType::List(Arc::new(field)),
+                values.as_ref(),
+                &[0, 2, 4],
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_scalar_constructor_field_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+    let metadata = Metadata::new()
+        .with("ARROW:extension:name", "example.id")
+        .with("ARROW:extension:metadata", "{}")
+        .with("origin", "input");
+    let value = ScalarAndMetadata::new(
+        ScalarValue::Int32(Some(7)),
+        Some(metadata.clone().into()),
+    );
+    for (sql, expected) in [
+        (
+            "SELECT make_array($1) AS v",
+            DataType::List(Arc::new(
+                Field::new_list_field(DataType::Int32, true)
+                    .with_metadata(metadata.clone()),
+            )),
+        ),
+        (
+            "SELECT make_array($1, CAST(8 AS BIGINT)) AS v",
+            DataType::List(Arc::new(
+                Field::new_list_field(DataType::Int64, true).with_metadata(
+                    HashMap::from([("origin".to_string(), "input".to_string())]),
+                ),
+            )),
+        ),
+        (
+            "SELECT named_struct('value', $1) AS v",
+            DataType::Struct(
+                vec![
+                    Field::new("value", DataType::Int32, true)
+                        .with_metadata(metadata.clone()),
+                ]
+                .into(),
+            ),
+        ),
+    ] {
+        let df = ctx
+            .sql(sql)
+            .await?
+            .with_param_values(ParamValues::List(vec![value.clone()]))?;
+        assert_eq!(df.schema().field(0).data_type(), &expected, "{sql}");
+        let batches = df.collect().await?;
+        assert_eq!(batches[0].column(0).data_type(), &expected, "{sql}");
+        assert_eq!(batches[0].num_rows(), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_array_nested_field_metadata() -> Result<()> {
+    use arrow::array::StructArray;
+    use arrow::buffer::NullBuffer;
+    let ctx = SessionContext::new();
+    let mut columns: Vec<ArrayRef> = Vec::new();
+    for (origin, nullable, values) in [
+        ("a", false, vec![Some(1), Some(2)]),
+        ("b", true, vec![Some(3), None]),
+    ] {
+        let field = Field::new("v", DataType::Int32, nullable)
+            .with_metadata(HashMap::from([("origin".to_string(), origin.to_string())]));
+        columns.push(Arc::new(StructArray::new(
+            vec![field].into(),
+            vec![Arc::new(Int32Array::from(values))],
+            None,
+        )));
+    }
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", columns[0].data_type().clone(), false),
+        Field::new("b", columns[1].data_type().clone(), false),
+    ]));
+    ctx.register_batch("t", RecordBatch::try_new(schema, columns)?)?;
+    for (args, origin, values, validity, offsets) in [
+        (
+            "a, b",
+            "a",
+            vec![Some(1), Some(3), Some(2), None],
+            None,
+            [0, 2, 4],
+        ),
+        (
+            "b, a",
+            "b",
+            vec![Some(3), Some(1), None, Some(2)],
+            None,
+            [0, 2, 4],
+        ),
+        (
+            "named_struct('v', a['v']), named_struct('v', b['v'])",
+            "a",
+            vec![Some(1), Some(3), Some(2), None],
+            None,
+            [0, 2, 4],
+        ),
+        (
+            "a, b, NULL",
+            "a",
+            vec![Some(1), Some(3), None, Some(2), None, None],
+            Some(vec![true, true, false, true, true, false]),
+            [0, 3, 6],
+        ),
+        (
+            "NULL, a, b",
+            "a",
+            vec![None, Some(1), Some(3), None, Some(2), None],
+            Some(vec![false, true, true, false, true, true]),
+            [0, 3, 6],
+        ),
+    ] {
+        let field = Field::new("v", DataType::Int32, true)
+            .with_metadata(HashMap::from([("origin".to_string(), origin.to_string())]));
+        let values = StructArray::new(
+            vec![field].into(),
+            vec![Arc::new(Int32Array::from(values))],
+            validity.map(NullBuffer::from),
+        );
+        let expected = DataType::new_list(values.data_type().clone(), true);
+        assert_list_query(
+            &ctx,
+            &format!("SELECT make_array({args}) FROM t"),
+            &expected,
+            &values,
+            &offsets,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_make_array_constructor_field_metadata_conflict() -> Result<()> {
+    let ctx = SessionContext::new();
+    let fields = ["example.first", "example.second"]
+        .into_iter()
+        .enumerate()
+        .map(|(i, name)| {
+            Field::new(format!("c{i}"), DataType::Int32, true).with_metadata(
+                HashMap::from([("ARROW:extension:name".to_string(), name.to_string())]),
+            )
+        })
+        .collect::<Vec<_>>();
+    ctx.register_batch("t", RecordBatch::new_empty(Arc::new(Schema::new(fields))))?;
+    for expression in [
+        "make_array(c0, c1)",
+        "make_array(named_struct('v', c0), named_struct('v', c1))",
+        "make_array(named_struct('v', c0), NULL, named_struct('v', c1))",
+        "make_array(named_struct('v', named_struct('w', c0)), named_struct('v', named_struct('w', c1)))",
+        "make_array(named_struct('v', c0, 'other', 0), named_struct('other', 0, 'v', c1))",
+        "coalesce(named_struct('v', c0), named_struct('v', c1))",
+    ] {
+        let err = ctx
+            .sql(&format!("SELECT {expression} FROM t"))
+            .await
+            .unwrap_err();
+        for expected in [
+            "Cannot merge field metadata",
+            "example.first",
+            "example.second",
+        ] {
+            assert!(err.to_string().contains(expected), "{expression}: {err}");
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_coalesce_struct_field_metadata() -> Result<()> {
     use arrow::array::{Int64Array, NullArray, StructArray};

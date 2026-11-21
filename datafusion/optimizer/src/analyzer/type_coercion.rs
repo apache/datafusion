@@ -14,8 +14,9 @@ use crate::utils::{NamePreserver, merge_into_schema};
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::metadata::merge_metadata_for_union;
+use datafusion_common::metadata::{FieldMetadata, merge_metadata_for_union};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -1485,6 +1486,12 @@ fn coerce_scalar_function_argument(
     if value.data_type() != *data_type
         && let Ok(value) = value.cast_to(data_type)
     {
+        let metadata = metadata.map(|metadata| {
+            let mut metadata = metadata.into_inner();
+            metadata.remove(EXTENSION_TYPE_NAME_KEY);
+            metadata.remove(EXTENSION_TYPE_METADATA_KEY);
+            FieldMetadata::from(metadata)
+        });
         return Ok(Expr::Literal(value, metadata));
     }
 
@@ -1788,7 +1795,7 @@ mod test {
     use std::sync::Arc;
 
     use arrow::datatypes::DataType::Utf8;
-    use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Metadata, Schema, SchemaBuilder, TimeUnit};
     use insta::assert_snapshot;
 
     use crate::analyzer::type_coercion::{
@@ -1797,6 +1804,7 @@ mod test {
     use crate::analyzer::{Analyzer, AnalyzerRule};
     use crate::assert_analyzed_plan_with_config_eq_snapshot;
     use datafusion_common::config::ConfigOptions;
+    use datafusion_common::metadata::FieldMetadata;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{
         DFSchema, DFSchemaRef, Result, ScalarValue, Spans, TableReference,
@@ -3680,5 +3688,35 @@ mod test {
           EmptyRelation: rows=0
         "#,
         )
+    }
+
+    #[test]
+    fn literal_coercion_preserves_metadata_presence() -> Result<()> {
+        let extension = Metadata::new()
+            .with("ARROW:extension:name", "example.id")
+            .with("ARROW:extension:metadata", "{}");
+        for (metadata, expected) in [
+            (None, None),
+            (
+                Some(FieldMetadata::new_empty()),
+                Some(FieldMetadata::new_empty()),
+            ),
+            (
+                Some(FieldMetadata::from(extension.clone())),
+                Some(FieldMetadata::new_empty()),
+            ),
+            (
+                Some(FieldMetadata::from(extension.with("origin", "lit"))),
+                Some(FieldMetadata::from(Metadata::new().with("origin", "lit"))),
+            ),
+        ] {
+            let actual = super::coerce_scalar_function_argument(
+                Expr::Literal(ScalarValue::Int32(Some(1)), metadata),
+                &DataType::Int64,
+                &DFSchema::empty(),
+            )?;
+            assert_eq!(actual, Expr::Literal(ScalarValue::Int64(Some(1)), expected));
+        }
+        Ok(())
     }
 }

@@ -10,17 +10,17 @@ use std::vec;
 use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData,
-    NullArray, OffsetSizeTrait, new_null_array,
+    NullArray, OffsetSizeTrait, new_empty_array,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, FieldRef};
 use arrow::datatypes::{DataType::Null, Field};
-use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{DataFusionError, Result, plan_datafusion_err};
+use datafusion_common::metadata::coerced_fields_metadata;
+use datafusion_common::{DataFusionError, Result, internal_err, plan_datafusion_err};
 use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
@@ -80,19 +80,29 @@ impl ScalarUDFImpl for MakeArray {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let element_type = if arg_types.is_empty() {
-            Null
-        } else {
-            // At this point, all the type in array should be coerced to the same one.
-            arg_types[0].to_owned()
-        };
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
 
-        Ok(DataType::new_list(element_type, true))
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Argument storage types have already been coerced to a common type.
+        let element_type = args
+            .arg_fields
+            .first()
+            .map_or(Null, |f| f.data_type().clone());
+        let metadata =
+            coerced_fields_metadata(args.arg_fields.iter().map(|f| f.as_ref()))?;
+        let element = metadata.add_to_field(Field::new_list_field(element_type, true));
+        Ok(Field::new(self.name(), DataType::List(Arc::new(element)), true).into())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(make_array_inner)(&args.args)
+        let DataType::List(field) = args.return_type() else {
+            return internal_err!("incorrect make_array return type");
+        };
+        make_scalar_function(|arrays| {
+            array_array_with_field::<i32>(arrays, Arc::clone(field))
+        })(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -182,19 +192,29 @@ pub fn array_array<O: OffsetSizeTrait>(
     data_type: DataType,
     field_name: &str,
 ) -> Result<ArrayRef> {
+    array_array_with_field::<O>(args, Arc::new(Field::new(field_name, data_type, true)))
+}
+
+fn array_array_with_field<O: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    field: FieldRef,
+) -> Result<ArrayRef> {
+    let data_type = field.data_type();
     if args.is_empty() {
-        // If input is empty, combined output is an empty array with `Null` data type
-        let array = new_null_array(&Null, 0);
-        return Ok(Arc::new(
-            SingleRowListArrayBuilder::new(array).build_list_array(),
-        ));
+        let values = new_empty_array(data_type);
+        return Ok(Arc::new(GenericListArray::<O>::try_new(
+            field,
+            OffsetBuffer::new_zeroed(1),
+            values,
+            None,
+        )?));
     }
 
     let mut data = Vec::with_capacity(args.len());
     let mut total_len = 0;
     for arg in args {
         let arg_data = if arg.as_any().is::<NullArray>() {
-            ArrayData::new_empty(&data_type)
+            ArrayData::new_empty(data_type)
         } else {
             arg.to_data()
         };
@@ -226,7 +246,7 @@ pub fn array_array<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new(field_name, data_type, true)),
+        field,
         OffsetBuffer::new(offsets.into()),
         arrow::array::make_array(data),
         None,
@@ -246,7 +266,29 @@ pub fn coerce_types_inner(arg_types: &[DataType], name: &str) -> Result<Vec<Data
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::AsArray;
     use arrow::datatypes::{Fields, Metadata};
+
+    #[test]
+    fn empty_array_array_with_field_preserves_field_and_offset() -> Result<()> {
+        let field = Arc::new(
+            Field::new("element", DataType::Int32, false)
+                .with_metadata(Metadata::new().with("origin", "spark")),
+        );
+        let array = array_array_with_field::<i64>(&[], Arc::clone(&field))?;
+        assert_eq!(array.len(), 1);
+        assert_eq!(array.null_count(), 0);
+        assert_eq!(array.data_type(), &DataType::LargeList(field));
+        assert_eq!(array.as_list::<i64>().value_length(0), 0);
+
+        let array = array_array::<i64>(&[], DataType::Int32, "element")?;
+        assert_eq!(
+            array.data_type(),
+            &DataType::LargeList(Arc::new(Field::new("element", DataType::Int32, true),))
+        );
+        assert_eq!(array.as_list::<i64>().value_length(0), 0);
+        Ok(())
+    }
 
     #[test]
     fn coerce_types_inner_propagates_metadata_conflict_and_maps_unification_error() {

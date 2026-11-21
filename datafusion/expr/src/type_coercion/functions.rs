@@ -12,6 +12,7 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::internal_datafusion_err;
 use datafusion_common::types::LogicalType;
 use datafusion_common::utils::{
@@ -135,9 +136,16 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
         .iter()
         .zip(updated_types)
         .map(|(current_field, new_type)| {
-            current_field.as_ref().clone().with_data_type(new_type)
+            if current_field.data_type() == &new_type {
+                return Arc::clone(current_field);
+            }
+            // An implicit storage conversion has the metadata semantics of a
+            // type-only cast, including when a literal is materialized early.
+            let mut field = current_field.as_ref().clone().with_data_type(new_type);
+            field.metadata_mut().remove(EXTENSION_TYPE_NAME_KEY);
+            field.metadata_mut().remove(EXTENSION_TYPE_METADATA_KEY);
+            Arc::new(field)
         })
-        .map(Arc::new)
         .collect())
 }
 
@@ -1543,6 +1551,39 @@ mod tests {
         fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
             unimplemented!()
         }
+    }
+
+    #[test]
+    fn test_coerced_argument_metadata() -> Result<()> {
+        let metadata = arrow::datatypes::Metadata::from([
+            ("ARROW:extension:name".to_string(), "example.id".to_string()),
+            ("ARROW:extension:metadata".to_string(), "{}".to_string()),
+            ("origin".to_string(), "input".to_string()),
+        ]);
+        let fields = vec![
+            Arc::new(
+                Field::new("a", DataType::Int32, false).with_metadata(metadata.clone()),
+            ),
+            Arc::new(
+                Field::new("b", DataType::Int32, true).with_metadata(metadata.clone()),
+            ),
+        ];
+        let signature = Signature::exact(
+            vec![DataType::Int64, DataType::Int32],
+            Volatility::Immutable,
+        );
+        let coerced = fields_with_udf(&fields, &MockUdf(signature))?;
+        assert_eq!(
+            coerced[0].as_ref(),
+            &Field::new("a", DataType::Int64, false).with_metadata(
+                arrow::datatypes::Metadata::from([(
+                    "origin".to_string(),
+                    "input".to_string(),
+                )]),
+            ),
+        );
+        assert_eq!(coerced[1], fields[1]);
+        Ok(())
     }
 
     #[test]
