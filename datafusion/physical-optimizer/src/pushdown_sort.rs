@@ -42,14 +42,19 @@
 //! Related issue: <https://github.com/apache/datafusion/issues/17348>
 
 use crate::PhysicalOptimizerRule;
+use arrow::compute::SortOptions;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::SortOrderPushdownResult;
+use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::buffer::BufferExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::replace_children_if_necessary;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -141,7 +146,53 @@ impl PhysicalOptimizerRule for PushdownSort {
                 }
             }
 
-            // Pattern 2: Standalone SortExec (no SPM parent)
+            // Pattern 2: Ungrouped single-column MIN/MAX AggregateExec.
+            // Push down sort order so the scan reads files and row groups with
+            // the largest (or smallest) values first for early dynamic filter pruning.
+            if config.optimizer.enable_dynamic_filter_pushdown
+                && config.optimizer.enable_aggregate_dynamic_filter_pushdown
+                && let Some(agg) = plan.downcast_ref::<AggregateExec>()
+                && !agg.dynamic_expressions_produced().is_empty()
+                && agg.group_expr().is_true_no_grouping()
+                // Multiple aggregates (e.g. MIN(a), MAX(b)) may need different sort orders
+                && let [aggr_expr] = agg.aggr_expr()
+                && let [arg] = aggr_expr.expressions().as_slice()
+                // Expressions like MAX(-ts) or MAX(a + b) may not match the column sort order
+                && arg.is::<Column>()
+                && !input_has_fetch(agg.input())?
+            {
+                let fun_name = aggr_expr.fun().name();
+                let descending = if fun_name.eq_ignore_ascii_case("max") {
+                    Some(true)
+                } else if fun_name.eq_ignore_ascii_case("min") {
+                    Some(false)
+                } else {
+                    None
+                };
+                if let Some(descending) = descending {
+                    let sort_expr = PhysicalSortExpr::new(
+                        Arc::clone(arg),
+                        SortOptions {
+                            descending,
+                            // MIN/MAX ignore NULLs, so always push NULLs last
+                            nulls_first: false,
+                        },
+                    );
+                    match agg.input().try_pushdown_sort(&[sort_expr])? {
+                        SortOrderPushdownResult::Exact { inner }
+                        | SortOrderPushdownResult::Inexact { inner } => {
+                            let new_agg = replace_children_if_necessary(
+                                Arc::clone(&plan),
+                                vec![inner],
+                            )?;
+                            return Ok(Transformed::yes(new_agg));
+                        }
+                        SortOrderPushdownResult::Unsupported => {}
+                    }
+                }
+            }
+
+            // Pattern 3: Standalone SortExec (no SPM parent)
             let Some(sort_exec) = plan.downcast_ref::<SortExec>() else {
                 return Ok(Transformed::no(plan));
             };

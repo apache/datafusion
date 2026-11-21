@@ -28,6 +28,7 @@ use crate::projection::{
     EmbeddedProjection, ProjectionExec, ProjectionExpr, make_with_child,
     try_embed_projection, update_expr,
 };
+use crate::sort_pushdown::SortOrderPushdownResult;
 use crate::statistics::{ChildStats, StatisticsArgs, StatisticsContext};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
@@ -61,6 +62,7 @@ use datafusion_physical_expr::{
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -1002,6 +1004,46 @@ impl ExecutionPlan for FilterExec {
             batch_size: self.batch_size,
             fetch,
         }))
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        if self.fetch.is_some() {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        }
+
+        let child_order = match &self.projection {
+            None => order.to_vec(),
+            Some(projection) => {
+                // Remap parent output column indices back to child input column indices
+                let remapper = FilterRemapper::with_column_mapping(
+                    self.input.schema(),
+                    projection.iter().copied().enumerate().collect(),
+                );
+                let mut child_order = Vec::with_capacity(order.len());
+                for sort_expr in order {
+                    let Some(expr) = remapper.try_remap(&sort_expr.expr)? else {
+                        return Ok(SortOrderPushdownResult::Unsupported);
+                    };
+                    child_order.push(PhysicalSortExpr {
+                        expr,
+                        options: sort_expr.options,
+                    });
+                }
+                child_order
+            }
+        };
+
+        self.input
+            .try_pushdown_sort(&child_order)?
+            .try_map(|new_input| {
+                let new_filter = FilterExecBuilder::from(self)
+                    .with_input(new_input)
+                    .build()?;
+                Ok(Arc::new(new_filter) as Arc<dyn ExecutionPlan>)
+            })
     }
 
     #[cfg(feature = "proto")]
