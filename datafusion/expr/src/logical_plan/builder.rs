@@ -49,6 +49,7 @@ use datafusion_common::{
     get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
     plan_err,
 };
+use datafusion_expr_common::casts::is_lossless_decimal_cast;
 use datafusion_expr_common::type_coercion::binary::{
     type_union_coercion, type_union_resolution,
 };
@@ -130,40 +131,8 @@ fn recursive_type_can_be_coerced(from: &DataType, into: &DataType) -> bool {
         )
         | (DataType::Int64 | DataType::UInt64, DataType::Float64) => false,
         (from, into) if from.is_decimal() && into.is_floating() => false,
-        (from, into) if into.is_decimal() => {
-            if from.is_floating() {
-                return false;
-            }
-            let Some((into_precision, into_scale)) = decimal_precision_scale(into) else {
-                return false;
-            };
-            let from_precision_scale = match from {
-                DataType::Int8 | DataType::UInt8 => Some((3, 0)),
-                DataType::Int16 | DataType::UInt16 => Some((5, 0)),
-                DataType::Int32 | DataType::UInt32 => Some((10, 0)),
-                DataType::Int64 => Some((19, 0)),
-                DataType::UInt64 => Some((20, 0)),
-                _ => decimal_precision_scale(from),
-            };
-            let Some((from_precision, from_scale)) = from_precision_scale else {
-                return false;
-            };
-            into_scale >= from_scale
-                && into_precision - into_scale >= from_precision - from_scale
-        }
+        (from, into) if into.is_decimal() => is_lossless_decimal_cast(from, into),
         _ => true,
-    }
-}
-
-fn decimal_precision_scale(data_type: &DataType) -> Option<(i16, i16)> {
-    match data_type {
-        DataType::Decimal32(precision, scale)
-        | DataType::Decimal64(precision, scale)
-        | DataType::Decimal128(precision, scale)
-        | DataType::Decimal256(precision, scale) => {
-            Some((*precision as i16, *scale as i16))
-        }
-        _ => None,
     }
 }
 
