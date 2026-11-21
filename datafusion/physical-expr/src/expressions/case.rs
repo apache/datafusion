@@ -1670,7 +1670,10 @@ mod tests {
     use crate::expressions::{binary, cast, col, is_not_null};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
-    use arrow::datatypes::{Field, i256};
+    use arrow::datatypes::{
+        Decimal128Type, Field, Int8Type, Int16Type, Int64Type, UInt8Type, UInt64Type,
+        i256,
+    };
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::plan_err;
@@ -3373,13 +3376,14 @@ mod tests {
         );
     }
 
-    /// Covers both the linear and the hash lookup of primitive literals, with inputs
-    /// spanning several chunks of the linear lookup.
+    /// Covers the linear, the direct, and the hash lookup of primitive literals, with
+    /// inputs spanning several chunks of the linear lookup.
     #[rstest::rstest]
     fn test_case_when_literal_lookup_int64_by_number_of_literals(
         #[values(2, 16, 17, 40)] num_literals: i64,
+        #[values(1, 7, 1000)] spacing: i64,
     ) {
-        let literal = |i: i64| i * 7 - 50;
+        let literal = |i: i64| i * spacing - 50;
         let lookup_map = create_lookup(
             (0..num_literals).map(|i| (Some(literal(i)), Some(format!("v{i}")))),
         );
@@ -3408,13 +3412,14 @@ mod tests {
     /// not a multiple of 8, so that the validity bits of the slice are not byte-aligned.
     #[rstest::rstest]
     fn test_case_when_literal_lookup_int64_sliced_with_nulls(
-        #[values(5, 17)] num_literals: i64,
+        #[values(2, 5, 17)] num_literals: i64,
+        #[values(7, 1000)] spacing: i64,
     ) {
         const OFFSET: usize = 3;
         // Spans two linear lookup chunk boundaries, and ends mid-way of a validity word
         const LEN: usize = 600;
 
-        let literal = |i: i64| i * 7 - 50;
+        let literal = |i: i64| i * spacing - 50;
         let lookup_map = create_lookup(
             (0..num_literals).map(|i| (Some(literal(i)), Some(format!("v{i}")))),
         );
@@ -3449,11 +3454,13 @@ mod tests {
     /// the lower part or only in the upper part.
     fn test_lookup_wide_decimal(
         num_literals: i64,
+        spacing: i64,
         null: ScalarValue,
         value: impl Fn(i64, i64) -> ScalarValue,
     ) {
         const HIGH: i64 = 5;
 
+        let value = |i: i64, high: i64| value(i * spacing, high);
         let lookup_map = create_lookup(
             (0..num_literals).map(|i| (value(i, HIGH), Some(format!("v{i}")))),
         );
@@ -3480,13 +3487,15 @@ mod tests {
     }
 
     /// Covers both sides of the limit of the number of `Decimal128` literals looked up
-    /// by comparing with each of them.
+    /// by comparing with each of them, and the direct lookup of closely spaced ones.
     #[rstest::rstest]
     fn test_case_when_literal_lookup_decimal128_by_number_of_literals(
         #[values(2, 4, 5)] num_literals: i64,
+        #[values(1, 7, 1 << 20)] spacing: i64,
     ) {
         test_lookup_wide_decimal(
             num_literals,
+            spacing,
             ScalarValue::Decimal128(None, 38, 0),
             |low, high| {
                 ScalarValue::Decimal128(
@@ -3506,6 +3515,7 @@ mod tests {
     ) {
         test_lookup_wide_decimal(
             num_literals,
+            1,
             ScalarValue::Decimal256(None, 76, 0),
             |low, high| {
                 ScalarValue::Decimal256(
@@ -3515,6 +3525,83 @@ mod tests {
                 )
             },
         );
+    }
+
+    /// Looks up `inputs` with `literals` of an integer type, which are expected to be
+    /// looked up in a direct table.
+    fn test_direct_lookup<T: ArrowPrimitiveType>(
+        literals: impl IntoIterator<Item = T::Native>,
+        inputs: impl IntoIterator<Item = T::Native>,
+    ) {
+        let literals = literals.into_iter().collect::<Vec<_>>();
+        let lookup_map = literals
+            .iter()
+            .enumerate()
+            .map(|(i, literal)| {
+                (
+                    ScalarValue::new_primitive::<T>(Some(*literal), &T::DATA_TYPE)
+                        .unwrap(),
+                    ScalarValue::from(format!("v{i}")),
+                )
+            })
+            .collect::<Vec<_>>();
+        let (inputs, expected): (Vec<_>, Vec<_>) = inputs
+            .into_iter()
+            .map(|input| {
+                let i = literals.iter().position(|literal| *literal == input);
+                (input, i.map(|i| format!("v{i}")))
+            })
+            .unzip();
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(PrimitiveArray::<T>::from_iter_values(inputs)),
+            StringArray::from(expected),
+        );
+    }
+
+    /// Covers the direct lookup of integer literals at the ends of the range of their
+    /// type, where the offsets of the values from the lowest literal wrap around.
+    #[test]
+    fn test_case_when_literal_lookup_direct_at_type_bounds() {
+        test_direct_lookup::<Int8Type>(-128..=-123, i8::MIN..=i8::MAX);
+        test_direct_lookup::<Int8Type>(122..=127, i8::MIN..=i8::MAX);
+        test_direct_lookup::<UInt8Type>(0..=5, u8::MIN..=u8::MAX);
+        test_direct_lookup::<UInt8Type>(250..=255, u8::MIN..=u8::MAX);
+        test_direct_lookup::<Int16Type>(
+            [
+                i16::MIN,
+                i16::MIN + 2,
+                i16::MIN + 1000,
+                i16::MIN + 3,
+                i16::MIN + 1,
+            ],
+            [i16::MIN, i16::MIN + 1, i16::MIN + 4, i16::MIN + 1000, -1, 0]
+                .into_iter()
+                .chain(i16::MAX - 2..=i16::MAX),
+        );
+
+        let i64_inputs = || {
+            (i64::MIN..=i64::MIN + 6)
+                .chain(-1..=1)
+                .chain(i64::MAX - 6..=i64::MAX)
+        };
+        test_direct_lookup::<Int64Type>(i64::MAX - 4..=i64::MAX, i64_inputs());
+        test_direct_lookup::<Int64Type>(i64::MIN..=i64::MIN + 4, i64_inputs());
+        test_direct_lookup::<UInt64Type>(
+            u64::MAX - 4..=u64::MAX,
+            (0..=6).chain(u64::MAX - 6..=u64::MAX),
+        );
+
+        let i128_inputs = || {
+            (i128::MIN..=i128::MIN + 6)
+                .chain(-1..=1)
+                .chain([i64::MAX as i128 + 1, u64::MAX as i128 + 1])
+                .chain(i128::MAX - 6..=i128::MAX)
+        };
+        test_direct_lookup::<Decimal128Type>(i128::MAX - 2..=i128::MAX, i128_inputs());
+        test_direct_lookup::<Decimal128Type>(i128::MIN..=i128::MIN + 2, i128_inputs());
+        test_direct_lookup::<Decimal128Type>(-1..=1, i128_inputs());
     }
 
     #[test]
