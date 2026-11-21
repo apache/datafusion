@@ -5,13 +5,18 @@
 //! `lead` and `lag` window function implementations
 
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
-use arrow::array::UInt64Builder;
+use arrow::array::{Array, PrimitiveArray, PrimitiveBuilder, UInt64Builder};
 use arrow::compute::{interleave, take};
-use arrow::datatypes::FieldRef;
+use arrow::datatypes::{
+    FieldRef, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
+};
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::{DataFusionError, Result, ScalarValue, arrow_datafusion_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, arrow_datafusion_err, internal_err,
+};
 use datafusion_doc::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::{
     Documentation, LimitEffect, Literal, PartitionEvaluator, ReversedUDWF, Signature,
@@ -556,6 +561,61 @@ fn shift_with_default_value(
     }
 }
 
+fn shift_timestamp_with_null_default(
+    array: &ArrayRef,
+    shift_offset: i64,
+    output_range: Range<usize>,
+) -> Result<ArrayRef> {
+    let shift = offset_magnitude(shift_offset);
+    macro_rules! shift_timestamp {
+        ($timestamp_type:ty) => {{
+            let Some(array) = array
+                .as_any()
+                .downcast_ref::<PrimitiveArray<$timestamp_type>>()
+            else {
+                return internal_err!(
+                    "Failed to downcast {} for stateful LAG/LEAD evaluation",
+                    array.data_type()
+                );
+            };
+            let mut builder =
+                PrimitiveBuilder::<$timestamp_type>::with_capacity(output_range.len())
+                    .with_data_type(array.data_type().clone());
+            for idx in output_range {
+                let target = if shift_offset > 0 {
+                    idx.checked_sub(shift)
+                } else {
+                    idx.checked_add(shift).filter(|idx| *idx < array.len())
+                };
+                if let Some(target) = target.filter(|idx| array.is_valid(*idx)) {
+                    builder.append_value(array.value(target));
+                } else {
+                    builder.append_null();
+                }
+            }
+            Ok(Arc::new(builder.finish()) as ArrayRef)
+        }};
+    }
+
+    match array.data_type() {
+        DataType::Timestamp(TimeUnit::Second, Some(_)) => {
+            shift_timestamp!(TimestampSecondType)
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, Some(_)) => {
+            shift_timestamp!(TimestampMillisecondType)
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
+            shift_timestamp!(TimestampMicrosecondType)
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(_)) => {
+            shift_timestamp!(TimestampNanosecondType)
+        }
+        data_type => internal_err!(
+            "Expected a timestamp with timezone for stateful LAG/LEAD evaluation, got {data_type}"
+        ),
+    }
+}
+
 impl PartitionEvaluator for WindowShiftEvaluator {
     fn get_range(&self, idx: usize, n_rows: usize) -> Result<Range<usize>> {
         let offset = offset_magnitude(self.shift_offset);
@@ -687,6 +747,133 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         } else {
             Ok(self.default_value.clone())
         }
+    }
+
+    fn evaluate_stateful_array(
+        &self,
+        values: &[ArrayRef],
+        start_idx: usize,
+        num_rows: usize,
+        is_end: bool,
+    ) -> Result<Option<(ArrayRef, Range<usize>)>> {
+        let value = &values[0];
+        debug_assert_eq!(value.len(), num_rows);
+        debug_assert!(start_idx <= num_rows);
+        if !matches!(value.data_type(), DataType::Timestamp(_, Some(_))) {
+            return Ok(None);
+        }
+
+        let mut last_range = start_idx..start_idx;
+        let shift = offset_magnitude(self.shift_offset);
+
+        if shift == 0 {
+            if start_idx < num_rows {
+                last_range = num_rows - 1..num_rows - 1;
+            }
+            return Ok(Some((
+                value.slice(start_idx, num_rows - start_idx),
+                last_range,
+            )));
+        }
+
+        if !self.ignore_nulls {
+            let output_end = if self.is_lag() || is_end {
+                num_rows
+            } else {
+                num_rows.saturating_sub(shift)
+            };
+            if start_idx < output_end {
+                let idx = output_end - 1;
+                last_range = if self.is_lag() {
+                    idx.saturating_sub(shift)..idx + 1
+                } else {
+                    idx..min(idx.saturating_add(shift), num_rows)
+                };
+            }
+            if self.default_value.is_null() {
+                let output = shift_timestamp_with_null_default(
+                    value,
+                    self.shift_offset,
+                    start_idx..output_end,
+                )?;
+                return Ok(Some((output, last_range)));
+            }
+        }
+
+        let mut indices = ShiftIndexBuilder::new(
+            num_rows.saturating_sub(start_idx),
+            self.default_value.is_null(),
+        );
+        if !self.ignore_nulls && self.is_lag() {
+            for idx in start_idx..num_rows {
+                indices.append_option(idx.checked_sub(shift));
+                last_range = idx.saturating_sub(shift)..idx + 1;
+            }
+        } else if !self.ignore_nulls {
+            let output_end = if is_end {
+                num_rows
+            } else {
+                num_rows.saturating_sub(shift)
+            };
+            for idx in start_idx..output_end {
+                let target = idx.checked_add(shift).filter(|idx| *idx < num_rows);
+                indices.append_option(target);
+                last_range = idx..min(idx.saturating_add(shift), num_rows);
+            }
+        } else if self.is_lag() {
+            let mut preceding = VecDeque::new();
+            for idx in 0..start_idx {
+                if value.is_valid(idx) {
+                    if preceding.len() == shift {
+                        preceding.pop_front();
+                    }
+                    preceding.push_back(idx);
+                }
+            }
+            for idx in start_idx..num_rows {
+                let target = if preceding.len() == shift {
+                    preceding.front().copied()
+                } else {
+                    None
+                };
+                indices.append_option(target);
+                last_range = target.unwrap_or(0)..idx + 1;
+
+                if value.is_valid(idx) {
+                    if preceding.len() == shift {
+                        preceding.pop_front();
+                    }
+                    preceding.push_back(idx);
+                }
+            }
+        } else {
+            let mut following = VecDeque::new();
+            let mut next_idx = start_idx.saturating_add(1);
+            for idx in start_idx..num_rows {
+                while following.front().is_some_and(|next| *next <= idx) {
+                    following.pop_front();
+                }
+                next_idx = next_idx.max(idx.saturating_add(1));
+                while following.len() < shift && next_idx < num_rows {
+                    if value.is_valid(next_idx) {
+                        following.push_back(next_idx);
+                    }
+                    next_idx += 1;
+                }
+                if following.len() < shift && !is_end {
+                    break;
+                }
+
+                let target = following.get(shift - 1).copied();
+                indices.append_option(target);
+                last_range = idx..target.map_or(num_rows, |target| target + 1);
+            }
+        }
+
+        Ok(Some((
+            indices.finish(value, &self.default_value)?,
+            last_range,
+        )))
     }
 
     fn evaluate_all(
@@ -998,6 +1185,94 @@ mod tests {
             )?;
             assert_eq!(expected, *as_int32_array(&actual)?);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_stateful_array_evaluation_timestamp() -> Result<()> {
+        let timezone: Arc<str> = Arc::from("America/Los_Angeles");
+        let input: ArrayRef = Arc::new(
+            TimestampMicrosecondArray::from(vec![
+                Some(10),
+                None,
+                Some(30),
+                Some(40),
+                None,
+                Some(60),
+            ])
+            .with_timezone(Arc::clone(&timezone)),
+        );
+
+        for offset in [i64::MIN, -2, 0, 2, i64::MAX] {
+            for ignore_nulls in [false, true] {
+                for default_value in [
+                    ScalarValue::TimestampMicrosecond(None, Some(Arc::clone(&timezone))),
+                    ScalarValue::TimestampMicrosecond(
+                        Some(-1),
+                        Some(Arc::clone(&timezone)),
+                    ),
+                ] {
+                    let mut expected_evaluator = WindowShiftEvaluator {
+                        shift_offset: offset,
+                        default_value: default_value.clone(),
+                        ignore_nulls,
+                        non_null_offsets: VecDeque::new(),
+                    };
+                    let expected = expected_evaluator
+                        .evaluate_all(&[Arc::clone(&input)], input.len())?;
+
+                    // Simulate two input batches. The first call is not the end of
+                    // the partition, so LEAD may need to wait for more input.
+                    let evaluator = WindowShiftEvaluator {
+                        shift_offset: offset,
+                        default_value,
+                        ignore_nulls,
+                        non_null_offsets: VecDeque::new(),
+                    };
+                    let first_input = input.slice(0, 3);
+                    let (first, _) = evaluator
+                        .evaluate_stateful_array(&[first_input], 0, 3, false)?
+                        .expect("LAG/LEAD implements array evaluation");
+                    let (second, _) = evaluator
+                        .evaluate_stateful_array(
+                            &[Arc::clone(&input)],
+                            first.len(),
+                            input.len(),
+                            true,
+                        )?
+                        .expect("LAG/LEAD implements array evaluation");
+                    let actual =
+                        arrow::compute::concat(&[first.as_ref(), second.as_ref()])?;
+
+                    assert_eq!(actual.data_type(), input.data_type());
+                    assert_eq!(actual.to_data(), expected.to_data());
+                }
+            }
+        }
+
+        let evaluator = WindowShiftEvaluator {
+            shift_offset: 1,
+            default_value: ScalarValue::TimestampMicrosecond(
+                None,
+                Some(Arc::clone(&timezone)),
+            ),
+            ignore_nulls: false,
+            non_null_offsets: VecDeque::new(),
+        };
+        let empty = input.slice(0, 0);
+        let (output, range) = evaluator
+            .evaluate_stateful_array(&[empty], 0, 0, true)?
+            .expect("timezone timestamps use array evaluation");
+        assert!(output.is_empty());
+        assert_eq!(output.data_type(), input.data_type());
+        assert_eq!(range, 0..0);
+
+        let fallback_input: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        assert!(
+            evaluator
+                .evaluate_stateful_array(&[fallback_input], 0, 2, true)?
+                .is_none()
+        );
         Ok(())
     }
 }

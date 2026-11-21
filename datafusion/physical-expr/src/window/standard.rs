@@ -4,8 +4,7 @@
 
 //! Physical exec for standard window function expressions.
 
-use std::any::Any;
-use std::sync::Arc;
+use std::{any::Any, ops::Range, sync::Arc};
 
 use super::{StandardWindowFunctionExpr, WindowExpr};
 use crate::window::window_expr::{WindowEvalContext, WindowFn, get_orderby_values};
@@ -13,10 +12,10 @@ use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{EquivalenceProperties, PhysicalExpr};
 
 use arrow::array::{ArrayRef, new_empty_array};
-use arrow::datatypes::FieldRef;
+use arrow::datatypes::{DataType, FieldRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::evaluate_partition_ranges;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::WindowFrame;
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -28,6 +27,45 @@ pub struct StandardWindowExpr {
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
     order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
+}
+
+fn validate_stateful_array_result(
+    out_col: &ArrayRef,
+    last_range: &Range<usize>,
+    out_type: &DataType,
+    start_idx: usize,
+    num_rows: usize,
+    is_end: bool,
+) -> Result<()> {
+    let Some(remaining) = num_rows.checked_sub(start_idx) else {
+        return internal_err!(
+            "Stateful window evaluation starts at row {start_idx}, but only {num_rows} rows are buffered"
+        );
+    };
+    if out_col.len() > remaining {
+        return internal_err!(
+            "Stateful window evaluation produced {} rows for {remaining} remaining rows",
+            out_col.len()
+        );
+    }
+    if is_end && out_col.len() != remaining {
+        return internal_err!(
+            "Stateful window evaluation produced {} of {remaining} remaining rows at the end of the partition",
+            out_col.len()
+        );
+    }
+    if out_col.data_type() != out_type {
+        return internal_err!(
+            "Stateful window evaluation produced type {} instead of {out_type}",
+            out_col.data_type()
+        );
+    }
+    if last_range.start > last_range.end || last_range.end > num_rows {
+        return internal_err!(
+            "Stateful window evaluation returned invalid input range {last_range:?} for {num_rows} buffered rows"
+        );
+    }
+    Ok(())
 }
 
 impl StandardWindowExpr {
@@ -188,6 +226,16 @@ impl WindowExpr for StandardWindowExpr {
             let record_batch = &partition_batch_state.record_batch;
             let num_rows = record_batch.num_rows();
             let n_new_rows = num_rows.saturating_sub(state.last_calculated_index);
+            let array_result = if uses_window_frame {
+                None
+            } else {
+                evaluator.evaluate_stateful_array(
+                    &values,
+                    state.last_calculated_index,
+                    num_rows,
+                    partition_batch_state.is_end,
+                )?
+            };
             // Functions that use the window frame are evaluated on all frames after
             // the loop. Other functions are evaluated row by row, because their
             // `get_range` can depend on state that `evaluate` updates.
@@ -202,6 +250,9 @@ impl WindowExpr for StandardWindowExpr {
                 evaluator.is_causal()
             };
             for idx in state.last_calculated_index..num_rows {
+                if array_result.is_some() {
+                    break;
+                }
                 let frame_range = if uses_window_frame {
                     state
                         .window_frame_ctx
@@ -238,7 +289,20 @@ impl WindowExpr for StandardWindowExpr {
                         .push(evaluator.evaluate(&values, &state.window_frame_range)?);
                 }
             }
-            let out_col = if !frame_ranges.is_empty() {
+            let out_col = if let Some((out_col, last_range)) = array_result {
+                validate_stateful_array_result(
+                    &out_col,
+                    &last_range,
+                    out_type,
+                    state.last_calculated_index,
+                    num_rows,
+                    partition_batch_state.is_end,
+                )?;
+                if !out_col.is_empty() {
+                    state.window_frame_range = last_range;
+                }
+                out_col
+            } else if !frame_ranges.is_empty() {
                 evaluator.evaluate_ranges(&values, &frame_ranges)?
             } else if row_wise_results.is_empty() {
                 new_empty_array(out_type)
@@ -315,4 +379,68 @@ pub(crate) fn add_new_ordering_expr_with_partition_by(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Int32Array, StringArray};
+
+    #[test]
+    fn validate_stateful_array_contract() {
+        let valid: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        assert!(
+            validate_stateful_array_result(
+                &valid,
+                &(1..3),
+                &DataType::Int32,
+                1,
+                4,
+                false
+            )
+            .is_ok()
+        );
+
+        let too_many: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        assert!(
+            validate_stateful_array_result(
+                &too_many,
+                &(0..4),
+                &DataType::Int32,
+                1,
+                4,
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            validate_stateful_array_result(&valid, &(1..3), &DataType::Int32, 1, 4, true)
+                .is_err()
+        );
+
+        let wrong_type: ArrayRef = Arc::new(StringArray::from(vec!["1", "2"]));
+        assert!(
+            validate_stateful_array_result(
+                &wrong_type,
+                &(1..3),
+                &DataType::Int32,
+                1,
+                4,
+                false
+            )
+            .is_err()
+        );
+        let invalid_range = Range { start: 3, end: 2 };
+        assert!(
+            validate_stateful_array_result(
+                &valid,
+                &invalid_range,
+                &DataType::Int32,
+                1,
+                4,
+                false
+            )
+            .is_err()
+        );
+    }
 }
