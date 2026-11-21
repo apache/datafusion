@@ -447,7 +447,29 @@ impl<'a> TypeCoercionRewriter<'a> {
                             Arc::clone(&union_schema),
                         )?))
                     }
-                    other_plan => Ok(Arc::new(other_plan)),
+                    other_plan => {
+                        let needs_rename = other_plan
+                            .schema()
+                            .fields()
+                            .iter()
+                            .zip(union_schema.fields())
+                            .any(|(input, output)| input.name() != output.name());
+                        if needs_rename {
+                            let expr = other_plan
+                                .schema()
+                                .columns()
+                                .into_iter()
+                                .map(Expr::Column)
+                                .collect();
+                            Ok(Arc::new(project_with_column_index(
+                                expr,
+                                Arc::new(other_plan),
+                                Arc::clone(&union_schema),
+                            )?))
+                        } else {
+                            Ok(Arc::new(other_plan))
+                        }
+                    }
                 }
             })
             .collect::<Result<Vec<_>>>()?;
