@@ -802,6 +802,9 @@ impl EquivalenceGroup {
             IndexMap::<_, EquivalenceClass>::with_capacity(mapping.len());
         let mut augmented = None;
         for (source, targets) in mapping.iter() {
+            if is_volatile(source) {
+                continue;
+            }
             // We need to find equivalent projected expressions. For example,
             // consider a table with columns `[a, b, c]` with `a` == `b`, and
             // projection `[a + c, b + c]`. To conclude that `a + c == b + c`,
@@ -814,7 +817,7 @@ impl EquivalenceGroup {
             }
             // Retain deterministic expressions as equalities so orderings derived
             // through strict functions can be inferred after a merge clears orderings.
-            if !source.children().is_empty() && !is_volatile(source) {
+            if !source.children().is_empty() {
                 let augmented = augmented
                     .get_or_insert_with(|| self.augment_projection_mapping(mapping));
                 if let Some(projected) = Self::project_expr_indirect(augmented, source) {
@@ -1820,6 +1823,37 @@ mod tests {
         let mut class = EquivalenceClass::new([a_plus_b_plus_c]);
         class.extend(other);
         assert_eq!(class.canonical_expr().unwrap(), &a);
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_volatile_expr_does_not_equate_targets() -> Result<()> {
+        use crate::ScalarFunctionExpr;
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::{ColumnarValue, Volatility, create_udf};
+
+        let schema = abc_schema();
+        let udf = Arc::new(create_udf(
+            "f",
+            vec![DataType::Int32],
+            DataType::Int32,
+            Volatility::Volatile,
+            Arc::new(|args: &[ColumnarValue]| Ok(args[0].clone())),
+        ));
+        let volatile: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            udf,
+            vec![col("a", &schema)?],
+            &schema,
+            Arc::new(ConfigOptions::new()),
+        )?);
+        let mapping = ProjectionMapping::try_new(
+            [(Arc::clone(&volatile), "x".into()), (volatile, "y".into())],
+            &schema,
+        )?;
+
+        let projected = EquivalenceGroup::default().project(&mapping);
+        assert!(projected.is_empty());
+
         Ok(())
     }
 }
