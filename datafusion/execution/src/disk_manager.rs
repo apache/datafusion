@@ -501,7 +501,12 @@ impl std::io::Write for FileSpillWriter {
             )));
         }
 
-        self.file.write_all(buf).map_err(DataFusionError::IoError)?;
+        if let Err(e) = self.file.write_all(buf) {
+            self.disk_manager
+                .used_disk_space
+                .fetch_sub(len, Ordering::Relaxed);
+            return Err(e);
+        }
 
         self.current_file_disk_usage
             .fetch_add(len, Ordering::Relaxed);
@@ -1244,6 +1249,34 @@ mod tests {
         drop(file);
 
         // After drop: used_disk_space must be zero (no leak)
+        assert_eq!(dm.used_disk_space(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_rollback_on_io_error_then_drop_returns_to_zero() -> Result<()> {
+        let dm = Arc::new(DiskManager::builder().build()?);
+        let file = dm.create_tmp_file("test_io_error_rollback")?;
+
+        let mut writer = file.open_writer()?;
+        writer.write_all(b"hello")?;
+        let usage_after_write = dm.used_disk_space();
+        assert!(usage_after_write > 0);
+
+        // A read-only handle makes the underlying `write_all` fail after the
+        // reservation has already been charged.
+        let mut failing_writer = FileSpillWriter {
+            file: std::fs::File::open(file.path().unwrap())?,
+            disk_manager: Arc::clone(&dm),
+            current_file_disk_usage: Arc::new(AtomicU64::new(0)),
+        };
+        assert!(std::io::Write::write_all(&mut failing_writer, b"more data").is_err());
+        assert_eq!(dm.used_disk_space(), usage_after_write);
+
+        drop(failing_writer);
+        drop(writer);
+        drop(file);
         assert_eq!(dm.used_disk_space(), 0);
 
         Ok(())
