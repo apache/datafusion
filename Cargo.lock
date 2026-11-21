@@ -2432,7 +2432,6 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "bytes",
- "chrono",
  "datafusion",
  "datafusion-common",
  "datafusion-execution",
