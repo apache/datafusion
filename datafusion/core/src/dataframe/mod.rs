@@ -7,6 +7,11 @@
 #[cfg(feature = "parquet")]
 mod parquet;
 
+mod add_column;
+
+pub use add_column::array_col;
+use add_column::take_array_col;
+
 use crate::arrow::record_batch::RecordBatch;
 use crate::arrow::util::pretty;
 use crate::datasource::file_format::csv::CsvFormatFactory;
@@ -2434,21 +2439,47 @@ impl DataFrame {
 
     /// Add or replace a column in the DataFrame.
     ///
+    /// The column can be created from a DataFusion expression or, by passing
+    /// [`array_col`], from a pre-materialized in-memory Arrow array; see
+    /// [`array_col`] for the positional-pairing rules.
+    ///
     /// # Example
     /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::array::{ArrayRef, Int32Array};
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let ctx = SessionContext::new();
     /// let df = ctx
     ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?;
+    ///
+    /// // Add a column computed from existing DataFrame columns.
     /// let df = df.with_column("ab_sum", col("a") + col("b"))?;
+    ///
+    /// // Add a column from a pre-materialized Arrow array.
+    /// let values: ArrayRef = Arc::new(Int32Array::from(vec![42]));
+    /// let df = df.with_column("extra", array_col(values))?;
+    ///
+    /// let expected = vec![
+    ///     "+---+---+---+--------+-------+",
+    ///     "| a | b | c | ab_sum | extra |",
+    ///     "+---+---+---+--------+-------+",
+    ///     "| 1 | 2 | 3 | 3      | 42    |",
+    ///     "+---+---+---+--------+-------+",
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
+        if let Some(array) = take_array_col(&expr) {
+            return self.with_array_column(name, array);
+        }
+
         let window_func_exprs = find_window_exprs([&expr]);
 
         let original_names: HashSet<String> = self
