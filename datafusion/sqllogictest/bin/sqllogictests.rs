@@ -38,6 +38,7 @@ use crate::postgres_container::{
 };
 use datafusion::common::runtime::SpawnedTask;
 use futures::FutureExt;
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{IsTerminal, Write, stderr, stdout};
@@ -1079,8 +1080,37 @@ fn read_test_files(options: &Options) -> Result<Vec<TestFile>> {
         .filter(|f| options.check_pg_compat_file(f.path.as_path()))
         .collect::<Vec<_>>();
 
+    if let Some(list) = &options.unparser_known_failures {
+        let known_failures = read_known_failures(list)?;
+        // A stale entry (renamed or deleted file) would otherwise go unnoticed.
+        if let Some(missing) = known_failures
+            .iter()
+            .find(|p| !Path::new(TEST_DIRECTORY).join(p).is_file())
+        {
+            return exec_err!(
+                "{} lists {}, which is not a file in {TEST_DIRECTORY}",
+                list.display(),
+                missing.display()
+            );
+        }
+        paths.retain(|f| !known_failures.contains(&f.relative_path));
+    }
+
     paths.sort_unstable();
     Ok(paths)
+}
+
+/// Reads a known-failures list: one path relative to `test_files` per line.
+/// Blank lines and lines that start with `#` are ignored.
+fn read_known_failures(list: &Path) -> Result<HashSet<PathBuf>> {
+    let content = fs::read_to_string(list)
+        .map_err(|e| exec_datafusion_err!("Error reading {}: {e}", list.display()))?;
+    Ok(content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(PathBuf::from)
+        .collect())
 }
 
 /// Parsed command line options
@@ -1132,6 +1162,14 @@ struct Options {
         help = "Optimize logical plans before unparsing them in unparser round-trip mode"
     )]
     unparser_optimize: bool,
+
+    #[clap(
+        long,
+        value_name = "FILE",
+        requires = "unparser_round_trip",
+        help = "Skip the .slt files listed in FILE, one path relative to test_files per line"
+    )]
+    unparser_known_failures: Option<PathBuf>,
 
     #[clap(long, env = "INCLUDE_SQLITE", help = "Include sqlite files")]
     include_sqlite: bool,

@@ -504,7 +504,18 @@ because SQL cannot express them as a query.
 | Error while re-planning | The unparser produced SQL that does not plan.  |
 | Different rows          | The unparser changed the meaning of the query. |
 
-_WARNING_: many files fail in this mode, so it is opt-in and CI does not run it. To run the suite in this mode:
+Many files fail in this mode. [`unparser_known_failures.txt`](unparser_known_failures.txt) lists them, one path
+relative to `test_files` per line. CI runs every other file through `cargo xtask ci step test unparser`:
+
+```shell
+cargo test --test sqllogictests -- --unparser-round-trip --unparser-known-failures unparser_known_failures.txt
+```
+
+A new `.slt` file runs in this mode by default. If the unparser cannot handle it yet, add the file to the list.
+When a fix makes a listed file pass, remove the file from the list. The runner rejects an entry that names no
+file in `test_files`.
+
+To run every file, including the listed ones, leave out `--unparser-known-failures`:
 
 ```shell
 cargo test --test sqllogictests -- --unparser-round-trip
