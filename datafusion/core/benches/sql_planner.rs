@@ -1214,6 +1214,24 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     }
 
+    // Wide UNION ALL over distinct tables (one node with many inputs, as in
+    // queries generated over many tables)
+    let union_branches: Vec<String> = (0..200)
+        .map(|i| {
+            let table = format!("union_input_{i}");
+            ctx.register_table(table.as_str(), create_table_provider("u", 20))
+                .unwrap();
+            format!("SELECT * FROM {table}")
+        })
+        .collect();
+    for inputs in [50, 200] {
+        let query = union_branches[..inputs].join(" UNION ALL ");
+        let plan = analyzed_plan(&ctx, &rt, &query);
+        c.bench_function(&format!("optimizer_wide_union_all_{inputs}"), |b| {
+            b.iter(|| optimize_plan(&ctx, &plan))
+        });
+    }
+
     // Stacked wide projections of computed expressions (many expressions per
     // node over a wide input, as produced by layered views). Each expression
     // reads its input column twice so the layers are not merged.

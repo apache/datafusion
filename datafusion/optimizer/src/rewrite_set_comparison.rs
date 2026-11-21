@@ -8,7 +8,7 @@
 
 use crate::utils::{NamePreserver, merge_into_schema};
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, ExprSchema, Result, ScalarValue, plan_err};
 use datafusion_expr::expr::{self, Exists, SetComparison, SetQuantifier};
 use datafusion_expr::logical_plan::Subquery;
@@ -32,6 +32,12 @@ impl RewriteSetComparison {
     }
 
     fn rewrite_plan(&self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        // Only a node whose own expressions contain a set comparison has anything to
+        // rewrite. Return before merging its inputs' schemas, which is quadratic in the
+        // number of inputs of a wide union.
+        if !has_set_comparison(&plan)? {
+            return Ok(Transformed::no(plan));
+        }
         let mut schema = merge_schema(&plan.inputs());
         if let Some(merge_schema) = merge_into_schema(&plan)? {
             schema = merge_schema;
@@ -65,6 +71,21 @@ impl OptimizerRule for RewriteSetComparison {
     ) -> Result<Transformed<LogicalPlan>> {
         plan.transform_up_with_subqueries(|plan| self.rewrite_plan(plan))
     }
+}
+
+/// Returns true if one of `plan`'s own expressions, not counting its inputs, contains a
+/// set comparison.
+fn has_set_comparison(plan: &LogicalPlan) -> Result<bool> {
+    let mut found = false;
+    plan.apply_expressions(|expr| {
+        found = expr.exists(|e| Ok(matches!(e, Expr::SetComparison(_))))?;
+        Ok(if found {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    })?;
+    Ok(found)
 }
 
 fn rewrite_set_comparison(
@@ -170,4 +191,64 @@ fn to_outer_reference(expr: Expr, outer_schema: &DFSchema) -> Result<Expr> {
         _ => Ok(Transformed::no(expr)),
     })
     .map(|t| t.data)
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_common::Spans;
+    use datafusion_expr::logical_plan::Union;
+    use datafusion_expr::{Operator, col};
+
+    use super::*;
+    use crate::OptimizerContext;
+    use crate::test::test_table_scan_with_name;
+
+    fn wide_union() -> Result<LogicalPlan> {
+        let inputs = ["t1", "t2", "t3"]
+            .into_iter()
+            .map(|name| test_table_scan_with_name(name).map(Arc::new))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(LogicalPlan::Union(Union::try_new_with_loose_types(inputs)?))
+    }
+
+    #[test]
+    fn skips_union() -> Result<()> {
+        let rewritten = RewriteSetComparison::new()
+            .rewrite(wide_union()?, &OptimizerContext::new())?;
+        assert!(!rewritten.transformed);
+        Ok(())
+    }
+
+    #[test]
+    fn rewrites_set_comparison_above_union() -> Result<()> {
+        let subquery_plan = LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+            .project(vec![col("sq.a")])?
+            .build()?;
+        let subquery = Subquery {
+            subquery: Arc::new(subquery_plan),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+        let predicate = Expr::SetComparison(SetComparison::new(
+            Box::new(col("a")),
+            subquery,
+            Operator::Gt,
+            SetQuantifier::All,
+        ));
+        let plan = LogicalPlanBuilder::from(wide_union()?)
+            .filter(predicate)?
+            .build()?;
+
+        let rewritten =
+            RewriteSetComparison::new().rewrite(plan, &OptimizerContext::new())?;
+        assert!(rewritten.transformed);
+
+        let mut remaining = false;
+        rewritten.data.apply_with_subqueries(|node| {
+            remaining |= has_set_comparison(node)?;
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert!(!remaining);
+        Ok(())
+    }
 }

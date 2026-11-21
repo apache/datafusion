@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection};
@@ -60,6 +60,12 @@ impl SimplifyExpressions {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        // A node without expressions of its own (e.g. a `Union`) has nothing to simplify.
+        // Return before merging its inputs' schemas, which is quadratic in the number of
+        // inputs of a wide union.
+        if !has_expressions(&plan)? {
+            return Ok(Transformed::no(plan));
+        }
         let schema = if let Some(merge_schema) = merge_into_schema(&plan)? {
             DFSchemaRef::new(merge_schema)
         } else if !plan.inputs().is_empty() {
@@ -135,6 +141,16 @@ impl SimplifyExpressions {
     pub fn new() -> Self {
         Self {}
     }
+}
+
+/// Returns true if `plan` itself, not counting its inputs, has at least one expression.
+fn has_expressions(plan: &LogicalPlan) -> Result<bool> {
+    let mut found = false;
+    plan.apply_expressions(|_| {
+        found = true;
+        Ok(TreeNodeRecursion::Stop)
+    })?;
+    Ok(found)
 }
 
 /// Ensures that `LogicalPlan::Aggregate` is well formed after rewrites
@@ -276,6 +292,39 @@ mod tests {
                 @ $expected,
             )
         }};
+    }
+
+    fn wide_union() -> Result<LogicalPlan> {
+        let inputs = ["t1", "t2", "t3"]
+            .into_iter()
+            .map(|name| test_table_scan_with_name(name).map(Arc::new))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(LogicalPlan::Union(Union::try_new_with_loose_types(inputs)?))
+    }
+
+    #[test]
+    fn test_simplify_skips_union() -> Result<()> {
+        let rewritten = SimplifyExpressions::new()
+            .rewrite(wide_union()?, &OptimizerContext::new())?;
+        assert!(!rewritten.transformed);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simplify_filter_above_union() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(wide_union()?)
+            .filter(col("a").gt(lit(1u32)).and(lit(true)))?
+            .build()?;
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: a > UInt32(1)
+          Union
+            TableScan: t1
+            TableScan: t2
+            TableScan: t3
+        "
+        )
     }
 
     #[test]
