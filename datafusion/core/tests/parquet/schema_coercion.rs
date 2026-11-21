@@ -5,16 +5,16 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, DictionaryArray, Float32Array, Int64Array, RecordBatch, StringArray,
-    types::Int32Type,
+    ArrayRef, DictionaryArray, Float32Array, Float64Array, Int64Array, RecordBatch,
+    StringArray, types::Int32Type,
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::physical_plan::collect;
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion::test::object_store::local_unpartitioned_file;
-use datafusion_common::Result;
 use datafusion_common::test_util::batches_to_sort_string;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::object_store::ObjectStoreUrl;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -22,7 +22,9 @@ use datafusion_datasource::source::DataSourceExec;
 use insta::assert_snapshot;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
+use parquet::basic::ColumnOrder;
 use parquet::file::properties::WriterProperties;
+use parquet::file::reader::{FileReader, SerializedFileReader};
 use tempfile::NamedTempFile;
 
 /// Test for reading data from multiple parquet files with different schemas and coercing them into a single schema.
@@ -130,6 +132,69 @@ async fn multi_parquet_coercion_projection() {
     | 2  | Boo   | 20.0 |
     +----+-------+------+
     ");
+}
+
+#[tokio::test]
+async fn parquet_max_with_mixed_float_schemas() {
+    // Arrange
+    let cast_values: ArrayRef =
+        Arc::new(Float64Array::from(vec![1.00000001, 2.00000003]));
+    let native_values: ArrayRef = Arc::new(Float32Array::from(vec![0.5]));
+    let (_, files) = store_parquet(vec![
+        RecordBatch::try_from_iter(vec![("x", cast_values)]).unwrap(),
+        RecordBatch::try_from_iter(vec![("x", native_values)]).unwrap(),
+    ])
+    .unwrap();
+    for file in &files {
+        let reader = SerializedFileReader::new(file.reopen().unwrap()).unwrap();
+        let metadata = reader.metadata();
+        assert_eq!(
+            metadata.file_metadata().column_order(0),
+            ColumnOrder::IEEE_754_TOTAL_ORDER
+        );
+        let stats = metadata.row_group(0).column(0).statistics().unwrap();
+        assert_eq!(stats.nan_count_opt(), Some(0));
+        assert!(!stats.is_min_max_deprecated());
+        assert!(stats.min_is_exact());
+        assert!(stats.max_is_exact());
+    }
+
+    let output_schema = Schema::new(vec![Field::new("x", DataType::Float32, true)]);
+    let ctx = SessionContext::new_with_config(
+        SessionConfig::new().with_collect_statistics(true),
+    );
+    let paths: Vec<_> = files
+        .iter()
+        .map(|file| file.path().to_str().unwrap())
+        .collect();
+    let df = ctx
+        .read_parquet(
+            paths,
+            ParquetReadOptions::default()
+                .file_extension("")
+                .schema(&output_schema),
+        )
+        .await
+        .unwrap();
+    ctx.register_table("t", df.into_view()).unwrap();
+
+    // Act
+    let batches = ctx
+        .sql("SELECT MAX(x) FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    // Assert
+    // The Float64 file must still contribute after its values are cast.
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 1);
+    assert_eq!(
+        ScalarValue::try_from_array(batches[0].column(0), 0).unwrap(),
+        ScalarValue::Float32(Some(2.0))
+    );
 }
 
 /// Writes `batches` to a temporary parquet file

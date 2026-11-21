@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccess};
 use crate::bloom_filter::BloomFilterStatistics;
-use crate::metadata::{has_untrusted_byte_array_stats, has_untrusted_min_max_order};
+use crate::metadata::{has_untrusted_min_max_order, has_untrusted_min_max_stats};
 use crate::pruning::build_inverted_predicate;
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::compute::nullif;
@@ -537,29 +537,33 @@ impl<'a> RowGroupPruningStatistics<'a> {
         let converter = self.statistics_converter(column).ok()?;
         let parquet_index = converter.parquet_column_index();
         if parquet_index.is_some_and(|index| {
-            has_untrusted_min_max_order(self.parquet_schema, self.column_orders, index)
+            has_untrusted_min_max_order(
+                self.parquet_schema,
+                self.column_orders,
+                index,
+                converter.arrow_field().data_type(),
+            )
         }) {
             return None;
         }
         Some(converter)
     }
 
-    fn mask_untrusted_byte_array_stats(
+    fn mask_untrusted_min_max_stats(
         &self,
         parquet_index: Option<usize>,
         values: ArrayRef,
     ) -> Option<ArrayRef> {
-        if !has_untrusted_byte_array_stats(
+        if !has_untrusted_min_max_stats(
             self.parquet_schema,
             parquet_index,
             self.metadata_iter(),
         ) {
             return Some(values);
         }
-        // A file may mix legacy and modern row-group statistics. Keep the
-        // modern bounds usable rather than discarding this entire column.
+        // Keep usable row-group bounds when other groups have unsafe statistics.
         let mask = BooleanArray::from_iter(self.metadata_iter().map(|group| {
-            has_untrusted_byte_array_stats(self.parquet_schema, parquet_index, [group])
+            has_untrusted_min_max_stats(self.parquet_schema, parquet_index, [group])
         }));
         nullif(values.as_ref(), &mask).ok()
     }
@@ -569,13 +573,13 @@ impl PruningStatistics for RowGroupPruningStatistics<'_> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let converter = self.min_max_statistics_converter(column)?;
         let values = converter.row_group_mins(self.metadata_iter()).ok()?;
-        self.mask_untrusted_byte_array_stats(converter.parquet_column_index(), values)
+        self.mask_untrusted_min_max_stats(converter.parquet_column_index(), values)
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
         let converter = self.min_max_statistics_converter(column)?;
         let values = converter.row_group_maxes(self.metadata_iter()).ok()?;
-        self.mask_untrusted_byte_array_stats(converter.parquet_column_index(), values)
+        self.mask_untrusted_min_max_stats(converter.parquet_column_index(), values)
     }
 
     fn num_containers(&self) -> usize {
