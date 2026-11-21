@@ -451,12 +451,20 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         // Unfortunately, some taken views non-inlined
         let view = ByteView::from(*view);
         let last_remaining_buffer_index = view.buffer_index as usize;
+        let last_take_len = (view.offset + view.length) as usize;
 
         // Check should we take the whole `last_remaining_buffer_index` buffer
-        let take_whole_last_buffer = self.should_take_whole_buffer(
-            last_remaining_buffer_index,
-            (view.offset + view.length) as usize,
-        );
+        let take_whole_last_buffer =
+            self.should_take_whole_buffer(last_remaining_buffer_index, last_take_len);
+
+        // Remaining views all point into `in_progress` past the bytes drained from it
+        let offset_shift = if !take_whole_last_buffer
+            && last_remaining_buffer_index == self.completed.len()
+        {
+            last_take_len
+        } else {
+            0
+        };
 
         // Take related buffers
         let buffers = if take_whole_last_buffer {
@@ -464,7 +472,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         } else {
             self.take_buffers_with_partial_last(
                 last_remaining_buffer_index,
-                (view.offset + view.length) as usize,
+                last_take_len,
             )
         };
 
@@ -479,6 +487,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             if (*view as u32) > 12 {
                 let mut byte_view = ByteView::from(*view);
                 byte_view.buffer_index -= shifts as u32;
+                byte_view.offset -= offset_shift as u32;
                 *view = byte_view.as_u128();
             }
         });
@@ -524,9 +533,10 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             // If it is in `completed`, simply clone
             self.completed[last_remaining_buffer_index].clone()
         } else {
-            // If it is `in_progress`, copied `0 ~ offset` part
+            // If it is `in_progress`, take the `0 ~ offset` part out of it
             debug_assert!(last_take_len <= self.in_progress.len());
             let taken_last_buffer = self.in_progress[0..last_take_len].to_vec();
+            self.in_progress.drain(0..last_take_len);
             Buffer::from_vec(taken_last_buffer)
         };
 
@@ -653,6 +663,7 @@ mod tests {
     use arrow::datatypes::StringViewType;
 
     use super::GroupColumn;
+    use insta::assert_snapshot;
 
     fn make_true_buffer(n: usize) -> BooleanBufferBuilder {
         let mut buf = BooleanBufferBuilder::new(n);
@@ -1054,5 +1065,95 @@ mod tests {
 
         let taken_array = builder.take_n(3);
         assert_eq!(&taken_array, &input_array.slice(0, 3));
+    }
+
+    /// Calls `take_n(n)` and describes what was emitted and what the builder keeps.
+    fn describe_take_n(
+        builder: &mut ByteViewGroupValueBuilder<StringViewType>,
+        n: usize,
+    ) -> String {
+        let taken = builder.take_n(n);
+        let taken = taken.as_string_view();
+        let values: Vec<_> = taken.iter().flatten().collect();
+        let emitted: Vec<_> = taken.data_buffers().iter().map(|b| b.len()).collect();
+        let completed: Vec<_> = builder.completed.iter().map(|b| b.len()).collect();
+        let in_progress = builder.in_progress.len();
+        [
+            format!("take_n({n}): {values:?}"),
+            format!("  emitted buffer bytes: {emitted:?}"),
+            format!(
+                "  kept buffer bytes: completed {completed:?}, in_progress {in_progress}"
+            ),
+            String::new(),
+        ]
+        .join("\n")
+    }
+
+    /// Each take emits only its own strings.
+    #[test]
+    fn test_byte_view_take_n_drains_in_progress() {
+        let mut builder = ByteViewGroupValueBuilder::<StringViewType>::new();
+        let input_array: ArrayRef = Arc::new(StringViewArray::from(vec![
+            "the first string is quite long",
+            "the second string is also quite long",
+            "the third string is long too",
+            "the fourth string is the longest of them all",
+        ]));
+        for row in 0..3 {
+            builder.append_val(&input_array, row).unwrap();
+        }
+
+        let mut transcript = describe_take_n(&mut builder, 1);
+        transcript += &describe_take_n(&mut builder, 1);
+        builder.append_val(&input_array, 3).unwrap();
+        transcript += "append the fourth string\n";
+        transcript += &describe_take_n(&mut builder, 2);
+
+        assert_snapshot!(transcript, @r#"
+        take_n(1): ["the first string is quite long"]
+          emitted buffer bytes: [30]
+          kept buffer bytes: completed [], in_progress 64
+        take_n(1): ["the second string is also quite long"]
+          emitted buffer bytes: [36]
+          kept buffer bytes: completed [], in_progress 28
+        append the fourth string
+        take_n(2): ["the third string is long too", "the fourth string is the longest of them all"]
+          emitted buffer bytes: [72]
+          kept buffer bytes: completed [], in_progress 0
+        "#);
+    }
+
+    #[test]
+    fn test_byte_view_take_n_spans_completed_and_partial_in_progress() {
+        // A block holds two of the 14 byte strings
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(30);
+        let input_array: ArrayRef = Arc::new(StringViewArray::from(vec![
+            "aaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbb",
+            "cccccccccccccc",
+            "dddddddddddddd",
+            "eeeeeeeeeeeeee",
+            "ffffffffffffff",
+            "gggggggggggggg",
+        ]));
+        for row in 0..6 {
+            builder.append_val(&input_array, row).unwrap();
+        }
+
+        let mut transcript = describe_take_n(&mut builder, 5);
+        builder.append_val(&input_array, 6).unwrap();
+        transcript += "append the 'g' string\n";
+        transcript += &describe_take_n(&mut builder, 2);
+
+        assert_snapshot!(transcript, @r#"
+        take_n(5): ["aaaaaaaaaaaaaa", "bbbbbbbbbbbbbb", "cccccccccccccc", "dddddddddddddd", "eeeeeeeeeeeeee"]
+          emitted buffer bytes: [28, 28, 14]
+          kept buffer bytes: completed [], in_progress 14
+        append the 'g' string
+        take_n(2): ["ffffffffffffff", "gggggggggggggg"]
+          emitted buffer bytes: [28]
+          kept buffer bytes: completed [], in_progress 0
+        "#);
     }
 }
