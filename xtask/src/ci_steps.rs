@@ -444,6 +444,10 @@ impl StepContext {
                 // Same features as the Substrait steps, which run in the same
                 // CI job, so the job builds the test binary once.
                 cmd_builder.program("cargo").args([
+            "unparser" => {
+                // Same features as the Substrait steps, which run in the same CI
+                // job, so the job builds the test binary once.
+                cmd_builder.program("cargo").args([
                     "test",
                     "-p",
                     "datafusion-sqllogictest",
