@@ -11,8 +11,7 @@ use datafusion::execution::memory_pool::DEFAULT_DRIFT_LOG_THRESHOLD;
 use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
 use datafusion_sqllogictest::TestFile;
 use datafusion_sqllogictest::{
-    CountingAllocator, enable_memory_drift_logging, flush_thread_allocations,
-    memory_drift_tracker,
+    CountingAllocator, enable_memory_drift_logging, peak_memory_drift,
 };
 use datafusion_sqllogictest::{
     CurrentlyExecutingSqlTracker, DFColumnType, DataFusion, Filter, TestContext,
@@ -35,7 +34,7 @@ use sqllogictest::{
 use crate::postgres_container::{
     initialize_postgres_container, terminate_postgres_container,
 };
-use datafusion::common::runtime::SpawnedTask;
+use datafusion::common::runtime::{MemoryAccount, MemoryTrackedFuture, SpawnedTask};
 use futures::FutureExt;
 use std::fmt::Write as _;
 use std::fs;
@@ -83,7 +82,6 @@ fn config_change_result(
 pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .on_thread_stop(flush_thread_allocations)
         .build()?
         .block_on(run_tests())
 }
@@ -211,7 +209,8 @@ async fn run_tests() -> Result<()> {
             let currently_running_sql_tracker_clone =
                 currently_running_sql_tracker.clone();
             let file_start = Instant::now();
-            SpawnedTask::spawn(async move {
+            let account = Arc::new(MemoryAccount::default());
+            SpawnedTask::spawn(MemoryTrackedFuture::new(account, async move {
                 let result = match (
                     options.postgres_runner,
                     options.complete,
@@ -285,7 +284,7 @@ async fn run_tests() -> Result<()> {
                 }
 
                 (result, elapsed)
-            })
+            }))
             .join()
             .map(move |result| {
                 let elapsed = match &result {
@@ -387,14 +386,8 @@ async fn run_tests() -> Result<()> {
         HumanDuration(start.elapsed())
     ))?;
 
-    if let Some(peak) = memory_drift_tracker().and_then(|t| t.peak_drift()) {
+    if let Some(peak) = peak_memory_drift() {
         eprintln!("Peak memory drift: {peak}");
-        if options.test_threads > 1 {
-            eprintln!(
-                "Test files ran concurrently, so the file and consumer above can be wrong. \
-                 Run with --test-threads 1 to attribute drift to one file."
-            );
-        }
     }
 
     #[cfg(feature = "postgres")]

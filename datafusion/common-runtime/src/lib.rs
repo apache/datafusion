@@ -14,10 +14,15 @@
 
 pub mod common;
 mod join_set;
+mod memory_account;
 mod trace_utils;
 
 pub use common::SpawnedTask;
 pub use join_set::JoinSet;
+pub use memory_account::{
+    MemoryAccount, MemoryAccountTracer, MemoryTrackedFuture, ThreadAllocatedBytesFn,
+    current_memory_account, set_thread_allocated_bytes,
+};
 pub use trace_utils::{
     JoinSetTracer, JoinSetTracerError, set_join_set_tracer, trace_block, trace_future,
 };
