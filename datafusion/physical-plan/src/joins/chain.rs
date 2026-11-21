@@ -62,3 +62,56 @@ where
         match_row_idx = next - one;
     }
 }
+
+/// Emits the matches of the probe rows `0..num_rows` from `offset`, at most
+/// `limit` of them, for maps that store the build rows of each key next to
+/// each other, see `JoinHashMapType::group_rows`. `rows_of` returns the range
+/// in `rows` of a probe row's matches, or `None` if the probe row has none.
+/// Returns the offset to resume from, as [`traverse_chain`] does.
+pub(crate) fn grouped_matched_indices<T>(
+    rows: &[T],
+    num_rows: usize,
+    rows_of: impl Fn(usize) -> Option<(usize, usize)>,
+    limit: usize,
+    offset: ProbeOffset,
+    input_indices: &mut Vec<u32>,
+    match_indices: &mut Vec<u64>,
+) -> Option<ProbeOffset>
+where
+    T: Copy + Into<u64>,
+{
+    // Clear the buffer before producing new results
+    input_indices.clear();
+    match_indices.clear();
+    let mut remaining = limit;
+
+    let (first_row, mut resume_pos) = match offset {
+        AtRow { row } => (row, None),
+        // Resume at position `next` of the matches of probe row `row`
+        MidChain { row, next } => (row, Some(next as usize)),
+    };
+    for row in first_row..num_rows {
+        let resume_pos = resume_pos.take();
+        let Some((start, end)) = rows_of(row) else {
+            continue;
+        };
+        let pos = resume_pos.unwrap_or(start);
+        let take = (end - pos).min(remaining);
+        match_indices.extend(rows[pos..pos + take].iter().map(|&row| row.into()));
+        input_indices.extend(std::iter::repeat_n(row as u32, take));
+        remaining -= take;
+        if remaining == 0 {
+            return if pos + take < end {
+                Some(MidChain {
+                    row,
+                    next: (pos + take) as u64,
+                })
+            } else if row == num_rows - 1 {
+                None
+            } else {
+                Some(AtRow { row: row + 1 })
+            };
+        }
+    }
+    None
+}
