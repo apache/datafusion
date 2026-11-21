@@ -1094,6 +1094,20 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// Override this method to indicate that the function can be pushed down
     /// closer to the data source.
+    ///
+    /// # Requirements for functions returning
+    /// [`ExpressionPlacement::MoveTowardsLeafNodes`]
+    ///
+    /// The optimizer may evaluate such a function on rows where SQL semantics
+    /// would never call it: `ExtractLeafExpressions` can lift the call out of a
+    /// branch of a `CASE` expression and evaluate it in a projection over every
+    /// input row, and `PushDownLeafProjections` can push that projection below
+    /// filters, so the function also runs on rows those filters remove. A
+    /// function that returns [`ExpressionPlacement::MoveTowardsLeafNodes`] must
+    /// therefore produce a value (rather than error) for every input, and it
+    /// must not have side effects. The built-in functions that return this
+    /// placement (`get_field`, `input_file_name`, `file_row_index`) satisfy
+    /// this requirement.
     fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
         ExpressionPlacement::KeepInPlace
     }

@@ -19,6 +19,17 @@ pub enum ExpressionPlacement {
     /// Pushing these expressions down in the plan can reduce data early
     /// at low compute cost.
     /// See [`ExpressionPlacement::should_push_to_leaves`] for details.
+    ///
+    /// # Evaluation contract
+    ///
+    /// The optimizer may evaluate an expression with this placement on rows
+    /// that the query would never call it on. The expression can be lifted out
+    /// of a branch of a conditional expression such as `CASE` and evaluated in
+    /// a projection over every input row, and that projection can then be
+    /// pushed below filters, so the expression also runs on rows those filters
+    /// remove. An expression with this placement must therefore produce a
+    /// value (rather than error) on every input row and must not have side
+    /// effects.
     MoveTowardsLeafNodes,
     /// An expensive expression that should stay where it is in the plan.
     /// Examples include complex scalar functions or UDFs.
@@ -40,6 +51,9 @@ impl ExpressionPlacement {
     ///   and thus can reduce data early in the plan at very low compute cost.
     ///   It may even be possible to eliminate the expression entirely if the data source can project only the needed field
     ///   (as e.g. Parquet can).
+    ///   Note that a pushed-down expression may then be evaluated on rows that
+    ///   the original plan would not have evaluated it on; see the evaluation
+    ///   contract documented on [`ExpressionPlacement::MoveTowardsLeafNodes`].
     pub fn should_push_to_leaves(&self) -> bool {
         matches!(
             self,
