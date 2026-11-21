@@ -369,11 +369,6 @@ impl DiskManager {
         self.active_files_count.fetch_add(1, Ordering::Relaxed);
         Ok(Arc::new(RefCountedTempFile {
             parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
-            // Keep only the path. A held `NamedTempFile` keeps one file
-            // descriptor open per spill file, so an operator that holds many
-            // spill runs (for example a hash aggregate before its final merge)
-            // can exhaust the process file limit. Writers and readers open the
-            // path on demand instead.
             tempfile: Arc::new(
                 Builder::new()
                     .prefix(&escape_for_temp_file_name_prefix(request_description))
