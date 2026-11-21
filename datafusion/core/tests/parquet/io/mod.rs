@@ -36,6 +36,7 @@ use url::Url;
 // Tests are in submodules
 mod bloom_filter_io;
 mod filter_pushdown_io;
+mod page_index_cache_io;
 mod page_pruning_io;
 mod row_group_pruning_io;
 mod topk_io;
@@ -530,6 +531,12 @@ impl ParquetIoTest {
             .cache_manager
             .get_file_metadata_cache()
             .clear();
+        self.query_with_cached_metadata(sql).await
+    }
+
+    /// Like [`Self::query`], but keeps the file metadata cached by earlier
+    /// queries, so the output shows the I/O of a warm read.
+    pub(crate) async fn query_with_cached_metadata(&self, sql: &str) -> String {
         self.events.lock().unwrap().clear();
         self.requests.store(0, Ordering::SeqCst);
 
