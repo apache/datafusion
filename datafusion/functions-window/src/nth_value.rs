@@ -511,6 +511,10 @@ impl PartitionEvaluator for NthValueEvaluator {
         }
     }
 
+    fn evaluates_frames_independently(&self) -> bool {
+        true
+    }
+
     fn supports_bounded_execution(&self) -> bool {
         true
     }

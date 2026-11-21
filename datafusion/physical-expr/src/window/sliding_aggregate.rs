@@ -98,6 +98,15 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         self.aggregate_evaluate(batch)
     }
 
+    fn evaluate_partitions(
+        &self,
+        batch: &RecordBatch,
+        partitions: &[Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        self.aggregate_evaluate_partitions(batch, partitions)
+            .map(Some)
+    }
+
     fn evaluate_stateful(
         &self,
         partition_batches: &PartitionBatches,

@@ -10,10 +10,11 @@ use std::sync::Arc;
 use crate::PhysicalExpr;
 
 use arrow::array::BooleanArray;
-use arrow::array::{Array, ArrayRef, make_comparator, new_empty_array};
+use arrow::array::{Array, ArrayRef, UInt32Array, make_comparator, new_empty_array};
 use arrow::compute::SortOptions;
 use arrow::compute::filter as arrow_filter;
 use arrow::compute::kernels::sort::SortColumn;
+use arrow::compute::take;
 use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
@@ -83,6 +84,18 @@ pub trait WindowExpr: Send + Sync + Debug {
 
     /// Evaluate the window function values against the batch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef>;
+
+    /// Evaluates the window function on `partitions`, consecutive ranges of
+    /// whole partitions in `batch`, in one call, and returns one result per
+    /// row of `partitions`. Returns `None` if this expression does not support
+    /// it, in which case [`Self::evaluate`] is called for each partition.
+    fn evaluate_partitions(
+        &self,
+        _batch: &RecordBatch,
+        _partitions: &[Range<usize>],
+    ) -> Result<Option<ArrayRef>> {
+        Ok(None)
+    }
 
     /// Evaluate the window function against the batch. This function facilitates
     /// stateful, bounded-memory implementations.
@@ -209,6 +222,79 @@ pub trait AggregateWindowExpr: WindowExpr {
             0,
             false,
         )
+    }
+
+    /// Evaluates the window function on `partitions` in one call (see
+    /// [`WindowExpr::evaluate_partitions`]). The arguments, FILTER and ORDER BY
+    /// are evaluated once for all partitions.
+    fn aggregate_evaluate_partitions(
+        &self,
+        batch: &RecordBatch,
+        partitions: &[Range<usize>],
+    ) -> Result<ArrayRef> {
+        // A single partition can be larger than a batch, so its frames are
+        // not collected
+        if let [partition] = partitions {
+            return self
+                .aggregate_evaluate(&batch.slice(partition.start, partition.len()));
+        }
+        let offset = partitions.first().map_or(0, |p| p.start);
+        let num_rows = partitions.last().map_or(0, |p| p.end) - offset;
+        let batch = batch.slice(offset, num_rows);
+        let values = self.evaluate_args(&batch)?;
+        let filter_mask_arr = self
+            .filter_expr()
+            .map(|expr| expr.evaluate(&batch)?.into_array(num_rows))
+            .transpose()?;
+        let filter_mask = filter_mask_arr
+            .as_deref()
+            .map(as_boolean_array)
+            .transpose()?;
+        // A constant result is evaluated once, on the whole partition
+        let is_constant = self.is_constant_in_partition();
+        let frames = if is_constant {
+            partitions
+                .iter()
+                .map(|p| p.start - offset..p.end - offset)
+                .collect()
+        } else {
+            let order_bys = get_orderby_values(self.order_by_columns(&batch)?);
+            calculate_frames(
+                self.get_window_frame(),
+                self.order_by(),
+                &order_bys,
+                partitions,
+            )?
+        };
+        let mut results = Vec::with_capacity(frames.len());
+        let mut frames = frames.into_iter();
+        for partition in partitions {
+            let start = partition.start - offset;
+            let mut accumulator = self.get_accumulator()?;
+            let mut last_range = start..start;
+            let n_frames = if is_constant { 1 } else { partition.len() };
+            for frame in frames.by_ref().take(n_frames) {
+                results.push(self.get_aggregate_result_inside_range(
+                    &last_range,
+                    &frame,
+                    &values,
+                    &mut accumulator,
+                    filter_mask,
+                )?);
+                last_range = frame;
+            }
+        }
+        if !is_constant {
+            return ScalarValue::iter_to_array(results);
+        }
+        // Repeat the result of each partition for its rows
+        let indices = UInt32Array::from_iter_values(
+            partitions
+                .iter()
+                .enumerate()
+                .flat_map(|(idx, p)| std::iter::repeat_n(idx as u32, p.len())),
+        );
+        Ok(take(&ScalarValue::iter_to_array(results)?, &indices, None)?)
     }
 
     /// Statefully evaluates the window function against the batch. Maintains
@@ -599,6 +685,44 @@ fn is_row_ahead(
     let ahead = cmp(old_col.len() - 1, 0).is_lt();
     *row_ahead = Some(ahead);
     Ok(ahead)
+}
+
+/// Calculates the frame of every row of `partitions`, consecutive ranges of
+/// whole partitions, relative to the start of the first partition.
+/// `order_bys` holds the ORDER BY values of the rows of `partitions`.
+pub(crate) fn calculate_frames(
+    window_frame: &Arc<WindowFrame>,
+    order_by: &[PhysicalSortExpr],
+    order_bys: &[ArrayRef],
+    partitions: &[Range<usize>],
+) -> Result<Vec<Range<usize>>> {
+    let offset = partitions.first().map_or(0, |p| p.start);
+    let sort_options = order_by.iter().map(|o| o.options).collect();
+    let mut window_frame_ctx =
+        WindowFrameContext::new(Arc::clone(window_frame), sort_options);
+    let mut partition_order_bys = Vec::with_capacity(order_bys.len());
+    let mut frames = Vec::with_capacity(partitions.last().map_or(0, |p| p.end) - offset);
+    for partition in partitions {
+        let start = partition.start - offset;
+        partition_order_bys.clear();
+        partition_order_bys.extend(
+            order_bys
+                .iter()
+                .map(|column| column.slice(start, partition.len())),
+        );
+        window_frame_ctx.reset();
+        let mut range = 0..0;
+        for idx in 0..partition.len() {
+            range = window_frame_ctx.calculate_range(
+                &partition_order_bys,
+                &range,
+                partition.len(),
+                idx,
+            )?;
+            frames.push(start + range.start..start + range.end);
+        }
+    }
+    Ok(frames)
 }
 
 /// Get order by expression results inside `order_by_columns`.
