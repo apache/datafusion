@@ -95,8 +95,12 @@ pub async fn from_scalar_function(
         }
         // an operator always combines its operands, so they need the same field names
         name_struct_literals_like_first_struct_expr(&mut args, input_schema);
-        // In those cases we build a balanced tree of BinaryExprs
-        arg_list_to_binary_op_tree(op, args)
+        // only associative operators can use a balanced tree of BinaryExprs
+        if is_associative(op) {
+            arg_list_to_binary_op_tree(op, args)
+        } else {
+            left_fold_binary_op(op, args)
+        }
     } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
         // these combine their arguments too, as in `s BETWEEN low AND high`
         name_struct_literals_like_first_struct_expr(&mut args, input_schema);
@@ -233,6 +237,43 @@ pub fn substrait_to_df_name(name: &str) -> Option<&str> {
         "is_nan" => Some("isnan"),
         _ => None,
     }
+}
+
+/// The most arguments [`left_fold_binary_op`] accepts.
+/// Used to prevent overflows.
+const MAX_LEFT_FOLD_ARGS: usize = 500;
+
+fn is_associative(op: Operator) -> bool {
+    matches!(
+        op,
+        Operator::And
+            | Operator::Or
+            | Operator::BitwiseAnd
+            | Operator::BitwiseOr
+            | Operator::BitwiseXor
+            | Operator::StringConcat
+    )
+}
+
+/// Build a left-deep tree of binary operations, evaluated left to right as in SQL.
+///
+/// For example, `subtract` `(a, b, c, d)` will be converted to: `((a - b) - c) - d`.
+///
+/// `args` must not be empty.
+fn left_fold_binary_op(op: Operator, args: Vec<Expr>) -> Result<Expr> {
+    if args.len() > MAX_LEFT_FOLD_ARGS {
+        return substrait_err!(
+            "Binary operator {op:?} has {} arguments, more than the {MAX_LEFT_FOLD_ARGS} supported",
+            args.len()
+        );
+    }
+    let mut args = args.into_iter();
+    let Some(first) = args.next() else {
+        return substrait_err!("Cannot build binary operation tree with 0 arguments");
+    };
+    Ok(args.fold(first, |left, right| {
+        Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
+    }))
 }
 
 /// Build a balanced tree of binary operations from a binary operator and a list of arguments.
@@ -492,14 +533,16 @@ impl BuiltinExprBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{arg_list_to_binary_op_tree, case_insensitive_option};
+    use super::{
+        MAX_LEFT_FOLD_ARGS, arg_list_to_binary_op_tree, case_insensitive_option,
+    };
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::SubstraitConsumerContext;
     use crate::logical_plan::consumer::tests::TEST_SESSION_STATE;
     use crate::logical_plan::consumer::{DefaultSubstraitConsumer, SubstraitConsumer};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::{DFSchema, Result, ScalarValue};
-    use datafusion::logical_expr::{Expr, Operator};
+    use datafusion::common::{DFSchema, Result, ScalarValue, assert_contains};
+    use datafusion::logical_expr::{Expr, Operator, binary_expr, lit};
     use insta::assert_snapshot;
     use substrait::proto::expression::literal::LiteralType;
     use substrait::proto::expression::{Literal, RexType, ScalarFunction};
@@ -544,6 +587,75 @@ mod tests {
             )
             .await?;
         Ok(())
+    }
+
+    async fn consume_i64_call(name: &str, n_args: usize) -> Result<Expr> {
+        let mut extensions = Extensions::default();
+        extensions.functions.insert(0, name.to_string());
+        let consumer = DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+        let arguments = (1..=n_args as i64)
+            .map(|value| FunctionArgument {
+                arg_type: Some(ArgType::Value(Expression {
+                    rex_type: Some(RexType::Literal(Literal {
+                        nullable: false,
+                        type_variation_reference: 0,
+                        literal_type: Some(LiteralType::I64(value)),
+                    })),
+                })),
+            })
+            .collect();
+        let func = ScalarFunction {
+            function_reference: 0,
+            arguments,
+            ..Default::default()
+        };
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, false)]);
+        let df_schema = DFSchema::try_from(schema).unwrap();
+        consumer
+            .consume_scalar_function(
+                &func,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn non_associative_op_is_left_folded() -> Result<()> {
+        let expr = consume_i64_call("subtract:i64_i64", 4).await?;
+        let expected = (2..=4).fold(lit(1i64), |left, value| left - lit(value as i64));
+        assert_eq!(expr, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn associative_op_is_balanced() -> Result<()> {
+        let expr = consume_i64_call("bitwise_and:i64_i64", 4).await?;
+        let expected = binary_expr(
+            binary_expr(lit(1i64), Operator::BitwiseAnd, lit(2i64)),
+            Operator::BitwiseAnd,
+            binary_expr(lit(3i64), Operator::BitwiseAnd, lit(4i64)),
+        );
+        assert_eq!(expr, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn left_fold_accepts_max_args() -> Result<()> {
+        consume_i64_call("add:i64_i64", MAX_LEFT_FOLD_ARGS).await?;
+        Ok(())
+    }
+
+    /// Without the limit, the 50,000-deep chain would overflow the stack
+    #[tokio::test]
+    async fn left_fold_rejects_too_many_args() {
+        for n_args in [MAX_LEFT_FOLD_ARGS + 1, 50000] {
+            let err = consume_i64_call("add:i64_i64", n_args).await.unwrap_err();
+            assert_contains!(
+                err.to_string(),
+                format!("Binary operator Plus has {n_args} arguments")
+            );
+        }
     }
 
     fn int64_literals(integers: &[i64]) -> Vec<Expr> {
