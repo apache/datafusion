@@ -612,13 +612,18 @@ mod tests {
     use crate::metrics::{MetricValue, MetricsSet};
     use crate::test::TestMemoryExec;
     use crate::{ExecutionPlan, collect};
-    use arrow::array::{ArrayRef, Float64Array, Int32Array, Int64Array, UInt32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{
+        ArrayRef, AsArray, Float64Array, Int32Array, Int64Array, ListArray, StringArray,
+        UInt32Array,
+    };
+    use arrow::buffer::OffsetBuffer;
+    use arrow::datatypes::{DataType, Field, Int64Type, Schema};
     use datafusion_common::DataFusionError;
     use datafusion_execution::memory_pool::GreedyMemoryPool;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::{
         array_agg::array_agg_udaf,
+        count::count_udaf,
         min_max::{max_udaf, min_udaf},
         sum::sum_udaf,
     };
@@ -1052,7 +1057,12 @@ mod tests {
     #[tokio::test]
     async fn final_aggregate_reserves_incoming_state_batch() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
-        let aggregate = sum_aggregate(&schema, "v", "SUM(v)")?;
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("array_agg")
+                .build()?,
+        );
         let group_by = PhysicalGroupBy::default();
         let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
         let partial = AggregateExec::try_new(
@@ -1063,11 +1073,13 @@ mod tests {
             empty,
             Arc::clone(&schema),
         )?;
-        // 64 rows that retain 1 MB, like the few rows of a `median` state.
+        // One row that retains 1 MB of list elements, like the state of `array_agg`.
         let state_schema = partial.schema();
-        let values: ArrayRef =
-            Arc::new(Int64Array::from(vec![1_i64; 131_072]).slice(0, 64));
-        let batch = RecordBatch::try_new(Arc::clone(&state_schema), vec![values])?;
+        let values = Arc::new(Int64Array::from(vec![1_i64; 131_072]));
+        let offsets = OffsetBuffer::from_lengths([131_072]);
+        let field = Arc::new(Field::new_list_field(DataType::Int64, true));
+        let list: ArrayRef = Arc::new(ListArray::new(field, offsets, values, None));
+        let batch = RecordBatch::try_new(Arc::clone(&state_schema), vec![list])?;
         let input = TestMemoryExec::try_new_exec(
             &[vec![batch]],
             Arc::clone(&state_schema),
@@ -1102,11 +1114,86 @@ mod tests {
             .build_arc()?;
         let context = Arc::new(TaskContext::default().with_runtime(runtime));
         let output = collect(final_aggregate as Arc<dyn ExecutionPlan>, context).await?;
-        let result = output[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
+        let result = output[0].column(0).as_list::<i32>();
+        assert_eq!(result.value(0).len(), 131_072);
+        Ok(())
+    }
+
+    /// A full batch of fixed-width states is bounded by `batch_size`, so it is
+    /// not charged even when it is larger than the pool.
+    #[tokio::test]
+    async fn final_aggregate_does_not_charge_bounded_state_batch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let aggregates = vec![
+            sum_aggregate(&schema, "v", "a")?,
+            sum_aggregate(&schema, "v", "b")?,
+        ];
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let state = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            aggregates.clone(),
+            vec![None, None],
+            empty,
+            Arc::clone(&schema),
+        )?
+        .schema();
+        // 8192 rows of two `Int64` states: 128 KB, 16 bytes per row.
+        let values = || Arc::new(Int64Array::from(vec![1_i64; 8192])) as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::clone(&state), vec![values(), values()])?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&state), None)?;
+        let plan = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            aggregates,
+            vec![None, None],
+            input,
+            state,
+        )?);
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(96 * 1024)))
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        let output = collect(plan as Arc<dyn ExecutionPlan>, context).await?;
+        let result = output[0].column(0).as_primitive::<Int64Type>();
+        assert_eq!(result.value(0), 8192);
+        Ok(())
+    }
+
+    /// `Single` mode operates on raw input rather than partial states, so its
+    /// batches are not charged to the incoming state batch reservation.
+    #[tokio::test]
+    async fn single_aggregate_does_not_charge_raw_input() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, false)]));
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("count")
+                .build()?,
+        );
+        // 64 rows of 16 KB string values (1 MB).
+        let val_str = "a".repeat(16 * 1024);
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..64).map(|_| val_str.as_str()),
+        ));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![values])?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let plan = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::default(),
+            vec![aggregate],
+            vec![None],
+            input,
+            schema,
+        )?);
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(512 * 1024)))
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        let output = collect(plan as Arc<dyn ExecutionPlan>, context).await?;
+        let result = output[0].column(0).as_primitive::<Int64Type>();
         assert_eq!(result.value(0), 64);
         Ok(())
     }
