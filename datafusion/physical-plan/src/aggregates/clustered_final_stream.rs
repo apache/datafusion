@@ -491,7 +491,7 @@ mod tests {
     };
     use crate::common::collect;
     use crate::test::TestMemoryExec;
-    use arrow::array::{ArrayRef, Int64Array, StringViewArray};
+    use arrow::array::{ArrayRef, Int64Array, StringArray, StringViewArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
@@ -793,74 +793,123 @@ mod tests {
     /// The table stays small: only the incoming batch can exceed the limit.
     #[tokio::test]
     async fn clustered_final_refuses_large_state_batch() -> Result<()> {
-        let plan =
-            sum_over_sorted_input(AggregateMode::Final, &["k"], vec![vec![vec![1; 64]]])?;
-        // 64 rows that retain 1 MB per column, like the few rows of a `median` state.
-        let state = plan.input().schema();
-        let values: ArrayRef =
-            Arc::new(Int64Array::from(vec![1_i64; 131_072]).slice(0, 64));
-        let batch =
-            RecordBatch::try_new(Arc::clone(&state), vec![Arc::clone(&values), values])?;
-        let ordering = plan.input().properties().output_ordering().unwrap().clone();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Utf8, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".into())]);
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("sum")
+                .build()?,
+        );
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let state = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            vec![Arc::clone(&aggregate)],
+            vec![None],
+            empty,
+            Arc::clone(&schema),
+        )?
+        .schema();
+        // 64 rows of 16 KB string keys (1 MB), like the few rows of a `median` state.
+        let key_str = "a".repeat(16 * 1024);
+        let keys: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..64).map(|_| key_str.as_str()),
+        ));
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1_i64; 64]));
+        let batch = RecordBatch::try_new(Arc::clone(&state), vec![keys, values])?;
+        let ordering =
+            LexOrdering::new([PhysicalSortExpr::new_default(col("k", &state)?)]).unwrap();
         let input = TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&state), None)?
             .try_with_sort_information(vec![ordering])?;
         let plan = AggregateExec::try_new(
             AggregateMode::Final,
-            plan.group_expr().clone(),
-            plan.aggr_expr().to_vec(),
+            group_by.as_final(),
+            vec![aggregate],
             vec![None],
             Arc::new(TestMemoryExec::update_cache(&Arc::new(input))),
-            plan.input_schema(),
+            state,
         )?;
         assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
-        assert_resources_exhausted_under_limit(&plan, 1024 * 1024).await?;
+        assert_resources_exhausted_under_limit(&plan, 512 * 1024).await?;
         assert_output_unchanged_under_limit(&plan, 4 * 1024 * 1024).await
     }
 
     /// Spilling the table makes room for a state batch that did not fit next to it.
     #[tokio::test]
     async fn clustered_final_spills_to_admit_large_state_batch() -> Result<()> {
-        let plan = sum_over_sorted_input(
-            AggregateMode::Final,
-            &["k1", "k2"],
-            vec![vec![vec![0; 4000], (0..4000).collect()]],
-        )?;
-        assert_eq!(
-            plan.group_clustering_mode(),
-            &GroupClusteringMode::Partial(vec![0])
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k1", DataType::Int64, false),
+            Field::new("k2", DataType::Utf8, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let group_by = PhysicalGroupBy::new_single(vec![
+            (col("k1", &schema)?, "k1".into()),
+            (col("k2", &schema)?, "k2".into()),
+        ]);
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("sum")
+                .build()?,
         );
-        let state = plan.input().schema();
-        let batch = |rows: i64| {
-            RecordBatch::try_new(
-                Arc::clone(&state),
-                vec![
-                    Arc::new(Int64Array::from(vec![0_i64; rows as usize])) as ArrayRef,
-                    Arc::new(Int64Array::from((0..rows).collect::<Vec<_>>())),
-                    Arc::new(Int64Array::from(vec![1_i64; rows as usize])),
-                ],
-            )
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let state = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            vec![Arc::clone(&aggregate)],
+            vec![None],
+            empty,
+            Arc::clone(&schema),
+        )?
+        .schema();
+        let regular_batch = {
+            let k1: ArrayRef = Arc::new(Int64Array::from(vec![0_i64; 4000]));
+            let k2: ArrayRef = Arc::new(StringArray::from_iter_values(
+                (0..4000).map(|i| format!("k_{i:04}")),
+            ));
+            let v: ArrayRef = Arc::new(Int64Array::from(vec![1_i64; 4000]));
+            RecordBatch::try_new(Arc::clone(&state), vec![k1, k2, v])?
         };
-        // 64 rows that retain 3 MB, like the few rows of a `median` state.
-        let large = batch(131_072)?.slice(0, 64);
-        let ordering = plan.input().properties().output_ordering().unwrap().clone();
+        // 64 rows of 32 KB string keys (2 MB), like the few rows of a `median` state.
+        let large_batch = {
+            let large_str = "x".repeat(32 * 1024);
+            let k1: ArrayRef = Arc::new(Int64Array::from(vec![0_i64; 64]));
+            let k2: ArrayRef = Arc::new(StringArray::from_iter_values(
+                (0..64).map(|i| format!("large_{i:02}_{large_str}")),
+            ));
+            let v: ArrayRef = Arc::new(Int64Array::from(vec![1_i64; 64]));
+            RecordBatch::try_new(Arc::clone(&state), vec![k1, k2, v])?
+        };
+        let ordering =
+            LexOrdering::new([PhysicalSortExpr::new_default(col("k1", &state)?)])
+                .unwrap();
         let input = TestMemoryExec::try_new(
-            &[vec![batch(4000)?, large]],
+            &[vec![regular_batch, large_batch]],
             Arc::clone(&state),
             None,
         )?
         .try_with_sort_information(vec![ordering])?;
         let plan = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
-            plan.group_expr().clone(),
-            plan.aggr_expr().to_vec(),
+            group_by.as_final(),
+            vec![aggregate],
             vec![None],
             Arc::new(TestMemoryExec::update_cache(&Arc::new(input))),
-            plan.input_schema(),
+            state,
         )?);
+        assert_eq!(
+            plan.group_clustering_mode(),
+            &GroupClusteringMode::Partial(vec![0])
+        );
 
         // Fits the large batch, but not next to the table of 4000 groups.
         let runtime = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::new(GreedyMemoryPool::new(3150 * 1024)))
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(2600 * 1024)))
             .build_arc()?;
         let context =
             Arc::new(
@@ -874,7 +923,7 @@ mod tests {
         let output = collect(plan.execute(0, context)?).await?;
         assert!(plan.metrics().unwrap().spill_count().unwrap() > 0);
         let rows: usize = output.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(rows, 4000);
+        assert_eq!(rows, 4064);
         let mut total = 0;
         for b in &output {
             total += arrow::compute::sum(

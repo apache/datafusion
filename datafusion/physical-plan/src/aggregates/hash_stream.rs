@@ -903,7 +903,9 @@ mod tests {
     use crate::test::TestMemoryExec;
     use crate::test::exec::BarrierExec;
 
-    use arrow::array::{ArrayRef, AsArray, Int32Array, Int64Array, StringViewArray};
+    use arrow::array::{
+        ArrayRef, AsArray, Int32Array, Int64Array, StringArray, StringViewArray,
+    };
     use arrow::datatypes::{DataType, Field, Int32Type, Int64Type, Schema};
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
@@ -1868,7 +1870,7 @@ mod tests {
     #[tokio::test]
     async fn final_hash_reserves_incoming_state_batch() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("k", DataType::Int64, false),
+            Field::new("k", DataType::Utf8, false),
             Field::new("v", DataType::Int64, false),
         ]));
         let group_by =
@@ -1889,13 +1891,13 @@ mod tests {
             Arc::clone(&schema),
         )?;
         let state_schema = partial.schema();
-        // 64 rows that retain 2 MB, like the few rows of a `median` state.
-        let values: ArrayRef =
-            Arc::new(Int64Array::from(vec![1_i64; 131_072]).slice(0, 64));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&state_schema),
-            vec![Arc::clone(&values), values],
-        )?;
+        // 64 rows that reference 1 MB of string keys, like the few rows of a `median` state.
+        let key_str = "a".repeat(16 * 1024);
+        let keys: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..64).map(|_| key_str.as_str()),
+        ));
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1_i64; 64]));
+        let batch = RecordBatch::try_new(Arc::clone(&state_schema), vec![keys, values])?;
         let input = TestMemoryExec::try_new_exec(
             &[vec![batch]],
             Arc::clone(&state_schema),
@@ -1954,6 +1956,87 @@ mod tests {
     #[tokio::test]
     async fn final_hash_spills_to_admit_large_state_batch() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Utf8, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".into())]);
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("sum")
+                .build()?,
+        );
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let state = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            vec![Arc::clone(&aggregate)],
+            vec![None],
+            empty,
+            Arc::clone(&schema),
+        )?
+        .schema();
+        let regular_batch = {
+            let keys: ArrayRef = Arc::new(StringArray::from_iter_values(
+                (0..4000).map(|i| format!("k_{i:04}")),
+            ));
+            let values: ArrayRef = Arc::new(Int64Array::from(vec![1_i64; 4000]));
+            RecordBatch::try_new(Arc::clone(&state), vec![keys, values])?
+        };
+        // 64 rows of 32 KB string keys (2 MB), like the few rows of a `median` state.
+        let large_batch = {
+            let large_str = "x".repeat(32 * 1024);
+            let keys: ArrayRef = Arc::new(StringArray::from_iter_values(
+                (0..64).map(|i| format!("large_{i:02}_{large_str}")),
+            ));
+            let values: ArrayRef = Arc::new(Int64Array::from(vec![1_i64; 64]));
+            RecordBatch::try_new(Arc::clone(&state), vec![keys, values])?
+        };
+        let input = TestMemoryExec::try_new_exec(
+            &[vec![regular_batch, large_batch]],
+            Arc::clone(&state),
+            None,
+        )?;
+        let plan = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by.as_final(),
+            vec![aggregate],
+            vec![None],
+            input,
+            Arc::clone(&state),
+        )?);
+        // Fits the large batch, but not next to the table of 4000 groups.
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(2600 * 1024)))
+            .build_arc()?;
+        let context =
+            Arc::new(
+                TaskContext::default()
+                    .with_session_config(SessionConfig::new().set_bool(
+                        "datafusion.execution.enable_migration_aggregate",
+                        true,
+                    ))
+                    .with_runtime(runtime),
+            );
+        let output = collect(plan.execute(0, context)?).await?;
+        assert!(plan.metrics().unwrap().spill_count().unwrap() > 0);
+        let rows: usize = output.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 4064);
+        let mut total = 0;
+        for b in &output {
+            total +=
+                arrow::compute::sum(b.column(1).as_primitive::<Int64Type>()).unwrap_or(0);
+        }
+        assert_eq!(total, 4064);
+        Ok(())
+    }
+
+    /// Slices of a larger partial output share buffers that the partial
+    /// aggregate still reserves, so only their rows are charged.
+    #[tokio::test]
+    async fn final_hash_does_not_charge_buffers_shared_by_slices() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
             Field::new("k", DataType::Int64, false),
             Field::new("v", DataType::Int64, false),
         ]));
@@ -1975,22 +2058,17 @@ mod tests {
             Arc::clone(&schema),
         )?
         .schema();
-        let batch = |rows: i64| {
-            RecordBatch::try_new(
-                Arc::clone(&state),
-                vec![
-                    Arc::new(Int64Array::from((0..rows).collect::<Vec<_>>())) as ArrayRef,
-                    Arc::new(Int64Array::from(vec![1_i64; rows as usize])),
-                ],
-            )
-        };
-        // 64 rows that retain 2 MB, like the few rows of a `median` state.
-        let large = batch(131_072)?.slice(0, 64);
-        let input = TestMemoryExec::try_new_exec(
-            &[vec![batch(4000)?, large]],
+        // A partial output of 1M groups (16 MB) emitted as 8192-row slices.
+        let rows = 1 << 20;
+        let output = RecordBatch::try_new(
             Arc::clone(&state),
-            None,
+            vec![
+                Arc::new(Int64Array::from((0..rows).collect::<Vec<_>>())) as ArrayRef,
+                Arc::new(Int64Array::from(vec![1_i64; rows as usize])),
+            ],
         )?;
+        let slices = vec![output.slice(0, 8192), output.slice(8192, 8192)];
+        let input = TestMemoryExec::try_new_exec(&[slices], Arc::clone(&state), None)?;
         let plan = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             group_by.as_final(),
@@ -1999,9 +2077,8 @@ mod tests {
             input,
             Arc::clone(&state),
         )?);
-        // Fits the large batch, but not next to the table of 4000 groups.
         let runtime = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::new(GreedyMemoryPool::new(2200 * 1024)))
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(4 * 1024 * 1024)))
             .build_arc()?;
         let context =
             Arc::new(
@@ -2013,17 +2090,8 @@ mod tests {
                     .with_runtime(runtime),
             );
         let output = collect(plan.execute(0, context)?).await?;
-        assert!(plan.metrics().unwrap().spill_count().unwrap() > 0);
         let rows: usize = output.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(rows, 4000);
-        let mut total = 0;
-        for b in &output {
-            total += arrow::compute::sum(
-                b.column(1).as_primitive::<arrow::datatypes::Int64Type>(),
-            )
-            .unwrap_or(0);
-        }
-        assert_eq!(total, 4064);
+        assert_eq!(rows, 16384);
         Ok(())
     }
 }

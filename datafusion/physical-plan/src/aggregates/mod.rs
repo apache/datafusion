@@ -228,11 +228,21 @@ const MAX_IN_FLIGHT_STATE_BYTES_PER_ROW: usize = 1024;
 const MIN_CHARGED_STATE_BATCH_BYTES: usize = 64 * 1024;
 
 fn incoming_state_batch_reservation_bytes(batch: &RecordBatch) -> usize {
-    let bytes = datafusion_common::utils::memory::get_record_batch_memory_size(batch);
     let in_flight_bytes = batch
         .num_rows()
         .saturating_mul(MAX_IN_FLIGHT_STATE_BYTES_PER_ROW)
         .max(MIN_CHARGED_STATE_BATCH_BYTES);
+    let buffer_bytes =
+        datafusion_common::utils::memory::get_record_batch_memory_size(batch);
+    if buffer_bytes <= in_flight_bytes {
+        return 0;
+    }
+    // A zero-copy slice of a larger output shares buffers that its producer
+    // still reserves, so charge only the bytes its rows reference.
+    let sizes = crate::spill::spilled_row_sizes::SpilledRowSizes::new(batch);
+    let bytes = (0..batch.num_rows())
+        .map(|row| sizes.row(row))
+        .fold(0usize, usize::saturating_add);
     if bytes > in_flight_bytes { bytes } else { 0 }
 }
 
