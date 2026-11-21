@@ -16,9 +16,10 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
     FilterBuilder, FilterPredicate, is_not_null, not, nullif, prep_null_mask_filter,
 };
-use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_or_internal_err, exec_err,
     internal_datafusion_err, internal_err,
@@ -542,6 +543,12 @@ fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.is::<Column>()
 }
 
+/// Whether `expr` is a NULL literal
+fn is_null_literal(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.downcast_ref::<Literal>()
+        .is_some_and(|literal| literal.value().is_null())
+}
+
 /// Creates a [FilterPredicate] from a boolean array.
 fn create_filter(predicate: &BooleanArray, optimize: bool) -> FilterPredicate {
     let mut filter_builder = FilterBuilder::new(predicate);
@@ -877,10 +884,17 @@ impl CaseExpr {
         else_expr: Option<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
         // normalize null literals to None in the else_expr (this already happens
-        // during SQL planning, but not necessarily for other use cases)
+        // during SQL planning, but not necessarily for other use cases). A typed
+        // NULL with metadata is kept, since its metadata is part of the result field.
         let else_expr = match &else_expr {
             Some(e) => match e.downcast_ref::<Literal>() {
-                Some(lit) if lit.value().is_null() => None,
+                Some(lit)
+                    if lit.value().is_null()
+                        && (lit.metadata().is_empty()
+                            || lit.value().data_type().is_null()) =>
+                {
+                    None
+                }
                 _ => else_expr,
             },
             _ => else_expr,
@@ -910,14 +924,16 @@ impl CaseExpr {
             return EvalMethod::WithExpression(LazyProjectedBody::default());
         }
 
+        // A NULL literal ELSE evaluates like no ELSE
+        let null_else = body.else_expr.as_ref().is_none_or(is_null_literal);
         if body.when_then_expr.len() == 1
             && is_cheap_and_infallible(&(body.when_then_expr[0].1))
-            && body.else_expr.is_none()
+            && null_else
         {
             EvalMethod::InfallibleExprOrNull
         } else if body.when_then_expr.len() == 1
             && body.when_then_expr[0].1.is::<Literal>()
-            && body.else_expr.is_some()
+            && !null_else
             && body.else_expr.as_ref().unwrap().is::<Literal>()
         {
             EvalMethod::ScalarOrScalar
@@ -942,24 +958,127 @@ impl CaseExpr {
     pub fn else_expr(&self) -> Option<&Arc<dyn PhysicalExpr>> {
         self.body.else_expr.as_ref()
     }
+
+    /// [`PhysicalExpr::return_field`] without the name, from one visit of each value
+    /// branch. A nested CASE branch is visited the same way, since its name would
+    /// format its whole subtree again at every level.
+    fn unnamed_field(&self, input_schema: &Schema) -> Result<Field> {
+        let fields = self
+            .body
+            .when_then_expr
+            .iter()
+            .map(|(_, then)| then)
+            .chain(self.body.else_expr.iter())
+            .map(|expr| match expr.downcast_ref::<CaseExpr>() {
+                Some(case) => case.unnamed_field(input_schema).map(Arc::new),
+                None => expr.return_field(input_schema),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let data_type = self
+            .body
+            .data_type_from(|i| Ok(fields[i].data_type().clone()))?;
+        let nullable =
+            self.nullable_from(input_schema, |i| Ok(fields[i].is_nullable()))?;
+        let metadata = coerced_fields_metadata(fields.iter().map(|f| f.as_ref()))?;
+        Ok(metadata.add_to_field(Field::new("", data_type, nullable)))
+    }
+
+    /// The nullability of this CASE, given the nullability of each value branch:
+    /// the THEN expressions in order, then the ELSE.
+    fn nullable_from(
+        &self,
+        input_schema: &Schema,
+        mut branch_nullable: impl FnMut(usize) -> Result<bool>,
+    ) -> Result<bool> {
+        let mut branches = self.body.when_then_expr.iter().enumerate();
+        let nullable_then = branches.find_map(|(i, (w, t))| {
+            let is_nullable = match branch_nullable(i) {
+                // Pass on error determining nullability verbatim
+                Err(e) => return Some(Err(e)),
+                Ok(n) => n,
+            };
+
+            // Branches with a then expression that is not nullable do not impact the
+            // nullability of the case expression.
+            if !is_nullable {
+                return None;
+            }
+
+            // For case-with-expression assume all 'then' expressions are reachable
+            if self.body.expr.is_some() {
+                return Some(Ok(()));
+            }
+
+            // For branches with a nullable 'then' expression, try to determine
+            // if the 'then' expression is ever reachable in the situation where
+            // it would evaluate to null.
+
+            // Replace the `then` expression with `NULL` in the `when` expression
+            let with_null = match replace_with_null(
+                w,
+                unwrap_certainly_null_expr(t.as_ref()),
+                input_schema,
+            ) {
+                Err(e) => return Some(Err(e)),
+                Ok(e) => e,
+            };
+
+            let can_be_true = match evaluate_predicate(&with_null).and_then(|bounds| {
+                bounds.contains_value(ScalarValue::Boolean(Some(true)))
+            }) {
+                Err(e) => return Some(Err(e)),
+                Ok(b) => b,
+            };
+
+            if can_be_true { Some(Ok(())) } else { None }
+        });
+
+        if let Some(nullable_then) = nullable_then {
+            // There is at least one reachable nullable 'then' expression, so the case
+            // expression itself is nullable.
+            // Use `Result::map` to propagate the error from `nullable_then` if there is one.
+            nullable_then.map(|_| true)
+        } else if self.body.else_expr.is_some() {
+            // There are no reachable nullable 'then' expressions, so all we still need to
+            // check is the 'else' expression's nullability.
+            branch_nullable(self.body.when_then_expr.len())
+        } else {
+            // CASE produces NULL if there is no `else` expr
+            // (aka when none of the `when_then_exprs` match)
+            Ok(true)
+        }
+    }
 }
 
 impl CaseBody {
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        self.data_type_from(|i| match self.when_then_expr.get(i) {
+            Some((_, then)) => then.data_type(input_schema),
+            None => self
+                .else_expr
+                .as_ref()
+                .map_or(Ok(DataType::Null), |e| e.data_type(input_schema)),
+        })
+    }
+
+    /// The type of this CASE, given the type of each value branch: the THEN
+    /// expressions in order, then the ELSE.
+    fn data_type_from(
+        &self,
+        mut branch_type: impl FnMut(usize) -> Result<DataType>,
+    ) -> Result<DataType> {
         // since all then results have the same data type, we can choose any one as the
         // return data type except for the null.
         let mut data_type = DataType::Null;
         for i in 0..self.when_then_expr.len() {
-            data_type = self.when_then_expr[i].1.data_type(input_schema)?;
+            data_type = branch_type(i)?;
             if !data_type.equals_datatype(&DataType::Null) {
                 break;
             }
         }
         // if all then results are null, we use data type of else expr instead if possible.
-        if data_type.equals_datatype(&DataType::Null)
-            && let Some(e) = &self.else_expr
-        {
-            data_type = e.data_type(input_schema)?;
+        if data_type.equals_datatype(&DataType::Null) && self.else_expr.is_some() {
+            data_type = branch_type(self.when_then_expr.len())?;
         }
 
         Ok(data_type)
@@ -1400,8 +1519,10 @@ impl CaseExpr {
         } else if !when_value.has_true() {
             // All input rows are false/null, just call the 'else' expression
             match &self.body.else_expr {
-                Some(else_expr) => else_expr.evaluate(batch),
-                None => {
+                Some(else_expr) if !is_null_literal(else_expr) => {
+                    else_expr.evaluate(batch)
+                }
+                _ => {
                     let return_type = self.data_type(&batch.schema())?;
                     Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
                         &return_type,
@@ -1447,62 +1568,21 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        let nullable_then = self.body.when_then_expr.iter().find_map(|(w, t)| {
-            let is_nullable = match t.nullable(input_schema) {
-                // Pass on error determining nullability verbatim
-                Err(e) => return Some(Err(e)),
-                Ok(n) => n,
-            };
+        self.nullable_from(input_schema, |i| match self.body.when_then_expr.get(i) {
+            Some((_, then)) => then.nullable(input_schema),
+            None => self
+                .body
+                .else_expr
+                .as_ref()
+                .map_or(Ok(true), |e| e.nullable(input_schema)),
+        })
+    }
 
-            // Branches with a then expression that is not nullable do not impact the
-            // nullability of the case expression.
-            if !is_nullable {
-                return None;
-            }
-
-            // For case-with-expression assume all 'then' expressions are reachable
-            if self.body.expr.is_some() {
-                return Some(Ok(()));
-            }
-
-            // For branches with a nullable 'then' expression, try to determine
-            // if the 'then' expression is ever reachable in the situation where
-            // it would evaluate to null.
-
-            // Replace the `then` expression with `NULL` in the `when` expression
-            let with_null = match replace_with_null(
-                w,
-                unwrap_certainly_null_expr(t.as_ref()),
-                input_schema,
-            ) {
-                Err(e) => return Some(Err(e)),
-                Ok(e) => e,
-            };
-
-            let can_be_true = match evaluate_predicate(&with_null).and_then(|bounds| {
-                bounds.contains_value(ScalarValue::Boolean(Some(true)))
-            }) {
-                Err(e) => return Some(Err(e)),
-                Ok(b) => b,
-            };
-
-            if can_be_true { Some(Ok(())) } else { None }
-        });
-
-        if let Some(nullable_then) = nullable_then {
-            // There is at least one reachable nullable 'then' expression, so the case
-            // expression itself is nullable.
-            // Use `Result::map` to propagate the error from `nullable_then` if there is one.
-            nullable_then.map(|_| true)
-        } else if let Some(e) = &self.body.else_expr {
-            // There are no reachable nullable 'then' expressions, so all we still need to
-            // check is the 'else' expression's nullability.
-            e.nullable(input_schema)
-        } else {
-            // CASE produces NULL if there is no `else` expr
-            // (aka when none of the `when_then_exprs` match)
-            Ok(true)
-        }
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        Ok(Arc::new(
+            self.unnamed_field(input_schema)?
+                .with_name(format!("{self}")),
+        ))
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
