@@ -6,6 +6,49 @@
 //!
 //! This parser implements DataFusion specific statements such as
 //! `CREATE EXTERNAL TABLE`
+//!
+//! # Syntax vs Semantics
+//!
+//! Like [`sqlparser`], this parser checks *syntax* only: it answers whether the
+//! text is a well formed statement in DataFusion's SQL dialect (for example,
+//! `CREATE EXTERNAL TABLE` requires a `LOCATION` clause), not whether that
+//! statement means anything. Deciding the latter needs the catalog, schemas,
+//! types, and the surrounding plan, none of which the parser has, and the AST
+//! it produces is also used for purposes other than planning, such as round
+//! tripping SQL text. See the [Syntax vs Semantics] section of the
+//! [`sqlparser`] README for the same rule applied there.
+//!
+//! Semantic checks (unknown columns, non boolean predicates, contradictory
+//! options, ...) belong on the [`LogicalPlan`] rather than in this parser or in
+//! [`SqlToRel`]. SQL is only one way to build a plan: the DataFrame API,
+//! [`LogicalPlanBuilder`], Substrait, `datafusion-proto`, and other query
+//! languages built on DataFusion all bypass the SQL frontend entirely. Putting
+//! the check in the `try_new` constructor of the plan node, as
+//! [`Filter::try_new`], [`Aggregate::try_new`], and [`Union::try_new`] do,
+//! enforces it once for every frontend and means it cannot be bypassed by a
+//! rewrite rule or an extension that rebuilds the node. Rules that need the
+//! whole plan, or types after coercion, belong in an `AnalyzerRule` or in the
+//! logical plan invariants instead.
+//!
+//! Two kinds of errors do legitimately originate in [`SqlToRel`]: SQL that
+//! DataFusion has no plan representation for (such as `INSERT ... RETURNING`),
+//! and SQL specific context such as spans and [`Diagnostic`]s attached to an
+//! error raised elsewhere. This is a general guideline, not a rule the existing
+//! code follows everywhere: for example, aggregates in `WHERE` are rejected in
+//! the SQL planner, and some `CREATE EXTERNAL TABLE` clause combinations are
+//! rejected in this module even though the statement parses. Such checks are
+//! not precedents for new code, and PRs moving them are welcome. Prefer an end
+//! to end `sqllogictest` case for the user visible error, so the test keeps
+//! passing when a check moves to a different layer.
+//!
+//! [`LogicalPlan`]: datafusion_expr::LogicalPlan
+//! [`LogicalPlanBuilder`]: datafusion_expr::LogicalPlanBuilder
+//! [`SqlToRel`]: crate::planner::SqlToRel
+//! [`Filter::try_new`]: datafusion_expr::logical_plan::Filter::try_new
+//! [`Aggregate::try_new`]: datafusion_expr::logical_plan::Aggregate::try_new
+//! [`Union::try_new`]: datafusion_expr::logical_plan::Union::try_new
+//! [`Diagnostic`]: datafusion_common::Diagnostic
+//! [Syntax vs Semantics]: https://github.com/apache/datafusion-sqlparser-rs#syntax-vs-semantics
 
 use datafusion_common::DataFusionError;
 use datafusion_common::config::{ConfigNonZeroUsize, SqlParserOptions};
