@@ -5,14 +5,16 @@
 //! Benchmarks for `with_hashes` function
 
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, DictionaryArray, FixedSizeListArray,
-    GenericStringArray, Int32Array, Int64Array, ListArray, ListViewArray, MapArray,
-    NullArray, NullBufferBuilder, OffsetSizeTrait, PrimitiveArray, RunArray, StringArray,
-    StringViewArray, StructArray, UnionArray, make_array,
+    Array, ArrayRef, ArrowPrimitiveType, Decimal128Array, DictionaryArray,
+    FixedSizeListArray, GenericStringArray, Int32Array, Int64Array, ListArray,
+    ListViewArray, MapArray, NullArray, NullBufferBuilder, OffsetSizeTrait,
+    PrimitiveArray, RunArray, StringArray, StringViewArray, StructArray, UnionArray,
+    make_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{
-    ArrowDictionaryKeyType, DataType, Field, Fields, Int32Type, Int64Type, UnionFields,
+    ArrowDictionaryKeyType, DECIMAL128_MAX_PRECISION, DataType, Decimal128Type,
+    DecimalType, Field, Fields, Int32Type, Int64Type, UnionFields,
 };
 use criterion::{Bencher, Criterion, criterion_group, criterion_main};
 use datafusion_common::hash_utils::RandomState;
@@ -21,6 +23,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand::distr::{Alphanumeric, Distribution, StandardUniform};
 use rand::prelude::StdRng;
+use rand::seq::SliceRandom;
 use std::sync::Arc;
 
 const BATCH_SIZE: usize = 8192;
@@ -58,7 +61,41 @@ fn criterion_benchmark(c: &mut Criterion) {
     // poll with small strings for string view tests (<=12 bytes are inlined)
     let small_pool = StringPool::new(100, 5);
     let cases = [
-        BenchData::new("int64", primitive_array::<Int64Type>(BATCH_SIZE)),
+        BenchData {
+            // Dense from 10% to 50%, around the density at which a random 64-row
+            // chunk drops below `MIN_VALID_FOR_DENSE` valid rows (in
+            // `hash_utils.rs`) and `hash_array_primitive` switches from hashing
+            // every row of the chunk to hashing only its valid rows one at a time.
+            // 90 and 99 show the cost of the chunk loop on mostly null arrays, and
+            // 100 is the all-null column that ROLLUP and GROUPING SETS hash.
+            null_densities: &[
+                1,
+                DEFAULT_NULL_PERCENT,
+                10,
+                15,
+                20,
+                25,
+                30,
+                35,
+                40,
+                45,
+                50,
+                75,
+                90,
+                99,
+                100,
+            ],
+            ..BenchData::new("int64", primitive_array::<Int64Type>(BATCH_SIZE))
+        },
+        BenchData {
+            // Surrogate keys, such as TPC-DS's, are often `Int32`
+            null_densities: &[DEFAULT_NULL_PERCENT, 25, 40, 50, 99, 100],
+            ..BenchData::new("int32", primitive_array::<Int32Type>(BATCH_SIZE))
+        },
+        BenchData {
+            null_densities: &[DEFAULT_NULL_PERCENT, 25, 40, 50, 75, 99],
+            ..BenchData::new("decimal128", decimal128_array(BATCH_SIZE))
+        },
         BenchData::new("utf8", pool.string_array::<i32>(BATCH_SIZE)),
         BenchData::new("large_utf8", pool.string_array::<i64>(BATCH_SIZE)),
         BenchData::new("utf8_view", pool.string_view_array(BATCH_SIZE)),
@@ -112,6 +149,20 @@ fn criterion_benchmark(c: &mut Criterion) {
             let columns = null_columns(&array, null_percent);
             bench_single_and_multiple(c, name, &null_label(null_percent), &columns);
         }
+    }
+
+    // Nulls that fill whole 64-row blocks, as after a sort or an outer join, so
+    // each block of the validity mask is all null or all valid
+    let int64 = primitive_array::<Int64Type>(BATCH_SIZE);
+    for null_percent in [50, 90] {
+        let columns = (0..MULTIPLE_COLUMNS as u64)
+            .map(|column| {
+                let nulls = block_null_mask(BATCH_SIZE, null_percent, NULL_SEED + column);
+                with_nulls(&int64, nulls)
+            })
+            .collect::<Vec<_>>();
+        let label = format!("{null_percent}% nulls in 64-row blocks");
+        bench_single_and_multiple(c, "int64", &label, &columns);
     }
 }
 
@@ -234,17 +285,33 @@ fn add_nulls(array: &ArrayRef, null_density: f32, seed: u64) -> ArrayRef {
                     .expect("Failed to create RunArray with null values"),
             )
         }
-        _ => {
-            let array_data = array
-                .clone()
-                .into_data()
-                .into_builder()
-                .nulls(Some(create_null_mask(array.len(), null_density, seed)))
-                .build()
-                .unwrap();
-            make_array(array_data)
-        }
+        _ => with_nulls(array, create_null_mask(array.len(), null_density, seed)),
     }
+}
+
+/// Returns `array` with its null buffer replaced by `nulls`
+fn with_nulls(array: &ArrayRef, nulls: NullBuffer) -> ArrayRef {
+    let array_data = array
+        .to_data()
+        .into_builder()
+        .nulls(Some(nulls))
+        .build()
+        .unwrap();
+    make_array(array_data)
+}
+
+/// Returns a null mask where `null_percent` of the 64-row blocks are all null
+/// and the rest are all valid. The stream of `seed` picks the null blocks.
+fn block_null_mask(len: usize, null_percent: usize, seed: u64) -> NullBuffer {
+    let mut blocks: Vec<usize> = (0..len.div_ceil(64)).collect();
+    blocks.shuffle(&mut StdRng::seed_from_u64(seed));
+    let null_blocks = &blocks[..blocks.len() * null_percent / 100];
+    let mut valid = vec![true; len];
+    for &block in null_blocks {
+        let end = (block * 64 + 64).min(len);
+        valid[block * 64..end].fill(false);
+    }
+    NullBuffer::from(valid)
 }
 
 pub fn make_rng() -> StdRng {
@@ -316,6 +383,16 @@ where
         .map(|_| Some(rng.random::<T::Native>()))
         .collect();
     Arc::new(array)
+}
+
+/// Returns a `Decimal128` array of random values within its precision. An
+/// `i128` value costs more to hash than an `i64`.
+fn decimal128_array(array_len: usize) -> ArrayRef {
+    let max = Decimal128Type::MAX_FOR_EACH_PRECISION[DECIMAL128_MAX_PRECISION as usize];
+    let mut rng = make_rng();
+    Arc::new(Decimal128Array::from_iter_values(
+        (0..array_len).map(|_| rng.random_range(-max..=max)),
+    ))
 }
 
 /// Benchmark sliced arrays to demonstrate the optimization for when an array is
