@@ -35,11 +35,9 @@ impl FuzzTest for TimestampArithmeticFuzzer {
             TimeUnit::Microsecond,
             TimeUnit::Nanosecond,
         ] {
-            // 1. Generate a random timestamp and interval at this precision.
             let timestamp = random_timestamp(&mut rng, unit);
             let interval = random_interval(&mut rng, unit);
 
-            // 2. Assert that add/sub and sub/add both leave the timestamp unchanged.
             assert_eq!(
                 timestamp.add(&interval).unwrap().sub(&interval).unwrap(),
                 timestamp,
