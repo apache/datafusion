@@ -1471,6 +1471,13 @@ mod tests {
                     if let Some(s) = stats {
                         builder = builder.set_statistics(s);
                     }
+                    if dictionary_page_offset.is_some() {
+                        builder = builder.set_page_encoding_stats_mask(
+                            parquet::basic::EncodingMask::new_from_encodings(
+                                [parquet::basic::Encoding::RLE_DICTIONARY].iter(),
+                            ),
+                        );
+                    }
                     builder
                         .set_num_values(num_rows)
                         .set_dictionary_page_offset(dictionary_page_offset)

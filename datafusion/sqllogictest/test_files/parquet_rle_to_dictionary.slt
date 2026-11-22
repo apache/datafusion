@@ -212,6 +212,22 @@ Dictionary(Int32, Utf8)
 statement ok
 DROP TABLE threshold_declared;
 
+# parquet-mr format v1 writes PLAIN_DICTIONARY data pages; they count as
+# dictionary encoded. The file has no NDV, so its 1000 rows are the estimate.
+statement ok
+set datafusion.execution.parquet.dictionary_read_max_distinct_values = 1000;
+
+statement ok
+CREATE EXTERNAL TABLE threshold_plain_dictionary STORED AS PARQUET LOCATION '../../parquet-testing/data/plain-dict-uncompressed-checksum.parquet';
+
+query T
+SELECT DISTINCT arrow_typeof(binary_field) FROM threshold_plain_dictionary;
+----
+Dictionary(Int32, Binary)
+
+statement ok
+DROP TABLE threshold_plain_dictionary;
+
 statement ok
 reset datafusion.execution.parquet.write_row_group_number_distinct_values;
 

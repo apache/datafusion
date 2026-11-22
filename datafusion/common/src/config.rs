@@ -1461,6 +1461,9 @@ config_namespace! {
         /// (reading) If set, promote top-level plain string and binary columns to
         /// dictionaries when every data page is dictionary encoded and the
         /// per-file sum of row-group cardinality upper bounds is within this cap.
+        /// Files without page encoding statistics, such as those written by
+        /// parquet-rs before 55.0.0 (DataFusion 46 and earlier) or DuckDB 1.1, are
+        /// not promoted.
         /// Missing NDVs use the non-null row count when available and the row count
         /// otherwise. Values repeated across row groups may be counted more than once.
         /// The cap does not demote a dictionary declared by the same file; mixed
