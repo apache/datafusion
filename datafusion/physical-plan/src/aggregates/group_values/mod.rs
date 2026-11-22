@@ -36,6 +36,10 @@ pub(crate) use metrics::{
     GroupByMetrics, aggregate_sub_metrics,
 };
 
+/// Group id that [`GroupValues::lookup`] writes for a row whose key is not
+/// stored.
+pub const MISSING_GROUP: usize = usize::MAX;
+
 /// Stores the group values during hash aggregation.
 ///
 /// # Background
@@ -83,6 +87,17 @@ pub trait GroupValues: Send {
     /// assigned. If a row has a new value, the next available group id is
     /// assigned.
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()>;
+
+    /// Calculates the group id for each input row of `cols` like
+    /// [`Self::intern`], but never stores a new key.
+    ///
+    /// A row whose key is not stored gets [`MISSING_GROUP`]. The stored keys,
+    /// their group ids and [`Self::len`] are unchanged.
+    ///
+    /// The default returns a not implemented error.
+    fn lookup(&mut self, _cols: &[ArrayRef], _groups: &mut Vec<usize>) -> Result<()> {
+        not_impl_err!("GroupValues::lookup is not implemented")
+    }
 
     /// Returns the number of bytes of memory used by this [`GroupValues`].
     ///

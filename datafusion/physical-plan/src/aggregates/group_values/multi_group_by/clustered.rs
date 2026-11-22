@@ -525,6 +525,7 @@ mod tests {
             hashed.intern(&batch, &mut expected)?;
             assert_eq!(actual, [group_id]);
             assert_eq!(actual, expected);
+            assert!(clustered.lookup(&batch, &mut actual).is_err());
         }
         let values = clustered.emit(EmitTo::All)?;
         assert_eq!(values, hashed.emit(EmitTo::All)?);

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{GroupValues, MISSING_GROUP};
 use arrow::array::{Array, ArrayRef};
 use datafusion_expr::{EmitTo, GroupSelection};
 use datafusion_physical_expr::binary_map::OutputType;
@@ -62,6 +62,19 @@ impl GroupValues for GroupValuesBytesView {
 
         // ensure we assigned a group to for each row
         assert_eq!(groups.len(), arr.len());
+        Ok(())
+    }
+
+    fn lookup(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+    ) -> datafusion_common::Result<()> {
+        assert_eq!(cols.len(), 1);
+        groups.clear();
+        self.map.find(&cols[0], |group_idx| {
+            groups.push(group_idx.unwrap_or(MISSING_GROUP));
+        });
         Ok(())
     }
 
@@ -200,6 +213,14 @@ mod tests {
         group_values
             .intern(&[Arc::clone(&values)], &mut groups)
             .unwrap();
+        assert_eq!(group_values.len(), 10);
+        let probe: ArrayRef = Arc::new(StringViewArray::from(vec![
+            Some("group value number 3"),
+            Some("not stored"),
+            None,
+        ]));
+        group_values.lookup(&[probe], &mut groups).unwrap();
+        assert_eq!(groups, vec![3, MISSING_GROUP, MISSING_GROUP]);
         assert_eq!(group_values.len(), 10);
 
         group_values.clear_shrink(0);

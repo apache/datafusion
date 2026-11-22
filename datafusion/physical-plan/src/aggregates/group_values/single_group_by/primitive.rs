@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{GroupValues, MISSING_GROUP};
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
@@ -115,16 +115,22 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
     }
 }
 
-impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
+impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T>
 where
     T::Native: HashValue,
 {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    /// [`GroupValues::intern`] if `INSERT`, else [`GroupValues::lookup`].
+    fn probe<const INSERT: bool>(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+    ) -> Result<()> {
         assert_eq!(cols.len(), 1);
         groups.clear();
 
         for v in cols[0].as_primitive::<T>() {
             let group_id = match v {
+                None if !INSERT => self.null_group.unwrap_or(MISSING_GROUP),
                 None => *self.null_group.get_or_insert_with(|| {
                     let group_id = self.values.len();
                     self.values.push(Default::default());
@@ -137,21 +143,23 @@ where
                     let key = key.normalize_key();
                     let state = &self.random_state;
                     let hash = key.hash(state);
-                    let insert = self.map.entry(
-                        hash,
-                        |&(g, h)| unsafe {
-                            hash == h && self.values.get_unchecked(g).is_eq(key)
-                        },
-                        |&(_, h)| h,
-                    );
+                    let values = &self.values;
+                    let eq = |&(g, h): &(usize, u64)| unsafe {
+                        hash == h && values.get_unchecked(g).is_eq(key)
+                    };
 
-                    match insert {
-                        hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
-                        hashbrown::hash_table::Entry::Vacant(v) => {
-                            let g = self.values.len();
-                            v.insert((g, hash));
-                            self.values.push(key);
-                            g
+                    if !INSERT {
+                        // `entry` may grow the table even if nothing is inserted.
+                        self.map.find(hash, eq).map_or(MISSING_GROUP, |&(g, _)| g)
+                    } else {
+                        match self.map.entry(hash, eq, |&(_, h)| h) {
+                            hashbrown::hash_table::Entry::Occupied(o) => o.get().0,
+                            hashbrown::hash_table::Entry::Vacant(v) => {
+                                let g = self.values.len();
+                                v.insert((g, hash));
+                                self.values.push(key);
+                                g
+                            }
                         }
                     }
                 }
@@ -159,6 +167,19 @@ where
             groups.push(group_id)
         }
         Ok(())
+    }
+}
+
+impl<T: ArrowPrimitiveType> GroupValues for GroupValuesPrimitive<T>
+where
+    T::Native: HashValue,
+{
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+        self.probe::<true>(cols, groups)
+    }
+
+    fn lookup(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+        self.probe::<false>(cols, groups)
     }
 
     fn size(&self) -> usize {
@@ -413,8 +434,15 @@ mod tests {
         let null_group = groups[1];
         assert_eq!(null_group, 1);
 
+        let probe: ArrayRef = Arc::new(Int32Array::from(vec![Some(2), None, Some(5)]));
+        gv.lookup(std::slice::from_ref(&probe), &mut groups)?;
+        assert_eq!(groups, vec![2, 1, MISSING_GROUP]);
+        assert_eq!(gv.len(), 3);
+
         // Clear and shrink
         gv.clear_shrink(0);
+        gv.lookup(&[probe], &mut groups)?;
+        assert_eq!(groups, vec![MISSING_GROUP; 3]);
 
         let arr: ArrayRef = Arc::new(Int32Array::from(vec![None::<i32>]));
         let mut groups = vec![];
