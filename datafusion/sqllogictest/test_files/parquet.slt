@@ -550,6 +550,65 @@ physical_plan
 statement ok
 drop table binary_as_string_both;
 
+## Read nested binary fields through a table schema that declares them as
+## strings (https://github.com/apache/datafusion/issues/27065)
+
+query I
+COPY (
+  SELECT
+    [X'6F6E65', X'74776F'] AS list_col,
+    named_struct('value', X'7468726565') AS struct_col
+)
+TO 'test_files/scratch/parquet/nested_binary_as_string/valid.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (
+  SELECT
+    [X'6F6E65', X'FF'] AS list_col,
+    named_struct('value', X'FF') AS struct_col
+)
+TO 'test_files/scratch/parquet/nested_binary_as_string/invalid.parquet'
+STORED AS PARQUET;
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE nested_binary_as_string (
+  list_col VARCHAR[],
+  struct_col STRUCT<value VARCHAR>
+)
+STORED AS PARQUET LOCATION 'test_files/scratch/parquet/nested_binary_as_string/valid.parquet';
+
+# NB the data is read and displayed as strings
+query ??TT
+SELECT list_col, struct_col, arrow_typeof(list_col), arrow_typeof(struct_col)
+FROM nested_binary_as_string;
+----
+[one, two] {value: three} List(Utf8View) Struct("value": Utf8View)
+
+statement ok
+CREATE EXTERNAL TABLE nested_binary_as_string_invalid (
+  list_col VARCHAR[],
+  struct_col STRUCT<value VARCHAR>
+)
+STORED AS PARQUET LOCATION 'test_files/scratch/parquet/nested_binary_as_string/invalid.parquet';
+
+# Invalid UTF-8 is an error, not an invalid string array
+query error Encountered non UTF-8 data
+SELECT list_col FROM nested_binary_as_string_invalid;
+
+query error Encountered non UTF-8 data
+SELECT struct_col FROM nested_binary_as_string_invalid;
+
+statement ok
+DROP TABLE nested_binary_as_string;
+
+statement ok
+DROP TABLE nested_binary_as_string_invalid;
+
 # Read a parquet file with binary data in a FixedSizeBinary column
 
 # by default, the data is read as binary
