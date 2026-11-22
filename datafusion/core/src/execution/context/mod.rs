@@ -1899,25 +1899,14 @@ impl SessionContext {
 
     /// Create a [`DataFrame`] from named Arrow arrays.
     ///
-    /// Each `(name, array)` pair becomes one column. The field's nullability
-    /// is derived from the array: a column is non-nullable when its array is
-    /// guaranteed to contain no nulls (see [`Array::is_nullable`]), which lets
-    /// the optimizer simplify expressions such as `col IS NULL` on it.
+    /// Each `(name, array)` pair becomes one column. A field is nullable only
+    /// when its array may contain nulls (see [`Array::is_nullable`]).
     ///
-    /// The arrays are wrapped in a single [`RecordBatch`] and read through
-    /// [`Self::read_batch`], so the returned `DataFrame` runs in this session
-    /// and sees its registered functions, tables, configuration and runtime,
-    /// exactly like a `DataFrame` created with [`Self::read_batch`].
-    ///
-    /// The session state is captured when the `DataFrame` is created: functions
-    /// and configuration registered later are not visible to it, while tables
-    /// and runtime state shared through the catalog and runtime are.
-    ///
-    /// Returns an error if `columns` is empty or if the arrays have different
+    /// Returns an error if `columns` is empty or the arrays have different
     /// lengths.
     ///
     /// See also the [`dataframe!`] macro for building a `DataFrame` from
-    /// literal values without an existing `SessionContext`.
+    /// literal values.
     ///
     /// [`Array::is_nullable`]: arrow::array::Array::is_nullable
     /// [`dataframe!`]: macro@crate::dataframe
