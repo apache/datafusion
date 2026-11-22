@@ -1,22 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Simple iterator over batches for use in testing
 
+use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics, common,
@@ -35,9 +23,10 @@ use std::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use futures::Stream;
 use tokio::sync::Barrier;
@@ -124,6 +113,9 @@ pub struct MockExec {
     /// if true (the default), sends data using a separate task to ensure the
     /// batches are not available without this stream yielding first
     use_task: bool,
+    /// if true, report unknown statistics instead of deriving them from
+    /// `data` (which propagates any planted errors at planning time)
+    unknown_statistics: bool,
     cache: Arc<PlanProperties>,
 }
 
@@ -141,6 +133,7 @@ impl MockExec {
             data,
             schema,
             use_task: true,
+            unknown_statistics: false,
             cache: Arc::new(cache),
         }
     }
@@ -150,6 +143,17 @@ impl MockExec {
     /// not immediately ready
     pub fn with_use_task(mut self, use_task: bool) -> Self {
         self.use_task = use_task;
+        self
+    }
+
+    /// Report unknown statistics rather than computing them from `data`.
+    ///
+    /// By default statistics are derived from `data`, which propagates any
+    /// planted errors when statistics are requested during planning (for
+    /// example when a parent node computes its properties). Use this when a
+    /// planted error should only surface at execution time.
+    pub fn with_unknown_statistics(mut self) -> Self {
+        self.unknown_statistics = true;
         self
     }
 
@@ -195,11 +199,29 @@ impl ExecutionPlan for MockExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     /// Returns a stream which yields data
@@ -248,13 +270,14 @@ impl ExecutionPlan for MockExec {
         }
     }
 
-    // Panics if one of the batches is an error
+    // Errors if one of the batches is an error, unless
+    // `with_unknown_statistics` was used
     fn statistics_from_inputs(
         &self,
         _input_stats: &[Arc<Statistics>],
         args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
-        if args.partition().is_some() {
+        if self.unknown_statistics || args.partition().is_some() {
             return Ok(Arc::new(Statistics::new_unknown(&self.schema)));
         }
         let data: Result<Vec<_>> = self
@@ -295,6 +318,9 @@ pub struct BarrierExec {
     /// all streams wait on this barrier to produce
     start_data_barrier: Option<Arc<Barrier>>,
 
+    /// each stream waits on this barrier before sending each batch
+    batch_barrier: Option<Arc<Barrier>>,
+
     /// the stream wait for this to return Poll::Ready(None)
     finish_barrier: Option<Arc<(Barrier, AtomicUsize)>>,
 
@@ -313,6 +339,7 @@ impl BarrierExec {
             data,
             schema,
             start_data_barrier: barrier,
+            batch_barrier: None,
             cache: Arc::new(cache),
             finish_barrier: None,
             log: true,
@@ -326,6 +353,30 @@ impl BarrierExec {
 
     pub fn without_start_barrier(mut self) -> Self {
         self.start_data_barrier = None;
+        self
+    }
+
+    /// Wait for [`Self::wait_batch`] before sending each batch.
+    pub fn with_batch_barrier(mut self) -> Self {
+        self.batch_barrier = Some(Arc::new(Barrier::new(self.data.len() + 1)));
+        self
+    }
+
+    /// Release the next batch in each partition.
+    pub async fn wait_batch(&self) {
+        self.batch_barrier
+            .as_ref()
+            .expect("Must only be called when having a batch barrier")
+            .wait()
+            .await;
+    }
+
+    /// Declare the equivalence properties of the test data.
+    pub fn with_equivalence_properties(
+        mut self,
+        properties: EquivalenceProperties,
+    ) -> Self {
+        self.cache = Arc::new(self.cache.as_ref().clone().with_eq_properties(properties));
         self
     }
 
@@ -425,11 +476,29 @@ impl ExecutionPlan for BarrierExec {
         unimplemented!()
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!()
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     /// Returns a stream which yields data
@@ -445,6 +514,7 @@ impl ExecutionPlan for BarrierExec {
         // task simply sends data in order after barrier is reached
         let data = self.data[partition].clone();
         let start_barrier = self.start_data_barrier.as_ref().map(Arc::clone);
+        let batch_barrier = self.batch_barrier.as_ref().map(Arc::clone);
         let finish_barrier = self.finish_barrier.as_ref().map(Arc::clone);
         let log = self.log;
         let tx = builder.tx();
@@ -456,6 +526,9 @@ impl ExecutionPlan for BarrierExec {
                 barrier.wait().await;
             }
             for batch in data {
+                if let Some(barrier) = &batch_barrier {
+                    barrier.wait().await;
+                }
                 if log {
                     println!("Partition {partition} sending batch");
                 }
@@ -561,11 +634,29 @@ impl ExecutionPlan for ErrorExec {
         unimplemented!()
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!()
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     /// Returns a stream which yields data
@@ -582,6 +673,10 @@ impl ExecutionPlan for ErrorExec {
 #[derive(Debug, Clone)]
 pub struct StatisticsExec {
     stats: Statistics,
+    /// Per-partition statistics. `None` means they are not modeled: a
+    /// request for a specific partition then returns
+    /// [`Statistics::new_unknown`].
+    partition_statistics: Option<Vec<Statistics>>,
     schema: Arc<Schema>,
     cache: Arc<PlanProperties>,
 }
@@ -592,19 +687,44 @@ impl StatisticsExec {
             schema.fields().len(),
             "if defined, the column statistics vector length should be the number of fields"
         );
-        let cache = Self::compute_properties(Arc::new(schema.clone()));
+        let cache = Self::compute_properties(Arc::new(schema.clone()), 2);
         Self {
             stats,
+            partition_statistics: None,
             schema: Arc::new(schema),
             cache: Arc::new(cache),
         }
     }
 
+    /// Sets the per-partition statistics, in partition order.
+    ///
+    /// The plan's partition count becomes `partition_statistics.len()`. Each
+    /// entry's column statistics length must match the schema, like the
+    /// overall statistics passed to [`Self::new`].
+    pub fn with_partition_statistics(
+        mut self,
+        partition_statistics: Vec<Statistics>,
+    ) -> Self {
+        for stats in &partition_statistics {
+            assert_eq!(
+                stats.column_statistics.len(),
+                self.schema.fields().len(),
+                "if defined, the column statistics vector length should be the number of fields"
+            );
+        }
+        self.cache = Arc::new(Self::compute_properties(
+            Arc::clone(&self.schema),
+            partition_statistics.len(),
+        ));
+        self.partition_statistics = Some(partition_statistics);
+        self
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
+    fn compute_properties(schema: SchemaRef, partition_count: usize) -> PlanProperties {
         PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(2),
+            Partitioning::UnknownPartitioning(partition_count),
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
@@ -647,11 +767,29 @@ impl ExecutionPlan for StatisticsExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -667,10 +805,20 @@ impl ExecutionPlan for StatisticsExec {
         _input_stats: &[Arc<Statistics>],
         args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
-        Ok(Arc::new(if args.partition().is_some() {
-            Statistics::new_unknown(&self.schema)
-        } else {
-            self.stats.clone()
+        Ok(Arc::new(match args.partition() {
+            Some(idx) => match &self.partition_statistics {
+                Some(partition_statistics) => match partition_statistics.get(idx) {
+                    Some(stats) => stats.clone(),
+                    None => {
+                        return internal_err!(
+                            "Invalid partition index: {idx}, the partition count is {}",
+                            partition_statistics.len()
+                        );
+                    }
+                },
+                None => Statistics::new_unknown(&self.schema),
+            },
+            None => self.stats.clone(),
         }))
     }
 }
@@ -727,7 +875,7 @@ impl DisplayAs for BlockingExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "BlockingExec",)
+                write!(f, "BlockingExec")
             }
             DisplayFormatType::TreeRender => {
                 // TODO: collect info
@@ -751,11 +899,29 @@ impl ExecutionPlan for BlockingExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         internal_err!("Children cannot be replaced in {self:?}")
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -869,7 +1035,7 @@ impl DisplayAs for PanicExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "PanicExec",)
+                write!(f, "PanicExec")
             }
             DisplayFormatType::TreeRender => {
                 // TODO: collect info
@@ -893,11 +1059,29 @@ impl ExecutionPlan for PanicExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         internal_err!("Children cannot be replaced in {:?}", self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(

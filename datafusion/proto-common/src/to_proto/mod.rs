@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,7 +10,8 @@ use crate::protobuf_common::{
     EmptyMessage, arrow_type::ArrowTypeEnum, scalar_value::Value,
 };
 use arrow::array::{ArrayRef, RecordBatch};
-use arrow::csv::{QuoteStyle, WriterBuilder};
+use arrow::csv::QuoteStyle;
+use arrow::csv::writer::Terminator;
 use arrow::datatypes::{
     DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
     SchemaRef, TimeUnit, UnionMode,
@@ -99,7 +87,7 @@ impl TryFrom<&Field> for protobuf::Field {
             arrow_type: Some(Box::new(arrow_type)),
             nullable: field.is_nullable(),
             children: Vec::new(),
-            metadata: field.metadata().clone(),
+            metadata: field.metadata().into(),
         })
     }
 }
@@ -115,7 +103,7 @@ impl TryFrom<&DataType> for protobuf::ArrowType {
     }
 }
 
-impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
+impl TryFrom<&DataType> for ArrowTypeEnum {
     type Error = Error;
 
     fn try_from(val: &DataType) -> Result<Self, Self::Error> {
@@ -247,6 +235,7 @@ impl From<Column> for protobuf::Column {
         Self {
             relation: c.relation.map(|relation| protobuf::ColumnRelation {
                 relation: relation.to_string(),
+                parts: relation.to_vec(),
             }),
             name: c.name,
         }
@@ -265,7 +254,7 @@ impl TryFrom<&Schema> for protobuf::Schema {
     fn try_from(schema: &Schema) -> Result<Self, Self::Error> {
         Ok(Self {
             columns: convert_arc_fields_to_proto_fields(schema.fields())?,
-            metadata: schema.metadata.clone(),
+            metadata: schema.metadata().into(),
         })
     }
 }
@@ -276,7 +265,7 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
     fn try_from(schema: SchemaRef) -> Result<Self, Self::Error> {
         Ok(Self {
             columns: convert_arc_fields_to_proto_fields(schema.fields())?,
-            metadata: schema.metadata.clone(),
+            metadata: schema.metadata().into(),
         })
     }
 }
@@ -292,13 +281,14 @@ impl TryFrom<&DFSchema> for protobuf::DfSchema {
                     field: Some(field.as_ref().try_into()?),
                     qualifier: qualifier.map(|r| protobuf::ColumnRelation {
                         relation: r.to_string(),
+                        parts: r.to_vec(),
                     }),
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
         Ok(Self {
             columns,
-            metadata: s.metadata().clone(),
+            metadata: s.metadata().into(),
         })
     }
 }
@@ -439,9 +429,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     })
                 }
                 None => Ok(protobuf::ScalarValue {
-                    value: Some(protobuf::scalar_value::Value::NullValue(
-                        (&data_type).try_into()?,
-                    )),
+                    value: Some(Value::NullValue((&data_type).try_into()?)),
                 }),
             },
             ScalarValue::Decimal64(val, p, s) => match *val {
@@ -457,9 +445,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     })
                 }
                 None => Ok(protobuf::ScalarValue {
-                    value: Some(protobuf::scalar_value::Value::NullValue(
-                        (&data_type).try_into()?,
-                    )),
+                    value: Some(Value::NullValue((&data_type).try_into()?)),
                 }),
             },
             ScalarValue::Decimal128(val, p, s) => match *val {
@@ -475,9 +461,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     })
                 }
                 None => Ok(protobuf::ScalarValue {
-                    value: Some(protobuf::scalar_value::Value::NullValue(
-                        (&data_type).try_into()?,
-                    )),
+                    value: Some(Value::NullValue((&data_type).try_into()?)),
                 }),
             },
             ScalarValue::Decimal256(val, p, s) => match *val {
@@ -493,9 +477,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     })
                 }
                 None => Ok(protobuf::ScalarValue {
-                    value: Some(protobuf::scalar_value::Value::NullValue(
-                        (&data_type).try_into()?,
-                    )),
+                    value: Some(Value::NullValue((&data_type).try_into()?)),
                 }),
             },
             ScalarValue::Date64(val) => {
@@ -788,8 +770,8 @@ impl From<&Precision<usize>> for protobuf::Precision {
     }
 }
 
-impl From<&Precision<datafusion_common::ScalarValue>> for protobuf::Precision {
-    fn from(s: &Precision<datafusion_common::ScalarValue>) -> protobuf::Precision {
+impl From<&Precision<ScalarValue>> for protobuf::Precision {
+    fn from(s: &Precision<ScalarValue>) -> protobuf::Precision {
         match s {
             Precision::Exact(val) => protobuf::Precision {
                 precision_info: protobuf::PrecisionInfo::Exact.into(),
@@ -880,10 +862,37 @@ impl TryFrom<&CsvWriterOptions> for protobuf::CsvWriterOptions {
     type Error = DataFusionError;
 
     fn try_from(opts: &CsvWriterOptions) -> datafusion_common::Result<Self, Self::Error> {
-        Ok(csv_writer_options_to_proto(
-            &opts.writer_options,
-            &opts.compression,
-        ))
+        let CsvWriterOptions {
+            writer_options,
+            compression,
+            compression_level,
+        } = opts;
+        let compression: protobuf::CompressionTypeVariant = compression.into();
+        let quote_style: protobuf::CsvQuoteStyle = writer_options.quote_style().into();
+        let terminator = match writer_options.line_terminator() {
+            Terminator::CRLF => b"\r\n".to_vec(),
+            Terminator::Any(byte) => vec![*byte],
+        };
+
+        Ok(protobuf::CsvWriterOptions {
+            compression: compression.into(),
+            delimiter: (writer_options.delimiter() as char).to_string(),
+            has_header: writer_options.header(),
+            date_format: writer_options.date_format().map(str::to_owned),
+            datetime_format: writer_options.datetime_format().map(str::to_owned),
+            timestamp_format: writer_options.timestamp_format().map(str::to_owned),
+            time_format: writer_options.time_format().map(str::to_owned),
+            null_value: writer_options.null().to_owned(),
+            quote: (writer_options.quote() as char).to_string(),
+            escape: (writer_options.escape() as char).to_string(),
+            double_quote: writer_options.double_quote(),
+            quote_style: quote_style.into(),
+            ignore_leading_whitespace: writer_options.ignore_leading_whitespace(),
+            ignore_trailing_whitespace: writer_options.ignore_trailing_whitespace(),
+            compression_level: *compression_level,
+            timestamp_tz_format: writer_options.timestamp_tz_format().map(str::to_owned),
+            terminator,
+        })
     }
 }
 
@@ -893,9 +902,16 @@ impl TryFrom<&JsonWriterOptions> for protobuf::JsonWriterOptions {
     fn try_from(
         opts: &JsonWriterOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        let compression: protobuf::CompressionTypeVariant = opts.compression.into();
+        // Exhaustive destructure: new writer options must be explicitly
+        // included in the wire representation.
+        let JsonWriterOptions {
+            compression,
+            compression_level,
+        } = opts;
+        let compression: protobuf::CompressionTypeVariant = (*compression).into();
         Ok(protobuf::JsonWriterOptions {
             compression: compression.into(),
+            compression_level: *compression_level,
         })
     }
 }
@@ -912,19 +928,22 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             pushdown_filters: value.pushdown_filters,
             reorder_filters: value.reorder_filters,
             force_filter_selections: value.force_filter_selections,
+            enable_exact_reverse_scan: value.enable_exact_reverse_scan,
             data_pagesize_limit: value.data_pagesize_limit as u64,
             write_batch_size: value.write_batch_size as u64,
             writer_version: value.writer_version.to_string(),
-            compression_opt: value.compression.clone().map(protobuf::parquet_options::CompressionOpt::Compression),
+            compression_opt: value.compression.map(|v| protobuf::parquet_options::CompressionOpt::Compression(v.to_string())),
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
-            statistics_enabled_opt: value.statistics_enabled.clone().map(protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled),
+            statistics_enabled_opt: value.statistics_enabled.map(|v| protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled(v.to_string())),
             max_row_group_size: value.max_row_group_size as u64,
+            max_in_list_size: value.max_in_list_size as u64,
+            row_group_range_assignment: value.row_group_range_assignment.to_string(),
             created_by: value.created_by.clone(),
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
             statistics_truncate_length_opt: value.statistics_truncate_length.map(|v| protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v as u64)),
             data_page_row_count_limit: value.data_page_row_count_limit as u64,
-            encoding_opt: value.encoding.clone().map(protobuf::parquet_options::EncodingOpt::Encoding),
+            encoding_opt: value.encoding.map(|encoding| protobuf::parquet_options::EncodingOpt::Encoding(encoding.to_string())),
             bloom_filter_on_read: value.bloom_filter_on_read,
             bloom_filter_on_write: value.bloom_filter_on_write,
             bloom_filter_fpp_opt: value.bloom_filter_fpp.map(protobuf::parquet_options::BloomFilterFppOpt::BloomFilterFpp),
@@ -935,11 +954,13 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
             skip_arrow_metadata: value.skip_arrow_metadata,
-            coerce_int96_opt: value.coerce_int96.clone().map(protobuf::parquet_options::CoerceInt96Opt::CoerceInt96),
-            coerce_int96_tz_opt: value.coerce_int96_tz.clone().map(protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz),
+            write_row_group_number_distinct_values: value.write_row_group_number_distinct_values,
+            coerce_int96_opt: value.coerce_int96.map(|v| protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v.to_string())),
+            coerce_int96_tz_opt: value.coerce_int96_tz.as_ref().map(|v| protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v.to_string())),
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
             max_row_group_bytes_opt: value.max_row_group_bytes.map(|v| protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v.get() as u64)),
             content_defined_chunking: Some((&value.content_defined_chunking).into()),
+            enable_rle_to_dictionary: value.enable_rle_to_dictionary,
         })
     }
 }
@@ -1056,6 +1077,9 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             ignore_trailing_whitespace: opts
                 .ignore_trailing_whitespace
                 .map_or_else(Vec::new, |h| vec![h as u8]),
+            match_columns_by_header: opts
+                .match_columns_by_header
+                .map_or_else(Vec::new, |h| vec![h as u8]),
         })
     }
 }
@@ -1076,16 +1100,14 @@ impl TryFrom<&JsonOptions> for protobuf::JsonOptions {
 
 /// Creates a scalar protobuf value from an optional value (T), and
 /// encoding None as the appropriate datatype
-fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
+fn create_proto_scalar<I, T: FnOnce(&I) -> Value>(
     v: Option<&I>,
     null_arrow_type: &DataType,
     constructor: T,
 ) -> Result<protobuf::ScalarValue, Error> {
     let value = v
         .map(constructor)
-        .unwrap_or(protobuf::scalar_value::Value::NullValue(
-            null_arrow_type.try_into()?,
-        ));
+        .unwrap_or(Value::NullValue(null_arrow_type.try_into()?));
 
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
@@ -1141,35 +1163,25 @@ fn encode_scalar_nested_value(
 
     match val {
         ScalarValue::List(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::ListValue(scalar_list_value)),
+            value: Some(Value::ListValue(scalar_list_value)),
         }),
         ScalarValue::LargeList(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::LargeListValue(
-                scalar_list_value,
-            )),
+            value: Some(Value::LargeListValue(scalar_list_value)),
         }),
         ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
-                scalar_list_value,
-            )),
+            value: Some(Value::FixedSizeListValue(scalar_list_value)),
         }),
         ScalarValue::ListView(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::ListViewValue(
-                scalar_list_value,
-            )),
+            value: Some(Value::ListViewValue(scalar_list_value)),
         }),
         ScalarValue::LargeListView(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::LargeListViewValue(
-                scalar_list_value,
-            )),
+            value: Some(Value::LargeListViewValue(scalar_list_value)),
         }),
         ScalarValue::Struct(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::StructValue(
-                scalar_list_value,
-            )),
+            value: Some(Value::StructValue(scalar_list_value)),
         }),
         ScalarValue::Map(_) => Ok(protobuf::ScalarValue {
-            value: Some(protobuf::scalar_value::Value::MapValue(scalar_list_value)),
+            value: Some(Value::MapValue(scalar_list_value)),
         }),
         _ => unreachable!(),
     }
@@ -1186,28 +1198,4 @@ where
         .into_iter()
         .map(|field| field.as_ref().try_into())
         .collect::<Result<Vec<_>, Error>>()
-}
-
-pub(crate) fn csv_writer_options_to_proto(
-    csv_options: &WriterBuilder,
-    compression: &CompressionTypeVariant,
-) -> protobuf::CsvWriterOptions {
-    let compression: protobuf::CompressionTypeVariant = compression.into();
-    let quote_style: protobuf::CsvQuoteStyle = csv_options.quote_style().into();
-    protobuf::CsvWriterOptions {
-        compression: compression.into(),
-        delimiter: (csv_options.delimiter() as char).to_string(),
-        has_header: csv_options.header(),
-        date_format: csv_options.date_format().unwrap_or("").to_owned(),
-        datetime_format: csv_options.datetime_format().unwrap_or("").to_owned(),
-        timestamp_format: csv_options.timestamp_format().unwrap_or("").to_owned(),
-        time_format: csv_options.time_format().unwrap_or("").to_owned(),
-        null_value: csv_options.null().to_owned(),
-        quote: (csv_options.quote() as char).to_string(),
-        escape: (csv_options.escape() as char).to_string(),
-        double_quote: csv_options.double_quote(),
-        quote_style: quote_style.into(),
-        ignore_leading_whitespace: csv_options.ignore_leading_whitespace(),
-        ignore_trailing_whitespace: csv_options.ignore_trailing_whitespace(),
-    }
 }

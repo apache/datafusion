@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -668,6 +655,75 @@ fn optimize_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
     let config = OptimizerContext::new().with_skip_failing_rules(false);
     let optimizer = Optimizer::new();
     optimizer.optimize(plan, &config, observe)
+}
+
+#[test]
+fn limit_offset_parameters_keep_type_after_optimization() -> Result<()> {
+    for sql in [
+        "SELECT 20 AS value LIMIT $1",
+        "SELECT 20 AS value OFFSET $1",
+    ] {
+        let optimized = test_sql(sql)?;
+        assert_eq!(
+            optimized.get_parameter_types()?,
+            HashMap::from([("$1".to_string(), Some(DataType::Int64))]),
+            "{sql}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn limit_offset_parameters_leave_cast_inputs_unresolved_after_optimization() -> Result<()>
+{
+    for sql in [
+        "SELECT $1 AS value",
+        "SELECT $1 AS value LIMIT CAST($1 AS INT)",
+        "SELECT $1 AS value LIMIT CAST($1 AS BIGINT)",
+        "SELECT $1 AS value FROM (VALUES (1), (2)) AS t(v) OFFSET CAST($1 AS BIGINT)",
+        "SELECT $1 AS value FROM (SELECT 1 LIMIT CAST($1 AS BIGINT)) AS t",
+    ] {
+        let optimized = test_sql(sql)?;
+        assert_eq!(
+            optimized.get_parameter_types()?,
+            HashMap::from([("$1".to_string(), None)]),
+            "{sql}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn limit_parameter_binding_with_inferred_type() -> Result<()> {
+    let statements = Parser::parse_sql(
+        &GenericDialect {},
+        "SELECT $1 + CAST(1 AS INT) AS value LIMIT $1",
+    )?;
+    let context_provider = MyContextProvider::default();
+    let plan =
+        SqlToRel::new(&context_provider).sql_statement_to_plan(statements[0].clone())?;
+    let analyzed =
+        Analyzer::new().execute_and_check(plan, &ConfigOptions::default(), |_, _| {})?;
+    let bound = analyzed.with_param_values(vec![ScalarValue::Int32(Some(1))])?;
+    let optimized = optimize_plan(bound)?;
+    let limit = match &optimized {
+        LogicalPlan::Limit(limit) => limit,
+        LogicalPlan::Projection(projection) => {
+            let LogicalPlan::Limit(limit) = projection.input.as_ref() else {
+                panic!("expected LIMIT under projection, got {optimized:?}");
+            };
+            limit
+        }
+        _ => panic!("expected LIMIT plan, got {optimized:?}"),
+    };
+    assert!(
+        matches!(
+            limit.get_fetch_type()?,
+            datafusion_expr::FetchType::Literal(Some(1))
+        ),
+        "unexpected optimized LIMIT: {optimized}"
+    );
+    Ok(())
 }
 
 /// Extension node that does NOT implement `necessary_children_exprs`.

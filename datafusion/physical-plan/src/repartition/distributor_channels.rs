@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Special channel construction to distribute data from various inputs into N outputs
 //! minimizing buffering but preventing deadlocks when repartitioning
@@ -40,7 +27,6 @@
 use std::{
     collections::VecDeque,
     future::Future,
-    ops::DerefMut,
     pin::Pin,
     sync::{
         Arc,
@@ -162,7 +148,7 @@ impl<T> Drop for DistributionSender<T> {
             // During the shutdown of a empty channel, both the sender and the receiver side will be dropped. However we
             // only want to decrement the "empty channels" counter once.
             //
-            // We are within a critical section here, so we we can safely assume that either the last sender or the
+            // We are within a critical section here, so we can safely assume that either the last sender or the
             // receiver (there's only one) will be dropped first.
             //
             // If the last sender is dropped first, `state.data` will still exists and the sender side decrements the
@@ -173,12 +159,7 @@ impl<T> Drop for DistributionSender<T> {
             // senders and it will decrement the `empty_channels` counter. It will also set `data` to `None`. The sender
             // side will then see that `data` is `None` and can therefore infer that the receiver end was dropped, and
             // hence it MUST NOT decrement the `empty_channels` counter.
-            if state
-                .data
-                .as_ref()
-                .map(|data| data.is_empty())
-                .unwrap_or_default()
-            {
+            if state.data.as_ref().is_some_and(|data| data.is_empty()) {
                 // channel is gone, so we need to clear our signal
                 self.gate.decr_empty_channels();
             }
@@ -225,7 +206,7 @@ impl<T> Future for SendFuture<'_, T> {
             // if so, allow sender to create another
             if this.gate.empty_channels.load(Ordering::SeqCst) == 0 {
                 let mut guard = this.gate.send_wakers.lock();
-                if let Some(send_wakers) = guard.deref_mut() {
+                if let Some(send_wakers) = &mut *guard {
                     send_wakers.push((cx.waker().clone(), this.channel.id));
                     return Poll::Pending;
                 }
@@ -238,7 +219,7 @@ impl<T> Future for SendFuture<'_, T> {
                 this.gate.decr_empty_channels();
                 guard_channel_state.take_recv_wakers()
             } else {
-                Vec::with_capacity(0)
+                Vec::new()
             }
         };
 
@@ -303,7 +284,7 @@ impl<T> Future for RecvFuture<'_, T> {
         assert!(!this.rdy, "polled ready future");
 
         let mut guard_channel_state = this.channel.state.lock();
-        let channel_state = guard_channel_state.deref_mut();
+        let channel_state = &mut *guard_channel_state;
         let data = channel_state.data.as_mut().expect("not dropped yet");
 
         match data.pop_front() {
@@ -322,10 +303,10 @@ impl<T> Future for RecvFuture<'_, T> {
                         if this.gate.empty_channels.load(Ordering::SeqCst) > 0 {
                             guard.take().unwrap_or_default()
                         } else {
-                            Vec::with_capacity(0)
+                            Vec::new()
                         }
                     } else {
-                        Vec::with_capacity(0)
+                        Vec::new()
                     };
 
                     drop(guard_channel_state);
@@ -436,7 +417,7 @@ impl Gate {
         let to_wake = {
             let mut guard = self.send_wakers.lock();
 
-            if let Some(send_wakers) = guard.deref_mut() {
+            if let Some(send_wakers) = &mut *guard {
                 // `drain_filter` is unstable, so implement our own
                 let (wake, keep) =
                     send_wakers.drain(..).partition(|(_waker, id2)| id == *id2);
@@ -445,7 +426,7 @@ impl Gate {
 
                 wake
             } else {
-                Vec::with_capacity(0)
+                Vec::new()
             }
         };
 

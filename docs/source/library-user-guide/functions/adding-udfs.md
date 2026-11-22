@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
@@ -1116,6 +1103,24 @@ impl Accumulator for GeometricMean {
 }
 ```
 
+### Declaring how an Aggregate UDF treats `DISTINCT`
+
+By default DataFusion assumes an aggregate is sensitive to the `DISTINCT` modifier, which means the accumulator is expected to
+read `AccumulatorArgs::is_distinct` and deduplicate its input. Override
+[`AggregateUDFImpl::distinct_handling`] when that is not what your function does:
+
+- Return `DistinctHandling::Insensitive` when duplicates cannot change the result, that is, when merging a value the
+  accumulator has already seen is a no-op. `min`, `max`, `bool_and` and `bit_or` are all in this group. The optimizer
+  then plans `f(DISTINCT x)` as `f(x)`, which skips both the per-group hash set and the extra grouping stage that
+  `SingleDistinctToGroupBy` would otherwise introduce.
+- Return `DistinctHandling::Unsupported` when the accumulator does not implement `DISTINCT`: it does not read
+  `is_distinct`, or it rejects `DISTINCT` with an error. The planner must then deduplicate the input first or reject
+  the query. Today this is a declaration only; rejecting such queries at planning time is a follow-up change.
+- Leave the default `DistinctHandling::Sensitive` when the accumulator reads `AccumulatorArgs::is_distinct` and
+  deduplicates its input itself.
+
+Getting this wrong changes query results, so only claim `Insensitive` if your merge is genuinely idempotent.
+
 ### Registering an Aggregate UDF
 
 To register a Aggregate UDF, you need to wrap the function implementation in a [`AggregateUDF`] struct and then register
@@ -1370,6 +1375,7 @@ async fn main() -> Result<()> {
 
 [`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
+[`aggregateudfimpl::distinct_handling`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.AggregateUDFImpl.html#method.distinct_handling
 [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 
 ## Adding a Table UDF

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines the merge plan for executing partitions in parallel and then merging the results
 //! into a single partition
@@ -21,20 +8,27 @@
 use std::sync::Arc;
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+#[cfg(target_arch = "wasm32")]
+use super::stream::RecordBatchStreamAdapter;
 use super::stream::{ObservedStream, RecordBatchReceiverStream};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
+use crate::execution_plan::LimitBehavior;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{ProjectionExec, make_with_child};
 use crate::sort_pushdown::SortOrderPushdownResult;
 use crate::statistics::{ChildStats, StatisticsArgs};
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning, check_if_same_properties};
+use crate::{
+    ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, Partitioning,
+    ReplaceChildrenOptions, validate_child_count,
+};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
@@ -143,25 +137,51 @@ impl ExecutionPlan for CoalescePartitionsExec {
         vec![false]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        let mut plan = CoalescePartitionsExec::new(children.swap_remove(0));
-        plan.fetch = self.fetch;
-        Ok(Arc::new(plan))
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => {
+                let mut plan = CoalescePartitionsExec::new(children.swap_remove(0));
+                plan.fetch = self.fetch;
+                Ok(Arc::new(plan))
+            }
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -197,6 +217,26 @@ impl ExecutionPlan for CoalescePartitionsExec {
             }
             _ => {
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+
+                // wasm has no tokio reactor, so avoid `JoinSet::spawn`; poll
+                // input partitions cooperatively via `select_all` instead.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let elapsed_compute = baseline_metrics.elapsed_compute().clone();
+                    let _timer = elapsed_compute.timer();
+
+                    let mut streams = Vec::with_capacity(input_partitions);
+                    for i in 0..input_partitions {
+                        streams.push(self.input.execute(i, Arc::clone(&context))?);
+                    }
+                    let merged = futures::stream::select_all(streams);
+                    return Ok(Box::pin(ObservedStream::new(
+                        Box::pin(RecordBatchStreamAdapter::new(self.schema(), merged)),
+                        baseline_metrics,
+                        self.fetch,
+                    )));
+                }
+
                 // record the (very) minimal work done so that
                 // elapsed_compute is not reported as 0
                 let elapsed_compute = baseline_metrics.elapsed_compute().clone();
@@ -249,8 +289,16 @@ impl ExecutionPlan for CoalescePartitionsExec {
         true
     }
 
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Merge
+    }
+
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::Equal
+        if self.fetch.is_none() {
+            CardinalityEffect::Equal
+        } else {
+            CardinalityEffect::LowerEqual
+        }
     }
 
     /// Tries to swap `projection` with its input, which is known to be a
@@ -287,19 +335,6 @@ impl ExecutionPlan for CoalescePartitionsExec {
             metrics: self.metrics.clone(),
             cache: Arc::clone(&self.cache),
         }))
-    }
-
-    fn with_preserve_order(
-        &self,
-        preserve_order: bool,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        self.input
-            .with_preserve_order(preserve_order)
-            .and_then(|new_input| {
-                Arc::new(self.clone())
-                    .with_new_children(vec![new_input])
-                    .ok()
-            })
     }
 
     fn gather_filters_for_pushdown(
@@ -352,14 +387,29 @@ impl ExecutionPlan for CoalescePartitionsExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `CoalescePartitionsExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+            fetch,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        let fetch = fetch
+            .map(|fetch| usize_to_wire(fetch, "CoalescePartitionsExec", "fetch"))
+            .transpose()?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Merge(Box::new(
                     protobuf::CoalescePartitionsExecNode {
                         input: Some(Box::new(input)),
-                        fetch: self.fetch().map(|f| f as u32),
+                        fetch,
                     },
                 )),
             ),
@@ -380,20 +430,27 @@ impl CoalescePartitionsExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         let merge = crate::expect_plan_variant!(
             node,
             protobuf::physical_plan_node::PhysicalPlanType::Merge,
             "CoalescePartitionsExec",
         );
+        // Destructure exhaustively so that a new field on
+        // `CoalescePartitionsExecNode` is a compile error here rather than a
+        // silently dropped field.
+        let protobuf::CoalescePartitionsExecNode { input, fetch } = &**merge;
         let input = ctx.decode_required_child(
-            merge.input.as_deref(),
+            input.as_deref(),
             "CoalescePartitionsExec",
             "input",
         )?;
+        let fetch = fetch
+            .map(|f| usize_from_wire(f, "CoalescePartitionsExec", "fetch"))
+            .transpose()?;
         Ok(Arc::new(
-            CoalescePartitionsExec::new(input)
-                .with_fetch(merge.fetch.map(|f| f as usize)),
+            CoalescePartitionsExec::new(input).with_fetch(fetch),
         ))
     }
 }
@@ -411,8 +468,31 @@ mod tests {
 
     use arrow::array::RecordBatch;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr::expressions::col;
 
     use futures::FutureExt;
+
+    #[rstest::rstest]
+    #[case::single_partition(1)]
+    #[case::multiple_partitions(2)]
+    fn coalesce_clears_explicit_grouping(#[case] partitions: usize) -> Result<()> {
+        let input = test::mem_exec(partitions);
+        let grouping = col("i", &input.schema())?;
+        let input = Arc::new(
+            input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
+        );
+        assert!(
+            input
+                .properties()
+                .equivalence_properties()
+                .grouping_satisfy([Arc::clone(&grouping)])?
+        );
+        let merge = CoalescePartitionsExec::new(input);
+        let properties = merge.properties().equivalence_properties();
+        assert!(properties.geq_class().is_empty());
+        assert!(!properties.grouping_satisfy([grouping])?);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn merge() -> Result<()> {
@@ -622,5 +702,22 @@ mod tests {
         assert_eq!(row_count, 400, "Should return exactly 400 rows");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_cardinality_effect_with_fetch() {
+        let input = test::scan_partitioned(4);
+
+        let coalesce = CoalescePartitionsExec::new(Arc::clone(&input));
+        assert!(matches!(
+            coalesce.cardinality_effect(),
+            CardinalityEffect::Equal
+        ));
+
+        let coalesce = CoalescePartitionsExec::new(input).with_fetch(Some(10));
+        assert!(matches!(
+            coalesce.cardinality_effect(),
+            CardinalityEffect::LowerEqual
+        ));
     }
 }

@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Extensions List
@@ -40,12 +27,14 @@ we'll gladly set up a new repository for your extension.
 | ---------------------------- | ----------------- | --------------------------------------------------------------------------------- |
 | [DataFusion Table Providers] | [`TableProvider`] | Support for `PostgreSQL`, `MySQL`, `SQLite`, `DuckDB`, and `Flight SQL`           |
 | [DataFusion Federation]      | Framework         | Allows DataFusion to execute (part of) a query plan by a remote execution engine. |
+| [DataFusion Bloom]           | Execution layer   | Runs adaptive predicate transfer before DataFusion's native joins                 |
 | [DataFusion ORC]             | [`TableProvider`] | [Apache ORC] file format                                                          |
 | [DataFusion JSON Functions]  | Functions         | Scalar functions for querying JSON strings                                        |
 
 [`tableprovider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 [datafusion table providers]: https://github.com/datafusion-contrib/datafusion-table-providers
 [datafusion federation]: https://github.com/datafusion-contrib/datafusion-federation
+[datafusion bloom]: https://github.com/YimingQiao/datafusion-bloom
 [datafusion orc]: https://github.com/datafusion-contrib/datafusion-orc
 [apache orc]: https://orc.apache.org/
 [datafusion json functions]: https://github.com/datafusion-contrib/datafusion-functions-json

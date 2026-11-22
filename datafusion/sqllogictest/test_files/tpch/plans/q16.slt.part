@@ -1,20 +1,6 @@
-
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-
-#   http://www.apache.org/licenses/LICENSE-2.0
-
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 query TT
 explain select
@@ -58,8 +44,8 @@ logical_plan
 06)----------Projection: partsupp.ps_suppkey, part.p_brand, part.p_type, part.p_size
 07)------------Inner Join: partsupp.ps_partkey = part.p_partkey
 08)--------------TableScan: partsupp projection=[ps_partkey, ps_suppkey]
-09)--------------Filter: part.p_brand != Utf8View("Brand#45") AND part.p_size IN ([Int32(49), Int32(14), Int32(23), Int32(45), Int32(19), Int32(3), Int32(36), Int32(9)]) AND part.p_type NOT LIKE Utf8View("MEDIUM POLISHED%")
-10)----------------TableScan: part projection=[p_partkey, p_brand, p_type, p_size], partial_filters=[part.p_brand != Utf8View("Brand#45"), part.p_size IN ([Int32(49), Int32(14), Int32(23), Int32(45), Int32(19), Int32(3), Int32(36), Int32(9)]), part.p_type NOT LIKE Utf8View("MEDIUM POLISHED%")]
+09)--------------Filter: part.p_size IN ([Int32(49), Int32(14), Int32(23), Int32(45), Int32(19), Int32(3), Int32(36), Int32(9)]) AND part.p_brand != Utf8View("Brand#45") AND part.p_type NOT LIKE Utf8View("MEDIUM POLISHED%")
+10)----------------TableScan: part projection=[p_partkey, p_brand, p_type, p_size], partial_filters=[part.p_size IN ([Int32(49), Int32(14), Int32(23), Int32(45), Int32(19), Int32(3), Int32(36), Int32(9)]), part.p_brand != Utf8View("Brand#45"), part.p_type NOT LIKE Utf8View("MEDIUM POLISHED%")]
 11)----------SubqueryAlias: __correlated_sq_1
 12)------------Projection: supplier.s_suppkey
 13)--------------Filter: supplier.s_comment LIKE Utf8View("%Customer%Complaints%")
@@ -80,7 +66,7 @@ physical_plan
 13)------------------------RepartitionExec: partitioning=Hash([ps_partkey@0], 4), input_partitions=4
 14)--------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:0..2932049], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:2932049..5864098], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:5864098..8796147], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/partsupp.tbl:8796147..11728193]]}, projection=[ps_partkey, ps_suppkey], constraints=[PrimaryKey([0, 1])], file_type=csv, has_header=false
 15)------------------------RepartitionExec: partitioning=Hash([p_partkey@0], 4), input_partitions=4
-16)--------------------------FilterExec: p_brand@1 != Brand#45 AND p_size@3 IN (SET) ([49, 14, 23, 45, 19, 3, 36, 9]) AND p_type@2 NOT LIKE MEDIUM POLISHED%
+16)--------------------------FilterExec: p_size@3 IN (SET) ([49, 14, 23, 45, 19, 3, 36, 9]) AND p_brand@1 != Brand#45 AND p_type@2 NOT LIKE MEDIUM POLISHED%
 17)----------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:0..597773], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:597773..1195546], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:1195546..1793319], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/part.tbl:1793319..2391090]]}, projection=[p_partkey, p_brand, p_type, p_size], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
 18)--------------------FilterExec: s_comment@1 LIKE %Customer%Complaints%, projection=[s_suppkey@0]
 19)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1

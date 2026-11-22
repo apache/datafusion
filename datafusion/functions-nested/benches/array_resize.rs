@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{ArrayRef, Int64Array, ListArray};
 use arrow::buffer::OffsetBuffer;
@@ -79,6 +66,40 @@ fn criterion_benchmark(c: &mut Criterion) {
         &return_field,
         &config_options,
     );
+
+    bench_case(
+        &mut group,
+        "shrink_default_null_fill_500_to_10",
+        &[
+            ColumnarValue::Array(create_int64_list_array(NUM_ROWS, 500)),
+            ColumnarValue::Array(repeated_int64_array(10)),
+        ],
+        &two_arg_fields,
+        &return_field,
+        &config_options,
+    );
+
+    // Keep the visible rows and output size fixed while varying the backing
+    // child size. Slicing a ListArray retains the entire child array.
+    for backing_rows in [NUM_ROWS, NUM_ROWS * 100] {
+        let list_len = 10;
+        let array = create_int64_list_array(backing_rows, list_len)
+            .slice((backing_rows - NUM_ROWS) / 2, NUM_ROWS);
+        bench_case(
+            &mut group,
+            &format!(
+                "shrink_default_null_fill_sliced_10_to_5_backing_values_{}",
+                backing_rows * list_len
+            ),
+            &[
+                ColumnarValue::Array(array),
+                ColumnarValue::Array(repeated_int64_array(5)),
+            ],
+            &two_arg_fields,
+            &return_field,
+            &config_options,
+        );
+    }
 
     bench_case(
         &mut group,

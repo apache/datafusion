@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! # PIVOT and UNPIVOT Example
 //!
@@ -64,16 +51,16 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::record_batch::RecordBatch;
-use datafusion::prelude::*;
-use datafusion_common::{Result, ScalarValue, plan_datafusion_err};
-use datafusion_expr::{
+use datafusion::common::{Result, ScalarValue, plan_datafusion_err};
+use datafusion::logical_expr::{
     Expr, case, col, lit,
     logical_plan::builder::LogicalPlanBuilder,
     planner::{
         PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
     },
 };
-use datafusion_sql::sqlparser::ast::{NullInclusion, PivotValueSource, TableFactor};
+use datafusion::prelude::*;
+use datafusion::sql::sqlparser::ast::{NullInclusion, PivotValueSource, TableFactor};
 use insta::assert_snapshot;
 
 // ============================================================================
@@ -399,10 +386,10 @@ impl RelationPlanner for PivotUnpivotPlanner {
 fn plan_pivot(
     ctx: &mut dyn RelationPlannerContext,
     table: TableFactor,
-    aggregate_functions: &[datafusion_sql::sqlparser::ast::ExprWithAlias],
-    value_column: &[datafusion_sql::sqlparser::ast::Expr],
+    aggregate_functions: &[datafusion::sql::sqlparser::ast::ExprWithAlias],
+    value_column: &[datafusion::sql::sqlparser::ast::Expr],
     value_source: PivotValueSource,
-    alias: Option<datafusion_sql::sqlparser::ast::TableAlias>,
+    alias: Option<datafusion::sql::sqlparser::ast::TableAlias>,
 ) -> Result<RelationPlanning> {
     // Plan the input table
     let input = ctx.plan(table)?;
@@ -520,11 +507,11 @@ fn plan_pivot(
 fn plan_unpivot(
     ctx: &mut dyn RelationPlannerContext,
     table: TableFactor,
-    value: &datafusion_sql::sqlparser::ast::Expr,
-    name: datafusion_sql::sqlparser::ast::Ident,
-    columns: &[datafusion_sql::sqlparser::ast::ExprWithAlias],
+    value: &datafusion::sql::sqlparser::ast::Expr,
+    name: datafusion::sql::sqlparser::ast::Ident,
+    columns: &[datafusion::sql::sqlparser::ast::ExprWithAlias],
     null_inclusion: Option<&NullInclusion>,
-    alias: Option<datafusion_sql::sqlparser::ast::TableAlias>,
+    alias: Option<datafusion::sql::sqlparser::ast::TableAlias>,
 ) -> Result<RelationPlanning> {
     // Plan the input table
     let input = ctx.plan(table)?;

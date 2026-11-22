@@ -1,0 +1,11 @@
+name Q01
+group array_agg_distinct
+
+expect_plan AggregateExec
+
+run
+-- 1M groups, 2 rows/group, and 2 distinct values/group. `range` is end-exclusive.
+-- This is data-free so comparisons isolate grouped array_agg(DISTINCT) execution.
+SELECT value / 2 AS k, array_agg(DISTINCT value % 2) AS distinct_values
+FROM range(2000000)
+GROUP BY value / 2;

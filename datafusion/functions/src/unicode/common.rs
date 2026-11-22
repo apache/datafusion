@@ -1,25 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Common utilities for implementing unicode functions
 
+use crate::strings::{MAX_INLINE_LEN, sub_view};
 use arrow::array::{
-    Array, ArrayRef, ByteView, GenericStringArray, Int64Array, OffsetSizeTrait,
-    StringViewArray, make_view,
+    Array, ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBuffer, ScalarBuffer};
@@ -57,7 +44,13 @@ pub(crate) fn pad_data_capacity(length_array: &Int64Array) -> usize {
     length_array
         .iter()
         .flatten()
-        .fold(0, |acc, len| acc.saturating_add(len as usize))
+        // Negative lengths produce "" and lengths above i32::MAX are an error,
+        // so neither adds bytes
+        .filter(|len| (0..=i32::MAX as i64).contains(len))
+        .fold(0usize, |acc, len| acc.saturating_add(len as usize))
+        // Many in-range lengths can still add up to more than one buffer
+        // should reserve up front
+        .min(i32::MAX as usize)
 }
 
 /// A trait for `left` and `right` byte slicing operations
@@ -125,15 +118,34 @@ pub(crate) enum StringCharLen {
 /// Calculate the byte length of the substring of `n` chars from string `string`
 #[inline]
 fn left_right_byte_length(string: &str, n: i64) -> usize {
+    let abs = n.unsigned_abs().min(usize::MAX as u64) as usize;
+    let bytes = string.as_bytes();
+    // ASCII bytes are never part of a multi-byte UTF-8 sequence, so if the
+    // `abs` bytes at the relevant end of the string are ASCII, they are exactly
+    // the `abs` characters at that end. Checking only those bytes is cheaper
+    // than either a `char_indices()` scan or checking the whole string.
     match n.cmp(&0) {
-        Ordering::Less => string
-            .char_indices()
-            .nth_back((n.unsigned_abs().min(usize::MAX as u64) - 1) as usize)
-            .map(|(index, _)| index)
-            .unwrap_or(0),
         Ordering::Equal => 0,
+        // Byte offset of the `abs`-th character from the end.
+        Ordering::Less => {
+            let start = bytes.len().saturating_sub(abs);
+            if bytes[start..].is_ascii() {
+                start
+            } else {
+                string
+                    .char_indices()
+                    .nth_back(abs - 1)
+                    .map_or(0, |(index, _)| index)
+            }
+        }
+        // Byte offset of the `abs`-th character from the start.
         Ordering::Greater => {
-            byte_offset_of_char(string, n.unsigned_abs().min(usize::MAX as u64) as usize)
+            let end = abs.min(bytes.len());
+            if bytes[..end].is_ascii() {
+                end
+            } else {
+                byte_offset_of_char(string, abs)
+            }
         }
     }
 }
@@ -198,29 +210,52 @@ fn general_left_right_view<F: LeftRightSlicer>(
             let n = n_array.value(idx);
 
             let range = F::slice(string, n);
-            let result_bytes = &string.as_bytes()[range.clone()];
-            if result_bytes.len() > 12 {
+            if range.len() > MAX_INLINE_LEN {
                 has_out_of_line = true;
             }
-
-            let byte_view = ByteView::from(views[idx]);
-            let new_offset = byte_view.offset + (range.start as u32);
-            make_view(result_bytes, byte_view.buffer_index, new_offset)
+            sub_view(views[idx], string.as_bytes(), range)
         })
         .collect::<Vec<u128>>();
 
     let views = ScalarBuffer::from(new_views);
     let data_buffers = if has_out_of_line {
-        string_view_array.data_buffers().to_vec()
+        Arc::clone(string_view_array.data_buffers())
     } else {
-        vec![]
+        Arc::from([])
     };
 
     // SAFETY:
-    // - Each view is produced by `make_view` with correct bytes and offset
+    // - Each view is produced by `sub_view` from the input view and a range
+    //   within the input string, as returned by `F::slice`
+    // - `F::slice` returns ranges that start and end on char boundaries (see
+    //   `left_right_byte_length`), so every result is valid UTF-8
     // - Out-of-line views reuse the original buffer index and adjusted offset
     unsafe {
         let array = StringViewArray::new_unchecked(views, data_buffers, new_nulls);
         Ok(Arc::new(array) as ArrayRef)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::Int64Array;
+
+    use super::pad_data_capacity;
+
+    #[test]
+    fn test_pad_data_capacity() {
+        let capacity =
+            |lengths: Vec<Option<i64>>| pad_data_capacity(&Int64Array::from(lengths));
+        assert_eq!(capacity(vec![]), 0);
+        // Negative lengths produce "" and lengths above i32::MAX are an error
+        assert_eq!(capacity(vec![Some(3), None, Some(-1), Some(i64::MIN)]), 3);
+        assert_eq!(
+            capacity(vec![Some(3), Some(i32::MAX as i64 + 1), Some(i64::MAX)]),
+            3
+        );
+        assert_eq!(
+            capacity(vec![Some(i32::MAX as i64), Some(1)]),
+            i32::MAX as usize
+        );
     }
 }

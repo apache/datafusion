@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -103,10 +90,15 @@ fn build_task_ctx(pool_size: usize) -> Arc<datafusion_execution::TaskContext> {
 /// have mismatched nullability (one child's `val` is non-nullable, the other's
 /// is nullable with NULLs). A tiny FairSpillPool forces all batches to spill.
 ///
-/// UnionExec returns child streams without schema coercion, so batches from
-/// different children carry different per-field nullability into the shared
-/// SpillPool. The IPC writer must use the SpillManager's canonical (nullable)
-/// schema — not the first batch's schema — so readback batches are valid.
+/// `UnionExec` now re-stamps every child batch with its own declared (nullable)
+/// schema before they reach `RepartitionExec` (see
+/// <https://github.com/apache/datafusion/issues/15394>), so this no longer
+/// exercises mismatched-nullability batches arriving at the SpillManager via
+/// `UnionExec` specifically. It's kept as a regression test for the
+/// SpillManager fix itself: the IPC writer must use the SpillManager's
+/// canonical schema -- not the first batch's schema -- so readback batches
+/// stay valid for any caller that does hand it batches with differing
+/// nullability. See <https://github.com/apache/datafusion/issues/21292>.
 ///
 /// Otherwise, sort_batch will panic with
 /// `Column 'val' is declared as non-nullable but contains null values`

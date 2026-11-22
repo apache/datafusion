@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 <!---
@@ -153,7 +140,7 @@ array_agg(expression [ORDER BY expression])
 +-----------------------------------------------+
 > SELECT array_agg(DISTINCT column_name ORDER BY column_name) FROM table_name;
 +--------------------------------------------------------+
-| array_agg(DISTINCT column_name ORDER BY column_name)  |
+| array_agg(DISTINCT column_name ORDER BY column_name)   |
 +--------------------------------------------------------+
 | [element1, element2, element3]                         |
 +--------------------------------------------------------+
@@ -176,9 +163,9 @@ avg(expression)
 ```sql
 > SELECT avg(column_name) FROM table_name;
 +---------------------------+
-| avg(column_name)           |
+| avg(column_name)          |
 +---------------------------+
-| 42.75                      |
+| 42.75                     |
 +---------------------------+
 ```
 
@@ -239,18 +226,18 @@ bool_and(expression)
 ```sql
 > SELECT bool_and(column_name) FROM table_name;
 +----------------------------+
-| bool_and(column_name)       |
+| bool_and(column_name)      |
 +----------------------------+
-| true                        |
+| true                       |
 +----------------------------+
 ```
 
 ### `bool_or`
 
-Returns true if all non-null input values are true, otherwise false.
+Returns true if any non-null input value is true, otherwise false.
 
 ```sql
-bool_and(expression)
+bool_or(expression)
 ```
 
 #### Arguments
@@ -260,11 +247,11 @@ bool_and(expression)
 #### Example
 
 ```sql
-> SELECT bool_and(column_name) FROM table_name;
+> SELECT bool_or(column_name) FROM table_name;
 +----------------------------+
-| bool_and(column_name)       |
+| bool_or(column_name)       |
 +----------------------------+
-| true                        |
+| true                       |
 +----------------------------+
 ```
 
@@ -285,7 +272,7 @@ count(expression)
 ```sql
 > SELECT count(column_name) FROM table_name;
 +-----------------------+
-| count(column_name)     |
+| count(column_name)    |
 +-----------------------+
 | 100                   |
 +-----------------------+
@@ -314,11 +301,11 @@ first_value(expression [ORDER BY expression])
 
 ```sql
 > SELECT first_value(column_name ORDER BY other_column) FROM table_name;
-+-----------------------------------------------+
-| first_value(column_name ORDER BY other_column)|
-+-----------------------------------------------+
-| first_element                                 |
-+-----------------------------------------------+
++------------------------------------------------+
+| first_value(column_name ORDER BY other_column) |
++------------------------------------------------+
+| first_element                                  |
++------------------------------------------------+
 ```
 
 ### `grouping`
@@ -339,13 +326,13 @@ grouping(expression)
 > SELECT column_name, GROUPING(column_name) AS group_column
   FROM table_name
   GROUP BY GROUPING SETS ((column_name), ());
-+-------------+-------------+
++-------------+--------------+
 | column_name | group_column |
-+-------------+-------------+
-| value1      | 0           |
-| value2      | 0           |
-| NULL        | 1           |
-+-------------+-------------+
++-------------+--------------+
+| value1      | 0            |
+| value2      | 0            |
+| NULL        | 1            |
++-------------+--------------+
 ```
 
 ### `last_value`
@@ -388,7 +375,7 @@ max(expression)
 ```sql
 > SELECT max(column_name) FROM table_name;
 +----------------------+
-| max(column_name)      |
+| max(column_name)     |
 +----------------------+
 | 150                  |
 +----------------------+
@@ -415,7 +402,7 @@ median(expression)
 ```sql
 > SELECT median(column_name) FROM table_name;
 +----------------------+
-| median(column_name)   |
+| median(column_name)  |
 +----------------------+
 | 45.5                 |
 +----------------------+
@@ -438,7 +425,7 @@ min(expression)
 ```sql
 > SELECT min(column_name) FROM table_name;
 +----------------------+
-| min(column_name)      |
+| min(column_name)     |
 +----------------------+
 | 12                   |
 +----------------------+
@@ -461,11 +448,11 @@ percentile_cont(percentile) WITHIN GROUP (ORDER BY expression)
 
 ```sql
 > SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) FROM table_name;
-+----------------------------------------------------------+
++-----------------------------------------------------------+
 | percentile_cont(0.75) WITHIN GROUP (ORDER BY column_name) |
-+----------------------------------------------------------+
-| 45.5                                                     |
-+----------------------------------------------------------+
++-----------------------------------------------------------+
+| 45.5                                                      |
++-----------------------------------------------------------+
 ```
 
 An alternate syntax is also supported:
@@ -481,7 +468,7 @@ An alternate syntax is also supported:
 
 #### Aliases
 
-- quantile_cont
+- quantile\_cont
 
 ### `quantile_cont`
 
@@ -522,7 +509,7 @@ string_agg([DISTINCT] expression, delimiter [ORDER BY expression])
 +--------------------------+
 | names_list               |
 +--------------------------+
-| Charlie, Bob, Alice |
+| Charlie, Bob, Alice      |
 +--------------------------+
 ```
 
@@ -543,7 +530,7 @@ sum(expression)
 ```sql
 > SELECT sum(column_name) FROM table_name;
 +-----------------------+
-| sum(column_name)       |
+| sum(column_name)      |
 +-----------------------+
 | 12345                 |
 +-----------------------+
@@ -563,8 +550,8 @@ var(expression)
 
 #### Aliases
 
-- var_sample
-- var_samp
+- var\_sample
+- var\_samp
 
 ### `var_pop`
 
@@ -580,7 +567,7 @@ var_pop(expression)
 
 #### Aliases
 
-- var_population
+- var\_population
 
 ### `var_population`
 
@@ -644,10 +631,10 @@ _Alias of [covar_samp](#covar_samp)._
 
 ### `covar_pop`
 
-Returns the sample covariance of a set of number pairs.
+Returns the population covariance of a set of number pairs.
 
 ```sql
-covar_samp(expression1, expression2)
+covar_pop(expression1, expression2)
 ```
 
 #### Arguments
@@ -658,11 +645,11 @@ covar_samp(expression1, expression2)
 #### Example
 
 ```sql
-> SELECT covar_samp(column1, column2) FROM table_name;
+> SELECT covar_pop(column1, column2) FROM table_name;
 +-----------------------------------+
-| covar_samp(column1, column2)      |
+| covar_pop(column1, column2)       |
 +-----------------------------------+
-| 8.25                              |
+| 7.63333333333                     |
 +-----------------------------------+
 ```
 
@@ -705,7 +692,7 @@ nth_value(expression, n ORDER BY expression)
 #### Arguments
 
 - **expression**: The column or expression to retrieve the nth value from.
-- **n**: The position (nth) of the value to retrieve, based on the ordering.
+- **n**: The position of the value to retrieve. Positive values count from the first value, starting at 1; negative values count backward from the last value, where -1 returns the last value.
 
 #### Example
 
@@ -743,7 +730,7 @@ create table daily_sales(day int, total_sales int) as values (1,100), (2,150), (
 select * from daily_sales;
 +-----+-------------+
 | day | total_sales |
-| --- | ----------- |
++-----+-------------+
 | 1   | 100         |
 | 2   | 150         |
 | 3   | 200         |
@@ -779,7 +766,7 @@ create table daily_temperature(day int, temperature int) as values (1,30), (2,32
 select * from daily_temperature;
 +-----+-------------+
 | day | temperature |
-| --- | ----------- |
++-----+-------------+
 | 1   | 30          |
 | 2   | 32          |
 | 3   | NULL        |
@@ -816,7 +803,7 @@ create table daily_metrics(day int, user_signups int) as values (1,100), (2,120)
 select * from daily_metrics;
 +-----+---------------+
 | day | user_signups  |
-| --- | ------------- |
++-----+---------------+
 | 1   | 100           |
 | 2   | 120           |
 | 3   | NULL          |
@@ -852,7 +839,7 @@ create table weekly_performance(week int, productivity_score int) as values (1,6
 select * from weekly_performance;
 +------+---------------------+
 | week | productivity_score  |
-| ---- | ------------------- |
++------+---------------------+
 | 1    | 60                  |
 | 2    | 65                  |
 | 3    | 70                  |
@@ -861,12 +848,11 @@ select * from weekly_performance;
 +------+---------------------+
 
 SELECT regr_intercept(productivity_score, week) AS intercept FROM weekly_performance;
-+----------+
-|intercept|
-|intercept |
-+----------+
-|  55      |
-+----------+
++-----------+
+| intercept |
++-----------+
+| 55        |
++-----------+
 ```
 
 ### `regr_r2`
@@ -898,16 +884,16 @@ select * from weekly_performance;
 +-----+--------------+
 
 SELECT regr_r2(user_signups, day) AS r_squared FROM weekly_performance;
-+---------+
-|r_squared|
-+---------+
-| 1.0     |
-+---------+
++-----------+
+| r_squared |
++-----------+
+| 1.0       |
++-----------+
 ```
 
 ### `regr_slope`
 
-Returns the slope of the linear regression line for non-null pairs in aggregate columns. Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k\*X + b) using minimal RSS fitting.
+Returns the slope of the linear regression line for non-null pairs in aggregate columns. Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k*X + b) using minimal RSS fitting.
 
 ```sql
 regr_slope(expression_y, expression_x)
@@ -1062,7 +1048,7 @@ stddev(expression)
 ```sql
 > SELECT stddev(column_name) FROM table_name;
 +----------------------+
-| stddev(column_name)   |
+| stddev(column_name)  |
 +----------------------+
 | 12.34                |
 +----------------------+
@@ -1070,7 +1056,7 @@ stddev(expression)
 
 #### Aliases
 
-- stddev_samp
+- stddev\_samp
 
 ### `stddev_pop`
 
@@ -1089,7 +1075,7 @@ stddev_pop(expression)
 ```sql
 > SELECT stddev_pop(column_name) FROM table_name;
 +--------------------------+
-| stddev_pop(column_name)   |
+| stddev_pop(column_name)  |
 +--------------------------+
 | 10.56                    |
 +--------------------------+
@@ -1237,9 +1223,9 @@ An alternative syntax is also supported:
 
 ```sql
 > SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
-+--------------------------------------------------+
++----------------------------------------------------------------------+
 | approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
-+--------------------------------------------------+
-| 78.5                                             |
-+--------------------------------------------------+
++----------------------------------------------------------------------+
+| 78.5                                                                 |
++----------------------------------------------------------------------+
 ```

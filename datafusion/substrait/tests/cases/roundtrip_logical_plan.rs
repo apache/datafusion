@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
@@ -35,6 +22,7 @@ use std::mem::size_of_val;
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit,
 };
+use datafusion::common::test_util::batches_to_sort_string;
 use datafusion::common::tree_node::Transformed;
 use datafusion::common::{DFSchema, DFSchemaRef, Spans, not_impl_err, plan_err};
 use datafusion::error::Result;
@@ -321,6 +309,120 @@ async fn select_without_limit() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_table_scan_offset_and_fetch() -> Result<()> {
+    use datafusion::arrow::array::Int64Array;
+    use datafusion::dataframe::DataFrame;
+    use datafusion::datasource::provider_as_source;
+    use datafusion::logical_expr::TableScanBuilder;
+
+    // A single CSV partition preserves input order and supports exact skip pushdown.
+    let temp = tempfile::tempdir()?;
+    let path = temp.path().join("data.csv");
+    std::fs::write(&path, "x\n0\n1\n2\n3\n4\n5\n")?;
+    let ctx = SessionContext::new();
+    ctx.register_csv("t", path.to_str().unwrap(), CsvReadOptions::new())
+        .await?;
+    let source = provider_as_source(ctx.table_provider("t").await?);
+
+    for skip in [Some(2), None, Some(0), Some(8)] {
+        for fetch in [None, Some(0), Some(2)] {
+            for project in [false, true] {
+                for parent in [
+                    None,
+                    Some((0, Some(2))),
+                    Some((1, Some(3))),
+                    Some((1, None)),
+                ] {
+                    let scan = TableScanBuilder::new("t", source.clone())
+                        .with_skip(skip)
+                        .with_fetch(fetch)
+                        .build()?;
+                    let mut builder =
+                        LogicalPlanBuilder::from(LogicalPlan::TableScan(scan));
+                    if project {
+                        builder = builder.project(vec![col("x")])?;
+                    }
+                    if let Some((skip, fetch)) = parent {
+                        builder = builder.limit(skip, fetch)?;
+                    }
+                    let plan = builder.build()?;
+                    let proto = to_substrait_plan(&plan, &ctx.state())?;
+                    let restored = from_substrait_plan(&ctx.state(), &proto).await?;
+                    let mut expected = (0_i64..6)
+                        .skip(skip.unwrap_or(0))
+                        .take(fetch.unwrap_or(usize::MAX))
+                        .collect::<Vec<_>>();
+                    if let Some((skip, fetch)) = parent {
+                        expected = expected
+                            .into_iter()
+                            .skip(skip)
+                            .take(fetch.unwrap_or(usize::MAX))
+                            .collect();
+                    }
+                    for (stage, plan) in [("original", plan), ("roundtrip", restored)] {
+                        let batches = DataFrame::new(ctx.state(), plan).collect().await?;
+                        let actual = batches
+                            .iter()
+                            .flat_map(|batch| {
+                                batch
+                                    .column(0)
+                                    .as_any()
+                                    .downcast_ref::<Int64Array>()
+                                    .unwrap()
+                                    .values()
+                                    .iter()
+                                    .copied()
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(
+                            actual, expected,
+                            "{stage}: skip={skip:?}, fetch={fetch:?}, project={project}, parent={parent:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+// Limit expressions use Int64, but limit pushdown can produce a larger usize fetch.
+#[tokio::test]
+#[cfg(target_pointer_width = "64")]
+async fn reject_table_scan_fetch_above_i64_max() -> Result<()> {
+    use datafusion::arrow::array::Int64Array;
+    use datafusion::arrow::record_batch::RecordBatch;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch(
+        "t",
+        RecordBatch::try_from_iter(vec![(
+            "x",
+            Arc::new(Int64Array::from(vec![0, 1, 2])) as ArrayRef,
+        )])?,
+    )?;
+    let plan = ctx
+        .sql("SELECT * FROM t LIMIT 9223372036854775807 OFFSET 1")
+        .await?
+        .into_optimized_plan()?;
+    let LogicalPlan::Limit(limit) = &plan else {
+        panic!("expected Limit")
+    };
+    let LogicalPlan::TableScan(scan) = limit.input.as_ref() else {
+        panic!("expected TableScan")
+    };
+    assert_eq!(scan.fetch, Some(i64::MAX as usize + 1));
+    let error = to_substrait_plan(&plan, &ctx.state())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("TableScan fetch exceeds the supported Int64 range"),
+        "{error}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn select_with_limit_offset() -> Result<()> {
     roundtrip("SELECT * FROM data LIMIT 200 OFFSET 10").await?;
     roundtrip("SELECT * FROM data LIMIT 100+100 OFFSET 20/2").await
@@ -333,8 +435,67 @@ async fn simple_aggregate() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_distinct_with_having() -> Result<()> {
-    roundtrip("SELECT a, count(distinct b) FROM data GROUP BY a, c HAVING count(b) > 100")
-        .await
+    let ctx = create_context_without_single_distinct_to_group_by().await?;
+    roundtrip_with_ctx(
+        "SELECT a, count(distinct b) FROM data GROUP BY a, c HAVING count(b) > 100",
+        ctx,
+    )
+    .await?;
+    Ok(())
+}
+
+/// The query in [`aggregate_distinct_with_having`], through the default
+/// optimizer, where `single_distinct_aggregation_to_group_by` rewrites it into
+/// a two phase group by.
+///
+/// A rewritten plan does not round trip to an identical plan, so the identity
+/// test above turns the rule off. This one leaves it on and asserts what
+/// Substrait does carry: the output schema and the rows. The `HAVING` threshold
+/// is lowered from the identity test's so that there are rows to compare.
+#[tokio::test]
+async fn aggregate_distinct_with_having_rewritten() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT a, count(distinct b) FROM data GROUP BY a, c HAVING count(b) > 0")
+        .await?
+        .into_optimized_plan()?;
+
+    // The rule applied: the distinct argument is a grouping key of an inner
+    // aggregate, and the non-distinct `count` became a `sum` of its partial
+    // counts. Without this the test would keep passing over an unrewritten
+    // plan, which the identity test already covers.
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: data.a, count(alias1) AS count(DISTINCT data.b)
+      Filter: CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END > Int64(0)
+        Projection: data.a, count(alias1), sum(alias2)
+          Aggregate: groupBy=[[data.a, data.c]], aggr=[[count(alias1), sum(alias2)]]
+            Aggregate: groupBy=[[data.a, data.c, data.b AS alias1]], aggr=[[count(data.b) AS alias2]]
+              TableScan: data projection=[a, b, c]
+    "
+    );
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    assert_eq!(plan.schema(), plan2.schema());
+
+    let results = DataFrame::new(ctx.state(), plan2).collect().await?;
+    datafusion::assert_batches_sorted_eq!(
+        [
+            "+---+------------------------+",
+            "| a | count(DISTINCT data.b) |",
+            "+---+------------------------+",
+            "| 1 | 1                      |",
+            "| 3 | 1                      |",
+            "+---+------------------------+",
+        ],
+        &results
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -344,10 +505,59 @@ async fn aggregate_multiple_keys() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_grouping_sets() -> Result<()> {
-    roundtrip(
-        "SELECT a, c, d, avg(b) FROM data GROUP BY GROUPING SETS ((a, c), (a), (d), ())",
+    let ctx = create_context().await?;
+    let proto = roundtrip_with_ctx(
+        "SELECT a, c, d, avg(b), sum(e) FROM data GROUP BY GROUPING SETS ((a, c), (a), (d), ())",
+        ctx.clone(),
     )
-    .await
+    .await?;
+
+    let Some(plan_rel::RelType::Root(root)) = &proto.relations[0].rel_type else {
+        panic!("expected root relation");
+    };
+    let Some(RelType::Project(project)) = &root.input.as_ref().unwrap().rel_type else {
+        panic!("expected project relation");
+    };
+    let Some(RelType::Aggregate(aggregate)) = &project.input.as_ref().unwrap().rel_type
+    else {
+        panic!("expected aggregate relation");
+    };
+
+    assert_eq!(aggregate.grouping_expressions.len(), 3);
+    assert_eq!(aggregate.groupings[0].expression_references, [0, 1]);
+    assert_eq!(aggregate.groupings[1].expression_references, [0]);
+    assert_eq!(aggregate.groupings[2].expression_references, [2]);
+    assert!(aggregate.groupings[3].expression_references.is_empty());
+    let output_mapping = match aggregate
+        .common
+        .as_ref()
+        .and_then(|common| common.emit_kind.as_ref())
+    {
+        Some(substrait::proto::rel_common::EmitKind::Emit(emit)) => &emit.output_mapping,
+        _ => panic!("expected aggregate output mapping"),
+    };
+    assert_eq!(output_mapping, &[0, 1, 2, 5, 3, 4]);
+
+    let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+    let results = DataFrame::new(ctx.state(), plan).collect().await?;
+    datafusion::assert_batches_sorted_eq!(
+        [
+            "+---+------------+-------+-------------+-------------+",
+            "| a | c          | d     | avg(data.b) | sum(data.e) |",
+            "+---+------------+-------+-------------+-------------+",
+            "|   |            |       | 3.250000    | 6442450943  |",
+            "|   |            | false | 2.000000    | 4294967295  |",
+            "|   |            | true  | 4.500000    | 2147483648  |",
+            "| 1 |            |       | 2.000000    | 4294967295  |",
+            "| 1 | 2020-01-01 |       | 2.000000    | 4294967295  |",
+            "| 3 |            |       | 4.500000    | 2147483648  |",
+            "| 3 | 2020-01-01 |       | 4.500000    | 2147483648  |",
+            "+---+------------+-------+-------------+-------------+",
+        ],
+        &results
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -548,12 +758,18 @@ async fn case_without_base_expression() -> Result<()> {
 
 #[tokio::test]
 async fn case_with_base_expression() -> Result<()> {
-    roundtrip(
+    // Substrait has no base expression in `IfThen`, so a base `CASE` is emitted
+    // as conditions over `<base> = <value>` and comes back in that form. The
+    // projection keeps its original name, so the schema is unchanged.
+    assert_expected_plan(
         "SELECT (CASE a
                             WHEN 0 THEN 'zero'
                             WHEN 1 THEN 'one'
                             ELSE 'other'
                            END) FROM data",
+        "Projection: CASE WHEN data.a = Int64(0) THEN Utf8(\"zero\") WHEN data.a = Int64(1) THEN Utf8(\"one\") ELSE Utf8(\"other\") END AS CASE data.a WHEN Int64(0) THEN Utf8(\"zero\") WHEN Int64(1) THEN Utf8(\"one\") ELSE Utf8(\"other\") END\
+        \n  TableScan: data projection=[a]",
+        true,
     )
     .await
 }
@@ -611,7 +827,7 @@ async fn roundtrip_inlist_2() -> Result<()> {
 #[tokio::test]
 // Test with length > datafusion_optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST
 async fn roundtrip_inlist_3() -> Result<()> {
-    let inlist = (0..THRESHOLD_INLINE_INLIST + 1)
+    let inlist = (0..=THRESHOLD_INLINE_INLIST)
         .map(|i| format!("'{i}'"))
         .collect::<Vec<_>>()
         .join(", ");
@@ -732,6 +948,50 @@ async fn roundtrip_scalar_subquery_substrait() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_scalar_subquery_projection_with_join_rewrite() -> Result<()> {
+    let ctx = create_context().await?;
+    ctx.sql(
+        "SET datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery = false",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let plan = generate_plan_from_sql_with_ctx(
+        "SELECT a, (SELECT MAX(b) FROM data2) AS max_b FROM data",
+        false,
+        true,
+        &ctx,
+    )
+    .await?;
+
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: data.a, max(data2.b) AS max_b
+      Left Join:
+        TableScan: data projection=[a]
+        Aggregate: groupBy=[[]], aggr=[[max(data2.b)]]
+          TableScan: data2 projection=[b]
+    "
+    );
+
+    let results = DataFrame::new(ctx.state(), plan).collect().await?;
+    datafusion::assert_batches_sorted_eq!(
+        [
+            "+---+-------+",
+            "| a | max_b |",
+            "+---+-------+",
+            "| 1 | 4.5   |",
+            "| 3 | 4.5   |",
+            "+---+-------+",
+        ],
+        &results
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_exists_substrait() -> Result<()> {
     let ctx = create_context().await?;
     let plan = build_exists_filter_plan(&ctx, false).await?;
@@ -748,6 +1008,207 @@ async fn roundtrip_not_exists_substrait() -> Result<()> {
     let proto = to_substrait_plan(&plan, &ctx.state())?;
     let roundtrip_plan = from_substrait_plan(&ctx.state(), &proto).await?;
     assert_exists_predicate(&roundtrip_plan, true);
+    Ok(())
+}
+
+/// `(steps_out, field index)` of every `OuterReference` field reference in the
+/// plan, collected by walking its JSON serialization.
+fn outer_references(plan: &Plan) -> Vec<(u32, u32)> {
+    fn walk(value: &serde_json::Value, out: &mut Vec<(u32, u32)>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                // A FieldReference serializes its root type and direct reference
+                // as sibling keys, e.g.:
+                //   { "directReference": { "structField": { "field": 3 } },
+                //     "outerReference":  { "stepsOut": 1 } }
+                // proto3 JSON omits zero-valued fields, hence the unwrap_or(0)s.
+                if let Some(outer) = map.get("outerReference") {
+                    let steps =
+                        outer.get("stepsOut").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let field = map
+                        .get("directReference")
+                        .and_then(|d| d.get("structField"))
+                        .and_then(|s| s.get("field"))
+                        .and_then(|f| f.as_u64())
+                        .unwrap_or(0);
+                    out.push((steps as u32, field as u32));
+                }
+                map.values().for_each(|v| walk(v, out));
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            _ => {}
+        }
+    }
+    let mut refs = vec![];
+    walk(
+        &serde_json::to_value(plan).expect("Plan serializes to JSON"),
+        &mut refs,
+    );
+    refs.sort_unstable(); // key order in the JSON walk isn't proto field order
+    refs
+}
+
+#[tokio::test]
+async fn roundtrip_correlated_exists() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT b FROM data WHERE EXISTS (SELECT 1 FROM data2 WHERE data2.a = data.a)")
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_eq!(outer_references(&proto), vec![(1, 0)]);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.b
+      Filter: EXISTS (<subquery>)
+        Subquery:
+          Projection: Int64(1)
+            Filter: data2.a = outer_ref(data.a)
+              TableScan: data2
+        TableScan: data
+    "
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_correlated_in_subquery() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT b FROM data WHERE a IN (SELECT data2.a FROM data2 WHERE data2.d = data.d)")
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_eq!(outer_references(&proto), vec![(1, 3)]);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.b
+      Filter: data.a IN (<subquery>)
+        Subquery:
+          Projection: data2.a
+            Filter: data2.d = outer_ref(data.d)
+              TableScan: data2
+        TableScan: data
+    "
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_correlated_scalar_subquery() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT a FROM data WHERE a < (SELECT sum(data2.a) FROM data2 WHERE data2.a = data.a)")
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_eq!(outer_references(&proto), vec![(1, 0)]);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.a
+      Filter: data.a < (<subquery>)
+        Subquery:
+          Projection: sum(data2.a)
+            Aggregate: groupBy=[[]], aggr=[[sum(data2.a)]]
+              Filter: data2.a = outer_ref(data.a)
+                TableScan: data2
+        TableScan: data
+    "
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_nested_correlated_subquery() -> Result<()> {
+    let ctx = create_context().await?;
+    // The innermost subquery references `data.a` from the outermost query,
+    // two subquery boundaries out.
+    let plan = ctx
+        .sql(
+            "SELECT b FROM data WHERE EXISTS (\
+               SELECT 1 FROM data2 WHERE data2.a = data.a AND EXISTS (\
+                 SELECT 1 FROM book WHERE book.isbn = data.a))",
+        )
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_eq!(outer_references(&proto), vec![(1, 0), (2, 0)]);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.b
+      Filter: EXISTS (<subquery>)
+        Subquery:
+          Projection: Int64(1)
+            Filter: data2.a = outer_ref(data.a) AND EXISTS (<subquery>)
+              Subquery:
+                Projection: Int64(1)
+                  Filter: book.isbn = outer_ref(data.a)
+                    TableScan: book
+              TableScan: data2
+        TableScan: data
+    "
+            );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_correlated_subquery_shadowed_outer_column() -> Result<()> {
+    let ctx = create_context().await?;
+    // Both the outermost query and the middle subquery scan `data`, so the
+    // qualified name `data.a` is present in two enclosing scopes when the
+    // innermost subquery references it. Following SQL scoping rules (and
+    // SqlToRel's own resolution), the reference binds to the *nearest*
+    // enclosing scope: the producer must emit steps_out = 1, not 2.
+    let plan = ctx
+        .sql(
+            "SELECT b FROM data WHERE EXISTS (\
+               SELECT 1 FROM data WHERE EXISTS (\
+                 SELECT 1 FROM book WHERE book.isbn = data.a))",
+        )
+        .await?
+        .into_unoptimized_plan();
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    assert_eq!(outer_references(&proto), vec![(1, 0)]);
+
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert_eq!(plan.schema(), plan2.schema());
+    assert_snapshot!(
+    plan2,
+    @r"
+    Projection: data.b
+      Filter: EXISTS (<subquery>)
+        Subquery:
+          Projection: Int64(1)
+            Filter: EXISTS (<subquery>)
+              Subquery:
+                Projection: Int64(1)
+                  Filter: book.isbn = outer_ref(data.a)
+                    TableScan: book
+              TableScan: data
+        TableScan: data
+    "
+            );
     Ok(())
 }
 
@@ -1001,6 +1462,63 @@ async fn roundtrip_union2() -> Result<()> {
         "SELECT a, b FROM data UNION SELECT a, b FROM data UNION SELECT a, b FROM data",
     )
     .await
+}
+
+#[tokio::test]
+async fn roundtrip_union_join_duplicate_column_names() -> Result<()> {
+    use datafusion::arrow::array::{Int64Array, ListBuilder, MapBuilder, StringBuilder};
+    use datafusion::arrow::record_batch::RecordBatch;
+
+    // Non-nullable list items expose type coercion after consumption widens the
+    // typed NULL's list items to nullable. Both joined columns need that cast.
+    let mut tags = MapBuilder::new(
+        None,
+        StringBuilder::new(),
+        ListBuilder::new(StringBuilder::new()).with_field(Field::new(
+            "item",
+            DataType::Utf8,
+            false,
+        )),
+    );
+    tags.keys().append_value("env");
+    tags.values().values().append_value("test");
+    tags.values().append(true);
+    tags.append(true)?;
+    let batch = RecordBatch::try_from_iter(vec![
+        ("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef),
+        ("_tags", Arc::new(tags.finish()) as ArrayRef),
+    ])?;
+    let ctx = SessionContext::new();
+    for table in ["t1", "t2", "t3"] {
+        ctx.register_batch(table, batch.clone())?;
+    }
+
+    // List-item nullability changes during the round trip, so the schemas differ.
+    let plan = generate_plan_from_sql_with_ctx(
+        "SELECT NULL AS a, NULL AS b FROM t1 \
+         UNION ALL \
+         SELECT x._tags AS a, y._tags AS b \
+         FROM t2 AS x INNER JOIN t3 AS y ON x.id = y.id",
+        false,
+        true,
+        &ctx,
+    )
+    .await?;
+
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: Map([NULL]) AS a, Map([NULL])__temp__0 AS b
+      Union
+        Projection: Map([NULL]), Map([NULL]) AS Map([NULL])__temp__0
+          TableScan: t1 projection=[]
+        Projection: CAST(t2._tags AS Map("entries": non-null Struct("key": non-null Utf8, "value": List(Utf8)), unsorted)) AS Map([NULL]), CAST(t3._tags AS Map("entries": non-null Struct("key": non-null Utf8, "value": List(Utf8)), unsorted)) AS Map([NULL])__temp__0
+          Inner Join: t2.id = t3.id
+            TableScan: t2 projection=[id, _tags]
+            TableScan: t3 projection=[id, _tags]
+    "#
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -1376,6 +1894,94 @@ async fn simple_window_function() -> Result<()> {
 }
 
 #[tokio::test]
+async fn stacked_windows_with_same_default_name_via_builder() -> Result<()> {
+    // Substrait projections are positional and drop DataFusion's aliases, so the
+    // inherited `rn1` column and the new window both come back under the same
+    // default name. The consumer must keep them apart.
+    // See https://github.com/apache/datafusion/issues/23007
+    use datafusion::arrow::util::pretty::pretty_format_batches;
+    use datafusion::functions_window::expr_fn::row_number;
+    use datafusion::logical_expr::ExprFunctionExt;
+
+    let ctx = create_context().await?;
+    let scan = ctx.table("data").await?.into_optimized_plan()?;
+    let row_number_by_a = || {
+        row_number()
+            .order_by(vec![col("a").sort(true, false)])
+            .build()
+    };
+    // The filter between the two windows makes `rn1` and `rn2` differ for the
+    // surviving row. A consumer that resolved `rn2` to the inherited window
+    // column would then return wrong values instead of passing unnoticed.
+    let plan = LogicalPlanBuilder::from(scan)
+        .window(vec![row_number_by_a()?.alias("rn1")])?
+        .filter(col("a").gt(lit(1i64)))?
+        .window(vec![row_number_by_a()?.alias("rn2")])?
+        .build()?;
+
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+    // Compare output fields; qualifiers and functional dependencies
+    // can differ after a Substrait round trip.
+    assert_eq!(plan.schema().as_arrow(), plan2.schema().as_arrow());
+
+    let expected = DataFrame::new(ctx.state(), plan)
+        .select_columns(&["a", "rn1", "rn2"])?
+        .collect()
+        .await?;
+    let actual = DataFrame::new(ctx.state(), plan2)
+        .select_columns(&["a", "rn1", "rn2"])?
+        .collect()
+        .await?;
+    let actual = pretty_format_batches(&actual)?.to_string();
+    assert_eq!(pretty_format_batches(&expected)?.to_string(), actual);
+    assert_snapshot!(
+        actual,
+        @r"
+    +---+-----+-----+
+    | a | rn1 | rn2 |
+    +---+-----+-----+
+    | 3 | 2   | 1   |
+    +---+-----+-----+
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn chained_windows_with_same_default_name() -> Result<()> {
+    // SQL form from https://github.com/apache/datafusion/issues/23007. The two
+    // `avg` windows differ only by aliases that Substrait does not carry. As in
+    // roundtrip_self_join, the consumer must synthesize an alias, so the plan
+    // text differs; verify schema and executability instead.
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql(
+            "SELECT a, b, avg1, avg2 FROM (
+                SELECT a, b, avg1,
+                       row_number() OVER () AS seq2,
+                       avg(b) OVER (PARTITION BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS avg2
+                FROM (
+                    SELECT a, b, avg1 FROM (
+                        SELECT a, b,
+                               row_number() OVER () AS seq1,
+                               avg(b) OVER (PARTITION BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS avg1
+                        FROM data
+                    ) t1 ORDER BY seq1
+                ) t2
+            ) t3 ORDER BY seq2",
+        )
+        .await?
+        .into_optimized_plan()?;
+
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+    // Compare output fields; qualifiers and functional dependencies
+    // can differ after a Substrait round trip.
+    assert_eq!(plan.schema().as_arrow(), plan2.schema().as_arrow());
+    DataFrame::new(ctx.state(), plan2).show().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn window_with_rows() -> Result<()> {
     roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM data;").await?;
     roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING) FROM data;").await?;
@@ -1384,6 +1990,45 @@ async fn window_with_rows() -> Result<()> {
     roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN 2 PRECEDING AND UNBOUNDED FOLLOWING) FROM data;").await?;
     roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN 2 FOLLOWING AND 4 FOLLOWING) FROM data;").await?;
     roundtrip("SELECT sum(b) OVER (PARTITION BY a ROWS BETWEEN 4 PRECEDING AND 2 PRECEDING) FROM data;").await
+}
+
+#[tokio::test]
+async fn window_distinct() -> Result<()> {
+    roundtrip(
+        "SELECT count(DISTINCT a) OVER (ORDER BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM data;",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn unsupported_window_semantics_are_rejected() -> Result<()> {
+    let ctx = create_context().await?;
+    for (sql, expected_error) in [
+        (
+            "SELECT first_value(a) IGNORE NULLS OVER (ORDER BY a) FROM data;",
+            "IGNORE NULLS",
+        ),
+        (
+            "SELECT first_value(a) RESPECT NULLS OVER (ORDER BY a) FROM data;",
+            "RESPECT NULLS",
+        ),
+        (
+            "SELECT sum(a) FILTER (WHERE a > 0) OVER (PARTITION BY d) FROM data;",
+            "FILTER",
+        ),
+        (
+            "SELECT count(*) OVER (ORDER BY c RANGE BETWEEN INTERVAL '1' DAY PRECEDING AND CURRENT ROW) FROM data;",
+            "Unsupported Substrait window frame offset",
+        ),
+    ] {
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        let err = to_substrait_plan(&plan, &ctx.state()).unwrap_err();
+        assert!(
+            err.to_string().contains(expected_error),
+            "expected error containing '{expected_error}', got '{err}'"
+        );
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -1477,6 +2122,10 @@ async fn roundtrip_literal_named_struct() -> Result<()> {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "The braces are part of the expected struct output, not format args"
+)]
 async fn roundtrip_literal_renamed_struct() -> Result<()> {
     // This test aims to hit a case where the struct column itself has the expected name, but its
     // inner field needs to be renamed.
@@ -1679,7 +2328,7 @@ async fn new_test_grammar() -> Result<()> {
 #[tokio::test]
 async fn extension_logical_plan() -> Result<()> {
     let ctx = create_context().await?;
-    let validation_bytes = "MockUserDefinedLogicalPlan".as_bytes().to_vec();
+    let validation_bytes = b"MockUserDefinedLogicalPlan".to_vec();
     let ext_plan = LogicalPlan::Extension(Extension {
         node: Arc::new(MockUserDefinedLogicalPlan {
             validation_bytes,
@@ -2054,11 +2703,260 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
     assert_snapshot!(
     plan,
     @"
-    Projection: array_transform2(make_array(make_array(data3.p1)), (p0) -> array_concat(array_transform2(p0, (p2) -> p2 * Int64(2)), array_transform2(p0, (p3) -> p3 * Int64(2)))) AS array_transform2(make_array(make_array(data3.p1)),(v) -> array_concat(array_transform2(v,(v) -> v * Int64(2)),array_transform2(v,(v) -> v * Int64(2))))
+    Projection: array_transform2(make_array(make_array(data3.p1)), (p0) -> array_concat(array_transform2(p0, (p2) -> p2 * Int64(2)), array_transform2(p0, (p2) -> p2 * Int64(2)))) AS array_transform2(make_array(make_array(data3.p1)),(v) -> array_concat(array_transform2(v,(v) -> v * Int64(2)),array_transform2(v,(v) -> v * Int64(2))))
       TableScan: data3 projection=[p1]
     "
     );
 
+    Ok(())
+}
+
+// Substrait lambda parameter types carry no struct field names, so a parameter over a
+// list of structs must take its field names from the list, not from its declared type.
+#[tokio::test]
+async fn roundtrip_lambda_parameter_struct_field_names() -> Result<()> {
+    let ctx = higher_order_function_ctx().await?;
+    ctx.sql(
+        "CREATE TABLE structs AS SELECT \
+         [named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y')] AS s, \
+         [[named_struct('a', 3, 'b', 'z')]] AS nested",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    // field of a parameter over a column
+    roundtrip_with_ctx(
+        "SELECT array_transform(s, p0 -> get_field(p0, 'b')) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
+
+    // field of a parameter over a computed list
+    roundtrip_with_ctx(
+        "SELECT array_transform(array_concat(s, s), p0 -> get_field(p0, 'a')) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
+
+    // field of the inner parameter, where the inner list is the outer parameter
+    roundtrip_with_ctx(
+        "SELECT array_transform(nested, p0 -> array_transform(p0, p1 -> get_field(p1, 'b'))) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
+
+    // field of the outer parameter, read inside an inner lambda
+    roundtrip_with_ctx(
+        "SELECT array_transform(s, p0 -> array_transform([1, 2], p1 -> get_field(p0, 'a') + p1)) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Round trips `sql` and checks that the output type and rows don't change. Substrait
+/// literals carry no struct field names, so a struct literal combined with a struct
+/// column must take the column's names for the two to have the same type.
+///
+/// `sql` can read two tables: `struct_rows`, whose column `st` is a `Struct{a, b}`, and
+/// `zones`, whose column `z` is a `List<Struct{subnet: Struct{id}, zone_name}>`. Plans
+/// are not compared as text: for a set operation, the consumer puts the output alias
+/// above the union rather than in each input.
+async fn assert_struct_literal_roundtrips(sql: &str) -> Result<()> {
+    let ctx = higher_order_function_ctx().await?;
+    for table in [
+        "CREATE TABLE struct_rows AS SELECT named_struct('a', 1, 'b', 'x') AS st \
+         UNION ALL SELECT NULL AS st",
+        "CREATE TABLE zones AS SELECT [named_struct('subnet', named_struct('id', 'subnet-1'), \
+         'zone_name', 'zone-a')] AS z UNION ALL SELECT NULL AS z",
+    ] {
+        ctx.sql(table).await?.collect().await?;
+    }
+
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    let expected = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+    assert_eq!(
+        plan.schema().field(0).data_type(),
+        plan2.schema().field(0).data_type()
+    );
+    let actual = DataFrame::new(ctx.state(), plan2).collect().await?;
+    assert_eq!(
+        batches_to_sort_string(&expected),
+        batches_to_sort_string(&actual)
+    );
+    Ok(())
+}
+
+// coalesce is simplified to a CASE, whose ELSE branch is the literal
+#[tokio::test]
+async fn roundtrip_struct_literal_in_coalesce() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT coalesce(st, named_struct('a', 0, 'b', 'z')) FROM struct_rows",
+    )
+    .await
+}
+
+// the lambda reads `subnet.id`, which it only finds if `[]` took the column's names
+#[tokio::test]
+async fn roundtrip_struct_literal_next_to_nested_struct_column() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT array_transform(coalesce(z, []), p0 -> get_field(get_field(p0, 'subnet'), 'id')) \
+         FROM zones",
+    )
+    .await
+}
+
+// a NULL struct in the ELSE branch, from https://github.com/apache/datafusion/issues/14632
+#[tokio::test]
+async fn roundtrip_struct_literal_in_case_else() -> Result<()> {
+    roundtrip(
+        "SELECT (CASE WHEN column1 IS NOT NULL THEN named_struct('f1', column1) ELSE NULL END) AS res \
+         FROM (VALUES ('a'), (NULL))",
+    )
+    .await
+}
+
+// the inner CASE has only literal results, so it takes the names of the outer CASE's column
+#[tokio::test]
+async fn roundtrip_struct_literal_in_nested_case_after_column() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT CASE WHEN st IS NOT NULL THEN st \
+         ELSE CASE WHEN random() > 2 THEN named_struct('a', 0, 'b', 'z') \
+         ELSE named_struct('a', 9, 'b', 'w') END END FROM struct_rows",
+    )
+    .await
+}
+
+// same as above, with the inner CASE first: it must not give its generated names to `st`
+#[tokio::test]
+async fn roundtrip_struct_literal_in_nested_case_before_column() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT CASE WHEN st IS NULL \
+         THEN CASE WHEN random() > 2 THEN named_struct('a', 0, 'b', 'z') \
+         ELSE named_struct('a', 9, 'b', 'w') END ELSE st END FROM struct_rows",
+    )
+    .await
+}
+
+// up to 3 items, so the optimizer rewrites the IN list into `st = ... OR st = ...`
+#[tokio::test]
+async fn roundtrip_struct_literal_in_list() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT st IN (named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y')) \
+         FROM struct_rows",
+    )
+    .await
+}
+
+// the default value of `lag` must have the type of `st`
+#[tokio::test]
+async fn roundtrip_struct_literal_window_function_argument() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT lag(st, 1, named_struct('a', 0, 'b', 'z')) OVER () FROM struct_rows",
+    )
+    .await
+}
+
+// the input padded with a NULL comes first, so it must not give its generated names
+#[tokio::test]
+async fn roundtrip_struct_literal_union_with_null_first_input() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT NULL AS r FROM struct_rows UNION ALL SELECT st AS r FROM struct_rows",
+    )
+    .await
+}
+
+// the input padded with a NULL comes second
+#[tokio::test]
+async fn roundtrip_struct_literal_union_with_null_second_input() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT st AS r FROM struct_rows UNION ALL SELECT NULL AS r FROM struct_rows",
+    )
+    .await
+}
+
+// the LIMIT hides the projection with the literal from the union
+#[tokio::test]
+async fn roundtrip_struct_literal_union_with_limit() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT * FROM (SELECT NULL AS r FROM struct_rows LIMIT 1) \
+         UNION ALL SELECT st AS r FROM struct_rows",
+    )
+    .await
+}
+
+// the input with the literals is itself a UNION, without ALL
+#[tokio::test]
+async fn roundtrip_struct_literal_union_with_nested_union_input() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT * FROM (SELECT named_struct('a', 0, 'b', 'z') AS r FROM struct_rows \
+         UNION SELECT named_struct('a', 9, 'b', 'w') AS r FROM struct_rows) \
+         UNION ALL SELECT st AS r FROM struct_rows",
+    )
+    .await
+}
+
+// make_array survives optimization, so it reaches the consumer as a function call
+#[tokio::test]
+async fn roundtrip_struct_literal_in_function_call() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT make_array(st, named_struct('a', 0, 'b', 'z')) FROM struct_rows",
+    )
+    .await
+}
+
+// `r` has the shape of `st` but is independent of it, so it keeps its own names
+#[tokio::test]
+async fn roundtrip_struct_literal_independent_function_argument() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT named_struct('l', st, 'r', named_struct('c0', 42, 'c1', 'q')) FROM struct_rows",
+    )
+    .await
+}
+
+// more than 3 items, so the optimizer doesn't rewrite the IN list into `=`/`OR`
+#[tokio::test]
+async fn roundtrip_struct_literal_in_long_in_list() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT st IN (named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y'), \
+         named_struct('a', 3, 'b', 'z'), named_struct('a', 4, 'b', 'w')) FROM struct_rows",
+    )
+    .await
+}
+
+// the literal is a map's values, renamed through the map type
+#[tokio::test]
+async fn roundtrip_struct_literal_in_map_values() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT CASE WHEN st IS NULL THEN map(['k'], [named_struct('a', 0, 'b', 'z')]) \
+         ELSE map(['k'], [st]) END FROM struct_rows",
+    )
+    .await
+}
+
+// Sibling lambda parameter names may repeat, but nested captures must still
+// resolve against their own enclosing scopes during optimization and execution.
+#[tokio::test]
+async fn roundtrip_executes_sibling_and_nested_lambda_scopes() -> Result<()> {
+    let ctx = create_context_with_dialect(Some(Dialect::Databricks)).await?;
+    let df = ctx.sql(
+        "SELECT array_transform([1, 2], x -> x + 10) AS ints,
+                array_transform(['a', 'b'], s -> upper(s)) AS strings,
+                array_transform([1, 2], x -> array_transform([10, 20], y -> x + y)) AS nested",
+    ).await?;
+    let plan = df.logical_plan().clone();
+    let expected = df.collect().await?;
+    assert_eq!(
+        expected.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        1
+    );
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let consumed = from_substrait_plan(&ctx.state(), &proto).await?;
+    let actual = DataFrame::new(ctx.state(), consumed).collect().await?;
+    assert_eq!(actual, expected);
     Ok(())
 }
 
@@ -2118,9 +3016,8 @@ impl HigherOrderUDFImpl for ArrayTransform {
             unreachable!()
         };
 
-        let field = match list.data_type() {
-            DataType::List(field) => field,
-            _ => unreachable!(),
+        let DataType::List(field) = list.data_type() else {
+            unreachable!()
         };
 
         Ok(LambdaParametersProgress::Complete(vec![vec![
@@ -2197,10 +3094,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
         }
         Some(RelType::Set(set)) => {
             for input in &set.inputs {
-                match check_post_join_filters(input) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                }
+                check_post_join_filters(input)?;
             }
             Ok(())
         }
@@ -2209,10 +3103,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
         }
         Some(RelType::ExtensionMulti(ext)) => {
             for input in &ext.inputs {
-                match check_post_join_filters(input) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                }
+                check_post_join_filters(input)?;
             }
             Ok(())
         }
@@ -2224,19 +3115,13 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
     }
 }
 
-async fn verify_post_join_filter_value(proto: Box<Plan>) -> Result<()> {
+fn verify_post_join_filter_value(proto: &Plan) -> Result<()> {
     for relation in &proto.relations {
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
-                plan_rel::RelType::Rel(rel) => match check_post_join_filters(rel) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                },
+                plan_rel::RelType::Rel(rel) => check_post_join_filters(rel)?,
                 plan_rel::RelType::Root(root) => {
-                    match check_post_join_filters(root.input.as_ref().unwrap()) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    check_post_join_filters(root.input.as_ref().unwrap())?
                 }
             },
             None => return plan_err!("Cannot parse plan relation: None"),
@@ -2263,28 +3148,16 @@ fn count_read_filters(rel: &Rel, filter_count: &mut u32) -> Result<()> {
     }
 }
 
-async fn assert_read_filter_count(
-    proto: Box<Plan>,
-    expected_filter_count: u32,
-) -> Result<()> {
+fn assert_read_filter_count(proto: &Plan, expected_filter_count: u32) -> Result<()> {
     let mut filter_count: u32 = 0;
     for relation in &proto.relations {
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
                 plan_rel::RelType::Rel(rel) => {
-                    match count_read_filters(rel, &mut filter_count) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    count_read_filters(rel, &mut filter_count)?
                 }
                 plan_rel::RelType::Root(root) => {
-                    match count_read_filters(
-                        root.input.as_ref().unwrap(),
-                        &mut filter_count,
-                    ) {
-                        Err(e) => return Err(e),
-                        Ok(_) => continue,
-                    }
+                    count_read_filters(root.input.as_ref().unwrap(), &mut filter_count)?
                 }
             },
             None => return plan_err!("Cannot parse plan relation: None"),
@@ -2644,7 +3517,7 @@ async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
     let proto = roundtrip_with_ctx(sql, ctx).await?;
 
     // verify that the join filters are None
-    verify_post_join_filter_value(proto).await
+    verify_post_join_filter_value(&proto)
 }
 
 async fn roundtrip_verify_read_filter_count(
@@ -2655,7 +3528,7 @@ async fn roundtrip_verify_read_filter_count(
     let proto = roundtrip_with_ctx(sql, ctx).await?;
 
     // verify that filter counts in read relations are as expected
-    assert_read_filter_count(proto, expected_filter_count).await
+    assert_read_filter_count(&proto, expected_filter_count)
 }
 
 async fn roundtrip_all_types(sql: &str) -> Result<()> {
@@ -2665,6 +3538,34 @@ async fn roundtrip_all_types(sql: &str) -> Result<()> {
 
 async fn create_context() -> Result<SessionContext> {
     create_context_with_dialect(None).await
+}
+
+/// [`create_context`] with `single_distinct_aggregation_to_group_by` removed from
+/// the optimizer.
+///
+/// That rule rewrites a single `AGG(DISTINCT x)` into a two phase group by whose
+/// inner aggregate aliases its grouping and measure expressions (`alias1`,
+/// `alias2`). Substrait carries no names for those expressions, so the consumer
+/// derives them from the expressions themselves and a rewritten plan does not
+/// round trip to an identical plan. That holds for every output of the rule, not
+/// only for the query under test.
+///
+/// What a rewritten plan does carry through Substrait is covered by
+/// [`aggregate_distinct_with_having_rewritten`], on the default context.
+async fn create_context_without_single_distinct_to_group_by() -> Result<SessionContext> {
+    let ctx = create_context().await?;
+    let rules = ctx
+        .state()
+        .optimizer()
+        .rules
+        .iter()
+        .filter(|rule| rule.name() != "single_distinct_aggregation_to_group_by")
+        .cloned()
+        .collect();
+    let state = SessionStateBuilder::new_from_existing(ctx.state())
+        .with_optimizer_rules(rules)
+        .build();
+    Ok(SessionContext::new_with_state(state))
 }
 
 async fn create_context_with_dialect(dialect: Option<Dialect>) -> Result<SessionContext> {

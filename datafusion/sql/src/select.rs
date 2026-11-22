@@ -1,30 +1,19 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use crate::expr::{QUALIFY_HELP, reject_window_functions};
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
     CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
-    check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
-    resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up,
+    DedupedProjection, check_columns_satisfy_exprs, extract_aliases, rebase_expr,
+    references_volatile_alias, resolve_aliases_to_exprs, resolve_columns,
+    resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up,
     rewrite_recursive_unnests_bottom_up, substitute_top_level_alias,
     substitute_top_level_aliases_in_sorts,
 };
@@ -32,17 +21,22 @@ use crate::utils::{
 use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, not_impl_err, plan_err};
-use datafusion_common::{RecursionUnnestOption, UnnestOptions};
+use datafusion_common::{
+    Column, DFSchema, DFSchemaRef, DataFusionError, HashMap, Result, not_impl_err,
+    plan_err,
+};
+use datafusion_common::{NullHandling, RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
 use datafusion_expr::builder::get_struct_unnested_columns;
+use datafusion_expr::expr::Unnest as UnnestExpr;
 use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
-    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
+    conjunction, expr_as_column_expr, expr_to_columns, find_aggregate_exprs,
+    find_window_exprs, split_conjunction_owned,
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
@@ -51,9 +45,9 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderBy,
-    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
-    visit_expressions_mut,
+    Distinct, Expr as SQLExpr, GroupByExpr, Ident, NamedWindowExpr, OrderBy, Query,
+    SelectItemQualifiedWildcardKind, VisitMut, VisitorMut, WildcardAdditionalOptions,
+    WindowSpec, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -86,6 +80,21 @@ struct RewrittenUnnestExprGroups {
     expr_groups: Vec<Vec<Expr>>,
 }
 
+/// The USING-join column sets of a SELECT's input plan, collected on first
+/// use: collecting walks the whole input plan, and wildcard-only projections
+/// never need them.
+#[derive(Default)]
+struct LazyUsingColumns(Option<Vec<HashSet<Column>>>);
+
+impl LazyUsingColumns {
+    fn get(&mut self, plan: &LogicalPlan) -> Result<&[HashSet<Column>]> {
+        if self.0.is_none() {
+            self.0 = Some(plan.using_columns()?);
+        }
+        Ok(self.0.as_deref().unwrap_or_default())
+    }
+}
+
 fn flatten_expr_groups(expr_groups: Vec<Vec<Expr>>) -> Vec<Expr> {
     expr_groups.into_iter().flatten().collect()
 }
@@ -95,7 +104,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn select_to_plan(
         &self,
         mut select: Select,
-        query_order_by: Option<OrderBy>,
+        mut query_order_by: Option<OrderBy>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // Check for unsupported syntax first
@@ -127,6 +136,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Handle named windows before processing the projection expression
         check_conflicting_windows(&select.named_window)?;
         self.match_window_definitions(&mut select.projection, &select.named_window)?;
+        self.match_window_definitions(&mut select.having, &select.named_window)?;
+        self.match_window_definitions(&mut select.qualify, &select.named_window)?;
+        self.match_window_definitions(&mut query_order_by, &select.named_window)?;
 
         // Process the SELECT expressions
         let select_exprs = self.prepare_select_exprs(
@@ -190,20 +202,55 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // ON expression is a bare identifier. `b` resolves to the
                 // alias; `b + 0` keeps `b` as the input column.
                 let expr = substitute_top_level_alias(expr, &alias_map);
-                normalize_col(expr, &projected_plan)
+                let expr = normalize_col(expr, &projected_plan)?;
+                let (expr, _) = expr.infer_placeholder_types(&on_expr_schema)?;
+                Ok(expr)
             })
             .collect::<Result<Vec<Expr>>>()?;
 
-        // Optionally the HAVING expression.
+        // Optionally the HAVING expression. Conjuncts that reference a
+        // volatile alias are deferred to `having_post_projection` and planned
+        // above the final projection (see [`references_volatile_alias`]); the
+        // remaining conjuncts take the normal path below the projection.
+        let mut having_post_projection: Option<Expr> = None;
         let having_expr_opt = select
             .having
-            .map::<Result<Expr>, _>(|having_expr| {
+            .map::<Result<Option<Expr>>, _>(|having_expr| {
                 self.warn_on_null_equality_predicate(&having_expr);
+                let window_span = self.window_function_span(&having_expr, &alias_map);
                 let having_expr = self.sql_expr_to_logical_expr(
                     having_expr,
                     &combined_schema,
                     planner_context,
                 )?;
+                // HAVING is evaluated before window functions are computed, so
+                // they may not appear there (checked on a fully dereferenced
+                // copy so that an alias of a window function is rejected too)
+                reject_window_functions(
+                    &resolve_aliases_to_exprs(having_expr.clone(), &alias_map)?,
+                    "HAVING",
+                    QUALIFY_HELP,
+                    window_span,
+                )?;
+                let mut deferred_conjuncts = vec![];
+                let mut normal_conjuncts = vec![];
+                for conjunct in split_conjunction_owned(having_expr) {
+                    if references_volatile_alias(&conjunct, &alias_map)? {
+                        deferred_conjuncts.push(conjunct);
+                    } else {
+                        normal_conjuncts.push(conjunct);
+                    }
+                }
+                // Volatile aliases are never dereferenced; see
+                // [`references_volatile_alias`] for why.
+                having_post_projection = match conjunction(deferred_conjuncts) {
+                    Some(expr) => {
+                        let expr = normalize_col(expr, &projected_plan)?;
+                        let (expr, _) = expr.infer_placeholder_types(&combined_schema)?;
+                        Some(expr)
+                    }
+                    None => None,
+                };
                 // This step "dereferences" any aliases in the HAVING clause.
                 //
                 // This is how we support queries with HAVING expressions that
@@ -217,36 +264,56 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
-                let having_expr = resolve_aliases_to_exprs(having_expr, &alias_map)?;
-                normalize_col(having_expr, &projected_plan)
+                match conjunction(normal_conjuncts) {
+                    Some(expr) => {
+                        let expr = resolve_aliases_to_exprs(expr, &alias_map)?;
+                        let expr = normalize_col(expr, &projected_plan)?;
+                        let (expr, _) = expr.infer_placeholder_types(&combined_schema)?;
+                        Ok(Some(expr))
+                    }
+                    None => Ok(None),
+                }
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
 
         // All of the group by expressions
         let group_by_exprs = if let GroupByExpr::Expressions(exprs, _) = select.group_by {
             exprs
                 .into_iter()
                 .map(|e| {
-                    let group_by_expr = self.sql_expr_to_logical_expr(
-                        e,
-                        &combined_schema,
-                        planner_context,
-                    )?;
-
                     // Aliases from the projection can conflict with same-named expressions in the input
                     let mut alias_map = alias_map.clone();
                     for f in base_plan.schema().fields() {
                         alias_map.remove(f.name());
                     }
+                    let window_span = self.window_function_span(&e, &alias_map);
+
+                    let group_by_expr = self.sql_expr_to_logical_expr(
+                        e,
+                        &combined_schema,
+                        planner_context,
+                    )?;
                     let group_by_expr =
                         resolve_aliases_to_exprs(group_by_expr, &alias_map)?;
                     let group_by_expr =
                         resolve_positions_to_exprs(group_by_expr, &select_exprs)?;
+                    // Window functions are computed after grouping, so they may
+                    // not be grouped on (checked after aliases and positions are
+                    // resolved so `GROUP BY rn` / `GROUP BY 1` are rejected too)
+                    reject_window_functions(
+                        &group_by_expr,
+                        "GROUP BY",
+                        "Compute the window function in a subquery and group by its result",
+                        window_span,
+                    )?;
                     let group_by_expr = normalize_col(group_by_expr, &projected_plan)?;
                     self.validate_schema_satisfies_exprs(
                         base_plan.schema(),
                         std::slice::from_ref(&group_by_expr),
                     )?;
+                    let (group_by_expr, _) =
+                        group_by_expr.infer_placeholder_types(&combined_schema)?;
                     Ok(group_by_expr)
                 })
                 .collect::<Result<Vec<Expr>>>()?
@@ -262,15 +329,37 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .collect()
         };
 
-        // Optionally the QUALIFY expression.
+        // Optionally the QUALIFY expression. Like HAVING, conjuncts that
+        // reference a volatile alias are deferred to
+        // `qualify_post_projection` and planned above the final projection.
+        let mut qualify_post_projection: Option<Expr> = None;
         let qualify_expr_opt = select
             .qualify
-            .map::<Result<Expr>, _>(|qualify_expr| {
+            .map::<Result<Option<Expr>>, _>(|qualify_expr| {
                 let qualify_expr = self.sql_expr_to_logical_expr(
                     qualify_expr,
                     &combined_schema,
                     planner_context,
                 )?;
+                let mut deferred_conjuncts = vec![];
+                let mut normal_conjuncts = vec![];
+                for conjunct in split_conjunction_owned(qualify_expr) {
+                    if references_volatile_alias(&conjunct, &alias_map)? {
+                        deferred_conjuncts.push(conjunct);
+                    } else {
+                        normal_conjuncts.push(conjunct);
+                    }
+                }
+                // Volatile aliases are never dereferenced; see
+                // [`references_volatile_alias`] for why.
+                qualify_post_projection = match conjunction(deferred_conjuncts) {
+                    Some(expr) => {
+                        let expr = normalize_col(expr, &projected_plan)?;
+                        let (expr, _) = expr.infer_placeholder_types(&combined_schema)?;
+                        Some(expr)
+                    }
+                    None => None,
+                };
                 // This step "dereferences" any aliases in the QUALIFY clause.
                 //
                 // This is how we support queries with QUALIFY expressions that
@@ -284,10 +373,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //
                 //   select row_number() over (PARTITION BY id) as rk from users qualify row_number() over (PARTITION BY id) > 1;
                 //
-                let qualify_expr = resolve_aliases_to_exprs(qualify_expr, &alias_map)?;
-                normalize_col(qualify_expr, &projected_plan)
+                match conjunction(normal_conjuncts) {
+                    Some(expr) => {
+                        let expr = resolve_aliases_to_exprs(expr, &alias_map)?;
+                        let expr = normalize_col(expr, &projected_plan)?;
+                        let (expr, _) = expr.infer_placeholder_types(&combined_schema)?;
+                        Ok(Some(expr))
+                    }
+                    None => Ok(None),
+                }
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
 
         // The outer expressions we will search through for aggregates.
         // First, find aggregates in SELECT, HAVING, and QUALIFY
@@ -333,7 +430,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 &aggr_exprs,
             )?
         } else {
-            match having_expr_opt {
+            match having_expr_opt.as_ref().or(having_post_projection.as_ref()) {
                 Some(having_expr) => {
                     return plan_err!(
                         "HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"
@@ -342,7 +439,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 None => AggregatePlanResult {
                     plan: base_plan.clone(),
                     select_exprs: select_exprs.clone(),
-                    having_expr: having_expr_opt,
+                    having_expr: None,
                     qualify_expr: qualify_expr_opt,
                     order_by_exprs: order_by_rex,
                     on_exprs: on_exprs_pre_aggr,
@@ -439,6 +536,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
+        // A QUALIFY that was deferred to a post-projection filter still
+        // requires window functions elsewhere in the query. A window function
+        // inside the deferred predicate itself is rejected later with a more
+        // specific error, so it is not counted here.
+        if let Some(qualify_expr) = &qualify_post_projection
+            && window_func_exprs.is_empty()
+            && find_window_exprs(std::iter::once(qualify_expr)).is_empty()
+        {
+            return plan_err!(
+                "QUALIFY clause requires window functions in the SELECT list or QUALIFY clause"
+            );
+        }
+
         // Process distinct clause. For `DISTINCT ON` combined with
         // aggregation, GROUP BY, or window functions we apply DistinctOn
         // *before* the final projection so grouping columns and ORDER BY
@@ -447,11 +557,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // list is wrapped in FIRST_VALUE during lowering).
         let plan = match select.distinct {
             None | Some(Distinct::All) => {
-                self.try_process_unnest(plan, select_exprs_post_aggr)?
+                let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
+                let plan =
+                    self.filter_post_projection(plan, having_post_projection, "HAVING")?;
+                self.filter_post_projection(plan, qualify_post_projection, "QUALIFY")?
             }
             Some(Distinct::Distinct) => {
                 let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
+                // HAVING and QUALIFY are evaluated before DISTINCT
+                let plan =
+                    self.filter_post_projection(plan, having_post_projection, "HAVING")?;
+                let plan = self.filter_post_projection(
+                    plan,
+                    qualify_post_projection,
+                    "QUALIFY",
+                )?;
                 LogicalPlanBuilder::from(plan).distinct()?.build()?
+            }
+            Some(Distinct::On(_))
+                if having_post_projection.is_some()
+                    || qualify_post_projection.is_some() =>
+            {
+                return plan_err!(
+                    "HAVING and QUALIFY expressions that reference aliases of volatile expressions are not supported with DISTINCT ON. Use a subquery instead"
+                );
             }
             Some(Distinct::On(_)) => {
                 if aggr_exprs.is_empty()
@@ -530,6 +659,37 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let plan = self.order_by(plan, order_by_rex)?;
         Ok(plan)
+    }
+
+    /// Plans a deferred HAVING / QUALIFY predicate — one that references a
+    /// volatile alias (see [`references_volatile_alias`]) — as a `Filter`
+    /// above the final projection, where the alias is a real column.
+    /// Everything the predicate references must be in the projection output;
+    /// anything else is rejected with a suggestion to use a subquery.
+    fn filter_post_projection(
+        &self,
+        plan: LogicalPlan,
+        filter_expr: Option<Expr>,
+        clause: &str,
+    ) -> Result<LogicalPlan> {
+        let Some(expr) = filter_expr else {
+            return Ok(plan);
+        };
+        if !find_aggregate_exprs(std::iter::once(&expr)).is_empty()
+            || !find_window_exprs(std::iter::once(&expr)).is_empty()
+        {
+            return plan_err!(
+                "{clause} clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions. Add the function to the SELECT list and reference it by alias, or use a subquery"
+            );
+        }
+        for column in expr.column_refs() {
+            if plan.schema().qualified_field_from_column(column).is_err() {
+                return plan_err!(
+                    "{clause} clauses that reference an alias of a volatile expression can only reference columns from the SELECT list, but {column} is not in the SELECT list. Use a subquery instead"
+                );
+            }
+        }
+        LogicalPlanBuilder::from(plan).filter(expr)?.build()
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
@@ -628,7 +788,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let mut unnest_columns = IndexMap::new();
             // from which columns used for projection, before the unnest happen
             // including non unnest columns and unnest columns
-            let mut inner_projection_exprs = vec![];
+            let mut inner_projection_exprs = DedupedProjection::default();
             let mut outer_expr_groups =
                 Vec::with_capacity(intermediate_expr_groups.len());
 
@@ -665,9 +825,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 });
             }
 
-            // Set preserve_nulls to false to ensure compatibility with DuckDB and PostgreSQL
-            let mut unnest_options = UnnestOptions::new().with_preserve_nulls(false);
-            let mut unnest_col_vec = vec![];
+            // The default SQL `UNNEST` matches DuckDB/PostgreSQL: drop both
+            // NULL and empty input lists. Outer-unnest (modelled as
+            // `Unnest { outer: true }`) overrides that and selects
+            // `NullHandling::PreserveAndExpandEmpty`. Mixing the two in a
+            // single SELECT is a planning error because `UnnestOptions` is
+            // per-`UnnestExec`, not per-column.
+            let null_handling = collect_unnest_null_handling(&intermediate_expr_groups)?;
+            let mut unnest_options =
+                UnnestOptions::new().with_null_handling(null_handling);
+            let mut unnest_col_vec = Vec::with_capacity(unnest_columns.len());
 
             for (col, maybe_list_unnest) in unnest_columns.into_iter() {
                 if let Some(list_unnest) = maybe_list_unnest {
@@ -686,7 +853,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
-                .project(inner_projection_exprs)?
+                .project(inner_projection_exprs.into_exprs())?
                 .unnest_columns_with_options(unnest_col_vec, unnest_options)?
                 .build()?;
             intermediate_expr_groups = outer_expr_groups;
@@ -789,7 +956,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         loop {
             let mut unnest_columns = IndexMap::new();
-            let mut inner_projection_exprs = vec![];
+            let mut inner_projection_exprs = DedupedProjection::default();
 
             let outer_projection_exprs = rewrite_recursive_unnests_bottom_up(
                 &intermediate_plan,
@@ -824,9 +991,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         columns
                     }
                 };
-                projection_exprs.extend(inner_projection_exprs);
+                projection_exprs.extend(inner_projection_exprs.into_exprs());
 
-                let mut unnest_col_vec = vec![];
+                let mut unnest_col_vec = Vec::with_capacity(unnest_columns.len());
 
                 for (col, maybe_list_unnest) in unnest_columns.into_iter() {
                     if let Some(list_unnest) = maybe_list_unnest {
@@ -867,6 +1034,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let fallback_schemas = plan.fallback_normalize_schemas();
 
                 self.warn_on_null_equality_predicate(&predicate_expr);
+                let window_span =
+                    self.window_function_span(&predicate_expr, &HashMap::new());
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, plan.schema(), planner_context)?;
 
@@ -878,6 +1047,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "Aggregate functions are not allowed in the WHERE clause. Consider using HAVING instead"
                     );
                 }
+                // WHERE is evaluated before window functions are computed, so
+                // they may not appear there either
+                reject_window_functions(
+                    &filter_expr,
+                    "WHERE",
+                    QUALIFY_HELP,
+                    window_span,
+                )?;
 
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
@@ -950,11 +1127,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         empty_from: bool,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<SelectExpr>> {
-        let mut prepared_select_exprs = vec![];
+        let mut prepared_select_exprs = Vec::with_capacity(projection.len());
         let mut error_builder = DataFusionErrorBuilder::new();
+        let mut using_columns = LazyUsingColumns::default();
 
         for expr in projection {
-            match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
+            match self.sql_select_to_rex(
+                expr,
+                plan,
+                &mut using_columns,
+                empty_from,
+                planner_context,
+            ) {
                 Ok(expr) => prepared_select_exprs.push(expr),
                 Err(err) => error_builder.add_error(err),
             }
@@ -967,6 +1151,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         sql: SelectItem,
         plan: &LogicalPlan,
+        using_columns: &mut LazyUsingColumns,
         empty_from: bool,
         planner_context: &mut PlannerContext,
     ) -> Result<SelectExpr> {
@@ -976,7 +1161,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let col = normalize_col_with_schemas_and_ambiguity_check(
                     expr,
                     &[&[plan.schema()]],
-                    &plan.using_columns()?,
+                    using_columns.get(plan)?,
                 )?;
 
                 Ok(SelectExpr::Expression(col))
@@ -987,7 +1172,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let col = normalize_col_with_schemas_and_ambiguity_check(
                     select_expr,
                     &[&[plan.schema()]],
-                    &plan.using_columns()?,
+                    using_columns.get(plan)?,
                 )?;
                 let name = self.ident_normalizer.normalize(alias);
                 // avoiding adding an alias if the column name is the same.
@@ -1008,6 +1193,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 let planned_options = self.plan_wildcard_options(
                     plan,
+                    using_columns,
                     empty_from,
                     planner_context,
                     options,
@@ -1030,6 +1216,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let qualifier = self.object_name_to_table_reference(object_name)?;
                 let planned_options = self.plan_wildcard_options(
                     plan,
+                    using_columns,
                     empty_from,
                     planner_context,
                     options,
@@ -1067,6 +1254,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn plan_wildcard_options(
         &self,
         plan: &LogicalPlan,
+        using_columns: &mut LazyUsingColumns,
         empty_from: bool,
         planner_context: &mut PlannerContext,
         options: WildcardAdditionalOptions,
@@ -1086,6 +1274,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     self.sql_select_to_rex(
                         SelectItem::UnnamedExpr(item.expr.clone()),
                         plan,
+                        using_columns,
                         empty_from,
                         planner_context,
                     )
@@ -1200,7 +1389,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // combine the original grouping and aggregate expressions into one list (note that
         // we do not add the "having" expression since that is not part of the projection)
-        let mut aggr_projection_exprs = vec![];
+        let mut aggr_projection_exprs =
+            Vec::with_capacity(group_by_exprs.len() + aggr_exprs.len());
         for expr in group_by_exprs {
             match expr {
                 Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
@@ -1368,58 +1558,146 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         })
     }
 
-    // If the projection is done over a named window, that window
-    // name must be defined. Otherwise, it gives an error.
+    /// Replaces every window that references a named window, as in `OVER w`
+    /// or `OVER (w ...)`, with the resolved window specification.
+    ///
+    /// Subqueries are skipped: each resolves names against its own `WINDOW`
+    /// clause when it is planned.
     fn match_window_definitions(
         &self,
-        projection: &mut [SelectItem],
+        node: &mut impl VisitMut,
         named_windows: &[NamedWindowDefinition],
     ) -> Result<()> {
         let named_windows: Vec<(&NamedWindowDefinition, String)> = named_windows
             .iter()
             .map(|w| (w, self.ident_normalizer.normalize(w.0.clone())))
             .collect();
-        for proj in projection.iter_mut() {
-            if let SelectItem::ExprWithAlias { expr, alias: _ }
-            | SelectItem::UnnamedExpr(expr) = proj
-            {
-                let mut err = None;
-                let _ = visit_expressions_mut(expr, |expr| {
-                    if let SQLExpr::Function(f) = expr
-                        && let Some(WindowType::NamedWindow(ident)) = &f.over
-                    {
-                        let normalized_ident =
-                            self.ident_normalizer.normalize(ident.clone());
-                        for (
-                            NamedWindowDefinition(_, window_expr),
-                            normalized_window_ident,
-                        ) in named_windows.iter()
-                        {
-                            if normalized_ident.eq(normalized_window_ident) {
-                                f.over = Some(match window_expr {
-                                    NamedWindowExpr::NamedWindow(ident) => {
-                                        WindowType::NamedWindow(ident.clone())
-                                    }
-                                    NamedWindowExpr::WindowSpec(spec) => {
-                                        WindowType::WindowSpec(spec.clone())
-                                    }
-                                })
-                            }
-                        }
-                        // All named windows must be defined with a WindowSpec.
-                        if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                            err = Some(plan_err!("The window {ident} is not defined!"));
-                            return ControlFlow::Break(());
-                        }
-                    }
-                    ControlFlow::Continue(())
-                });
-                if let Some(err) = err {
-                    return err;
-                }
+        let mut resolver = NamedWindowResolver {
+            planner: self,
+            named_windows: &named_windows,
+            query_depth: 0,
+        };
+        match node.visit(&mut resolver) {
+            ControlFlow::Break(e) => Err(e),
+            ControlFlow::Continue(()) => Ok(()),
+        }
+    }
+
+    /// Returns the window specification of the named window `ident`.
+    ///
+    /// A window definition may only reference windows defined before it, so
+    /// references cannot form a cycle.
+    fn resolve_named_window(
+        &self,
+        ident: &Ident,
+        named_windows: &[(&NamedWindowDefinition, String)],
+    ) -> Result<WindowSpec> {
+        let normalized_ident = self.ident_normalizer.normalize(ident.clone());
+        let Some(position) = named_windows
+            .iter()
+            .position(|(_, name)| *name == normalized_ident)
+        else {
+            return plan_err!("The window {ident} is not defined!");
+        };
+        let (NamedWindowDefinition(_, window_expr), _) = named_windows[position];
+        let earlier_windows = &named_windows[..position];
+        match window_expr {
+            NamedWindowExpr::NamedWindow(base) => {
+                self.resolve_named_window(base, earlier_windows)
+            }
+            NamedWindowExpr::WindowSpec(spec) => {
+                self.resolve_window_spec(spec, earlier_windows)
             }
         }
-        Ok(())
+    }
+
+    /// Resolves a window specification that may reference a named window, as
+    /// in `OVER (w ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)`.
+    ///
+    /// Following the SQL standard and PostgreSQL, the specification copies
+    /// the referenced window's `PARTITION BY` and `ORDER BY`, may add an
+    /// `ORDER BY` only when the referenced window has none, and may add a
+    /// frame only when the referenced window has none.
+    fn resolve_window_spec(
+        &self,
+        spec: &WindowSpec,
+        named_windows: &[(&NamedWindowDefinition, String)],
+    ) -> Result<WindowSpec> {
+        let Some(base_name) = &spec.window_name else {
+            return Ok(spec.clone());
+        };
+        let base = self.resolve_named_window(base_name, named_windows)?;
+        if !spec.partition_by.is_empty() {
+            return plan_err!(
+                "Cannot override PARTITION BY clause of window {base_name}"
+            );
+        }
+        if !spec.order_by.is_empty() && !base.order_by.is_empty() {
+            return plan_err!("Cannot override ORDER BY clause of window {base_name}");
+        }
+        if base.window_frame.is_some() {
+            return plan_err!(
+                "Cannot copy window {base_name} because it has a frame clause"
+            );
+        }
+        let order_by = if spec.order_by.is_empty() {
+            base.order_by
+        } else {
+            spec.order_by.clone()
+        };
+        Ok(WindowSpec {
+            window_name: None,
+            partition_by: base.partition_by,
+            order_by,
+            window_frame: spec.window_frame.clone(),
+        })
+    }
+}
+
+/// Resolves named window references in the expressions of a single `SELECT`.
+struct NamedWindowResolver<'a, 'b, S: ContextProvider> {
+    planner: &'a SqlToRel<'b, S>,
+    named_windows: &'a [(&'a NamedWindowDefinition, String)],
+    /// Number of subqueries enclosing the expression being visited.
+    query_depth: usize,
+}
+
+impl<S: ContextProvider> VisitorMut for NamedWindowResolver<'_, '_, S> {
+    type Break = DataFusionError;
+
+    fn pre_visit_query(&mut self, _query: &mut Query) -> ControlFlow<Self::Break> {
+        self.query_depth += 1;
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &mut Query) -> ControlFlow<Self::Break> {
+        self.query_depth -= 1;
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_expr(&mut self, expr: &mut SQLExpr) -> ControlFlow<Self::Break> {
+        if self.query_depth > 0 {
+            return ControlFlow::Continue(());
+        }
+        let SQLExpr::Function(f) = expr else {
+            return ControlFlow::Continue(());
+        };
+        let resolved = match &f.over {
+            Some(WindowType::NamedWindow(ident)) => {
+                self.planner.resolve_named_window(ident, self.named_windows)
+            }
+            Some(WindowType::WindowSpec(spec)) if spec.window_name.is_some() => {
+                self.planner.resolve_window_spec(spec, self.named_windows)
+            }
+            _ => return ControlFlow::Continue(()),
+        };
+        match resolved {
+            Ok(spec) => {
+                f.over = Some(WindowType::WindowSpec(spec));
+                ControlFlow::Continue(())
+            }
+            Err(e) => ControlFlow::Break(e),
+        }
     }
 }
 
@@ -1450,4 +1728,46 @@ fn has_unnest_expr_recursively(expr: &Expr) -> bool {
         }
     });
     has_unnest
+}
+
+/// Walk `select_exprs`, observe every [`Expr::Unnest`] inside them, and
+/// derive the [`NullHandling`] mode for the resulting [`UnnestOptions`].
+///
+/// * No unnest with `outer = true`  → [`NullHandling::Drop`] (default SQL
+///   `UNNEST(...)` semantics, matching DuckDB/PostgreSQL).
+/// * Every unnest with `outer = true` → [`NullHandling::PreserveAndExpandEmpty`]
+///   (outer-unnest semantics: `NULL` and empty input lists each produce a
+///   single `NULL` output row).
+/// * A mix of `outer = true` and `outer = false` in one SELECT → planning
+///   error, because `UnnestOptions` applies per `Unnest` plan node, not
+///   per output column.
+fn collect_unnest_null_handling(expr_groups: &[Vec<Expr>]) -> Result<NullHandling> {
+    let mut saw_outer = false;
+    let mut saw_inner = false;
+    for group in expr_groups {
+        for expr in group {
+            expr.apply(|e| {
+                if let Expr::Unnest(UnnestExpr { outer, .. }) = e {
+                    if *outer {
+                        saw_outer = true;
+                    } else {
+                        saw_inner = true;
+                    }
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+    }
+    if saw_outer && saw_inner {
+        return plan_err!(
+            "Cannot mix `unnest(...)` with `unnest_outer(...)` in the same \
+             SELECT — the unnest operator carries a single null-handling \
+             mode. Split the query so each unnest projection uses one mode."
+        );
+    }
+    Ok(if saw_outer {
+        NullHandling::PreserveAndExpandEmpty
+    } else {
+        NullHandling::Drop
+    })
 }

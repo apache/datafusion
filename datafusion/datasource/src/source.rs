@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`DataSource`] and [`DataSourceExec`]
 
@@ -33,13 +20,15 @@ use datafusion_physical_plan::metrics::{
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    ReplaceChildrenOptions,
 };
 use itertools::Itertools;
 
 use crate::file::FileSource;
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
@@ -221,9 +210,29 @@ pub trait DataSource: Any + Send + Sync + Debug {
     }
 
     /// Returns a variant of this `DataSource` that is aware of order-sensitivity.
+    #[deprecated(
+        since = "56.0.0",
+        note = "no longer called: a scan that advertises an output ordering always preserves it"
+    )]
     fn with_preserve_order(&self, _preserve_order: bool) -> Option<Arc<dyn DataSource>> {
         None
     }
+
+    /// Apply a closure to each expression used by this data source.
+    ///
+    /// This includes filter predicates (which may contain dynamic filters) and any
+    /// other expressions used during data scanning.
+    ///
+    /// The function `f` should be called once per expression unless the function returns
+    /// [`TreeNodeRecursion::Stop`] to stop iteration.
+    ///
+    /// See [`ExecutionPlan::apply_expressions`] for more details and implementation examples.
+    ///
+    /// [`ExecutionPlan::apply_expressions`]: datafusion_physical_plan::ExecutionPlan::apply_expressions
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion>;
 
     /// Injects arbitrary run-time state into this DataSource, returning a new instance
     /// that incorporates that state *if* it is relevant to the concrete DataSource implementation.
@@ -263,6 +272,30 @@ pub trait DataSource: Any + Send + Sync + Debug {
     /// [`Self::open`].
     fn open_with_args(&self, args: OpenArgs) -> Result<SendableRecordBatchStream> {
         self.open(args.partition, args.context)
+    }
+
+    /// Serialize this data source to a full [`PhysicalPlanNode`] (a
+    /// `DataSourceExec` wrapping this source), if it knows how.
+    ///
+    /// This is the `DataSource` analog of
+    /// [`ExecutionPlan::try_to_proto`].
+    /// [`DataSourceExec::try_to_proto`](crate::source::DataSourceExec) delegates
+    /// to this hook, which for file scans forwards to
+    /// [`FileSource::try_to_proto`]
+    /// through the shared [`FileScanConfig`]
+    /// spine.
+    ///
+    /// * `Ok(None)` (the default) — "I don't serialize myself"; the caller falls
+    ///   back to the central downcast chain in `datafusion-proto`.
+    /// * `Ok(Some(node))` — fully serialized; the caller must not fall back.
+    ///
+    /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        Ok(None)
     }
 }
 
@@ -359,11 +392,30 @@ impl ExecutionPlan for DataSourceExec {
         Vec::new()
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Delegate to the underlying data source
+        self.data_source.apply_expressions(f)
     }
 
     /// Implementation of [`ExecutionPlan::repartitioned`] which relies upon the inner [`DataSource::repartitioned`].
@@ -524,18 +576,6 @@ impl ExecutionPlan for DataSourceExec {
             })
     }
 
-    fn with_preserve_order(
-        &self,
-        preserve_order: bool,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        self.data_source
-            .with_preserve_order(preserve_order)
-            .map(|new_data_source| {
-                Arc::new(self.clone().with_data_source(new_data_source))
-                    as Arc<dyn ExecutionPlan>
-            })
-    }
-
     fn with_new_state(
         &self,
         state: Arc<dyn Any + Send + Sync>,
@@ -552,6 +592,18 @@ impl ExecutionPlan for DataSourceExec {
         let mut new_exec = Arc::unwrap_or_clone(self);
         new_exec.execution_state = Arc::new(OnceLock::new());
         Ok(Arc::new(new_exec))
+    }
+
+    /// Delegates serialization to the wrapped [`DataSource`]. For file scans the
+    /// concrete [`FileSource`] emits the node via its
+    /// own `try_to_proto` hook, keeping the format-specific wire logic in the
+    /// format crate.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        self.data_source().try_to_proto(ctx)
     }
 }
 

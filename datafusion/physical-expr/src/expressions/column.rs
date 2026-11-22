@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Physical column reference: [`Column`]
 
@@ -153,15 +140,35 @@ impl PhysicalExpr for Column {
         _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
+        let Self { name, index } = self;
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
                 protobuf::PhysicalColumn {
-                    name: self.name.clone(),
-                    index: self.index as u32,
+                    name: name.clone(),
+                    index: *index as u32,
                 },
             )),
         }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl From<&datafusion_proto_models::protobuf::PhysicalColumn> for Column {
+    fn from(c: &datafusion_proto_models::protobuf::PhysicalColumn) -> Self {
+        let datafusion_proto_models::protobuf::PhysicalColumn { name, index } = c;
+        Column::new(name, *index as usize)
+    }
+}
+
+#[cfg(feature = "proto")]
+impl From<&Column> for datafusion_proto_models::protobuf::PhysicalColumn {
+    fn from(c: &Column) -> Self {
+        let Column { name, index } = c;
+        Self {
+            name: name.clone(),
+            index: *index as u32,
+        }
     }
 }
 

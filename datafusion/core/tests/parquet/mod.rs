@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Parquet integration tests
 use crate::parquet::utils::MetricsFinder;
@@ -53,11 +40,13 @@ mod expr_adapter;
 mod external_access_plan;
 mod file_statistics;
 mod filter_pushdown;
+mod io;
 mod ordering;
 mod page_pruning;
 mod row_group_pruning;
 mod schema;
 mod schema_coercion;
+mod string_in_list_pruning;
 mod utils;
 
 #[cfg(test)]
@@ -112,7 +101,7 @@ enum Unit {
 struct ContextWithParquet {
     /// temp file parquet data is written to. The file is cleaned up
     /// when dropped
-    _file: NamedTempFile,
+    file: NamedTempFile,
     provider: Arc<dyn TableProvider>,
     ctx: SessionContext,
 }
@@ -330,11 +319,10 @@ impl ContextWithParquet {
                     custom_schema,
                     custom_batches,
                 )
-                .await
             }
             Unit::Page(row_per_page) => {
                 config = config.with_parquet_page_index_pruning(true);
-                make_test_file_page(scenario, row_per_page).await
+                make_test_file_page(scenario, row_per_page)
             }
             Unit::RowGroupAndPage(row_per_group, row_per_page) => {
                 config = config.with_parquet_bloom_filter_pruning(true);
@@ -347,7 +335,6 @@ impl ContextWithParquet {
                     custom_schema,
                     custom_batches,
                 )
-                .await
             }
         };
         let parquet_path = file.path().to_string_lossy();
@@ -362,7 +349,7 @@ impl ContextWithParquet {
         ctx.register_table("t", provider.clone()).unwrap();
 
         Self {
-            _file: file,
+            file,
             provider,
             ctx,
         }
@@ -429,7 +416,7 @@ impl ContextWithParquet {
 
         // find the parquet metrics
         let parquet_metrics =
-            MetricsFinder::find_metrics(physical_plan.as_ref()).unwrap();
+            MetricsFinder::find_metrics(physical_plan.as_ref()).unwrap_or_default();
 
         let result_rows = results.iter().map(|b| b.num_rows()).sum();
 
@@ -903,25 +890,25 @@ fn make_dictionary_batch(strings: Vec<&str>, integers: Vec<i32>) -> RecordBatch 
     let large_utf8_dict = DictionaryArray::new(keys.clone(), Arc::new(large_utf8));
 
     let binary =
-        BinaryArray::from_iter_values(strings.iter().cloned().map(|v| v.as_bytes()));
+        BinaryArray::from_iter_values(strings.iter().copied().map(|v| v.as_bytes()));
     let binary_dict = DictionaryArray::new(keys.clone(), Arc::new(binary));
 
     let large_binary =
-        LargeBinaryArray::from_iter_values(strings.iter().cloned().map(|v| v.as_bytes()));
+        LargeBinaryArray::from_iter_values(strings.iter().copied().map(|v| v.as_bytes()));
     let large_binary_dict = DictionaryArray::new(keys.clone(), Arc::new(large_binary));
 
     let int32 = Int32Array::from_iter_values(integers.clone());
     let int32_dict = DictionaryArray::new(small_keys.clone(), Arc::new(int32));
 
-    let int64 = Int64Array::from_iter_values(integers.iter().cloned().map(|v| v as i64));
+    let int64 = Int64Array::from_iter_values(integers.iter().copied().map(|v| v as i64));
     let int64_dict = DictionaryArray::new(keys.clone(), Arc::new(int64));
 
     let uint32 =
-        UInt32Array::from_iter_values(integers.iter().cloned().map(|v| v as u32));
+        UInt32Array::from_iter_values(integers.iter().copied().map(|v| v as u32));
     let uint32_dict = DictionaryArray::new(small_keys.clone(), Arc::new(uint32));
 
     let decimal = Decimal128Array::from_iter_values(
-        integers.iter().cloned().map(|v| (v * 100) as i128),
+        integers.iter().copied().map(|v| (v * 100) as i128),
     )
     .with_precision_and_scale(6, 2)
     .unwrap();
@@ -1173,7 +1160,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
 }
 
 /// Create a test parquet file with various data types
-async fn make_test_file_rg(
+fn make_test_file_rg(
     scenario: Scenario,
     row_per_group: usize,
     row_per_page: Option<usize>,
@@ -1219,7 +1206,7 @@ async fn make_test_file_rg(
     output_file
 }
 
-async fn make_test_file_page(scenario: Scenario, row_per_page: usize) -> NamedTempFile {
+fn make_test_file_page(scenario: Scenario, row_per_page: usize) -> NamedTempFile {
     let mut output_file = tempfile::Builder::new()
         .prefix("parquet_page_pruning")
         .suffix(".parquet")

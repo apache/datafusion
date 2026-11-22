@@ -1,20 +1,7 @@
 #!/usr/bin/env python
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Script that updates versions for datafusion crates, locally
 #
@@ -26,29 +13,6 @@ import argparse
 from pathlib import Path
 import tomlkit
 
-crates = {
-    'datafusion-common': 'datafusion/common/Cargo.toml',
-    'datafusion-common-runtime': 'datafusion/common-runtime/Cargo.toml',
-    'datafusion': 'datafusion/core/Cargo.toml',
-    'datafusion-execution': 'datafusion/execution/Cargo.toml',
-    'datafusion-expr': 'datafusion/expr/Cargo.toml',
-    'datafusion-ffi': 'datafusion/ffi/Cargo.toml',
-    'datafusion-functions': 'datafusion/functions/Cargo.toml',
-    'datafusion-functions-aggregate': 'datafusion/functions-aggregate/Cargo.toml',
-    'datafusion-functions-nested': 'datafusion/functions-nested/Cargo.toml',
-    'datafusion-optimizer': 'datafusion/optimizer/Cargo.toml',
-    'datafusion-physical-expr': 'datafusion/physical-expr/Cargo.toml',
-    'datafusion-physical-expr-common': 'datafusion/physical-expr-common/Cargo.toml',
-    'datafusion-physical-plan': 'datafusion/physical-plan/Cargo.toml',
-    'datafusion-proto': 'datafusion/proto/Cargo.toml',
-    'datafusion-sql': 'datafusion/sql/Cargo.toml',
-    'datafusion-sqllogictest': 'datafusion/sqllogictest/Cargo.toml',
-    'datafusion-substrait': 'datafusion/substrait/Cargo.toml',
-    'datafusion-wasmtest': 'datafusion/wasmtest/Cargo.toml',
-    'datafusion-benchmarks': 'benchmarks/Cargo.toml',
-    'datafusion-cli': 'datafusion-cli/Cargo.toml',
-    'datafusion-examples': 'datafusion-examples/Cargo.toml',
-}
 
 def update_workspace_version(new_version: str):
     cargo_toml = 'Cargo.toml'
@@ -64,47 +28,15 @@ def update_workspace_version(new_version: str):
 
     doc = tomlkit.parse(data)
 
-    for crate in crates.keys():
-        df_dep = doc.get('workspace').get('dependencies', {}).get(crate)
+    for crate, df_dep in doc['workspace']['dependencies'].items():
+        if not crate.startswith('datafusion'):
+            continue
         # skip crates that pin datafusion using git hash
         if df_dep is not None and df_dep.get('version') is not None:
             print(f'updating {crate} dependency in {cargo_toml}')
             df_dep['version'] = new_version
 
-    with open(cargo_toml, 'w') as f:
-        f.write(tomlkit.dumps(doc))
-
-
-def update_datafusion_version(cargo_toml: str, new_version: str):
-    print(f'updating {cargo_toml}')
-    with open(cargo_toml) as f:
-        data = f.read()
-
-    doc = tomlkit.parse(data)
-    pkg = doc.get('package')
-    if 'workspace' not in pkg['version']:
-        pkg['version'] = new_version
-
-    with open(cargo_toml, 'w') as f:
-        f.write(tomlkit.dumps(doc))
-
-def update_downstream_versions(cargo_toml: str, new_version: str):
-    with open(cargo_toml) as f:
-        data = f.read()
-
-    doc = tomlkit.parse(data)
-
-    for crate in crates.keys():
-        df_dep = doc.get('dependencies', {}).get(crate)
-        # skip crates that pin datafusion using git hash
-        if df_dep is not None and df_dep.get('version') is not None:
-            print(f'updating {crate} dependency in {cargo_toml}')
-            df_dep['version'] = new_version
-
-        df_dep = doc.get('dev-dependencies', {}).get(crate)
-        if df_dep is not None and df_dep.get('version') is not None:
-            print(f'updating {crate} dev-dependency in {cargo_toml}')
-            df_dep['version'] = new_version
+    doc['workspace']['package']['version'] = new_version
 
     with open(cargo_toml, 'w') as f:
         f.write(tomlkit.dumps(doc))
@@ -117,8 +49,48 @@ def update_docs(path: str, new_version: str):
         fd.seek(0)
         content = re.sub(r'datafusion\s*=\s*"(.+?)"', f'datafusion = "{new_version}"', content)
         content = re.sub(r'datafusion\s*=\s*\{\s*version\s*=\s*"(.+?)"', f'datafusion = {{ version = "{new_version}"', content)
+        content = re.sub(r'datafusion version \d+\.\d+\.\d+(-\S+)?', f'datafusion version {new_version}', content)
         fd.truncate()
         fd.write(content)
+
+
+def is_prerelease(version: str) -> bool:
+    """Returns True for development versions such as `56.0.0-dev`"""
+    return '-' in version
+
+
+def release_version(version: str) -> str:
+    """Strips any pre-release suffix: `56.0.0-dev` --> `56.0.0`"""
+    return version.split('-')[0]
+
+
+def update_ci(new_version: str):
+    # The release version labeler adds a label to merged PRs with the
+    # version they will be released in. On `main` the version is
+    # `N.0.0-dev` so the label is `vN.0.0`
+    print("updating ci/scripts/release_version_labeler.js")
+    with open("ci/scripts/release_version_labeler.js", 'r+') as fd:
+        target_version = f"v{release_version(new_version)}"
+        content = fd.read()
+        fd.seek(0)
+        content = re.sub(
+            r"const target_version = '.*?'", f"const target_version = '{target_version}'", content
+        )
+        fd.truncate()
+        fd.write(content)
+
+
+USER_FACING_DOCS = [
+    "README.md",
+    "docs/source/download.md",
+    "docs/source/user-guide/example-usage.md",
+    "docs/source/user-guide/crate-configuration.md",
+]
+
+
+def update_user_facing_docs(new_version: str):
+    for path in USER_FACING_DOCS:
+        update_docs(path, new_version)
 
 
 def main():
@@ -127,28 +99,44 @@ def main():
             'Update datafusion crate version and corresponding version pins '
             'in downstream crates.'
         ))
-    parser.add_argument('new_version', type=str, help='new datafusion version')
+    parser.add_argument('new_version', type=str, help='new datafusion version (e.g. `56.0.0` or `56.0.0-dev`)')
+    parser.add_argument(
+        '--user-facing-docs-only',
+        action='store_true',
+        help=(
+            'only update the version in the user-facing documentation examples '
+            '(e.g. `docs/source/download.md`). Used to sync docs on `main` after a release'
+        ))
     args = parser.parse_args()
 
     new_version = args.new_version
     repo_root = Path(__file__).parent.parent.absolute()
 
+    if args.user_facing_docs_only:
+        if is_prerelease(new_version):
+            parser.error(
+                f'{new_version} is a development version; user-facing docs '
+                'should only reference released versions')
+        print(f'Updating user-facing docs in {repo_root} to {new_version}')
+        update_user_facing_docs(new_version)
+        return
+
     print(f'Updating workspace in {repo_root} to {new_version}')
     update_workspace_version(new_version)
 
-    print(f'Updating datafusion crate versions in {repo_root} to {new_version}')
-    for cargo_toml in crates.values():
-        update_datafusion_version(cargo_toml, new_version)
+    # The generated config docs embed the full crate version (for example
+    # `datafusion version 56.0.0-dev`) so they are always updated
+    update_docs("docs/source/user-guide/configs.md", new_version)
 
-    print(f'Updating datafusion dependency versions in {repo_root} to {new_version}')
-    for cargo_toml in crates.values():
-        update_downstream_versions(cargo_toml, new_version)
+    if is_prerelease(new_version):
+        # Development versions (e.g. `56.0.0-dev`) are never published to
+        # crates.io, so leave the user-facing examples pointing at the
+        # latest released version
+        print(f'{new_version} is a development version, not updating docs examples')
+    else:
+        update_user_facing_docs(new_version)
 
-    update_docs("README.md", new_version)
-    update_docs("docs/source/download.md", new_version)
-    update_docs("docs/source/user-guide/example-usage.md", new_version)
-    update_docs("docs/source/user-guide/crate-configuration.md", new_version)
-
+    update_ci(new_version)
 
 if __name__ == "__main__":
     main()

@@ -1,27 +1,15 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # DataFusion Documentation
 
 This folder contains the source content of the [User Guide](./source/user-guide)
-and [Contributor Guide](./source/contributor-guide). These are both published to
-https://datafusion.apache.org/ as part of the release process.
+and [Contributor Guide](./source/contributor-guide). The site root shows the
+development documentation built from `main`. Released versions of the complete
+site are available under `/versions/<version>/`.
 
 ## Dependencies
 
@@ -48,9 +36,7 @@ Run the provided script to build the HTML pages.
 ```
 
 The HTML will be generated into a `build` directory. Open `build/html/index.html`
-in your preferred browser, e.g.
-
-Preview the site on Linux by running this command.
+in your preferred browser, for example on Linux via
 
 ```bash
 # On macOS
@@ -58,6 +44,16 @@ open build/html/index.html
 # On Linux with Firefox
 firefox build/html/index.html
 ```
+
+Note that some features of the site, such as the version picker, do not work
+when the pages are opened directly as files. To preview such features, serve
+the site over HTTP with sphinx-autobuild:
+
+```bash
+uv run --with sphinx-autobuild sphinx-autobuild source build/html --port 8000
+```
+
+And then open http://localhost:8000/ in your browser
 
 ## Making Changes
 
@@ -69,7 +65,7 @@ automatically updated.
 
 This documentation is hosted at https://datafusion.apache.org/
 
-When the PR is merged to the `main` branch of the DataFusion
+When a PR is merged to the `main` branch of the DataFusion
 repository, a [github workflow](https://github.com/apache/datafusion/blob/main/.github/workflows/docs.yaml) which:
 
 1. Builds the html content
@@ -79,3 +75,11 @@ The Apache Software Foundation provides https://datafusion.apache.org/,
 which serves content based on the configuration in
 [.asf.yaml](https://github.com/apache/datafusion/blob/main/.asf.yaml),
 which specifies the target as https://datafusion.apache.org/.
+
+The documentation for previously released versions is served under
+`/versions/<version>/`. The releases in the version picker are listed in
+`source/_static/versions.json`, and older releases that are still published,
+but not shown in the picker, are listed in `source/_static/old_versions.json`.
+See the
+[release instructions](../dev/release/README.md#publish-the-versioned-documentation)
+for how it is published.

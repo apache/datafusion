@@ -1,26 +1,14 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::{
-    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float32Type,
-    Float64Type,
+    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
+    DECIMAL256_MAX_PRECISION, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
+    Decimal256Type, Float32Type, Float64Type,
 };
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::interval_arithmetic::Interval;
@@ -31,7 +19,10 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-use super::decimal::{apply_decimal_op, ceil_decimal_value};
+use super::decimal::{
+    apply_decimal_op, ceil_decimal_value, decimal_floor_ceil_precision,
+    decimal_floor_ceil_return_type,
+};
 
 #[user_doc(
     doc_section(label = "Math Functions"),
@@ -83,10 +74,7 @@ impl ScalarUDFImpl for CeilFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::Null => Ok(DataType::Float64),
-            other => Ok(other.clone()),
-        }
+        Ok(decimal_floor_ceil_return_type(&arg_types[0]))
     }
 
     fn is_strict(&self) -> bool {
@@ -122,7 +110,11 @@ impl ScalarUDFImpl for CeilFunc {
         let is_scalar = matches!(arg, ColumnarValue::Scalar(_));
 
         // Array path (also handles decimal scalars converted to size-1 arrays)
-        let value = arg.to_array(args.number_rows)?;
+        let value = if is_scalar {
+            arg.to_array(1)?
+        } else {
+            arg.to_array(args.number_rows)?
+        };
 
         let result: ArrayRef = match value.data_type() {
             DataType::Float64 => Arc::new(
@@ -141,8 +133,13 @@ impl ScalarUDFImpl for CeilFunc {
             DataType::Decimal32(precision, scale) => {
                 apply_decimal_op::<Decimal32Type, _>(
                     &value,
-                    *precision,
+                    decimal_floor_ceil_precision(
+                        *precision,
+                        *scale,
+                        DECIMAL32_MAX_PRECISION,
+                    ),
                     *scale,
+                    0,
                     self.name(),
                     ceil_decimal_value,
                 )?
@@ -150,8 +147,13 @@ impl ScalarUDFImpl for CeilFunc {
             DataType::Decimal64(precision, scale) => {
                 apply_decimal_op::<Decimal64Type, _>(
                     &value,
-                    *precision,
+                    decimal_floor_ceil_precision(
+                        *precision,
+                        *scale,
+                        DECIMAL64_MAX_PRECISION,
+                    ),
                     *scale,
+                    0,
                     self.name(),
                     ceil_decimal_value,
                 )?
@@ -159,8 +161,13 @@ impl ScalarUDFImpl for CeilFunc {
             DataType::Decimal128(precision, scale) => {
                 apply_decimal_op::<Decimal128Type, _>(
                     &value,
-                    *precision,
+                    decimal_floor_ceil_precision(
+                        *precision,
+                        *scale,
+                        DECIMAL128_MAX_PRECISION,
+                    ),
                     *scale,
+                    0,
                     self.name(),
                     ceil_decimal_value,
                 )?
@@ -168,8 +175,13 @@ impl ScalarUDFImpl for CeilFunc {
             DataType::Decimal256(precision, scale) => {
                 apply_decimal_op::<Decimal256Type, _>(
                     &value,
-                    *precision,
+                    decimal_floor_ceil_precision(
+                        *precision,
+                        *scale,
+                        DECIMAL256_MAX_PRECISION,
+                    ),
                     *scale,
+                    0,
                     self.name(),
                     ceil_decimal_value,
                 )?
@@ -195,11 +207,51 @@ impl ScalarUDFImpl for CeilFunc {
     }
 
     fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
-        let data_type = inputs[0].data_type();
+        let data_type = decimal_floor_ceil_return_type(&inputs[0].data_type());
         Interval::make_unbounded(&data_type)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::Field;
+    use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::{
+        ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    };
+
+    use crate::math::ceil::CeilFunc;
+
+    #[test]
+    fn test_ceil_decimal_scalar_zero_rows() {
+        let udf = CeilFunc::new();
+        let arg = ScalarValue::Decimal32(Some(150), 9, 2);
+        let arg_fields = vec![Arc::new(Field::new("a", arg.data_type(), true))];
+        let return_field = udf
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &[Some(&arg)],
+            })
+            .unwrap();
+        let result = udf
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Scalar(arg)],
+                arg_fields,
+                number_rows: 0,
+                return_field,
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+        let ColumnarValue::Scalar(result) = result else {
+            panic!("expected a scalar result, got {result:?}");
+        };
+        assert_eq!(result, ScalarValue::Decimal32(Some(2), 8, 0));
     }
 }

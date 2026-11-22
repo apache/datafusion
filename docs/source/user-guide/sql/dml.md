@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # DML
@@ -136,3 +123,92 @@ INSERT INTO <i><b>table_name</i></b> { VALUES ( <i><b>expression</i></b> [, ...]
 | 2     |
 +-------+
 ```
+
+## DELETE
+
+Removes rows from a table.
+
+<pre>
+DELETE FROM <i><b>table_name</b></i> [ WHERE <i><b>condition</b></i> ]
+</pre>
+
+`DELETE` returns the number of removed rows in a column named `count`.
+
+If you omit the `WHERE` clause, DataFusion removes all rows.
+
+DataFusion removes a row only if the condition is true for that row. SQL three-valued logic applies: if the condition evaluates to `NULL`, the row remains. For example, `WHERE value > 15` keeps a row with a `NULL` value, because `NULL > 15` is `NULL`.
+
+Not all tables support `DELETE`. See [Table support for DELETE and UPDATE](#table-support-for-delete-and-update).
+
+### Examples
+
+Remove the rows that match a condition:
+
+```sql
+> DELETE FROM target_table WHERE id > 1;
++-------+
+| count |
++-------+
+| 2     |
++-------+
+```
+
+Remove all rows:
+
+```sql
+> DELETE FROM target_table;
++-------+
+| count |
++-------+
+| 3     |
++-------+
+```
+
+## UPDATE
+
+Changes the values of existing rows.
+
+<pre>
+UPDATE <i><b>table_name</b></i> SET <i><b>column</b></i> = <i><b>expression</b></i> [, ...] [ WHERE <i><b>condition</b></i> ]
+</pre>
+
+`UPDATE` returns the number of affected rows in a column named `count`.
+
+If you omit the `WHERE` clause, DataFusion changes all rows. The three-valued logic of `DELETE` also applies here.
+
+Each assignment expression reads the row values from before the statement. `SET a = b, b = a` therefore exchanges the two values.
+
+Not all tables support `UPDATE`. See [Table support for DELETE and UPDATE](#table-support-for-delete-and-update).
+
+### Examples
+
+Set one column in the rows that match a condition:
+
+```sql
+> UPDATE target_table SET name = 'Baz' WHERE id = 2;
++-------+
+| count |
++-------+
+| 1     |
++-------+
+```
+
+Set two columns, one from an expression:
+
+```sql
+> UPDATE target_table SET value = value * 2, name = 'Doubled' WHERE id < 3;
++-------+
+| count |
++-------+
+| 2     |
++-------+
+```
+
+## Table support for DELETE and UPDATE
+
+Not all table providers support `DELETE` and `UPDATE`. In-memory tables created with `CREATE TABLE` support both statements. File-based tables created with `CREATE EXTERNAL TABLE` and views do not. Support for custom table providers depends on the provider.
+
+### Known limitations
+
+- `DELETE` ignores `LIMIT`: [#24998](https://github.com/apache/datafusion/issues/24998).
+- `UPDATE ... FROM` is not supported: [#19950](https://github.com/apache/datafusion/issues/19950).

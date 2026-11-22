@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 // Scalar UDF doc sections for use in public documentation
 pub mod scalar_doc_sections {
@@ -84,6 +71,14 @@ pub mod scalar_doc_sections {
             r#"Apache DataFusion uses a [PCRE-like](https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions)
 regular expression [syntax](https://docs.rs/regex/latest/regex/#syntax)
 (minus support for several features including look-around and backreferences).
+
+The following flags are optionally supported in functions:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: `^` and `$` match begin/end of line
+  - **s**: allow `.` to match `\n`
+  - **R**: enables CRLF mode: when multi-line mode is enabled, `\r\n` is used
+  - **U**: swap the meaning of `x*` and `x*?`
+
 The following regular expression functions are supported:"#,
         ),
     };

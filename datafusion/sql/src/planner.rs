@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
 use std::collections::HashMap;
@@ -23,6 +10,7 @@ use std::vec;
 
 use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
+use arrow_schema::extension::{Json, Uuid};
 use datafusion_common::TableReference;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
@@ -376,7 +364,7 @@ impl PlannerContext {
         match self.outer_from_schema.as_mut() {
             Some(from_schema) => Arc::make_mut(from_schema).merge(schema),
             None => self.outer_from_schema = Some(Arc::clone(schema)),
-        };
+        }
         Ok(())
     }
 
@@ -677,6 +665,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // If no type_planner can handle this type, use the default conversion
         match sql_type {
+            // Canonical Arrow extension types
+            SQLDataType::Uuid => Ok(Arc::new(
+                Field::new("", DataType::FixedSizeBinary(16), true)
+                    .with_extension_type(Uuid),
+            )),
+            SQLDataType::JSON => Ok(Arc::new(
+                Field::new("", DataType::Utf8, true).with_extension_type(Json::default()),
+            )),
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
                 Ok(self.convert_data_type_to_field(inner_sql_type)?.into_list())
@@ -715,14 +711,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(DataType::Int32)
             }
             SQLDataType::BigInt(_) | SQLDataType::Int8(_) => Ok(DataType::Int64),
-            SQLDataType::TinyIntUnsigned(_) => Ok(DataType::UInt8),
-            SQLDataType::SmallIntUnsigned(_) | SQLDataType::Int2Unsigned(_) => {
+            SQLDataType::TinyIntUnsigned(_) | SQLDataType::UTinyInt => Ok(DataType::UInt8),
+            SQLDataType::SmallIntUnsigned(_)
+            | SQLDataType::Int2Unsigned(_)
+            | SQLDataType::USmallInt => {
                 Ok(DataType::UInt16)
             }
             SQLDataType::IntUnsigned(_)
             | SQLDataType::IntegerUnsigned(_)
             | SQLDataType::Int4Unsigned(_) => Ok(DataType::UInt32),
-            SQLDataType::Varchar(length) => {
+            SQLDataType::Varchar(length)
+            | SQLDataType::Nvarchar(length)
+            | SQLDataType::CharacterVarying(length)
+            | SQLDataType::CharVarying(length) => {
                 match (length, self.options.support_varchar_with_length) {
                     (Some(_), false) => plan_err!(
                         "does not support Varchar with length, \
@@ -737,11 +738,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
             }
-            SQLDataType::BigIntUnsigned(_) | SQLDataType::Int8Unsigned(_) => {
+            SQLDataType::BigIntUnsigned(_)
+            | SQLDataType::Int8Unsigned(_)
+            | SQLDataType::UBigInt => {
                 Ok(DataType::UInt64)
             }
-            SQLDataType::Float(_) => Ok(DataType::Float32),
-            SQLDataType::Real | SQLDataType::Float4 => Ok(DataType::Float32),
+            SQLDataType::Float(_)
+            | SQLDataType::Real
+            | SQLDataType::Float4 => Ok(DataType::Float32),
             SQLDataType::Double(ExactNumberInfo::None)
             | SQLDataType::DoublePrecision
             | SQLDataType::Float8 => Ok(DataType::Float64),
@@ -760,34 +764,53 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
             SQLDataType::Timestamp(precision, tz_info)
-                if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
+                if let Some(unit) = time_unit_for_precision(*precision) =>
             {
                 let tz = if *tz_info == TimezoneInfo::Tz
                     || *tz_info == TimezoneInfo::WithTimeZone
                 {
                     // Timestamp With Time Zone
                     // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
-                    // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
-                    self.context_provider.options().execution.time_zone.clone()
+                    // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Time Zone>
+                    //
+                    // Note that the configured time zone is an `Option` that is
+                    // unset by default, so by default this yields the
+                    // timezone-naive `Timestamp<TimeUnit, None>`. Whether that
+                    // should remain the behavior is tracked in
+                    // https://github.com/apache/datafusion/issues/25166
+                    self.context_provider
+                        .options()
+                        .execution
+                        .time_zone
+                        .as_ref()
+                        .map(|tz| tz.as_str().to_string())
                 } else {
                     // Timestamp Without Time zone
                     None
                 };
-                let precision = match precision {
-                    Some(0) => TimeUnit::Second,
-                    Some(3) => TimeUnit::Millisecond,
-                    Some(6) => TimeUnit::Microsecond,
-                    None | Some(9) => TimeUnit::Nanosecond,
-                    _ => unreachable!(),
-                };
-                Ok(DataType::Timestamp(precision, tz.map(Into::into)))
+                Ok(DataType::Timestamp(unit, tz.map(Into::into)))
+            }
+            SQLDataType::Datetime(precision)
+                if time_unit_for_precision(*precision).is_some() =>
+            {
+                self.convert_simple_data_type(&SQLDataType::Timestamp(
+                    *precision,
+                    TimezoneInfo::None,
+                ))
             }
             SQLDataType::Date => Ok(DataType::Date32),
-            SQLDataType::Time(None, tz_info) => {
+            SQLDataType::Time(precision, tz_info)
+                if let Some(unit) = time_unit_for_precision(*precision) =>
+            {
                 if *tz_info == TimezoneInfo::None
                     || *tz_info == TimezoneInfo::WithoutTimeZone
                 {
-                    Ok(DataType::Time64(TimeUnit::Nanosecond))
+                    Ok(match unit {
+                        TimeUnit::Second | TimeUnit::Millisecond => DataType::Time32(unit),
+                        TimeUnit::Microsecond | TimeUnit::Nanosecond => {
+                            DataType::Time64(unit)
+                        }
+                    })
                 } else {
                     // We don't support TIMETZ and TIME WITH TIME ZONE for now
                     not_impl_err!("Unsupported SQL type {sql_type}")
@@ -804,7 +827,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
                 make_decimal_type(precision, scale.map(|s| s as u64))
             }
-            SQLDataType::Bytea => Ok(DataType::Binary),
+            SQLDataType::Bytea
+            | SQLDataType::Blob(None)
+            | SQLDataType::Binary(None)
+            | SQLDataType::Varbinary(None)
+            | SQLDataType::Bytes(None) => Ok(DataType::Binary),
             SQLDataType::Interval { fields, precision } => {
                 if fields.is_some() || precision.is_some() {
                     return not_impl_err!("Unsupported SQL type {sql_type}");
@@ -826,7 +853,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(DataType::Struct(Fields::from(fields)))
             }
-            SQLDataType::Nvarchar(_)
+            SQLDataType::Map(key_type, value_type, _) => {
+                let key_field = Arc::new(Field::new(
+                    "key", self.convert_data_type_to_field(key_type)?.data_type().clone(), false
+                ));
+                let value_field = Arc::new(Field::new(
+                    "value", self.convert_data_type_to_field(value_type)?.data_type().clone(), true)
+                );
+                let entries = DataType::Struct(Fields::from([key_field, value_field]));
+                Ok(DataType::Map(Arc::new(Field::new("entries", entries, false)), false))
+            }
             | SQLDataType::JSON
             | SQLDataType::Uuid
             | SQLDataType::Binary(_)
@@ -841,12 +877,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::MediumInt(_)
             | SQLDataType::MediumIntUnsigned(_)
             | SQLDataType::Character(_)
-            | SQLDataType::CharacterVarying(_)
-            | SQLDataType::CharVarying(_)
             | SQLDataType::CharacterLargeObject(_)
             | SQLDataType::CharLargeObject(_)
             | SQLDataType::Timestamp(_, _)
-            | SQLDataType::Time(Some(_), _)
+            | SQLDataType::Time(_, _)
             | SQLDataType::Dec(_)
             | SQLDataType::BigNumeric(_)
             | SQLDataType::BigDecimal(_)
@@ -870,7 +904,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Date32
             | SQLDataType::Datetime64(_, _)
             | SQLDataType::FixedString(_)
-            | SQLDataType::Map(_, _)
             | SQLDataType::Tuple(_)
             | SQLDataType::Nested(_)
             | SQLDataType::Union(_)
@@ -892,11 +925,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::AnyType
             | SQLDataType::Table(_)
             | SQLDataType::VarBit(_)
-            | SQLDataType::UTinyInt
-            | SQLDataType::USmallInt
             | SQLDataType::HugeInt
             | SQLDataType::UHugeInt
-            | SQLDataType::UBigInt
             | SQLDataType::TimestampNtz{..}
             | SQLDataType::NamedTable { .. }
             | SQLDataType::TsVector
@@ -922,6 +952,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             object_name,
             self.options.enable_ident_normalization,
         )
+    }
+}
+
+/// Maps SQL fractional-seconds precision to an Arrow [`TimeUnit`]. No precision
+/// means nanoseconds. Returns `None` for unsupported precisions.
+fn time_unit_for_precision(precision: Option<u64>) -> Option<TimeUnit> {
+    match precision {
+        Some(0) => Some(TimeUnit::Second),
+        Some(3) => Some(TimeUnit::Millisecond),
+        Some(6) => Some(TimeUnit::Microsecond),
+        None | Some(9) => Some(TimeUnit::Nanosecond),
+        _ => None,
     }
 }
 

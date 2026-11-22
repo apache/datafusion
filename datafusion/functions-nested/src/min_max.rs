@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarUDFImpl`] definitions for array_min and array_max functions.
 use crate::utils::make_scalar_function;
@@ -21,6 +8,7 @@ use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray, GenericListArray,
     OffsetSizeTrait, PrimitiveBuilder, downcast_primitive,
 };
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeList, List};
 use datafusion_common::Result;
@@ -263,7 +251,7 @@ fn primitive_array_min_max<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
             match len {
                 0 => None,
                 _ if len < ARROW_COMPUTE_THRESHOLD => {
-                    scalar_min_max::<T>(values_slice, values_nulls, start, end, is_min)
+                    scalar_min_max(values_slice, values_nulls, start, end, is_min)
                 }
                 _ => {
                     let slice = values_array.slice(start, len);
@@ -285,14 +273,14 @@ fn primitive_array_min_max<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
 /// Computes min or max for a single list row by directly scanning a slice of
 /// the flat values buffer.
 #[inline]
-fn scalar_min_max<T: ArrowPrimitiveType>(
-    values_slice: &[T::Native],
-    values_nulls: Option<&arrow::buffer::NullBuffer>,
+fn scalar_min_max<N: ArrowNativeTypeOp>(
+    values_slice: &[N],
+    values_nulls: Option<&NullBuffer>,
     start: usize,
     end: usize,
     is_min: bool,
-) -> Option<T::Native> {
-    let mut best: Option<T::Native> = None;
+) -> Option<N> {
+    let mut best: Option<N> = None;
     for (i, &val) in values_slice[start..end].iter().enumerate() {
         if let Some(nulls) = values_nulls
             && !nulls.is_valid(start + i)

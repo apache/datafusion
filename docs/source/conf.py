@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Configuration file for the Sphinx documentation builder.
 #
@@ -37,6 +24,7 @@ sys.path.insert(0, os.path.abspath(".."))
 project = "Apache DataFusion"
 copyright = "2019-2025, Apache Software Foundation"
 author = "Apache Software Foundation"
+version = release = "main"
 
 
 # -- General configuration ---------------------------------------------------
@@ -55,6 +43,7 @@ extensions = [
     "myst_parser",
     "sphinx_reredirects",
     "rustdoc_trim",
+    "sphinx_sitemap",
 ]
 
 source_suffix = {
@@ -89,12 +78,18 @@ html_theme = "pydata_sphinx_theme"
 
 html_theme_options = {
      "logo": {
-        "image_light": "_static/images/original.svg", 
-        "image_dark": "_static/images/original_dark.svg", 
+        "image_light": "_static/images/original.svg",
+        "image_dark": "_static/images/original_dark.svg",
     },
     "use_edit_page_button": True,
     "navbar_center": [],
-    "navbar_end": ["theme-switcher"],
+    "navbar_end": ["version-switcher", "theme-switcher"],
+    # Release docs are published separately; the manifest may not be live yet.
+    "check_switcher": False,
+    "switcher": {
+        "json_url": "/_static/versions.json",
+        "version_match": version,
+    },
 }
 
 html_context = {
@@ -111,7 +106,19 @@ html_static_path = ["_static"]
 
 # Copy agent-facing files (llms.txt) verbatim to the site root so they
 # resolve at the conventional URL `https://datafusion.apache.org/llms.txt`.
-html_extra_path = ["llms.txt"]
+html_extra_path = ["llms.txt", "robots.txt"]
+
+# Base URL of the published site. Required by sphinx-sitemap to build
+# absolute <loc> entries in the generated sitemap.xml.
+html_baseurl = "https://datafusion.apache.org/"
+
+# The site is published as a single flat, single-language tree (see
+# .github/workflows/docs.yaml, which rsyncs docs/build/html/ straight to the
+# site root) — there is no /en/ or version path segment. Override
+# sphinx-sitemap's default "{lang}{version}{link}" scheme, which assumes a
+# Read the Docs-style multi-language/multi-version layout, so <loc> entries
+# match the real URLs instead of a nonexistent /en/... prefix.
+sitemap_url_scheme = "{link}"
 
 html_logo = "_static/images/2x_bgwhite_original.png"
 

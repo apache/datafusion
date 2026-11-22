@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! File Compression type abstraction
 
@@ -45,7 +32,6 @@ use futures::TryStreamExt;
 use futures::stream::BoxStream;
 #[cfg(feature = "compression")]
 use liblzma::read::XzDecoder;
-use object_store::buffered::BufWriter;
 use tokio::io::AsyncWrite;
 #[cfg(feature = "compression")]
 use tokio_util::io::{ReaderStream, StreamReader};
@@ -158,7 +144,7 @@ impl FileCompressionType {
     /// according to this `FileCompressionType` using the default compression level.
     pub fn convert_async_writer(
         &self,
-        w: BufWriter,
+        w: impl AsyncWrite + Send + Unpin + 'static,
     ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
         self.convert_async_writer_with_level(w, None)
     }
@@ -170,7 +156,7 @@ impl FileCompressionType {
     /// compression level. If `None`, the default level for each algorithm is used.
     pub fn convert_async_writer_with_level(
         &self,
-        w: BufWriter,
+        w: impl AsyncWrite + Send + Unpin + 'static,
         compression_level: Option<u32>,
     ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
         #[cfg(feature = "compression")]

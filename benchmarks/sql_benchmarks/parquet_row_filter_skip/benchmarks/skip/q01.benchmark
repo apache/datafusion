@@ -1,0 +1,7 @@
+subgroup skip
+
+template sql_benchmarks/parquet_row_filter_skip/parquet_row_filter_skip.benchmark.template
+SUBGROUP=skip
+QPAD=01
+DATASET=clustered
+NAME=skip_q01_string_range_low_selectivity

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use core::fmt;
 use std::ops::ControlFlow;
@@ -167,6 +154,8 @@ pub struct SelectBuilder {
     /// Table aliases that correspond to LATERAL FLATTEN relations.
     /// Column references into these aliases must use `VALUE` as the column name.
     flatten_table_aliases: Vec<String>,
+    /// Depth of explicitly named subqueries currently being rendered.
+    subquery_alias_depth: usize,
 }
 
 /// Prefix used for auto-generated LATERAL FLATTEN table aliases.
@@ -193,6 +182,19 @@ impl SelectBuilder {
     /// Returns true if the given table alias refers to a FLATTEN relation.
     pub fn is_flatten_table_alias(&self, alias: &str) -> bool {
         self.flatten_table_aliases.iter().any(|a| a == alias)
+    }
+
+    pub(super) fn enter_subquery_alias(&mut self) {
+        self.subquery_alias_depth += 1;
+    }
+
+    pub(super) fn exit_subquery_alias(&mut self) {
+        debug_assert!(self.subquery_alias_depth > 0);
+        self.subquery_alias_depth -= 1;
+    }
+
+    pub(super) fn inside_subquery_alias(&self) -> bool {
+        self.subquery_alias_depth > 0
     }
 
     /// Returns the most recently generated flatten alias, or `None` if
@@ -419,6 +421,7 @@ impl SelectBuilder {
             flavor: Some(SelectFlavor::Standard),
             flatten_alias_counter: 0,
             flatten_table_aliases: Vec::new(),
+            subquery_alias_depth: 0,
         }
     }
 }
@@ -661,6 +664,7 @@ pub struct DerivedRelationBuilder {
     lateral: Option<bool>,
     subquery: Option<Box<ast::Query>>,
     alias: Option<ast::TableAlias>,
+    projection_names: Vec<ast::Ident>,
 }
 
 impl DerivedRelationBuilder {
@@ -676,18 +680,49 @@ impl DerivedRelationBuilder {
         self.alias = value;
         self
     }
+    pub(super) fn projection_names(&mut self, value: Vec<ast::Ident>) -> &mut Self {
+        self.projection_names = value;
+        self
+    }
     fn build(&self) -> Result<ast::TableFactor, BuilderError> {
+        let mut subquery = match self.subquery {
+            Some(ref value) => value.clone(),
+            None => {
+                return Err(Into::into(UninitializedFieldError::from("subquery")));
+            }
+        };
+        if self
+            .alias
+            .as_ref()
+            .is_none_or(|alias| alias.columns.is_empty())
+            && let ast::SetExpr::Select(select) = subquery.body.as_mut()
+            && select.projection.len() == self.projection_names.len()
+        {
+            for (item, alias) in select.projection.iter_mut().zip(&self.projection_names)
+            {
+                if let ast::SelectItem::UnnamedExpr(expr) = item {
+                    let preserves_name = match expr {
+                        ast::Expr::Identifier(name) => name.value == alias.value,
+                        ast::Expr::CompoundIdentifier(names) => {
+                            names.last().is_some_and(|name| name.value == alias.value)
+                        }
+                        _ => false,
+                    };
+                    if !preserves_name {
+                        *item = ast::SelectItem::ExprWithAlias {
+                            expr: expr.clone(),
+                            alias: alias.clone(),
+                        };
+                    }
+                }
+            }
+        }
         Ok(ast::TableFactor::Derived {
             lateral: match self.lateral {
                 Some(ref value) => *value,
                 None => return Err(Into::into(UninitializedFieldError::from("lateral"))),
             },
-            subquery: match self.subquery {
-                Some(ref value) => value.clone(),
-                None => {
-                    return Err(Into::into(UninitializedFieldError::from("subquery")));
-                }
-            },
+            subquery,
             alias: self.alias.clone(),
             sample: None,
         })
@@ -697,6 +732,7 @@ impl DerivedRelationBuilder {
             lateral: Default::default(),
             subquery: Default::default(),
             alias: Default::default(),
+            projection_names: Default::default(),
         }
     }
 }

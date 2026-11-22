@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# A correlated `NOT IN` with an equality correlation pairs rows through a
+# hash map on the scope key. When a scope holds many rows, the join stops
+# looking up each probe row and groups the probe rows by scope hash. These
+# tests give scopes that are large enough for that switch, with a residual
+# filter that leaves some rows unmarked, and compare each `NOT IN` with the
+# same result computed by an outer join and an aggregate. Small batches split
+# the groups and the hash chains across chunks.
+# Matrix rules: no EXPLAIN, no in-file SET of a swept knob, rowsort every
+# multi-row query.
+
+# configMatrix: datafusion.execution.batch_size=1,7,8192
+# configMatrix: datafusion.execution.target_partitions=1,4
+
+statement ok
+CREATE TABLE ns_outer AS SELECT
+  value AS id,
+  CASE WHEN value % 4 = 0 THEN NULL ELSE value % 9 END AS a,
+  CASE WHEN value % 23 = 0 THEN NULL WHEN value <= 50 THEN 1 ELSE 2 END AS b,
+  value % 11 AS z
+FROM generate_series(1, 60);
+
+statement ok
+CREATE TABLE ns_inner AS SELECT
+  CASE WHEN value % 3 = 0 THEN NULL ELSE value % 9 END AS x,
+  CASE WHEN value <= 35 THEN 1 ELSE 2 END AS y,
+  value % 13 AS w
+FROM generate_series(1, 40);
+
+# The `IN` mark of each outer row: TRUE on an equal pair, else UNKNOWN when a
+# pair in scope involves a NULL, else FALSE. `NOT IN` is its negation.
+statement ok
+CREATE VIEW ns_expected AS SELECT
+  o.id,
+  CASE
+    WHEN bool_or(i.x = o.a) THEN false
+    WHEN count(i.y) > 0 AND bool_or(i.x IS NULL OR o.a IS NULL) THEN NULL
+    ELSE true
+  END AS not_in
+FROM ns_outer o LEFT JOIN ns_inner i ON i.y = o.b AND i.w < o.z
+GROUP BY o.id, o.a;
+
+query BI rowsort
+SELECT not_in, count(*) FROM ns_expected GROUP BY not_in;
+----
+NULL 31
+false 19
+true 10
+
+# `LeftMark`: the marks are on the outer (build) rows.
+query I
+SELECT count(*) FROM (
+  SELECT id, a NOT IN (
+    SELECT x FROM ns_inner i WHERE i.y = o.b AND i.w < o.z
+  ) AS not_in FROM ns_outer o
+  EXCEPT SELECT id, not_in FROM ns_expected
+);
+----
+0
+
+query I
+SELECT count(*) FROM (
+  SELECT id, not_in FROM ns_expected
+  EXCEPT SELECT id, a NOT IN (
+    SELECT x FROM ns_inner i WHERE i.y = o.b AND i.w < o.z
+  ) AS not_in FROM ns_outer o
+);
+----
+0
+
+# `RightAnti`: the marks are on the outer (probe) rows.
+query I rowsort
+SELECT id FROM ns_outer o WHERE a NOT IN (
+  SELECT x FROM ns_inner i WHERE i.y = o.b AND i.w < o.z
+)
+EXCEPT SELECT id FROM ns_expected WHERE not_in;
+----
+
+query I rowsort
+SELECT id FROM ns_expected WHERE not_in
+EXCEPT SELECT id FROM ns_outer o WHERE a NOT IN (
+  SELECT x FROM ns_inner i WHERE i.y = o.b AND i.w < o.z
+);
+----
+
+statement ok
+DROP VIEW ns_expected;
+
+statement ok
+DROP TABLE ns_outer;
+
+statement ok
+DROP TABLE ns_inner;

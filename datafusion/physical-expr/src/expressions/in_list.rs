@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Implementation of `InList` expressions: [`InListExpr`]
 
@@ -22,6 +9,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
+use crate::expressions::Literal;
 use crate::physical_expr::physical_exprs_bag_equal;
 
 use arrow::array::*;
@@ -31,18 +19,23 @@ use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::kernels::cmp::eq as arrow_eq;
 use arrow::datatypes::*;
 
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, exec_err,
 };
 use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 mod array_static_filter;
+mod branchless_filter;
+mod byte_view_filter;
+mod dictionary_filter;
+mod fixed_size_binary_filter;
 mod primitive_filter;
 mod result;
 mod static_filter;
 mod strategy;
 
-use static_filter::StaticFilter;
+use static_filter::StaticFilterRef;
 use strategy::instantiate_static_filter;
 
 /// InList
@@ -50,7 +43,7 @@ pub struct InListExpr {
     expr: Arc<dyn PhysicalExpr>,
     list: Vec<Arc<dyn PhysicalExpr>>,
     negated: bool,
-    static_filter: Option<Arc<dyn StaticFilter + Send + Sync>>,
+    static_filter: Option<StaticFilterRef>,
 }
 
 impl Debug for InListExpr {
@@ -103,7 +96,7 @@ fn evaluate_list(
 /// Try to evaluate a list of expressions as constants.
 ///
 /// Returns:
-/// - `Ok(Some(ArrayRef))` if all expressions are constants (can be evaluated on an empty RecordBatch)
+/// - `Ok(Some(ArrayRef))` if all expressions are constants (built only from literals)
 /// - `Ok(None)` if the list contains non-constant expressions
 /// - `Err(...)` only for actual errors (not for non-constant expressions)
 ///
@@ -113,6 +106,15 @@ fn try_evaluate_constant_list(
     list: &[Arc<dyn PhysicalExpr>],
     schema: &Schema,
 ) -> Result<Option<ArrayRef>> {
+    // An item can read a column yet return a scalar on an empty batch (a CASE whose
+    // WHEN matches all zero rows returns its THEN), so require literal leaves.
+    for expr in list {
+        if expr.exists(|e| {
+            Ok(e.is_volatile_node() || (e.children().is_empty() && !e.is::<Literal>()))
+        })? {
+            return Ok(None);
+        }
+    }
     let batch = RecordBatch::new_empty(Arc::new(schema.clone()));
     match evaluate_list(list, &batch) {
         Ok(array) => Ok(Some(array)),
@@ -147,7 +149,7 @@ impl InListExpr {
         expr: Arc<dyn PhysicalExpr>,
         list: Vec<Arc<dyn PhysicalExpr>>,
         negated: bool,
-        static_filter: Option<Arc<dyn StaticFilter + Send + Sync>>,
+        static_filter: Option<StaticFilterRef>,
     ) -> Self {
         Self {
             expr,
@@ -214,15 +216,15 @@ impl InListExpr {
             expr,
             list,
             negated,
-            Some(instantiate_static_filter(array)?),
+            Some(instantiate_static_filter(array, &expr_data_type)?),
         ))
     }
 
     /// Create a new InList expression, using a static filter when possible.
     ///
     /// This validates data types and attempts to create a static filter for constant
-    /// list expressions. Uses specialized StaticFilter implementations for better
-    /// performance (e.g., Int32StaticFilter for Int32).
+    /// list expressions. Uses specialized branchless, bitmap, or hash-set filters
+    /// when the list's physical representation supports them.
     ///
     /// Returns an error if data types don't match. If the list contains non-constant
     /// expressions, falls back to dynamic evaluation at runtime.
@@ -241,7 +243,7 @@ impl InListExpr {
 
         // Try to create a static filter if all list expressions are constants
         let static_filter = match try_evaluate_constant_list(&list, schema)? {
-            Some(in_array) => Some(instantiate_static_filter(in_array)?),
+            Some(in_array) => Some(instantiate_static_filter(in_array, &expr_data_type)?),
             None => None, // Non-constant expressions, fall back to dynamic evaluation
         };
 
@@ -261,15 +263,20 @@ impl InListExpr {
             protobuf::physical_expr_node::ExprType::InList,
             "InList",
         );
+        let protobuf::PhysicalInListNode {
+            expr,
+            list,
+            negated,
+        } = &**node;
 
         let expr =
-            ctx.decode_required_expression(node.expr.as_deref(), "InListExpr", "expr")?;
-        let list = ctx.decode_children_expressions(&node.list)?;
+            ctx.decode_required_expression(expr.as_deref(), "InListExpr", "expr")?;
+        let list = ctx.decode_children_expressions(list)?;
 
         Ok(Arc::new(InListExpr::try_new(
             expr,
             list,
-            node.negated,
+            *negated,
             ctx.schema(),
         )?))
     }
@@ -361,12 +368,14 @@ impl PhysicalExpr for InListExpr {
                 // Use Arrow's vectorized eq kernel for types it supports (primitive,
                 // boolean, string, binary, dictionary), falling back to row-by-row
                 // comparator for unsupported types (nested, RunEndEncoded, etc.).
-                let value = value.into_array(num_rows)?;
+                // Normalize the left side once for the whole list. Doing this
+                // outside `compare_one` avoids rescanning it for every item.
+                let value = value.normalize().into_array(num_rows)?;
                 let lhs_supports_arrow_eq = supports_arrow_eq(value.data_type());
 
                 // Helper: compare value against a single list expression
                 let compare_one = |expr: &Arc<dyn PhysicalExpr>| -> Result<BooleanArray> {
-                    match expr.evaluate(batch)? {
+                    match expr.evaluate(batch)?.normalize() {
                         ColumnarValue::Array(array) => {
                             if lhs_supports_arrow_eq
                                 && supports_arrow_eq(array.data_type())
@@ -436,7 +445,8 @@ impl PhysicalExpr for InListExpr {
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-        let mut children = vec![&self.expr];
+        let mut children = Vec::with_capacity(self.list.len() + 1);
+        children.push(&self.expr);
         children.extend(&self.list);
         children
     }
@@ -477,13 +487,21 @@ impl PhysicalExpr for InListExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self {
+            expr,
+            list,
+            negated,
+            // Lookup set rebuilt from `list` by `try_new` on decode.
+            static_filter: _,
+        } = self;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::InList(Box::new(
                 protobuf::PhysicalInListNode {
-                    expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
-                    list: ctx.encode_children_expressions(&self.list)?,
-                    negated: self.negated,
+                    expr: Some(Box::new(ctx.encode_child(expr)?)),
+                    list: ctx.encode_children_expressions(list)?,
+                    negated: *negated,
                 },
             ))),
         }))
@@ -522,9 +540,10 @@ pub fn in_list(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit, try_cast};
+    use crate::expressions::{binary, case, col, lit, try_cast};
     use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, i256};
     use datafusion_common::plan_err;
+    use datafusion_expr::Operator;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use insta::assert_snapshot;
@@ -880,7 +899,7 @@ mod tests {
 
     /// Test IN LIST for all string types (Utf8, LargeUtf8, Utf8View).
     ///
-    /// Test data: "a" (in list), "d" (not in list), ["b", "c"] (other list values)
+    /// Test data: "a" (in list), "d" (not in list), `["b", "c"]` (other list values)
     #[test]
     fn in_list_string_types() -> Result<()> {
         let string_data = PrimitiveTestCaseData {
@@ -1259,6 +1278,39 @@ mod tests {
             expr,
             &schema
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_nested_dictionary_scalar() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![0, 0, 0]))],
+        )?;
+        for (value, list) in [
+            (ScalarValue::Int32(Some(2)), vec![lit(1_i32), lit(2_i32)]),
+            (
+                ScalarValue::Float64(Some(-0.0)),
+                vec![lit(0.0_f64), lit(1.0_f64)],
+            ),
+        ] {
+            let needle = lit(ScalarValue::Dictionary(
+                Box::new(DataType::Int16),
+                Box::new(ScalarValue::Dictionary(
+                    Box::new(DataType::Int8),
+                    Box::new(value),
+                )),
+            ));
+
+            let expr = in_list(needle, list, &false, &schema)?;
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(
+                as_boolean_array(&result),
+                &BooleanArray::from(vec![true, true, true])
+            );
+        }
 
         Ok(())
     }
@@ -2591,7 +2643,7 @@ mod tests {
         // Create IN list with Int32 literals: (100, 200, 300)
         let list = vec![lit(100i32), lit(200i32), lit(300i32)];
 
-        // Create InListExpr via in_list() - this uses Int32StaticFilter for Int32 lists
+        // Create InListExpr via in_list(), which selects a primitive static filter.
         let expr = in_list(col_a, list, &false, &schema)?;
 
         // Create dictionary-encoded batch with values [100, 200, 500]
@@ -2900,10 +2952,9 @@ mod tests {
 
     #[test]
     fn test_in_list_esoteric_types() -> Result<()> {
-        // Test esoteric/less common types to validate the transform and mapping flow.
-        // These types are reinterpreted to base primitive types (e.g., Timestamp -> UInt64,
-        // Interval -> Decimal128, Float16 -> UInt16). We just need to verify basic
-        // functionality works - no need for comprehensive null handling tests.
+        // Test less common types covered by IN-list evaluation. Some of these
+        // use specialized filters, and others fall back to the generic path;
+        // this keeps the end-to-end behavior covered either way.
 
         // Helper: simple IN test that expects [Some(true), Some(false)]
         let test_type = |data_type: DataType,
@@ -2926,7 +2977,7 @@ mod tests {
             Ok(())
         };
 
-        // Timestamp types (all units map to Int64 -> UInt64)
+        // Timestamp types
         test_type(
             DataType::Timestamp(TimeUnit::Second, None),
             Arc::new(TimestampSecondArray::from(vec![Some(1000), Some(2000)])),
@@ -2960,7 +3011,7 @@ mod tests {
             ],
         )?;
 
-        // Time32 and Time64 (map to Int32 -> UInt32 and Int64 -> UInt64 respectively)
+        // Time32 and Time64
         test_type(
             DataType::Time32(TimeUnit::Second),
             Arc::new(Time32SecondArray::from(vec![Some(3600), Some(7200)])),
@@ -3006,7 +3057,7 @@ mod tests {
             ],
         )?;
 
-        // Duration types (map to Int64 -> UInt64)
+        // Duration types
         test_type(
             DataType::Duration(TimeUnit::Second),
             Arc::new(DurationSecondArray::from(vec![Some(86400), Some(172800)])),
@@ -3052,7 +3103,7 @@ mod tests {
             ],
         )?;
 
-        // Interval types (map to 16-byte Decimal128Type)
+        // Interval types
         test_type(
             DataType::Interval(IntervalUnit::YearMonth),
             Arc::new(IntervalYearMonthArray::from(vec![Some(12), Some(24)])),
@@ -3114,8 +3165,7 @@ mod tests {
             ],
         )?;
 
-        // Decimal256 (maps to Decimal128Type for 16-byte width)
-        // Need to use with_precision_and_scale() to set the metadata
+        // Decimal256. Need to use with_precision_and_scale() to set the metadata.
         let precision = 38;
         let scale = 10;
         test_type(
@@ -3133,6 +3183,33 @@ mod tests {
             ],
         )?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_case_item_reading_a_column() -> Result<()> {
+        // n IN (2, CASE WHEN d > 5 THEN 1 ELSE d END)
+        let schema = Schema::new(vec![
+            Field::new("n", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]);
+        let d = col("d", &schema)?;
+        let when = binary(Arc::clone(&d), Operator::Gt, lit(5i32), &schema)?;
+        let item = case(None, vec![(when, lit(1i32))], Some(d))?;
+        let expr = in_list(col("n", &schema)?, vec![lit(2i32), item], &false, &schema)?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Int32Array::from(vec![2, 4, 1])),
+                Arc::new(Int32Array::from(vec![0, 4, 3])),
+            ],
+        )?;
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_boolean_array(&result),
+            &BooleanArray::from(vec![true, true, false])
+        );
         Ok(())
     }
 
@@ -3321,6 +3398,44 @@ mod tests {
         // row 1: 1.0 IN (2.0) → false
         // row 2: NaN IN (0.0) → false
         assert_eq!(result, &BooleanArray::from(vec![true, false, false]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_with_columns_float_signed_zero() -> Result<()> {
+        use arrow::compute::cast;
+
+        for (data_type, dictionary) in [
+            (DataType::Float32, false),
+            (DataType::Float64, false),
+            (DataType::Float64, true),
+        ] {
+            let mut left = cast(&Float64Array::from(vec![0.0, -0.0, 1.0]), &data_type)?;
+            let mut right = cast(&Float64Array::from(vec![-0.0, 0.0, 2.0]), &data_type)?;
+            if dictionary {
+                left = wrap_in_dict(left);
+                right = wrap_in_dict(right);
+            }
+            let scalar = lit(ScalarValue::try_from_array(left.as_ref(), 1)?);
+            let batch = RecordBatch::try_from_iter([("a", left), ("b", right)])?;
+            let schema = batch.schema();
+
+            // Exercise array and scalar values on both sides, including scalar
+            // normalization before the left-hand side is broadcast.
+            for (left, right) in [
+                (col("a", &schema)?, col("b", &schema)?),
+                (col("a", &schema)?, Arc::clone(&scalar)),
+                (scalar, col("a", &schema)?),
+            ] {
+                let expr = make_in_list_with_columns(left, vec![right], false);
+                let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+                assert_eq!(
+                    as_boolean_array(&result),
+                    &BooleanArray::from(vec![true, true, false]),
+                    "{data_type:?}, dictionary={dictionary}: {expr}"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -3549,6 +3664,38 @@ mod tests {
             );
         }
 
+        // FixedSizeBinary in_array, FixedSizeBinary and Dictionary needles
+        let fsb_in = Arc::new(FixedSizeBinaryArray::try_from_iter(
+            [
+                [1, 2, 3, 4].as_slice(),
+                [5, 6, 7, 8].as_slice(),
+                [9, 10, 11, 12].as_slice(),
+            ]
+            .into_iter(),
+        )?) as ArrayRef;
+        let fsb_needle = Arc::new(FixedSizeBinaryArray::try_from_iter(
+            [
+                [1, 2, 3, 4].as_slice(),
+                [13, 14, 15, 16].as_slice(),
+                [5, 6, 7, 8].as_slice(),
+            ]
+            .into_iter(),
+        )?) as ArrayRef;
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(Arc::clone(&fsb_needle), Arc::clone(&fsb_in))?
+        );
+        // The dictionary does not reference its second value, so that value
+        // must not become a member of the flattened list.
+        let dict_fsb_in = Arc::new(DictionaryArray::new(
+            Int32Array::from(vec![0, 2]),
+            Arc::clone(&fsb_in),
+        ));
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), Some(false), Some(false)]),
+            eval_in_list_from_array(wrap_in_dict(fsb_needle), dict_fsb_in)?
+        );
+
         // Utf8 (falls through to ArrayStaticFilter)
         let utf8_in = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
         let utf8_needle = Arc::new(StringArray::from(vec!["a", "d", "b"])) as ArrayRef;
@@ -3575,6 +3722,23 @@ mod tests {
                 wrap_in_dict(Arc::clone(&utf8_needle)),
                 wrap_in_dict(Arc::clone(&utf8_in)),
             )?
+        );
+
+        // Utf8View in_array, Utf8View and Dict(Utf8View) needles
+        let utf8view_in =
+            Arc::new(StringViewArray::from(vec!["a", "b", "c", "d", "e"])) as ArrayRef;
+        let utf8view_needle =
+            Arc::new(StringViewArray::from(vec!["a", "missing", "b"])) as ArrayRef;
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(
+                Arc::clone(&utf8view_needle),
+                Arc::clone(&utf8view_in),
+            )?
+        );
+        assert_eq!(
+            expected,
+            eval_in_list_from_array(wrap_in_dict(utf8view_needle), utf8view_in)?
         );
 
         // Struct in_array, Struct needle: multi-column join
@@ -3801,6 +3965,23 @@ mod tests {
     }
 
     #[test]
+    fn test_try_new_from_array_dict_haystack_float64_signed_zero() -> Result<()> {
+        // One value beyond the branchless limit selects the hash-set strategy.
+        let list_len =
+            <Float64Type as branchless_filter::BranchlessFilterType>::MAX_LIST_LEN + 1;
+        let haystack = make_f64_dict_array(vec![Some(-0.0); list_len]);
+        let needles: ArrayRef = Arc::new(Float64Array::from(vec![0.0]));
+        for needles in [Arc::clone(&needles), wrap_in_dict(needles)] {
+            assert_eq!(
+                eval_in_list_from_array(needles, Arc::clone(&haystack))?,
+                BooleanArray::from(vec![true])
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_try_new_from_array_type_mismatch_rejects() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let col_a = col("a", &schema)?;
@@ -3903,15 +4084,15 @@ mod proto_tests {
     }
 
     /// An `InListExpr` over a column with one literal value.
-    fn in_list_fixture() -> InListExpr {
+    fn in_list_fixture(negated: bool) -> InListExpr {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-        InListExpr::try_new(col("a", &schema).unwrap(), vec![lit(1)], false, &schema)
+        InListExpr::try_new(col("a", &schema).unwrap(), vec![lit(1)], negated, &schema)
             .unwrap()
     }
 
     #[test]
     fn try_to_proto_encodes_in_list() {
-        let in_list = in_list_fixture();
+        let in_list = in_list_fixture(false);
         let encoder = StubEncoder::ok();
         let ctx = PhysicalExprEncodeCtx::new(&encoder);
 
@@ -3929,11 +4110,20 @@ mod proto_tests {
         assert!(!in_list_node.negated);
         assert!(in_list_node.expr.is_some());
         assert_eq!(in_list_node.list.len(), 1);
+
+        assert!(matches!(
+            in_list_fixture(true)
+                .try_to_proto(&ctx)
+                .unwrap()
+                .unwrap()
+                .expr_type,
+            Some(physical_expr_node::ExprType::InList(node)) if node.negated
+        ));
     }
 
     #[test]
     fn try_to_proto_propagates_expr_encode_error() {
-        let in_list = in_list_fixture();
+        let in_list = in_list_fixture(false);
         let encoder = StubEncoder::failing_on(1);
         let ctx = PhysicalExprEncodeCtx::new(&encoder);
         let err = in_list.try_to_proto(&ctx).unwrap_err();
@@ -3942,7 +4132,7 @@ mod proto_tests {
 
     #[test]
     fn try_to_proto_propagates_list_encode_error() {
-        let in_list = in_list_fixture();
+        let in_list = in_list_fixture(false);
         // Call 1 is for `expr`, Call 2 is for the first element of `list`
         let encoder = StubEncoder::failing_on(2);
         let ctx = PhysicalExprEncodeCtx::new(&encoder);

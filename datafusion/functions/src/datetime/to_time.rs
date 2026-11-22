@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::datetime::common::*;
 use arrow::array::cast::AsArray;
@@ -22,7 +9,7 @@ use arrow::array::types::Time64NanosecondType;
 use arrow::array::{Array, PrimitiveArray, StringArrayType};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
-use chrono::NaiveTime;
+use chrono::format::{Item, Parsed, StrftimeItems, parse};
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -47,7 +34,7 @@ Timestamps will have the time portion extracted.
 Returns the corresponding time.
 
 Note: `to_time` returns Time64(Nanosecond), which represents the time of day in nanoseconds since midnight.",
-    syntax_example = "to_time('12:30:45', '%H:%M:%S')",
+    syntax_example = "to_time(expression[, format1, ..., format_n])",
     sql_example = r#"```sql
 > select to_time('12:30:45');
 +---------------------------+
@@ -141,6 +128,7 @@ impl ScalarUDFImpl for ToTimeFunc {
 /// Convert string arguments to time (standalone function, not a method on ToTimeFunc)
 fn string_to_time(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let formats = collect_formats(args)?;
+    let formats = compile_formats(&formats);
 
     match &args[0] {
         ColumnarValue::Scalar(ScalarValue::Utf8(s))
@@ -207,10 +195,25 @@ fn timestamp_to_time(arg: &ColumnarValue) -> Result<ColumnarValue> {
     arg.cast_to(&Time64(arrow::datatypes::TimeUnit::Nanosecond), None)
 }
 
+struct CompiledTimeFormat<'a> {
+    source: &'a str,
+    items: Vec<Item<'a>>,
+}
+
+fn compile_formats<'a>(formats: &[&'a str]) -> Vec<CompiledTimeFormat<'a>> {
+    formats
+        .iter()
+        .map(|source| CompiledTimeFormat {
+            source,
+            items: StrftimeItems::new(source).collect(),
+        })
+        .collect()
+}
+
 /// Parse time array using the provided formats
 fn parse_time_array<'a, A: StringArrayType<'a>>(
     array: &A,
-    formats: &[&str],
+    formats: &[CompiledTimeFormat<'_>],
 ) -> Result<PrimitiveArray<Time64NanosecondType>> {
     let mut values = Vec::with_capacity(array.len());
     for i in 0..array.len() {
@@ -224,10 +227,12 @@ fn parse_time_array<'a, A: StringArrayType<'a>>(
 }
 
 /// Parse time string using provided formats
-fn parse_time_with_formats(s: &str, formats: &[&str]) -> Result<i64> {
+fn parse_time_with_formats(s: &str, formats: &[CompiledTimeFormat<'_>]) -> Result<i64> {
     for format in formats {
-        if let Ok(time) = NaiveTime::parse_from_str(s, format) {
-            // Use Arrow's time_to_time64ns function instead of custom implementation
+        let mut parsed = Parsed::new();
+        if parse(&mut parsed, s, format.items.iter()).is_ok()
+            && let Ok(time) = parsed.to_naive_time()
+        {
             return Ok(time_to_time64ns(time));
         }
     }
@@ -235,5 +240,8 @@ fn parse_time_with_formats(s: &str, formats: &[&str]) -> Result<i64> {
         "Error parsing '{}' as time. Tried formats: {:?}",
         s,
         formats
+            .iter()
+            .map(|format| format.source)
+            .collect::<Vec<_>>()
     )
 }

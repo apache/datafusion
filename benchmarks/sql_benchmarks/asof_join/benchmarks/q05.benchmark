@@ -1,0 +1,18 @@
+name Q05
+group asof_join
+
+expect_plan AsOfJoinExec
+
+run
+-- Left: 100K rows; right: 1M rows; no equality key; ascending timestamps.
+-- Matches the latest right row at or before each left timestamp (l.ts >= r.ts).
+-- Exercises a right input that is ten times larger than the left input.
+WITH left_input AS (
+    SELECT value AS ts, value AS payload FROM range(100000)
+),
+right_input AS (
+    SELECT value AS ts, value AS payload FROM range(1000000)
+)
+SELECT l.ts, l.payload, r.payload AS right_payload
+FROM left_input l
+ASOF JOIN right_input r MATCH_CONDITION (l.ts >= r.ts);

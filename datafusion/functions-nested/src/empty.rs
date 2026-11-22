@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarUDFImpl`] definitions for array_empty function.
 
@@ -43,14 +30,14 @@ make_udf_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns 1 for an empty array or 0 for a non-empty array.",
+    description = "Returns true for an empty array or false for a non-empty array.",
     syntax_example = "empty(array)",
     sql_example = r#"```sql
 > select empty([1]);
 +------------------+
 | empty(List([1])) |
 +------------------+
-| 0                |
+| false            |
 +------------------+
 ```"#,
     argument(
@@ -122,9 +109,19 @@ fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn general_array_empty<O: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
-    let result = as_generic_list_array::<O>(array)?
-        .iter()
-        .map(|arr| arr.map(|arr| arr.is_empty()))
-        .collect::<BooleanArray>();
+    let result = as_generic_list_array::<O>(array)?;
+    let is_empty_iter = result.offsets().lengths().map(|n| n == 0);
+    // SAFETY: this is safe since the iterator lengths is exact size and
+    // trusted - it maps over fixed known number of elements
+    let output_buffer = unsafe { BooleanArray::from_trusted_len_iter(is_empty_iter) };
+
+    let (values, _) = output_buffer.into_parts();
+
+    // Add the nulls
+    let result = BooleanArray::new(
+        values,
+        result.nulls().filter(|n| n.null_count() > 0).cloned(),
+    );
+
     Ok(Arc::new(result))
 }

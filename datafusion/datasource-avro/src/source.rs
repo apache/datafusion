@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Execution plan for reading line-delimited Avro files
 
@@ -22,6 +9,7 @@ use std::sync::Arc;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_avro::reader::{Reader, ReaderBuilder};
 use datafusion_common::error::Result;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -167,6 +155,81 @@ impl FileSource for AvroSource {
     fn supports_repartitioning(&self) -> bool {
         // Avro OCF does not support safe byte-range splitting in this reader path.
         false
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        datafusion_physical_plan::apply_expression_roots(self.projection.source.iter(), f)
+    }
+
+    /// Emit an `AvroScan` node wrapping the shared base config.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        base: &FileScanConfig,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        // Exhaustive destructure: adding a field to `AvroSource` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            // Serialized in `base` and used to rebuild the source on decode.
+            table_schema: _,
+            // Set from `FileScanConfig` when the scan is opened.
+            batch_size: _,
+            // Serialized in `base` and reapplied on decode.
+            projection: _,
+            // Runtime metrics, not part of the plan.
+            metrics: _,
+        } = self;
+
+        let node = protobuf::AvroScanExecNode {
+            base_conf: Some(base.try_to_proto(ctx)?),
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::AvroScan(node)),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl AvroSource {
+    /// Reconstructs a `DataSourceExec` from a protobuf `AvroScan`.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_proto_models::protobuf;
+
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::AvroScan(scan)) =
+            &node.physical_plan_type
+        else {
+            return datafusion_common::internal_err!(
+                "PhysicalPlanNode is not an AvroScan"
+            );
+        };
+
+        let protobuf::AvroScanExecNode { base_conf } = scan;
+
+        let base_conf = base_conf.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "AvroScanExecNode is missing required field 'base_conf'"
+            )
+        })?;
+
+        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
+        let source = Arc::new(AvroSource::new(table_schema));
+
+        let conf = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
+        Ok(DataSourceExec::from_data_source(conf))
     }
 }
 
@@ -351,14 +414,14 @@ mod tests {
         assert_eq!(8, date_string_col.0);
         assert_eq!(&DataType::Binary, date_string_col.1.data_type());
         let col = get_col::<BinaryArray>(&batch, date_string_col).unwrap();
-        assert_eq!("01/01/09".as_bytes(), col.value(0));
-        assert_eq!("01/01/09".as_bytes(), col.value(1));
+        assert_eq!(b"01/01/09", col.value(0));
+        assert_eq!(b"01/01/09", col.value(1));
         let string_col = schema.column_with_name("string_col").unwrap();
         assert_eq!(9, string_col.0);
         assert_eq!(&DataType::Binary, string_col.1.data_type());
         let col = get_col::<BinaryArray>(&batch, string_col).unwrap();
-        assert_eq!("0".as_bytes(), col.value(0));
-        assert_eq!("1".as_bytes(), col.value(1));
+        assert_eq!(b"0", col.value(0));
+        assert_eq!(b"1", col.value(1));
         let timestamp_col = schema.column_with_name("timestamp_col").unwrap();
         assert_eq!(10, timestamp_col.0);
         assert_eq!(
@@ -395,8 +458,8 @@ mod tests {
             .as_any()
             .downcast_ref::<BinaryArray>()
             .unwrap();
-        assert_eq!("0".as_bytes(), col.value(0));
-        assert_eq!("1".as_bytes(), col.value(1));
+        assert_eq!(b"0", col.value(0));
+        assert_eq!(b"1", col.value(1));
 
         // Second column should be double_col (was at index 7 in original)
         assert_eq!("double_col", schema.field(1).name());

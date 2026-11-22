@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::*;
 use datafusion::common::test_util::batches_to_string;
@@ -292,7 +279,7 @@ async fn test_first_last_value_group_by_dict_nulls() -> Result<()> {
 /// Test MAX with dictionary columns containing null keys and values as specified in the SQL query
 #[tokio::test]
 async fn test_max_with_fuzz_table_dict_nulls() -> Result<()> {
-    let (ctx_single, ctx_multi) = setup_fuzz_test_contexts().await?;
+    let (ctx_single, ctx_multi) = setup_fuzz_test_contexts()?;
 
     // Execute the SQL query with MAX aggregations
     let sql = "SELECT
@@ -333,7 +320,7 @@ async fn test_max_with_fuzz_table_dict_nulls() -> Result<()> {
 /// Test MIN with fuzz table containing dictionary columns with null keys and values and timestamp data (single and multiple partitions)
 #[tokio::test]
 async fn test_min_timestamp_with_fuzz_table_dict_nulls() -> Result<()> {
-    let (ctx_single, ctx_multi) = setup_fuzz_timestamp_test_contexts().await?;
+    let (ctx_single, ctx_multi) = setup_fuzz_timestamp_test_contexts()?;
 
     // Execute the SQL query with MIN aggregation on timestamp
     let sql = "SELECT
@@ -373,7 +360,7 @@ async fn test_min_timestamp_with_fuzz_table_dict_nulls() -> Result<()> {
 /// Test COUNT and COUNT DISTINCT with fuzz table containing dictionary columns with null keys and values (single and multiple partitions)
 #[tokio::test]
 async fn test_count_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
-    let (ctx_single, ctx_multi) = setup_fuzz_count_test_contexts().await?;
+    let (ctx_single, ctx_multi) = setup_fuzz_count_test_contexts()?;
 
     // Execute the SQL query with COUNT and COUNT DISTINCT aggregations
     let sql = "SELECT
@@ -414,7 +401,7 @@ async fn test_count_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
 /// Test MEDIAN and MEDIAN DISTINCT with fuzz table containing various numeric types and dictionary columns with null keys and values (single and multiple partitions)
 #[tokio::test]
 async fn test_median_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
-    let (ctx_single, ctx_multi) = setup_fuzz_median_test_contexts().await?;
+    let (ctx_single, ctx_multi) = setup_fuzz_median_test_contexts()?;
 
     // Execute the SQL query with MEDIAN and MEDIAN DISTINCT aggregations
     let sql = "SELECT

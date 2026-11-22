@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`DiskManager`]: Manages files generated during query execution
 
@@ -30,7 +17,7 @@ use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use tempfile::{Builder, NamedTempFile, TempDir};
+use tempfile::{Builder, TempDir, TempPath};
 pub const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
 pub const DEFAULT_MAX_SPILL_MERGE_FAN_IN: usize = 0;
 
@@ -74,6 +61,26 @@ impl DiskManagerBuilder {
         self
     }
 
+    /// Configure a custom factory for creating temporary spill files.
+    ///
+    /// This sets the disk manager mode to [`DiskManagerMode::Custom`], so
+    /// operators that spill during query execution create files through the
+    /// provided [`TempFileFactory`] instead of using local temporary files.
+    pub fn set_temp_file_factory(&mut self, temp_file_factory: Arc<dyn TempFileFactory>) {
+        self.mode = DiskManagerMode::Custom(temp_file_factory);
+    }
+
+    /// Configure a custom factory for creating temporary spill files.
+    ///
+    /// See details on [`Self::set_temp_file_factory`].
+    pub fn with_temp_file_factory(
+        mut self,
+        temp_file_factory: Arc<dyn TempFileFactory>,
+    ) -> Self {
+        self.set_temp_file_factory(temp_file_factory);
+        self
+    }
+
     pub fn set_max_temp_directory_size(&mut self, value: u64) {
         self.max_temp_directory_size = value;
     }
@@ -97,28 +104,28 @@ impl DiskManagerBuilder {
         match self.mode {
             DiskManagerMode::OsTmpDirectory => Ok(DiskManager {
                 local_dirs: Mutex::new(Some(vec![])),
+                conf_dirs: vec![],
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                 max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
                 active_files_count: Arc::new(AtomicUsize::new(0)),
                 factory: None,
             }),
-            DiskManagerMode::Directories(conf_dirs) => {
-                let local_dirs = create_local_dirs(&conf_dirs)?;
-                debug!(
-                    "Created local dirs {local_dirs:?} as DataFusion working directory"
-                );
-                Ok(DiskManager {
-                    local_dirs: Mutex::new(Some(local_dirs)),
-                    max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
-                    max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
-                    used_disk_space: Arc::new(AtomicU64::new(0)),
-                    active_files_count: Arc::new(AtomicUsize::new(0)),
-                    factory: None,
-                })
-            }
+            DiskManagerMode::Directories(conf_dirs) => Ok(DiskManager {
+                // Created on the first `create_tmp_file`, as `OsTmpDirectory`
+                // already does, so building a `DiskManager` that never spills
+                // costs no directory syscalls.
+                local_dirs: Mutex::new(Some(vec![])),
+                conf_dirs,
+                max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
+                max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
+                used_disk_space: Arc::new(AtomicU64::new(0)),
+                active_files_count: Arc::new(AtomicUsize::new(0)),
+                factory: None,
+            }),
             DiskManagerMode::Disabled => Ok(DiskManager {
                 local_dirs: Mutex::new(None),
+                conf_dirs: vec![],
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                 max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
@@ -127,6 +134,7 @@ impl DiskManagerBuilder {
             }),
             DiskManagerMode::Custom(factory) => Ok(DiskManager {
                 local_dirs: Mutex::new(None),
+                conf_dirs: vec![],
                 max_temp_directory_size: AtomicU64::new(self.max_temp_directory_size),
                 max_spill_merge_fan_in: AtomicUsize::new(self.max_spill_merge_fan_in),
                 used_disk_space: Arc::new(AtomicU64::new(0)),
@@ -175,6 +183,10 @@ pub struct DiskManager {
     /// If `Some(vec![])` a new OS specified temporary directory will be created
     /// If `None` an error will be returned (configured not to spill)
     local_dirs: Mutex<Option<Vec<Arc<TempDir>>>>,
+    /// Directories configured by [`DiskManagerMode::Directories`], whose working
+    /// directories are created on the first `create_tmp_file`. Empty in every
+    /// other mode, where an OS temporary directory is used instead.
+    conf_dirs: Vec<PathBuf>,
     /// The maximum amount of data (in bytes) stored inside the temporary directories.
     /// Default to 100GB. Stored as `AtomicU64` so it can be adjusted at runtime
     /// without requiring exclusive (`&mut`) access to the `DiskManager`.
@@ -334,17 +346,23 @@ impl DiskManager {
             )
         })?;
 
-        // Create a temporary directory if needed
+        // Create the working directories if needed
         if local_dirs.is_empty() {
-            let tempdir = tempfile::tempdir().map_err(DataFusionError::IoError)?;
+            if self.conf_dirs.is_empty() {
+                let tempdir = tempfile::tempdir().map_err(DataFusionError::IoError)?;
 
-            debug!(
-                "Created directory '{:?}' as DataFusion tempfile directory for {}",
-                tempdir.path().to_string_lossy(),
-                request_description,
-            );
+                debug!(
+                    "Created directory '{:?}' as DataFusion tempfile directory for {}",
+                    tempdir.path().to_string_lossy(),
+                    request_description,
+                );
 
-            local_dirs.push(Arc::new(tempdir));
+                local_dirs.push(Arc::new(tempdir));
+            } else {
+                let created = create_local_dirs(&self.conf_dirs)?;
+                debug!("Created local dirs {created:?} as DataFusion working directory");
+                local_dirs.extend(created);
+            }
         }
 
         let dir_index = rng().random_range(0..local_dirs.len());
@@ -353,8 +371,10 @@ impl DiskManager {
             parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
             tempfile: Arc::new(
                 Builder::new()
+                    .prefix(&escape_for_temp_file_name_prefix(request_description))
                     .tempfile_in(local_dirs[dir_index].as_ref())
-                    .map_err(DataFusionError::IoError)?,
+                    .map_err(DataFusionError::IoError)?
+                    .into_temp_path(),
             ),
             current_file_disk_usage: Arc::new(AtomicU64::new(0)),
             disk_manager: Arc::clone(self),
@@ -362,8 +382,12 @@ impl DiskManager {
     }
 }
 
-/// A wrapper around a [`NamedTempFile`] that also contains
+/// A wrapper around a temporary file path ([`TempPath`]) that also contains
 /// a reference to its parent temporary directory.
+///
+/// This type does not keep the file open. It holds no file descriptor, so
+/// the number of live spill files does not count against the process file
+/// limit. Only open writers and read streams hold descriptors.
 ///
 /// This type is Clone-able, allowing multiple references to the same underlying file.
 /// The file is deleted only when the last reference is dropped.
@@ -376,10 +400,11 @@ impl DiskManager {
 #[derive(Debug)]
 pub struct RefCountedTempFile {
     /// The reference to the directory in which temporary files are created to ensure
-    /// it is not cleaned up prior to the NamedTempFile
+    /// it is not cleaned up prior to the temporary file
     parent_temp_dir: Arc<TempDir>,
-    /// The underlying temporary file, wrapped in Arc to allow cloning
-    tempfile: Arc<NamedTempFile>,
+    /// The path of the underlying temporary file, wrapped in Arc to allow
+    /// cloning. Dropping the last reference deletes the file.
+    tempfile: Arc<TempPath>,
     /// Tracks the current disk usage of this temporary file.
     ///
     /// This is wrapped in `Arc<AtomicU64>` so that all clones share the same
@@ -402,11 +427,7 @@ impl Clone for RefCountedTempFile {
 
 impl RefCountedTempFile {
     pub fn path(&self) -> &Path {
-        self.tempfile.path()
-    }
-
-    pub fn inner(&self) -> &NamedTempFile {
-        self.tempfile.as_ref()
+        &self.tempfile
     }
 
     fn current_disk_usage(&self) -> u64 {
@@ -504,7 +525,7 @@ impl SpillWriter for FileSpillWriter {
 
 impl SpillFile for RefCountedTempFile {
     fn path(&self) -> Option<&Path> {
-        Some(self.tempfile.path())
+        Some(&self.tempfile)
     }
 
     fn size(&self) -> Option<u64> {
@@ -553,10 +574,11 @@ impl SpillFile for RefCountedTempFile {
     }
 
     fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
-        let file = self
-            .tempfile
-            .as_file()
-            .try_clone()
+        // Append mode keeps the shared-offset behavior of several writers
+        // on one file.
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&*self.tempfile)
             .map_err(DataFusionError::IoError)?;
         Ok(Box::new(FileSpillWriter {
             file,
@@ -565,6 +587,37 @@ impl SpillFile for RefCountedTempFile {
         }))
     }
 }
+
+/// Escape a string to be safe to use in a temp file name prefix.
+///
+/// All non-alphanumeric characters are replaced by `_` and characters are put in lowercase.
+/// A `.tmp.` is added at the beginning and a last `.` is set at the end.
+///
+/// For example "This kind.of /input" becomes ".tmp.this_kind_of_input."
+///
+/// The output is also truncated to fit in 128 bytes.
+fn escape_for_temp_file_name_prefix(text: &str) -> String {
+    let mut output = String::with_capacity(text.len() + 6);
+    output.push_str(".tmp.");
+    let mut add_separator = false;
+    for c in text.chars() {
+        if c.is_alphanumeric() {
+            if add_separator && !output.is_empty() {
+                output.push('_');
+                add_separator = false;
+            }
+            output.extend(c.to_lowercase());
+        } else {
+            add_separator = true;
+        }
+        if output.len() >= 123 {
+            break; // We limit the output at 128 bytes and keep the space for an extra UTF-8 char and the final dot
+        }
+    }
+    output.push('.');
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn file_in_right_dir() -> Result<()> {
+    fn file_in_right_dir_and_with_description() -> Result<()> {
         let local_dir1 = TempDir::new()?;
         let local_dir2 = TempDir::new()?;
         let local_dir3 = TempDir::new()?;
@@ -616,10 +669,22 @@ mod tests {
         );
 
         assert!(dm.tmp_files_enabled());
-        let actual = dm.create_tmp_file("Testing")?;
+        let actual = dm.create_tmp_file("Testing with./spécial")?;
 
         // the file should be in one of the specified local directories
         assert_path_in_dirs(actual.path().unwrap(), local_dirs.into_iter());
+
+        let file_name = actual
+            .path()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            file_name.starts_with(".tmp.testing_with_spécial."),
+            "{file_name}"
+        );
 
         Ok(())
     }
@@ -653,6 +718,37 @@ mod tests {
             .with_mode(DiskManagerMode::Directories(vec![dir.path().to_path_buf()]))
             .build()
             .unwrap();
+    }
+
+    #[test]
+    fn test_directories_mode_creates_dirs_lazily() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+
+        let manager = Arc::new(
+            DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::Directories(vec![root.clone()]))
+                .build()
+                .unwrap(),
+        );
+
+        // Nothing has spilled, so no working directory should exist yet.
+        let entries: Vec<_> = std::fs::read_dir(&root).unwrap().collect();
+        assert!(
+            entries.is_empty(),
+            "expected no directories before the first spill, found {entries:?}"
+        );
+        assert!(manager.temp_dir_paths().is_empty());
+
+        // The first temporary file creates the working directory under the
+        // configured path.
+        let spill_file = manager.create_tmp_file("lazy dir test").unwrap();
+        let spill_path = spill_file.path().expect("spill file should have a path");
+        assert_path_in_dirs(spill_path, std::iter::once(root.as_path()));
+
+        let temp_dir_paths = manager.temp_dir_paths();
+        assert_eq!(temp_dir_paths.len(), 1);
+        assert!(temp_dir_paths[0].starts_with(&root));
     }
 
     /// Asserts that `file_path` is found anywhere in any of `dir` directories
@@ -1154,5 +1250,15 @@ mod tests {
         assert_eq!(dm.used_disk_space(), 0);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_escape_for_temp_file_name_prefix() {
+        assert_eq!(escape_for_temp_file_name_prefix("foo"), ".tmp.foo.");
+        assert_eq!(escape_for_temp_file_name_prefix("fooé \nt"), ".tmp.fooé_t.");
+        assert_eq!(
+            escape_for_temp_file_name_prefix(&"a".repeat(200)),
+            format!(".tmp.{}.", "a".repeat(118))
+        );
     }
 }

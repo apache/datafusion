@@ -1,31 +1,23 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use std::any::Any;
 use std::ffi::c_void;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::metrics::MetricsSet;
+use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, StatisticsArgs,
-    StatisticsContext,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    InputDistributionRequirements, PlanProperties, ReplaceChildrenOptions,
+    StatisticsArgs, StatisticsContext,
 };
 use stabby::string::String as SString;
 use stabby::vec::Vec as SVec;
@@ -33,7 +25,10 @@ use tokio::runtime::Handle;
 
 use crate::config::FFI_ConfigOptions;
 use crate::execution::FFI_TaskContext;
+use crate::physical_expr::FFI_PhysicalExpr;
 use crate::physical_expr::metrics::FFI_MetricsSet;
+use crate::physical_expr::partitioning::FFI_InputDistributionRequirements;
+use crate::physical_expr::sort::FFI_OrderingRequirements;
 use crate::plan_properties::FFI_PlanProperties;
 use crate::record_batch_stream::FFI_RecordBatchStream;
 use crate::statistics::{deserialize_statistics, serialize_statistics};
@@ -49,6 +44,14 @@ pub struct FFI_ExecutionPlan {
 
     /// Return a vector of children plans
     pub children: unsafe extern "C" fn(plan: &Self) -> SVec<FFI_ExecutionPlan>,
+
+    /// Return the physical expression roots owned by this plan node.
+    pub apply_expressions:
+        unsafe extern "C" fn(plan: &Self) -> FFI_Result<SVec<FFI_PhysicalExpr>>,
+
+    /// Return the dynamic expressions produced by this plan node.
+    pub dynamic_expressions_produced:
+        unsafe extern "C" fn(plan: &Self) -> SVec<FFI_PhysicalExpr>,
 
     pub with_new_children:
         unsafe extern "C" fn(plan: &Self, children: SVec<Self>) -> FFI_Result<Self>,
@@ -84,12 +87,33 @@ pub struct FFI_ExecutionPlan {
         partition: FFI_Option<usize>,
     ) -> FFI_Result<SVec<u8>>,
 
+    /// Return the input distribution requirements. See
+    /// [`ExecutionPlan::input_distribution_requirements`].
+    pub input_distribution_requirements:
+        unsafe extern "C" fn(plan: &Self) -> FFI_InputDistributionRequirements,
+
+    /// Return the required ordering of each child. See
+    /// [`ExecutionPlan::required_input_ordering`].
+    pub required_input_ordering:
+        unsafe extern "C" fn(plan: &Self) -> SVec<FFI_Option<FFI_OrderingRequirements>>,
+
+    /// Return whether the plan maintains the order of each child. See
+    /// [`ExecutionPlan::maintains_input_order`].
+    pub maintains_input_order: unsafe extern "C" fn(plan: &Self) -> SVec<bool>,
+
+    /// Return whether the plan benefits from partitioning each child. See
+    /// [`ExecutionPlan::benefits_from_input_partitioning`].
+    pub benefits_from_input_partitioning: unsafe extern "C" fn(plan: &Self) -> SVec<bool>,
+
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
     pub clone: unsafe extern "C" fn(plan: &Self) -> Self,
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(arg: &mut Self),
+
+    /// Return the major DataFusion version number of this provider.
+    pub version: unsafe extern "C" fn() -> u64,
 
     /// Internal data. This is only to be accessed by the provider of the plan.
     /// A [`ForeignExecutionPlan`] should never attempt to access this data.
@@ -138,6 +162,27 @@ unsafe extern "C" fn children_fn_wrapper(
         .collect()
 }
 
+unsafe extern "C" fn apply_expressions_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> FFI_Result<SVec<FFI_PhysicalExpr>> {
+    let mut expressions = SVec::new();
+    let result = plan.inner().apply_expressions(&mut |expr| {
+        expressions.push(FFI_PhysicalExpr::from(Arc::clone(expr)));
+        Ok(TreeNodeRecursion::Continue)
+    });
+    sresult!(result.map(|_| expressions))
+}
+
+unsafe extern "C" fn dynamic_expressions_produced_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> SVec<FFI_PhysicalExpr> {
+    plan.inner()
+        .dynamic_expressions_produced()
+        .into_iter()
+        .map(FFI_PhysicalExpr::from)
+        .collect()
+}
+
 unsafe extern "C" fn with_new_children_fn_wrapper(
     plan: &FFI_ExecutionPlan,
     children: SVec<FFI_ExecutionPlan>,
@@ -151,7 +196,10 @@ unsafe extern "C" fn with_new_children_fn_wrapper(
         .collect();
 
     let children = sresult_return!(children);
-    let new_plan = sresult_return!(inner_plan.with_new_children(children));
+    let new_plan = sresult_return!(inner_plan.replace_children(
+        children,
+        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute)
+    ));
 
     FFI_Result::Ok(FFI_ExecutionPlan::new(new_plan, runtime))
 }
@@ -219,11 +267,42 @@ unsafe extern "C" fn partition_statistics_fn_wrapper(
         .into()
 }
 
+unsafe extern "C" fn input_distribution_requirements_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> FFI_InputDistributionRequirements {
+    (&plan.inner().input_distribution_requirements()).into()
+}
+
+unsafe extern "C" fn required_input_ordering_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> SVec<FFI_Option<FFI_OrderingRequirements>> {
+    plan.inner()
+        .required_input_ordering()
+        .iter()
+        .map(|ordering| ordering.as_ref().map(FFI_OrderingRequirements::from).into())
+        .collect()
+}
+
+unsafe extern "C" fn maintains_input_order_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> SVec<bool> {
+    plan.inner().maintains_input_order().into_iter().collect()
+}
+
+unsafe extern "C" fn benefits_from_input_partitioning_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+) -> SVec<bool> {
+    plan.inner()
+        .benefits_from_input_partitioning()
+        .into_iter()
+        .collect()
+}
+
 unsafe extern "C" fn release_fn_wrapper(plan: &mut FFI_ExecutionPlan) {
     unsafe {
         debug_assert!(!plan.private_data.is_null());
         let private_data =
-            Box::from_raw(plan.private_data as *mut ExecutionPlanPrivateData);
+            Box::from_raw(plan.private_data.cast::<ExecutionPlanPrivateData>());
         drop(private_data);
         plan.private_data = std::ptr::null_mut();
     }
@@ -251,6 +330,9 @@ fn pass_runtime_to_children(
     runtime: &Handle,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     let mut updated_children = false;
+    // This intentionally uses the delegate-aware `is`: a transparent wrapper
+    // around a `ForeignExecutionPlan` typically forwards `replace_children` to
+    // it, so its children will still cross the FFI boundary and need the runtime.
     let plan_is_foreign = plan.is::<ForeignExecutionPlan>();
 
     let children = plan
@@ -268,9 +350,13 @@ fn pass_runtime_to_children(
             // If the parent is foreign and the child is local to this library, then when
             // we called `children()` above we will get something other than a
             // `ForeignExecutionPlan`. In this case wrap the plan in a `ForeignExecutionPlan`
-            // because when we call `with_new_children` below it will extract the
-            // FFI plan that does contain the runtime.
-            if plan_is_foreign && !child.is::<ForeignExecutionPlan>() {
+            // because when we call `replace_children` below it will extract the
+            // FFI plan that does contain the runtime. Check the concrete type rather
+            // than the delegate-aware `is` so that a local wrapper which delegates to
+            // a `ForeignExecutionPlan` still receives the runtime.
+            if plan_is_foreign
+                && !(child.as_ref() as &dyn Any).is::<ForeignExecutionPlan>()
+            {
                 updated_children = true;
                 let ffi_child = FFI_ExecutionPlan::new(child, Some(runtime.clone()));
                 let foreign_child = ForeignExecutionPlan::try_from(ffi_child);
@@ -281,7 +367,12 @@ fn pass_runtime_to_children(
         })
         .collect::<Result<Vec<_>>>()?;
     if updated_children {
-        Arc::clone(plan).with_new_children(children).map(Some)
+        Arc::clone(plan)
+            .replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
+            .map(Some)
     } else {
         Ok(None)
     }
@@ -292,7 +383,13 @@ impl FFI_ExecutionPlan {
     pub fn new(mut plan: Arc<dyn ExecutionPlan>, runtime: Option<Handle>) -> Self {
         // Note to developers: `pass_runtime_to_children` relies on the logic here to
         // get the underlying FFI plan during calls to `new_with_children`.
-        if let Some(plan) = plan.downcast_ref::<ForeignExecutionPlan>() {
+        //
+        // Check the concrete type rather than using the delegate-aware
+        // `downcast_ref`, otherwise a wrapper whose `downcast_delegate` is a
+        // `ForeignExecutionPlan` would be discarded here.
+        if let Some(plan) =
+            (plan.as_ref() as &dyn Any).downcast_ref::<ForeignExecutionPlan>()
+        {
             return plan.plan.clone();
         }
 
@@ -306,15 +403,22 @@ impl FFI_ExecutionPlan {
         Self {
             properties: properties_fn_wrapper,
             children: children_fn_wrapper,
+            apply_expressions: apply_expressions_fn_wrapper,
+            dynamic_expressions_produced: dynamic_expressions_produced_fn_wrapper,
             with_new_children: with_new_children_fn_wrapper,
             name: name_fn_wrapper,
             execute: execute_fn_wrapper,
             repartitioned: repartitioned_fn_wrapper,
             metrics: metrics_fn_wrapper,
             partition_statistics: partition_statistics_fn_wrapper,
+            input_distribution_requirements: input_distribution_requirements_fn_wrapper,
+            required_input_ordering: required_input_ordering_fn_wrapper,
+            maintains_input_order: maintains_input_order_fn_wrapper,
+            benefits_from_input_partitioning: benefits_from_input_partitioning_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            version: crate::version,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -338,6 +442,12 @@ pub struct ForeignExecutionPlan {
     plan: FFI_ExecutionPlan,
     properties: Arc<PlanProperties>,
     children: Vec<Arc<dyn ExecutionPlan>>,
+    /// Input requirements are fixed for a plan instance, so they are fetched
+    /// once on construction rather than across FFI on every optimizer call.
+    input_distribution_requirements: InputDistributionRequirements,
+    required_input_ordering: Vec<Option<OrderingRequirements>>,
+    maintains_input_order: Vec<bool>,
+    benefits_from_input_partitioning: Vec<bool>,
 }
 
 unsafe impl Send for ForeignExecutionPlan {}
@@ -393,11 +503,40 @@ impl TryFrom<FFI_ExecutionPlan> for ForeignExecutionPlan {
                 .map(<Arc<dyn ExecutionPlan>>::try_from)
                 .collect::<Result<Vec<_>>>()?;
 
+            let input_distribution_requirements =
+                (&(plan.input_distribution_requirements)(&plan)).into();
+            // `LexRequirement` and `OrderingRequirements` are non-empty by
+            // construction, so a well-formed provider never sends one that fails
+            // to convert. Reject the plan rather than silently dropping a
+            // (possibly hard) ordering requirement.
+            let required_input_ordering = (plan.required_input_ordering)(&plan)
+                .iter()
+                .map(|ordering| match ordering {
+                    FFI_Option::Some(ordering) => {
+                        OrderingRequirements::try_from(ordering).map(Some)
+                    }
+                    FFI_Option::None => Ok(None),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let maintains_input_order = (plan.maintains_input_order)(&plan)
+                .iter()
+                .copied()
+                .collect();
+            let benefits_from_input_partitioning =
+                (plan.benefits_from_input_partitioning)(&plan)
+                    .iter()
+                    .copied()
+                    .collect();
+
             Ok(ForeignExecutionPlan {
                 name,
                 plan,
                 properties: Arc::new(properties),
                 children,
+                input_distribution_requirements,
+                required_input_ordering,
+                maintains_input_order,
+                benefits_from_input_partitioning,
             })
         }
     }
@@ -416,9 +555,30 @@ impl ExecutionPlan for ForeignExecutionPlan {
         self.children.iter().collect()
     }
 
-    fn with_new_children(
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        self.input_distribution_requirements.clone()
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        self.required_input_ordering.clone()
+    }
+
+    fn maintains_input_order(&self) -> Vec<bool> {
+        self.maintains_input_order.clone()
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        self.benefits_from_input_partitioning.clone()
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let children = children
             .into_iter()
@@ -428,6 +588,16 @@ impl ExecutionPlan for ForeignExecutionPlan {
             unsafe { df_result!((self.plan.with_new_children)(&self.plan, children))? };
 
         (&new_plan).try_into()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -440,6 +610,33 @@ impl ExecutionPlan for ForeignExecutionPlan {
             df_result!((self.plan.execute)(&self.plan, partition, context))
                 .map(|stream| Pin::new(Box::new(stream)) as SendableRecordBatchStream)
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let expressions =
+            df_result!(unsafe { (self.plan.apply_expressions)(&self.plan) })?;
+        datafusion_physical_plan::apply_expression_roots(
+            expressions.iter().map(|expression| {
+                let expression: Arc<dyn datafusion_physical_plan::PhysicalExpr> =
+                    expression.into();
+                expression
+            }),
+            f,
+        )
+    }
+
+    fn dynamic_expressions_produced(
+        &self,
+    ) -> Vec<Arc<dyn datafusion_physical_plan::PhysicalExpr>> {
+        unsafe { (self.plan.dynamic_expressions_produced)(&self.plan) }
+            .iter()
+            .map(<Arc<dyn datafusion_physical_plan::PhysicalExpr>>::from)
+            .collect()
     }
 
     fn repartitioned(
@@ -474,8 +671,9 @@ impl ExecutionPlan for ForeignExecutionPlan {
 
 #[cfg(any(test, feature = "integration-tests"))]
 pub mod tests {
-    use datafusion_physical_plan::Partitioning;
+    use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+    use datafusion_physical_plan::{Partitioning, PhysicalExpr};
 
     use super::*;
 
@@ -483,8 +681,21 @@ pub mod tests {
     pub struct EmptyExec {
         props: Arc<PlanProperties>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        expressions: Vec<Arc<dyn PhysicalExpr>>,
+        dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
         metrics: Option<MetricsSet>,
         statistics: Option<Statistics>,
+        downcast_delegate: bool,
+        input_requirements: Option<TestInputRequirements>,
+    }
+
+    /// Non-default input requirements for an [`EmptyExec`], one entry per child.
+    #[derive(Debug, Clone)]
+    pub struct TestInputRequirements {
+        pub distribution: InputDistributionRequirements,
+        pub ordering: Vec<Option<OrderingRequirements>>,
+        pub maintains_input_order: Vec<bool>,
+        pub benefits_from_input_partitioning: Vec<bool>,
     }
 
     impl EmptyExec {
@@ -497,9 +708,26 @@ pub mod tests {
                     Boundedness::Bounded,
                 )),
                 children: Vec::default(),
+                expressions: Vec::default(),
+                dynamic_expressions: Vec::default(),
                 metrics: None,
                 statistics: None,
+                downcast_delegate: false,
+                input_requirements: None,
             }
+        }
+
+        pub fn with_children(mut self, children: Vec<Arc<dyn ExecutionPlan>>) -> Self {
+            self.children = children;
+            self
+        }
+
+        pub fn with_input_requirements(
+            mut self,
+            input_requirements: TestInputRequirements,
+        ) -> Self {
+            self.input_requirements = Some(input_requirements);
+            self
         }
 
         pub fn with_metrics(mut self, metrics: MetricsSet) -> Self {
@@ -509,6 +737,35 @@ pub mod tests {
 
         pub fn with_statistics(mut self, statistics: Statistics) -> Self {
             self.statistics = Some(statistics);
+            self
+        }
+
+        /// Act as a transparent wrapper around `child` via `downcast_delegate`.
+        pub fn with_downcast_delegate(mut self, child: Arc<dyn ExecutionPlan>) -> Self {
+            self.children = vec![child];
+            self.downcast_delegate = true;
+            self
+        }
+
+        pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
+            self.props =
+                Arc::new(self.props.as_ref().clone().with_partitioning(partitioning));
+            self
+        }
+
+        pub fn with_expressions(
+            mut self,
+            expressions: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Self {
+            self.expressions = expressions;
+            self
+        }
+
+        pub fn with_dynamic_expressions(
+            mut self,
+            dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Self {
+            self.dynamic_expressions = dynamic_expressions;
             self
         }
     }
@@ -536,16 +793,31 @@ pub mod tests {
             self.children.iter().collect()
         }
 
-        fn with_new_children(
+        fn replace_children(
             self: Arc<Self>,
             children: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(Arc::new(EmptyExec {
                 props: Arc::clone(&self.props),
                 children,
+                expressions: self.expressions.clone(),
+                dynamic_expressions: self.dynamic_expressions.clone(),
                 metrics: self.metrics.clone(),
                 statistics: self.statistics.clone(),
+                downcast_delegate: self.downcast_delegate,
+                input_requirements: self.input_requirements.clone(),
             }))
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
         }
 
         fn execute(
@@ -554,6 +826,47 @@ pub mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+
+        fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+            match &self.input_requirements {
+                Some(reqs) => reqs.distribution.clone(),
+                None => InputDistributionRequirements::new(vec![
+                    Distribution::UnspecifiedDistribution;
+                    self.children.len()
+                ]),
+            }
+        }
+
+        fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+            match &self.input_requirements {
+                Some(reqs) => reqs.ordering.clone(),
+                None => vec![None; self.children.len()],
+            }
+        }
+
+        fn maintains_input_order(&self) -> Vec<bool> {
+            match &self.input_requirements {
+                Some(reqs) => reqs.maintains_input_order.clone(),
+                None => vec![false; self.children.len()],
+            }
+        }
+
+        fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+            match &self.input_requirements {
+                Some(reqs) => reqs.benefits_from_input_partitioning.clone(),
+                None => vec![true; self.children.len()],
+            }
+        }
+
+        fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
+            self.downcast_delegate
+                .then(|| self.children.first().map(|c| c.as_ref()))
+                .flatten()
+        }
+
+        fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+            self.dynamic_expressions.iter().map(Arc::clone).collect()
         }
 
         fn metrics(&self) -> Option<MetricsSet> {
@@ -569,6 +882,17 @@ pub mod tests {
                 Statistics::new_unknown(self.props.eq_properties.schema())
             })))
         }
+
+        fn apply_expressions(
+            &self,
+            f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            datafusion_physical_plan::apply_expression_roots(&self.expressions, f)
+        }
+    }
+
+    pub(crate) fn create_dynamic_filter() -> Arc<DynamicFilterPhysicalExpr> {
+        Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)))
     }
 
     #[test]
@@ -601,6 +925,61 @@ pub mod tests {
     }
 
     #[test]
+    fn test_ffi_execution_plan_apply_expressions() -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::empty());
+        let dynamic_filter = create_dynamic_filter();
+        let expected_id = dynamic_filter
+            .expression_id()
+            .expect("dynamic filters always have an expression ID");
+        let expression: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let original_plan =
+            Arc::new(EmptyExec::new(schema).with_expressions(vec![expression]));
+
+        let mut ffi_plan = FFI_ExecutionPlan::new(original_plan, None);
+        ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into()?;
+
+        let mut retained = None;
+        foreign_plan.apply_expressions(&mut |expr| {
+            retained = Some(Arc::clone(expr));
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        drop(foreign_plan);
+
+        assert_eq!(
+            retained.and_then(|expr| expr.expression_id()),
+            Some(expected_id)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_dynamic_expressions_produced() -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::empty());
+        let dynamic_filter = create_dynamic_filter();
+        let expected_id = dynamic_filter
+            .expression_id()
+            .expect("dynamic filters always have an expression ID");
+        let expression: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let original_plan =
+            Arc::new(EmptyExec::new(schema).with_dynamic_expressions(vec![expression]));
+
+        let mut ffi_plan = FFI_ExecutionPlan::new(original_plan, None);
+        ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into()?;
+        foreign_plan.check_invariants(
+            datafusion_physical_plan::execution_plan::InvariantLevel::Always,
+        )?;
+
+        let produced = foreign_plan.dynamic_expressions_produced();
+        assert_eq!(produced.len(), 1);
+        assert_eq!(produced[0].expression_id(), Some(expected_id));
+        drop(foreign_plan);
+        assert_eq!(produced[0].expression_id(), Some(expected_id));
+        Ok(())
+    }
+
+    #[test]
     fn test_ffi_execution_plan_children() -> Result<()> {
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Float32, false),
@@ -620,7 +999,10 @@ pub mod tests {
         assert_eq!(parent_foreign.children().len(), 0);
         assert_eq!(child_foreign.children().len(), 0);
 
-        let parent_foreign = parent_foreign.with_new_children(vec![child_foreign])?;
+        let parent_foreign = parent_foreign.replace_children(
+            vec![child_foreign],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         assert_eq!(parent_foreign.children().len(), 1);
 
         // Version 2: Adding child to the local plan
@@ -630,7 +1012,10 @@ pub mod tests {
         let child_foreign = <Arc<dyn ExecutionPlan>>::try_from(&child_local)?;
 
         let parent_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let parent_plan = parent_plan.with_new_children(vec![child_foreign])?;
+        let parent_plan = parent_plan.replace_children(
+            vec![child_foreign],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         let mut parent_local = FFI_ExecutionPlan::new(parent_plan, None);
         parent_local.library_marker_id = crate::mock_foreign_marker_id;
         let parent_foreign = <Arc<dyn ExecutionPlan>>::try_from(&parent_local)?;
@@ -673,6 +1058,9 @@ pub mod tests {
 
         let observed = metric_foreign.metrics().expect("metrics should be present");
         assert_eq!(observed.output_rows(), Some(42));
+        assert_eq!(observed.for_partition(0).output_rows(), Some(11));
+        assert_eq!(observed.for_partition(1).output_rows(), Some(31));
+        assert_eq!(observed.for_partition(2).iter().count(), 0);
 
         Ok(())
     }
@@ -786,6 +1174,161 @@ pub mod tests {
         Ok(())
     }
 
+    /// A foreign plan reports the same input requirements as the plan it wraps,
+    /// so optimizer rules on the other side of the boundary see them.
+    #[test]
+    fn test_ffi_execution_plan_input_requirements_round_trip() -> Result<()> {
+        use arrow::compute::SortOptions;
+        use datafusion_physical_expr::expressions::Column;
+        use datafusion_physical_expr_common::sort_expr::{
+            LexRequirement, PhysicalSortRequirement,
+        };
+
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Int32, false),
+        ]));
+        let a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let child =
+            || Arc::new(EmptyExec::new(Arc::clone(&schema))) as Arc<dyn ExecutionPlan>;
+        let foreign = |plan: EmptyExec| -> Result<Arc<dyn ExecutionPlan>> {
+            let mut ffi = FFI_ExecutionPlan::new(Arc::new(plan), None);
+            ffi.library_marker_id = crate::mock_foreign_marker_id;
+            (&ffi).try_into()
+        };
+
+        // Defaults survive unchanged.
+        let default_plan = foreign(
+            EmptyExec::new(Arc::clone(&schema)).with_children(vec![child(), child()]),
+        )?;
+        assert_eq!(
+            format!("{:?}", default_plan.input_distribution_requirements()),
+            format!(
+                "{:?}",
+                InputDistributionRequirements::new(vec![
+                    Distribution::UnspecifiedDistribution;
+                    2
+                ])
+            )
+        );
+        assert_eq!(default_plan.required_input_ordering(), vec![None, None]);
+        assert_eq!(default_plan.maintains_input_order(), vec![false, false]);
+        assert_eq!(
+            default_plan.benefits_from_input_partitioning(),
+            vec![true, true]
+        );
+
+        // Non-default requirements, including co-partitioning and soft
+        // ordering, survive unchanged.
+        let ordering = OrderingRequirements::new_soft(
+            LexRequirement::new([PhysicalSortRequirement::new(
+                Arc::clone(&a),
+                Some(SortOptions::new(true, false)),
+            )])
+            .expect("non-empty"),
+        );
+        let reqs = TestInputRequirements {
+            distribution: InputDistributionRequirements::co_partitioned(vec![
+                Distribution::KeyPartitioned(vec![Arc::clone(&a)]),
+                Distribution::KeyPartitioned(vec![Arc::clone(&a)]),
+            ]),
+            ordering: vec![Some(ordering.clone()), None],
+            maintains_input_order: vec![true, false],
+            benefits_from_input_partitioning: vec![false, true],
+        };
+        let plan = foreign(
+            EmptyExec::new(Arc::clone(&schema))
+                .with_children(vec![child(), child()])
+                .with_input_requirements(reqs.clone()),
+        )?;
+        assert!(plan.is::<ForeignExecutionPlan>());
+        assert_eq!(
+            format!("{:?}", plan.input_distribution_requirements()),
+            format!("{:?}", reqs.distribution)
+        );
+        #[expect(deprecated, reason = "the deprecated method must agree too")]
+        let per_child = plan.required_input_distribution();
+        assert_eq!(
+            format!("{per_child:?}"),
+            format!("{:?}", reqs.distribution.clone().into_per_child())
+        );
+        assert_eq!(plan.required_input_ordering(), vec![Some(ordering), None]);
+        assert_eq!(plan.maintains_input_order(), vec![true, false]);
+        assert_eq!(plan.benefits_from_input_partitioning(), vec![false, true]);
+
+        Ok(())
+    }
+
+    /// `EnsureRequirements` running on the consumer side of the boundary sees
+    /// that a foreign `FinalPartitioned` aggregate needs its input
+    /// hash-partitioned, and inserts the repartition. Without the requirement
+    /// crossing FFI it adds only a round-robin repartition, producing a plan
+    /// that groups the same key in several partitions.
+    #[cfg(test)]
+    #[tokio::test]
+    async fn test_ensure_requirements_sees_foreign_plan_requirements() -> Result<()> {
+        use datafusion::arrow::array::Int32Array;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::common::tree_node::{Transformed, TreeNode};
+        use datafusion::datasource::MemTable;
+        use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
+        use datafusion::physical_plan::displayable;
+        use datafusion::physical_plan::repartition::RepartitionExec;
+        use datafusion::prelude::{SessionConfig, SessionContext};
+        use datafusion_physical_optimizer::PhysicalOptimizerRule;
+        use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+        use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]))],
+        )?;
+        let config = SessionConfig::new().with_target_partitions(4);
+        let ctx = SessionContext::new_with_config(config.clone());
+        ctx.register_table("t", Arc::new(MemTable::try_new(schema, vec![vec![batch]])?))?;
+        let plan = ctx
+            .sql("SELECT a % 2 AS parity, count(*) AS n FROM t GROUP BY 1")
+            .await?
+            .create_physical_plan()
+            .await?;
+
+        // Remove the hash repartition under the final aggregate and send that
+        // aggregate across the (mock) FFI boundary.
+        let plan = plan
+            .transform_up(|node| {
+                let Some(agg) = node.downcast_ref::<AggregateExec>() else {
+                    return Ok(Transformed::no(node));
+                };
+                if *agg.mode() != AggregateMode::FinalPartitioned {
+                    return Ok(Transformed::no(node));
+                }
+                let repartition = agg
+                    .input()
+                    .downcast_ref::<RepartitionExec>()
+                    .expect("hash repartition under the final aggregate");
+                let stripped = Arc::clone(&node).replace_children(
+                    vec![Arc::clone(repartition.input())],
+                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+                )?;
+                let mut ffi = FFI_ExecutionPlan::new(stripped, None);
+                ffi.library_marker_id = crate::mock_foreign_marker_id;
+                let foreign: Arc<dyn ExecutionPlan> = (&ffi).try_into()?;
+                Ok(Transformed::yes(foreign))
+            })?
+            .data;
+
+        let optimized = EnsureRequirements::new().optimize(plan, config.options())?;
+        let display = displayable(optimized.as_ref()).indent(false).to_string();
+        assert!(
+            display.contains("RepartitionExec: partitioning=Hash("),
+            "expected a hash repartition under the foreign aggregate:\n{display}"
+        );
+        check_plan_tree_sanity(&optimized, &config.options().optimizer)?;
+
+        Ok(())
+    }
+
     #[test]
     fn test_ffi_execution_plan_local_bypass() {
         let schema = Arc::new(arrow::datatypes::Schema::new(vec![
@@ -804,5 +1347,37 @@ pub mod tests {
         ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into().unwrap();
         assert!(foreign_plan.is::<ForeignExecutionPlan>());
+    }
+
+    /// A wrapper whose `downcast_delegate` is a `ForeignExecutionPlan` must not be
+    /// mistaken for one: it must survive `FFI_ExecutionPlan::new` and still receive
+    /// the runtime when it is the local child of a foreign parent.
+    #[tokio::test]
+    async fn test_ffi_execution_plan_delegating_wrapper() -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::empty());
+
+        let mut ffi_inner =
+            FFI_ExecutionPlan::new(Arc::new(EmptyExec::new(Arc::clone(&schema))), None);
+        ffi_inner.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_inner: Arc<dyn ExecutionPlan> =
+            Arc::new(ForeignExecutionPlan::try_from(ffi_inner)?);
+        let wrapper: Arc<dyn ExecutionPlan> = Arc::new(
+            EmptyExec::new(Arc::clone(&schema)).with_downcast_delegate(foreign_inner),
+        );
+        assert!(wrapper.is::<ForeignExecutionPlan>());
+
+        let ffi_wrapper = FFI_ExecutionPlan::new(Arc::clone(&wrapper), None);
+        assert!(ffi_wrapper.inner().downcast_delegate().is_some());
+
+        let parent = Arc::new(EmptyExec::new(schema)).replace_children(
+            vec![wrapper],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let mut ffi_parent = FFI_ExecutionPlan::new(parent, None);
+        ffi_parent.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_parent: Arc<dyn ExecutionPlan> = (&ffi_parent).try_into()?;
+        assert!(pass_runtime_to_children(&foreign_parent, &Handle::current())?.is_some());
+
+        Ok(())
     }
 }

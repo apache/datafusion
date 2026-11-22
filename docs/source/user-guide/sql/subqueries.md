@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Subqueries
@@ -78,7 +65,11 @@ the results of a subquery or list of values.
 
 ```sql
 expression [NOT] IN (subquery|list-literal)
+(expression[, ...]) [NOT] IN (subquery)
 ```
+
+The tuple form compares each tuple element with the subquery column at the
+same position, so the subquery must return one column per element.
 
 #### Examples
 
@@ -111,6 +102,20 @@ SELECT (1, 1) IN ((1, NULL));
 -- false
 
 SELECT (1, NULL) IN ((1, NULL));
+-- true
+```
+
+A tuple compared with a subquery instead follows SQL row comparison: two rows
+are equal when every element pair is equal, and the comparison is UNKNOWN
+(`NULL`) when no element pair differs but at least one involves a `NULL`. So
+the same values compared with a subquery give `NULL`, and `NOT IN` keeps a row
+only when every subquery row differs from it in some non-`NULL` element:
+
+```sql
+SELECT (1, NULL) IN (SELECT 1, NULL);
+-- NULL
+
+SELECT (NULL, 1) NOT IN (SELECT 2, 3);
 -- true
 ```
 
@@ -242,7 +247,8 @@ WHERE
 #### `WHERE` clause with non-scalar subquery
 
 Non-scalar subqueries must use the `[NOT] IN` or `[NOT] EXISTS` operators and
-can only return a single column.
+can only return a single column, or one column per element of a tuple
+`(expression[, ...]) [NOT] IN (subquery)`.
 The values in the returned column are evaluated as a list.
 
 The following query returns all rows with `column_2` values in table `x` that
@@ -357,7 +363,8 @@ HAVING
 #### `HAVING` clause with a non-scalar subquery
 
 Non-scalar subqueries must use the `[NOT] IN` or `[NOT] EXISTS` operators and
-can only return a single column.
+can only return a single column, or one column per element of a tuple
+`(expression[, ...]) [NOT] IN (subquery)`.
 The values in the returned column are evaluated as a list.
 
 The following query calculates the averages of even and odd numbers in table `y`

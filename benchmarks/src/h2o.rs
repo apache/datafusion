@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! H2O benchmark implementation for groupby, join and window operations
 //! Reference:
@@ -109,6 +96,7 @@ impl RunOpt {
 
         let iterations = self.common.iterations;
         let mut benchmark_run = BenchmarkRun::new();
+        benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("Query {query_id}"));
             let sql = queries.get_query(query_id)?;
@@ -131,7 +119,7 @@ impl RunOpt {
             println!("Query {query_id} avg time: {avg:.2} ms");
 
             // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
-            print_memory_stats();
+            print_memory_stats(&*ctx.runtime_env().memory_pool);
 
             if self.common.debug {
                 ctx.sql(sql)

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Simplify NOT expressions in physical expressions
 //!
@@ -52,9 +39,8 @@ pub fn simplify_not_expr(
     schema: &Schema,
 ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
     // Check if this is a NOT expression
-    let not_expr = match expr.downcast_ref::<NotExpr>() {
-        Some(not_expr) => not_expr,
-        None => return Ok(Transformed::no(expr)),
+    let Some(not_expr) = expr.downcast_ref::<NotExpr>() else {
+        return Ok(Transformed::no(expr));
     };
 
     let inner_expr = not_expr.arg();
@@ -69,7 +55,7 @@ pub fn simplify_not_expr(
         if let ScalarValue::Boolean(Some(val)) = literal.value() {
             return Ok(Transformed::yes(lit(ScalarValue::Boolean(Some(!val)))));
         }
-        if let ScalarValue::Boolean(None) = literal.value() {
+        if matches!(literal.value(), ScalarValue::Boolean(None)) {
             return Ok(Transformed::yes(lit(ScalarValue::Boolean(None))));
         }
     }

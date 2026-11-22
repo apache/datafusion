@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Apache DataFusion
@@ -28,6 +15,7 @@
 [![Discord chat][discord-badge]][discord-url]
 [![Linkedin][linkedin-badge]][linkedin-url]
 ![Crates.io MSRV][msrv-badge]
+[![Codecov][codecov-badge]][codecov-url]
 
 [crates-badge]: https://img.shields.io/crates/v/datafusion.svg
 [crates-url]: https://crates.io/crates/datafusion
@@ -40,11 +28,13 @@
 [commit-activity-badge]: https://img.shields.io/github/commit-activity/m/apache/datafusion
 [open-issues-badge]: https://img.shields.io/github/issues-raw/apache/datafusion
 [open-issues-url]: https://github.com/apache/datafusion/issues
-[pending-pr-badge]: https://img.shields.io/github/issues-search/apache/datafusion?query=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired+status%3Asuccess&label=Pending%20PRs&logo=github
-[pending-pr-url]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired+status%3Asuccess+sort%3Aupdated-desc
+[pending-pr-badge]: https://img.shields.io/github/issues-search/apache/datafusion?query=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired&label=Pending%20PRs&logo=github
+[pending-pr-url]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+draft%3Afalse+review%3Arequired+sort%3Aupdated-desc
 [linkedin-badge]: https://img.shields.io/badge/Follow-Linkedin-blue
 [linkedin-url]: https://www.linkedin.com/company/apache-datafusion/
 [msrv-badge]: https://img.shields.io/crates/msrv/datafusion?label=Min%20Rust%20Version
+[codecov-badge]: https://codecov.io/github/apache/datafusion/graph/badge.svg
+[codecov-url]: https://app.codecov.io/github/apache/datafusion/tree/main
 
 [Website](https://datafusion.apache.org/) |
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |
@@ -96,7 +86,7 @@ Here are links to important resources:
 - [Rust DataFrame API](https://datafusion.apache.org/user-guide/dataframe.html)
 - [Rust API docs](https://docs.rs/datafusion/latest/datafusion)
 - [Rust Examples](https://github.com/apache/datafusion/tree/main/datafusion-examples)
-- [Python DataFrame API](https://arrow.apache.org/datafusion-python/)
+- [Python DataFrame API](https://datafusion.apache.org/python/)
 - [Architecture](https://docs.rs/datafusion/latest/datafusion/index.html#architecture)
 
 ## What can you do with this crate?

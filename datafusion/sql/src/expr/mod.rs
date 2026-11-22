@@ -1,21 +1,9 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_expr::planner::{
@@ -24,19 +12,24 @@ use datafusion_expr::planner::{
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, CeilFloorKind,
     DataType as SQLDataType, DateTimeField, DictionaryField, Expr as SQLExpr,
-    ExprWithAlias as SQLExprWithAlias, JsonPath, MapEntry, Spanned, StructField,
-    Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
+    ExprWithAlias as SQLExprWithAlias, JsonPath, JsonPathElem, MapEntry, Spanned,
+    StructField, Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
 };
 use sqlparser::ast::{Query, Visit, Visitor};
 
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    DFSchema, Diagnostic, Result, ScalarValue, Span, internal_datafusion_err,
+    DFSchema, Diagnostic, HashMap, Result, ScalarValue, Span, internal_datafusion_err,
     internal_err, not_impl_err, plan_err,
 };
 
+use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::SetQuantifier;
-use datafusion_expr::expr::{InList, WildcardOptions};
+use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
+use datafusion_expr::utils::{
+    disjunction, find_window_exprs, window_function_not_allowed_err,
+};
 use datafusion_expr::{
     Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
     Operator, TryCast, lit, when,
@@ -57,6 +50,12 @@ mod substring;
 mod unary_op;
 mod value;
 
+/// Returns `None` if `expr` is not a NULL literal, and `Some(span)` where
+/// `span` is the literal's span, if it has one.
+#[expect(
+    clippy::option_option,
+    reason = "The two levels mean different things, see above"
+)]
 fn null_value_span(expr: &SQLExpr) -> Option<Option<Span>> {
     if let SQLExpr::Value(ValueWithSpan {
         value: Value::Null,
@@ -131,10 +130,106 @@ impl<S: ContextProvider> Visitor for NullEqualityPredicateVisitor<'_, '_, S> {
     }
 }
 
+/// Finds the location of the first window function call in a SQL expression.
+/// An identifier that is an alias of a `SELECT` expression containing a window
+/// function call counts as well, since aliases are resolved before the window
+/// function check (`HAVING total > 0` where `total` is `sum(x) OVER ()`).
+/// Subqueries are skipped: window functions are legal there.
+struct WindowFunctionSpanVisitor<'a, 'b, S: ContextProvider> {
+    sql_to_rel: &'a SqlToRel<'b, S>,
+    aliases: &'a HashMap<String, Expr>,
+    subquery_depth: usize,
+    span: Option<sqlparser::tokenizer::Span>,
+}
+
+impl<S: ContextProvider> Visitor for WindowFunctionSpanVisitor<'_, '_, S> {
+    type Break = ();
+
+    fn pre_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.subquery_depth += 1;
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_query(&mut self, _query: &Query) -> ControlFlow<Self::Break> {
+        self.subquery_depth -= 1;
+        ControlFlow::Continue(())
+    }
+
+    fn pre_visit_expr(&mut self, expr: &SQLExpr) -> ControlFlow<Self::Break> {
+        if self.subquery_depth > 0 {
+            return ControlFlow::Continue(());
+        }
+        let found = match expr {
+            SQLExpr::Function(function) => function.over.is_some(),
+            SQLExpr::Identifier(ident) => {
+                let name = self.sql_to_rel.ident_normalizer.normalize(ident.clone());
+                self.aliases
+                    .get(&name)
+                    .is_some_and(|aliased| !find_window_exprs([aliased]).is_empty())
+            }
+            _ => false,
+        };
+        if found {
+            self.span = Some(expr.span());
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+}
+
+/// Help for a window function in `WHERE` or `HAVING`: `QUALIFY` is the clause
+/// that filters on window function results.
+pub(crate) const QUALIFY_HELP: &str = "Move the condition that uses this window function to a QUALIFY clause, which is evaluated after window functions are computed";
+
+/// Returns an error if `expr`, planned from a clause where window functions
+/// cannot be evaluated, contains a window function call. `clause` names it in
+/// the message, `help` says how to rewrite the query and `span` is the location
+/// of the call in the SQL text, see [`SqlToRel::window_function_span`].
+///
+/// The physical planner rejects such expressions in every position, but
+/// without a span or a clause-specific hint. This check exists to give a
+/// better error for the common mistakes.
+pub(crate) fn reject_window_functions(
+    expr: &Expr,
+    clause: &str,
+    help: &str,
+    span: Option<Span>,
+) -> Result<()> {
+    match find_window_exprs([expr]).into_iter().next() {
+        None => Ok(()),
+        Some(window) => Err(window_function_not_allowed_err(&window, clause, span, help)),
+    }
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn warn_on_null_equality_predicate(&self, predicate: &SQLExpr) {
         let mut visitor = NullEqualityPredicateVisitor::new(self);
         let _ = predicate.visit(&mut visitor);
+    }
+
+    /// The location in the SQL text of the first window function call in
+    /// `expr`, or of the first identifier that is an alias (in `aliases`) of a
+    /// `SELECT` expression containing one. Falls back to the location of the
+    /// whole of `expr`, and returns `None` only if the parser recorded no
+    /// spans.
+    ///
+    /// Used to point the [`Diagnostic`] for a window function in `WHERE` or
+    /// `HAVING` at the offending call, which the planned [`Expr`] cannot do:
+    /// only columns carry spans there.
+    pub(crate) fn window_function_span(
+        &self,
+        expr: &SQLExpr,
+        aliases: &HashMap<String, Expr>,
+    ) -> Option<Span> {
+        let mut visitor = WindowFunctionSpanVisitor {
+            sql_to_rel: self,
+            aliases,
+            subquery_depth: 0,
+            span: None,
+        };
+        let _ = expr.visit(&mut visitor);
+        Span::try_from_sqlparser_span(visitor.span.unwrap_or_else(|| expr.span()))
     }
 
     pub(crate) fn sql_expr_to_logical_expr_with_alias(
@@ -210,21 +305,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         right: Expr,
         schema: &DFSchema,
     ) -> Result<Expr> {
-        // try extension planers
-        let mut binary_expr = RawBinaryExpr { op, left, right };
+        let binary_expr = RawBinaryExpr { op, left, right };
+        match self.try_plan_binary_op(binary_expr, schema)? {
+            PlannerResult::Planned(expr) => Ok(expr),
+            PlannerResult::Original(RawBinaryExpr { op, left, right }) => {
+                self.build_binary_expr(&op, left, right)
+            }
+        }
+    }
+
+    fn try_plan_binary_op(
+        &self,
+        mut binary_expr: RawBinaryExpr,
+        schema: &DFSchema,
+    ) -> Result<PlannerResult<RawBinaryExpr>> {
         for planner in self.context_provider.get_expr_planners() {
             match planner.plan_binary_op(binary_expr, schema)? {
                 PlannerResult::Planned(expr) => {
-                    return Ok(expr);
+                    return Ok(PlannerResult::Planned(expr));
                 }
                 PlannerResult::Original(expr) => {
                     binary_expr = expr;
                 }
             }
         }
-
-        let RawBinaryExpr { op, left, right } = binary_expr;
-        self.build_binary_expr(&op, left, right)
+        Ok(PlannerResult::Original(binary_expr))
     }
 
     pub fn sql_to_expr_with_alias(
@@ -347,16 +452,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 planner_context,
             ),
 
-            SQLExpr::Cast { array: true, .. } => {
-                not_impl_err!("`CAST(... AS type ARRAY`) not supported")
-            }
-
             SQLExpr::Cast {
                 kind: CastKind::Cast | CastKind::DoubleColon,
                 expr,
                 data_type,
                 format,
-                array: false,
             } => {
                 self.sql_cast_to_expr(*expr, &data_type, format, schema, planner_context)
             }
@@ -366,7 +466,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 expr,
                 data_type,
                 format,
-                array: false,
             } => {
                 if let Some(format) = format {
                     return not_impl_err!("CAST with format is not supported: {format}");
@@ -387,11 +486,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 value,
                 uses_odbc_syntax: _,
             }) => {
-                let value = match value.into_string() {
-                    Some(value) => value,
-                    None => {
-                        return plan_err!("Typed literal requires a string payload");
-                    }
+                let Some(value) = value.into_string() else {
+                    return plan_err!("Typed literal requires a string payload");
                 };
 
                 Ok(Expr::Cast(Cast::new_from_field(
@@ -656,24 +752,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             SQLExpr::AtTimeZone {
                 timestamp,
                 time_zone,
-            } => Ok(Expr::Cast(Cast::new(
-                Box::new(self.sql_expr_to_logical_expr_internal(
-                    *timestamp,
-                    schema,
-                    planner_context,
-                )?),
-                match *time_zone {
-                    SQLExpr::Value(ValueWithSpan {
-                        value: Value::SingleQuotedString(s),
-                        span: _,
-                    }) => DataType::Timestamp(TimeUnit::Nanosecond, Some(s.into())),
-                    _ => {
-                        return not_impl_err!(
-                            "Unsupported ast node in sqltorel: {time_zone:?}"
-                        );
-                    }
-                },
-            ))),
+            } => self.sql_at_time_zone_to_expr(
+                *timestamp,
+                *time_zone,
+                schema,
+                planner_context,
+            ),
             SQLExpr::Dictionary(fields) => {
                 self.try_plan_dictionary_literal(fields, schema, planner_context)
             }
@@ -721,16 +805,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan_all_op(&left_expr, &right_expr, &compare_op)
                 }
             },
-            #[expect(deprecated)]
-            SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
-                qualifier: None,
-                options: Box::new(WildcardOptions::default()),
-            }),
-            #[expect(deprecated)]
-            SQLExpr::QualifiedWildcard(object_name, _token) => Ok(Expr::Wildcard {
-                qualifier: Some(self.object_name_to_table_reference(object_name)?),
-                options: Box::new(WildcardOptions::default()),
-            }),
             SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
             SQLExpr::JsonAccess { value, path } => {
                 self.parse_json_access(schema, planner_context, value, &path)
@@ -746,20 +820,72 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         value: Box<SQLExpr>,
         path: &JsonPath,
     ) -> Result<Expr> {
+        let value = self.sql_to_expr(*value, schema, planner_context)?;
         let json_path = path.to_string();
-        let json_path = if let Some(json_path) = json_path.strip_prefix(":") {
-            // sqlparser's JsonPath display adds an extra `:` at the beginning.
-            json_path.to_owned()
-        } else {
-            json_path
+        let json_path = json_path.strip_prefix(":").unwrap_or(&json_path);
+        let binary_expr = RawBinaryExpr {
+            op: BinaryOperator::Custom(":".to_owned()),
+            left: value,
+            right: Expr::Literal(ScalarValue::Utf8(Some(json_path.to_owned())), None),
         };
-        self.build_logical_expr(
-            BinaryOperator::Custom(":".to_owned()),
-            self.sql_to_expr(*value, schema, planner_context)?,
-            // pass json path as a string literal, let the impl parse it when needed.
-            Expr::Literal(ScalarValue::Utf8(Some(json_path)), None),
-            schema,
-        )
+        let binary_expr = match self.try_plan_binary_op(binary_expr, schema)? {
+            PlannerResult::Planned(expr) => return Ok(expr),
+            PlannerResult::Original(expr) => expr,
+        };
+
+        if !path.path.is_empty()
+            && matches!(&binary_expr.op, BinaryOperator::Custom(op) if op == ":")
+            && is_struct_like(&binary_expr.left.get_type(schema)?)
+            && path
+                .path
+                .iter()
+                .all(|element| struct_field_name_from_json_path_elem(element).is_some())
+        {
+            let mut planned = binary_expr.left.clone();
+            let mut all_fields_planned = true;
+
+            for element in &path.path {
+                let field_name = struct_field_name_from_json_path_elem(element)
+                    .expect("all path elements were checked above");
+                let field_access = RawFieldAccessExpr {
+                    expr: planned,
+                    field_access: GetFieldAccess::NamedStructField {
+                        name: ScalarValue::from(field_name),
+                    },
+                };
+                match self.try_plan_field_access(field_access, schema)? {
+                    PlannerResult::Planned(expr) => planned = expr,
+                    PlannerResult::Original(field_access) => {
+                        planned = field_access.expr;
+                        all_fields_planned = false;
+                        break;
+                    }
+                }
+            }
+
+            if all_fields_planned {
+                return Ok(planned);
+            }
+        }
+
+        let RawBinaryExpr { op, left, right } = binary_expr;
+        self.build_binary_expr(&op, left, right)
+    }
+
+    fn try_plan_field_access(
+        &self,
+        mut field_access_expr: RawFieldAccessExpr,
+        schema: &DFSchema,
+    ) -> Result<PlannerResult<RawFieldAccessExpr>> {
+        for planner in self.context_provider.get_expr_planners() {
+            match planner.plan_field_access(field_access_expr, schema)? {
+                PlannerResult::Planned(expr) => {
+                    return Ok(PlannerResult::Planned(expr));
+                }
+                PlannerResult::Original(expr) => field_access_expr = expr,
+            }
+        }
+        Ok(PlannerResult::Original(field_access_expr))
     }
 
     /// Parses a struct(..) expression and plans it creation
@@ -811,6 +937,52 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
     }
 
+    /// Plan `<timestamp> AT TIME ZONE '<tz>'`.
+    ///
+    /// The result type depends on whether the input has a timezone *after
+    /// type coercion*, and type coercion runs after this planner. So this
+    /// method only builds `timezone('<tz>', <timestamp>)` through
+    /// [`ExprPlanner::plan_at_time_zone`], and that function decides once the
+    /// type is known. See `TimezoneFunc` in `datafusion-functions` for the
+    /// semantics.
+    ///
+    /// [`ExprPlanner::plan_at_time_zone`]: datafusion_expr::planner::ExprPlanner::plan_at_time_zone
+    fn sql_at_time_zone_to_expr(
+        &self,
+        timestamp: SQLExpr,
+        time_zone: SQLExpr,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let tz: Arc<str> = match time_zone {
+            SQLExpr::Value(ValueWithSpan {
+                value: Value::SingleQuotedString(s),
+                span: _,
+            }) => s.into(),
+            _ => {
+                return not_impl_err!("Unsupported ast node in sqltorel: {time_zone:?}");
+            }
+        };
+
+        let expr =
+            self.sql_expr_to_logical_expr_internal(timestamp, schema, planner_context)?;
+
+        let mut args = vec![lit(tz.as_ref()), expr];
+        for planner in self.context_provider.get_expr_planners() {
+            match planner.plan_at_time_zone(args)? {
+                PlannerResult::Planned(expr) => return Ok(expr),
+                PlannerResult::Original(original) => {
+                    args = original;
+                }
+            }
+        }
+
+        not_impl_err!(
+            "AT TIME ZONE needs an ExprPlanner that implements `plan_at_time_zone`, \
+             such as the `DatetimeFunctionPlanner` of `datafusion-functions`"
+        )
+    }
+
     fn sql_position_to_expr(
         &self,
         substr_expr: SQLExpr,
@@ -840,8 +1012,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let mut keys = vec![];
-        let mut values = vec![];
+        let mut keys = Vec::with_capacity(fields.len());
+        let mut values = Vec::with_capacity(fields.len());
         for field in fields {
             let key = lit(field.key.value);
             let value =
@@ -871,7 +1043,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Expr> {
         let mut exprs: Vec<_> = entries
             .into_iter()
-            .flat_map(|entry| vec![entry.key, entry.value].into_iter())
+            .flat_map(|entry| [entry.key, entry.value])
             .map(|expr| self.sql_expr_to_logical_expr(*expr, schema, planner_context))
             .collect::<Result<Vec<_>>>()?;
         for planner in self.context_provider.get_expr_planners() {
@@ -968,27 +1140,36 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<ValueWithSpan>,
+        escape_char: Option<Box<SQLExpr>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         case_insensitive: bool,
         any: bool,
     ) -> Result<Expr> {
-        if any {
-            return not_impl_err!("ANY in LIKE expression");
-        }
-        let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let escape_char = match escape_char.map(|v| v.value) {
-            Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
-                Some(char.chars().next().unwrap())
-            }
-            Some(value) => {
+        let escape_char = match escape_char.map(|e| *e) {
+            Some(SQLExpr::Value(ValueWithSpan {
+                value: Value::SingleQuotedString(char),
+                ..
+            })) if char.len() == 1 => Some(char.chars().next().unwrap()),
+            Some(expr) => {
                 return plan_err!(
-                    "Invalid escape character in LIKE expression. Expected a single character wrapped with single quotes, got {value}"
+                    "Invalid escape character in LIKE expression. Expected a single character wrapped with single quotes, got {expr}"
                 );
             }
             None => None,
         };
+        if any {
+            return self.sql_like_any_to_expr(
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                schema,
+                planner_context,
+                case_insensitive,
+            );
+        }
+        let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
         Ok(Expr::Like(Like::new(
             negated,
             Box::new(self.sql_expr_to_logical_expr(expr, schema, planner_context)?),
@@ -998,27 +1179,85 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )))
     }
 
+    /// Plans `expr [NOT] [I]LIKE ANY (p1, ..., pn)` as
+    /// `expr [NOT] [I]LIKE p1 OR ... OR expr [NOT] [I]LIKE pn`, as Spark does.
+    #[expect(clippy::too_many_arguments)]
+    fn sql_like_any_to_expr(
+        &self,
+        negated: bool,
+        expr: SQLExpr,
+        pattern: SQLExpr,
+        escape_char: Option<char>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+        case_insensitive: bool,
+    ) -> Result<Expr> {
+        let patterns = match pattern {
+            SQLExpr::Tuple(patterns) => patterns,
+            SQLExpr::Nested(pattern) if !matches!(*pattern, SQLExpr::Array(_)) => {
+                vec![*pattern]
+            }
+            pattern => {
+                return not_impl_err!(
+                    "ANY in LIKE expression is only supported with a parenthesized list of patterns, got {pattern}"
+                );
+            }
+        };
+        let expr = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
+        // Each pattern gets its own copy of `expr`, so a volatile `expr` could differ per pattern
+        if is_volatile_with_subqueries(&expr)? {
+            return not_impl_err!(
+                "ANY in LIKE expression does not support a volatile left-hand side, got {expr}"
+            );
+        }
+        let mut likes = Vec::with_capacity(patterns.len());
+        for pattern in patterns {
+            let pattern =
+                self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
+            if matches!(
+                pattern.get_type(schema),
+                Ok(DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::FixedSizeList(..))
+            ) {
+                return not_impl_err!(
+                    "ANY in LIKE expression does not support an array of patterns, got {pattern}"
+                );
+            }
+            likes.push(Expr::Like(Like::new(
+                negated,
+                Box::new(expr.clone()),
+                Box::new(pattern),
+                escape_char,
+                case_insensitive,
+            )));
+        }
+        // sqlparser rejects an empty pattern list
+        disjunction(likes).ok_or_else(|| {
+            internal_datafusion_err!(
+                "ANY in LIKE expression requires at least one pattern"
+            )
+        })
+    }
+
     fn sql_similarto_to_expr(
         &self,
         negated: bool,
         expr: SQLExpr,
         pattern: SQLExpr,
-        escape_char: Option<ValueWithSpan>,
+        escape_char: Option<Box<SQLExpr>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let pattern_type = pattern.get_type(schema)?;
-        if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
-            return plan_err!("Invalid pattern in SIMILAR TO expression");
-        }
-        let escape_char = match escape_char.map(|v| v.value) {
-            Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
-                Some(char.chars().next().unwrap())
-            }
-            Some(value) => {
+        let escape_char = match escape_char.map(|e| *e) {
+            Some(SQLExpr::Value(ValueWithSpan {
+                value: Value::SingleQuotedString(char),
+                ..
+            })) if char.len() == 1 => Some(char.chars().next().unwrap()),
+            Some(expr) => {
                 return plan_err!(
-                    "Invalid escape character in SIMILAR TO expression. Expected a single character wrapped with single quotes, got {value}"
+                    "Invalid escape character in SIMILAR TO expression. Expected a single character wrapped with single quotes, got {expr}"
                 );
             }
             None => None,
@@ -1311,19 +1550,44 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .into_iter()
             .flatten()
             .try_fold(root, |expr, field_access| {
-                let mut field_access_expr = RawFieldAccessExpr { expr, field_access };
-                for planner in self.context_provider.get_expr_planners() {
-                    match planner.plan_field_access(field_access_expr, schema)? {
-                        PlannerResult::Planned(expr) => return Ok(expr),
-                        PlannerResult::Original(expr) => {
-                            field_access_expr = expr;
-                        }
-                    }
+                let field_access_expr = RawFieldAccessExpr { expr, field_access };
+                match self.try_plan_field_access(field_access_expr, schema)? {
+                    PlannerResult::Planned(expr) => Ok(expr),
+                    PlannerResult::Original(field_access_expr) => not_impl_err!(
+                        "GetFieldAccess not supported by ExprPlanner: {field_access_expr:?}"
+                    ),
                 }
-                not_impl_err!(
-                    "GetFieldAccess not supported by ExprPlanner: {field_access_expr:?}"
-                )
             })
+    }
+}
+
+fn is_struct_like(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Struct(_))
+        || matches!(
+            data_type,
+            DataType::Dictionary(_, value_type)
+                if matches!(value_type.as_ref(), DataType::Struct(_))
+        )
+}
+
+fn struct_field_name_from_json_path_elem(element: &JsonPathElem) -> Option<&str> {
+    match element {
+        JsonPathElem::Dot { key, .. } => Some(key),
+        JsonPathElem::Bracket {
+            key:
+                SQLExpr::Value(ValueWithSpan {
+                    value: Value::SingleQuotedString(key) | Value::DoubleQuotedString(key),
+                    span: _,
+                }),
+        }
+        | JsonPathElem::ColonBracket {
+            key:
+                SQLExpr::Value(ValueWithSpan {
+                    value: Value::SingleQuotedString(key) | Value::DoubleQuotedString(key),
+                    span: _,
+                }),
+        } => Some(key),
+        JsonPathElem::Bracket { .. } | JsonPathElem::ColonBracket { .. } => None,
     }
 }
 
@@ -1437,6 +1701,34 @@ fn plan_all_op(
         .when(decisive_condition, lit(false))
         .when(has_nulls, null_bool)
         .otherwise(lit(true))
+}
+
+/// Returns true if `expr` is volatile, including any volatile expression inside
+/// the plan of a subquery it contains.
+///
+/// [`Expr::is_volatile`] treats subqueries as leaves, so it misses a subquery
+/// such as `(SELECT random())`.
+fn is_volatile_with_subqueries(expr: &Expr) -> Result<bool> {
+    expr.exists(|e| match e {
+        Expr::Exists(Exists { subquery, .. })
+        | Expr::InSubquery(InSubquery { subquery, .. })
+        | Expr::SetComparison(SetComparison { subquery, .. })
+        | Expr::ScalarSubquery(subquery) => {
+            let mut volatile = false;
+            subquery.subquery.apply_with_subqueries(|plan| {
+                plan.apply_expressions(|e| {
+                    volatile = e.is_volatile();
+                    Ok(if volatile {
+                        TreeNodeRecursion::Stop
+                    } else {
+                        TreeNodeRecursion::Continue
+                    })
+                })
+            })?;
+            Ok(volatile)
+        }
+        e => Ok(e.is_volatile_node()),
+    })
 }
 
 #[cfg(test)]
@@ -1596,5 +1888,33 @@ mod tests {
             .unwrap();
 
         assert!(matches!(expr, Expr::Alias(_)));
+    }
+
+    #[test]
+    fn test_parse_numbers_with_underscores() {
+        use datafusion_common::ScalarValue::*;
+
+        let context_provider = TestContextProvider::new();
+        let sql_to_rel = SqlToRel::new(&context_provider);
+
+        // (input, positive result, negative result)
+        let test_cases = [
+            ("1_000", Int64(Some(1000)), Int64(Some(-1000))),
+            ("100_000", Int64(Some(100000)), Int64(Some(-100000))),
+            ("1_2_3_4", Int64(Some(1234)), Int64(Some(-1234))),
+            ("0_0", Int64(Some(0)), Int64(Some(-0))),
+            ("1_23.4_56", Float64(Some(123.456)), Float64(Some(-123.456))),
+        ];
+
+        for (literal, out_positive, out_negative) in test_cases {
+            assert_eq!(
+                sql_to_rel.parse_sql_number(literal, false).unwrap(),
+                Expr::Literal(out_positive, None)
+            );
+            assert_eq!(
+                sql_to_rel.parse_sql_number(literal, true).unwrap(),
+                Expr::Literal(out_negative, None)
+            );
+        }
     }
 }

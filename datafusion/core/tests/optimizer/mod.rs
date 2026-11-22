@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests for the DataFusion SQL query planner that require functions from the
 //! datafusion-functions crate.
@@ -27,7 +14,9 @@ use arrow::datatypes::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TransformedResult;
-use datafusion_common::{DFSchema, Result, ScalarValue, TableReference, plan_err};
+use datafusion_common::{
+    DFSchema, Result, ScalarValue, TableReference, assert_contains, plan_err,
+};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{
     AggregateUDF, BinaryExpr, Expr, ExprSchemable, HigherOrderUDF, LogicalPlan, Operator,
@@ -136,6 +125,23 @@ fn concat_ws_literals() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn expensive_regexp_like_is_deferred_to_execution() -> Result<()> {
+    let pattern = "a{5}{5}{5}{5}{5}{5}{5}{5}";
+    let plan = test_sql(&format!("SELECT regexp_like('aaaaa', '{pattern}')"))?;
+    let plan = plan.display_indent().to_string();
+
+    assert_contains!(&plan, &format!("Utf8(\"{pattern}\")"));
+    assert_contains!(&plan, " ~ ");
+
+    let null_plan = test_sql(&format!("SELECT regexp_like(NULL, '{pattern}')"))?;
+    assert_contains!(
+        &null_plan.display_indent().to_string(),
+        "Projection: Boolean(NULL)"
+    );
+    Ok(())
+}
+
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
     let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
@@ -147,6 +153,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let context_provider = MyContextProvider::default()
         .with_udf(datetime::now(&config))
         .with_udf(datafusion_functions::core::arrow_cast())
+        .with_udf(datafusion_functions::regex::regexp_like())
         .with_udf(datafusion_functions::string::concat())
         .with_udf(datafusion_functions::string::concat_ws());
     let sql_to_rel = SqlToRel::new(&context_provider);

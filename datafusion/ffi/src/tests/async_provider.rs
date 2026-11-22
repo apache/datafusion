@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This is an example of an async table provider that will call functions on
 //! the tokio runtime of the library providing the function. Since we cannot
@@ -31,12 +18,15 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
-use datafusion_catalog::TableProvider;
+use datafusion_catalog::{MemoryCatalogProvider, TableProvider};
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, exec_err};
 use datafusion_execution::RecordBatchStream;
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions,
+};
 use datafusion_session::Session;
 use futures::Stream;
 use tokio::runtime::Handle;
@@ -72,7 +62,7 @@ fn async_table_provider_thread(
 
     runtime.block_on(async move {
         let mut num_received = 0;
-        while let Some(true) = batch_request.recv().await {
+        while batch_request.recv().await == Some(true) {
             let record_batch = match num_received {
                 0 => Some(create_record_batch(1, 5)),
                 1 => Some(create_record_batch(6, 1)),
@@ -135,11 +125,28 @@ impl TableProvider for AsyncTableProvider {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
+        state: &dyn Session,
+        _projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let catalog = state.catalog_list().catalog("datafusion").ok_or_else(|| {
+            datafusion_common::exec_datafusion_err!("missing datafusion catalog")
+        })?;
+        let schema = catalog.schema("public").ok_or_else(|| {
+            datafusion_common::exec_datafusion_err!("missing public schema")
+        })?;
+        if schema.table("external_table").await?.is_none() {
+            return exec_err!("missing external_table");
+        }
+
+        // Register a catalog from the dynamically loaded library so the host
+        // can verify that catalog mutations cross the FFI boundary as well.
+        state.catalog_list().register_catalog(
+            "ffi_registered".to_owned(),
+            Arc::new(MemoryCatalogProvider::new()),
+        );
+
         Ok(Arc::new(AsyncTestExecutionPlan::new(
             self.batch_request.clone(),
             self.batch_receiver.resubscribe(),
@@ -193,11 +200,22 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
         Vec::default()
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -209,6 +227,15 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
             batch_request: self.batch_request.clone(),
             batch_receiver: self.batch_receiver.resubscribe(),
         }))
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(
+            &Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`PropagateEmptyRelation`] eliminates nodes fed by `EmptyRelation`
 
@@ -23,9 +10,10 @@ use datafusion_common::JoinType;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, DFSchemaRef, Result, ScalarValue, plan_err};
 use datafusion_expr::logical_plan::LogicalPlan;
-use datafusion_expr::{EmptyRelation, Expr, GroupingSet, Projection, Union, cast, lit};
+use datafusion_expr::{EmptyRelation, Expr, Projection, Union, cast, lit};
 
 use crate::optimizer::ApplyOrder;
+use crate::utils::aggregate_emits_on_empty_input;
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimization rule that bottom-up to eliminate plan by propagating empty_relation.
@@ -46,10 +34,6 @@ impl OptimizerRule for PropagateEmptyRelation {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::BottomUp)
-    }
-
-    fn supports_rewrite(&self) -> bool {
-        true
     }
 
     fn rewrite(
@@ -174,13 +158,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                 }
             }
             LogicalPlan::Aggregate(ref agg) => {
-                // An aggregate over an empty input can be eliminated only when
-                // there is no empty grouping set.  An empty grouping set `()`
-                // (from `GROUPING SETS(())`, `ROLLUP(...)`, or `CUBE(...)`)
-                // always produces exactly one row even on empty input, so it
-                // must not be replaced by an empty relation.
-                if !agg.group_expr.is_empty()
-                    && !has_empty_grouping_set(&agg.group_expr)
+                if !aggregate_emits_on_empty_input(&agg.group_expr)
                     && let Some(empty_plan) = empty_child(&plan)?
                 {
                     return Ok(Transformed::yes(empty_plan));
@@ -214,11 +192,21 @@ impl OptimizerRule for PropagateEmptyRelation {
                     if child.schema().eq(plan.schema()) {
                         Ok(Transformed::yes(child))
                     } else {
+                        // The union takes its field names from its first
+                        // input, which may be gone. Map the remaining
+                        // input's columns by position.
+                        let exprs = child
+                            .schema()
+                            .columns()
+                            .into_iter()
+                            .zip(plan.schema().iter())
+                            .map(|(col, (qualifier, field))| {
+                                Expr::Column(col)
+                                    .alias_qualified(qualifier.cloned(), field.name())
+                            })
+                            .collect::<Vec<_>>();
                         Ok(Transformed::yes(LogicalPlan::Projection(
-                            Projection::new_from_schema(
-                                Arc::new(child),
-                                Arc::clone(plan.schema()),
-                            ),
+                            Projection::try_new(exprs, Arc::new(child))?,
                         )))
                     }
                 } else {
@@ -321,34 +309,10 @@ fn build_null_padded_projection(
     )?))
 }
 
-/// Returns `true` if any grouping set in the list of GROUP BY expressions is
-/// the empty set `()`.
-///
-/// An empty grouping set acts as a "grand total" group: the aggregate must
-/// always produce **exactly one row** for it, even when the input is empty.
-/// This means an aggregate with an empty grouping set cannot be replaced by
-/// an empty relation.
-///
-/// The three forms that can contain an empty grouping set:
-/// - `GROUPING SETS (…, (), …)` — explicitly listed.
-/// - `ROLLUP(exprs)` — always expands to include `()`.
-/// - `CUBE(exprs)`  — always expands to include `()`.
-fn has_empty_grouping_set(group_expr: &[Expr]) -> bool {
-    match group_expr.first() {
-        Some(Expr::GroupingSet(GroupingSet::GroupingSets(groups))) => {
-            groups.iter().any(|g| g.is_empty())
-        }
-        // Both ROLLUP and CUBE always include the empty grouping set ().
-        Some(Expr::GroupingSet(GroupingSet::Rollup(_)))
-        | Some(Expr::GroupingSet(GroupingSet::Cube(_))) => true,
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Metadata, Schema};
 
     use datafusion_common::{Column, DFSchema};
     use datafusion_expr::logical_plan::table_scan;
@@ -443,7 +407,8 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
-        let expected = "Projection: a, b, c\n  TableScan: test";
+        let expected =
+            "Projection: test.a AS a, test.b AS b, test.c AS c\n  TableScan: test";
         assert_together_optimized_plan(plan, expected, true)
     }
 
@@ -533,7 +498,34 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
 
-        let expected = "Projection: a, b, c\n  TableScan: test";
+        let expected =
+            "Projection: test.a AS a, test.b AS b, test.c AS c\n  TableScan: test";
+        assert_together_optimized_plan(plan, expected, true)
+    }
+
+    #[test]
+    fn propagate_union_remaining_input_with_other_names() -> Result<()> {
+        // Union
+        //  Filter: false
+        //    TableScan: test
+        //  Projection: test2.a AS x, test2.b AS y, test2.c AS z
+        //    TableScan: test2
+        let left = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(lit(false))?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
+            .project(vec![
+                col("a").alias("x"),
+                col("b").alias("y"),
+                col("c").alias("z"),
+            ])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(left).union(right)?.build()?;
+
+        let expected = "Projection: x AS a, y AS b, z AS c\
+        \n  Projection: test2.a AS x, test2.b AS y, test2.c AS z\
+        \n    TableScan: test2";
         assert_together_optimized_plan(plan, expected, true)
     }
 
@@ -800,7 +792,7 @@ mod tests {
             produce_one_row: false,
             schema: Arc::new(DFSchema::from_unqualified_fields(
                 fields.into(),
-                Default::default(),
+                Metadata::new(),
             )?),
         });
 
@@ -817,7 +809,7 @@ mod tests {
             .union(three)?
             .build()?;
 
-        let expected = "Projection: a, b, c\
+        let expected = "Projection: test.a AS a, test.b AS b, test.c AS c\
         \n  TableScan: test";
 
         assert_together_optimized_plan(plan, expected, true)

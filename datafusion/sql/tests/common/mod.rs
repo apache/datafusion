@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 #[cfg(test)]
@@ -122,6 +109,7 @@ impl ContextProvider for MockContextProvider {
                 Field::new("t_date32", DataType::Date32, false),
                 Field::new("t_date64", DataType::Date64, false),
             ])),
+            "t" => Ok(Schema::new(vec![Field::new("x", DataType::Float64, true)])),
             "j1" => Ok(Schema::new(vec![
                 Field::new("j1_id", DataType::Int32, false),
                 Field::new("j1_string", DataType::Utf8, false),
@@ -168,11 +156,20 @@ impl ContextProvider for MockContextProvider {
             ])),
             "person_with_uuid_extension" => Ok(Schema::new(vec![
                 Field::new("id", DataType::FixedSizeBinary(16), false).with_metadata(
-                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
-                        .into(),
+                    Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
                 ),
                 Field::new("first_name", DataType::Utf8, false),
                 Field::new("last_name", DataType::Utf8, false),
+            ])),
+            "person_with_binary_id" => Ok(Schema::new(vec![
+                Field::new("id", DataType::FixedSizeBinary(16), false),
+                Field::new("first_name", DataType::Utf8, false),
+                Field::new("last_name", DataType::Utf8, false),
+            ])),
+            "string_with_extension" => Ok(Schema::new(vec![
+                Field::new("value", DataType::Utf8, false).with_metadata(
+                    Metadata::new().with("ARROW:extension:name", "example.string"),
+                ),
             ])),
             "orders" => Ok(Schema::new(vec![
                 Field::new("order_id", DataType::UInt32, false),
@@ -213,6 +210,17 @@ impl ContextProvider for MockContextProvider {
                     ))),
                     false,
                 ),
+            ])),
+            "array_with_field_metadata" => Ok(Schema::new(vec![
+                Field::new(
+                    "left",
+                    DataType::List(Arc::new(
+                        Field::new_list_field(DataType::Int64, true)
+                            .with_metadata(Metadata::new().with("PARQUET:field_id", "2")),
+                    )),
+                    false,
+                )
+                .with_metadata(Metadata::new().with("PARQUET:field_id", "1")),
             ])),
             "lineitem" => Ok(Schema::new(vec![
                 Field::new("l_orderkey", DataType::UInt32, false),
@@ -380,12 +388,6 @@ impl TypePlanner for CustomTypePlanner {
         sql_type: &sqlparser::ast::DataType,
     ) -> Result<Option<FieldRef>> {
         match sql_type {
-            sqlparser::ast::DataType::Uuid => Ok(Some(Arc::new(
-                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
-                        .into(),
-                ),
-            ))),
             sqlparser::ast::DataType::Datetime(precision) => {
                 let precision = match precision {
                     Some(0) => TimeUnit::Second,
@@ -394,8 +396,10 @@ impl TypePlanner for CustomTypePlanner {
                     None | Some(9) => TimeUnit::Nanosecond,
                     _ => unreachable!(),
                 };
+                // Differs from the default mapping (no time zone)
                 Ok(Some(
-                    DataType::Timestamp(precision, None).into_nullable_field_ref(),
+                    DataType::Timestamp(precision, Some("UTC".into()))
+                        .into_nullable_field_ref(),
                 ))
             }
             _ => Ok(None),

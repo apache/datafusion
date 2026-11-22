@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Custom Table Provider
@@ -56,7 +43,10 @@ actually produced during execution.
 [listingtable]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 [viewtable]: https://docs.rs/datafusion/latest/datafusion/datasource/view/struct.ViewTable.html
 [planproperties]: https://docs.rs/datafusion/latest/datafusion/physical_plan/struct.PlanProperties.html
+[equivalenceproperties]: https://docs.rs/datafusion/latest/datafusion/physical_expr/struct.EquivalenceProperties.html
 [streamingtableexec]: https://docs.rs/datafusion/latest/datafusion/physical_plan/streaming/struct.StreamingTableExec.html
+[`optimizer`]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.Optimizer.html#built-in-optimizer-rules
+[`physicaloptimizer`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/optimizer/struct.PhysicalOptimizer.html#built-in-physical-optimizer-rules
 [datasourceexec]: https://docs.rs/datafusion/latest/datafusion/datasource/source/struct.DataSourceExec.html
 
 ## Background: Logical and Physical Planning
@@ -93,6 +83,9 @@ optimizations include:
 - **Limit pushdown** -- pushes `LIMIT` earlier in the plan so operators
   produce less data.
 
+See the [`Optimizer`] documentation for the full list of built-in logical
+optimizer rules.
+
 ### Physical Planning
 
 The **physical planner** converts the optimized logical plan into an
@@ -108,6 +101,9 @@ to scan" are made. The physical optimizer then refines this tree further with re
   statistics and table sizes.
 - **Aggregate optimization** -- combines partial and final aggregation stages,
   and can use exact statistics to skip scanning entirely.
+
+See the [`PhysicalOptimizer`] documentation for the full list of built-in
+physical optimizer rules.
 
 ### Why This Matters for Table Providers
 
@@ -170,7 +166,7 @@ impl TableProvider for MyTable {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -247,12 +243,20 @@ impl ExecutionPlan for MyExecPlan {
         vec![]  // Leaf node -- no children
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert!(children.is_empty());
+        Ok(self)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        assert!(children.is_empty());
-        Ok(self)
+        self.replace_children(children, ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute))
     }
 
     fn execute(
@@ -275,7 +279,8 @@ by file or by shard), expose that here.
 
 **Output ordering** declares whether your data is naturally sorted. This
 enables the optimizer to avoid inserting a `SortExec` when a query requires
-ordered data. Getting this right can be a significant performance win.
+ordered data. Getting this right can be a significant performance win. See
+[EquivalenceProperties] for more details.
 
 ### Partitioning Strategies
 
@@ -315,7 +320,7 @@ expects to work with:
 async fn scan(
     &self,
     state: &dyn Session,
-    projection: Option<&Vec<usize>>,
+    projection: Option<&[usize]>,
     filters: &[Expr],
     limit: Option<usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -520,7 +525,7 @@ To opt in, implement `supports_filters_pushdown`:
 # impl TableProvider for MyFilterTable {
 #     fn schema(&self) -> SchemaRef { todo!() }
 #     fn table_type(&self) -> TableType { TableType::Base }
-#     async fn scan(&self, _: &dyn Session, _: Option<&Vec<usize>>, _: &[Expr], _: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> { todo!() }
+#     async fn scan(&self, _: &dyn Session, _: Option<&[usize]>, _: &[Expr], _: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> { todo!() }
 #
 fn supports_filters_pushdown(
     &self,
@@ -655,7 +660,7 @@ and reading files that cannot possibly match the query.
 # use datafusion::execution::context::TaskContext;
 # use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 # use datafusion::physical_expr::EquivalenceProperties;
-# use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr, PlanProperties};
+# use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr, PlanProperties, ChildrenPropertiesMode, ReplaceChildrenOptions};
 # use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 #
 /// A table provider backed by date-partitioned directories.
@@ -692,7 +697,7 @@ impl TableProvider for DatePartitionedTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -764,8 +769,17 @@ impl DatePartitionedTable {
 #     fn name(&self) -> &str { "DatePartitionedExec" }
 #     fn properties(&self) -> &Arc<PlanProperties> { &self.properties }
 #     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> { vec![] }
-#     fn with_new_children(self: Arc<Self>, _: Vec<Arc<dyn ExecutionPlan>>) -> Result<Arc<dyn ExecutionPlan>> { Ok(self) }
+#     fn replace_children(self: Arc<Self>, _: Vec<Arc<dyn ExecutionPlan>>, _: ReplaceChildrenOptions) -> Result<Arc<dyn ExecutionPlan>> { Ok(self) }
+#
+#     fn with_new_children(
+#         self: Arc<Self>,
+#         children: Vec<Arc<dyn ExecutionPlan>>,
+#     ) -> Result<Arc<dyn ExecutionPlan>> {
+#         self.replace_children(children, ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute))
+#     }
+#
 #     fn execute(&self, _: usize, _: Arc<TaskContext>) -> Result<SendableRecordBatchStream> { todo!() }
+#     fn apply_expressions(&self, _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
 # }
 ```
 
@@ -774,6 +788,19 @@ and the partition pruning (`scan()`) work together: the first tells DataFusion
 that a `FilterExec` is unnecessary for the `date` predicate, and the second
 ensures that only the relevant directories are scanned. The actual file reading
 happens later, in the stream produced by `execute()`.
+
+## Row-Level DML: DELETE and UPDATE
+
+A custom table provider can support `DELETE` and `UPDATE` by implementing the optional [`TableProvider::delete_from()`] and [`TableProvider::update()`] methods. Their default implementations return a "not implemented" error.
+
+Each method builds an [ExecutionPlan] that changes the matching rows and returns the number of affected rows in a `count` column. Your provider decides how to apply and persist the changes. Perform the changes when the returned plan executes: these methods run during physical planning, including for `EXPLAIN`.
+
+The method documentation describes the filters, assignments, SQL semantics, and result schema that an implementation must support. [MemTable] provides an implementation of both methods over in-memory batches.
+
+For SQL syntax and examples, see the [DML section](../user-guide/sql/dml.md) of the user guide.
+
+[`tableprovider::delete_from()`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html#method.delete_from
+[`tableprovider::update()`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html#method.update
 
 ## Putting It All Together
 
@@ -800,10 +827,8 @@ use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-#     DisplayAs, DisplayFormatType,
-    ExecutionPlan, Partitioning,
-#     PhysicalExpr,
-    PlanProperties,
+#     DisplayAs, DisplayFormatType, PhysicalExpr,
+    ChildrenPropertiesMode, ReplaceChildrenOptions, ExecutionPlan, Partitioning, PlanProperties,
 };
 use futures::stream;
 
@@ -833,7 +858,7 @@ impl TableProvider for CountingTable {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -873,11 +898,19 @@ impl ExecutionPlan for CountingExec {
     fn properties(&self) -> &Arc<PlanProperties> { &self.properties }
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> { vec![] }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(children, ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute))
     }
 
     fn execute(
@@ -909,6 +942,13 @@ impl ExecutionPlan for CountingExec {
             batch_stream,
         )))
     }
+
+#     fn apply_expressions(
+#         &self,
+#         _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+#     ) -> Result<TreeNodeRecursion> {
+#         Ok(TreeNodeRecursion::Continue)
+#     }
 }
 ```
 

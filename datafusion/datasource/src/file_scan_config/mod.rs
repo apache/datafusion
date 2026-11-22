@@ -1,24 +1,18 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`FileScanConfig`] to configure scanning of possibly partitioned
 //! file sources.
 
 pub(crate) mod sort_pushdown;
+
+/// Shared `FileScanConfig` <-> proto conversion, gated on the `proto` feature.
+/// Attaches inherent `try_to_proto` / `try_from_proto` /
+/// `parse_table_schema_from_proto` helpers to [`FileScanConfig`] used by every
+/// file source's `try_to_proto` hook.
+#[cfg(feature = "proto")]
+mod proto;
 
 use crate::file_groups::FileGroup;
 use crate::{
@@ -30,8 +24,10 @@ use crate::{
 use arrow::datatypes::Fields;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraints, Result, ScalarValue, Statistics, internal_datafusion_err, internal_err,
+    Constraint, Constraints, Result, ScalarValue, SplitPoint, Statistics,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_execution::{
     SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
@@ -39,10 +35,13 @@ use datafusion_execution::{
 use datafusion_expr::Operator;
 
 use crate::source::OpenArgs;
+use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionMapping};
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
+use datafusion_physical_expr::{
+    EquivalenceProperties, Partitioning, RangePartitioning, split_conjunction,
+};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -81,7 +80,9 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema, SchemaRef};
 /// # use object_store::ObjectStore;
 /// # use datafusion_common::Result;
+/// # use datafusion_common::tree_node::TreeNodeRecursion;
 /// # use datafusion_datasource::file::FileSource;
+/// # use datafusion_physical_plan::PhysicalExpr;
 /// # use datafusion_datasource::file_groups::FileGroup;
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -111,6 +112,7 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// #  fn file_type(&self) -> &str { "parquet" }
 /// #  // Note that this implementation drops the projection on the floor, it is not complete!
 /// #  fn try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>> { Ok(Some(Arc::new(self.clone()) as Arc<dyn FileSource>)) }
+/// #  fn apply_expressions(&self, _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
 /// #  }
 /// # impl ParquetSource {
 /// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into()} }
@@ -171,10 +173,12 @@ pub struct FileScanConfig {
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
-    /// Whether the scan's limit is order sensitive
-    /// When `true`, files must be read in the exact order specified to produce
-    /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
-    /// DataFusion may reorder file processing for optimization without affecting correctness.
+    /// Read files in the order of [`Self::file_groups`].
+    ///
+    /// [`FileScanConfigBuilder::build`] sets this when the scan has an output
+    /// ordering. Readers use [`Self::preserves_file_order`], which also checks
+    /// the current [`Self::output_ordering`], so clearing this flag never
+    /// reorders a scan that advertises an ordering.
     pub preserve_order: bool,
     /// All equivalent lexicographical output orderings of this file scan, in terms of
     /// [`FileSource::table_schema`]. See [`FileScanConfigBuilder::with_output_ordering`] for more
@@ -320,14 +324,10 @@ impl FileScanConfigBuilder {
         self
     }
 
-    /// Set whether the limit should be order-sensitive.
-    ///
-    /// When `true`, files must be read in the exact order specified to produce
-    /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
-    /// DataFusion may reorder file processing for optimization without
-    /// affecting correctness.
-    pub fn with_preserve_order(mut self, order_sensitive: bool) -> Self {
-        self.preserve_order = order_sensitive;
+    /// Set whether files must be read in the order of the file groups even
+    /// when the scan has no output ordering. See [`FileScanConfig::preserve_order`].
+    pub fn with_preserve_order(mut self, preserve_order: bool) -> Self {
+        self.preserve_order = preserve_order;
         self
     }
 
@@ -530,9 +530,10 @@ impl FileScanConfigBuilder {
         } = self;
 
         let constraints = constraints.unwrap_or_default();
-        let statistics = statistics.unwrap_or_else(|| {
+        let mut statistics = statistics.unwrap_or_else(|| {
             Statistics::new_unknown(file_source.table_schema().table_schema())
         });
+        add_key_distinct_counts(&constraints, &mut statistics);
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
 
@@ -556,6 +557,32 @@ impl FileScanConfigBuilder {
     }
 }
 
+/// Records that a key column holds one distinct value per row, which no file format
+/// stores. Single-column keys only: a composite key says nothing about its columns.
+fn add_key_distinct_counts(constraints: &Constraints, statistics: &mut Statistics) {
+    let num_rows = statistics.num_rows;
+    for constraint in constraints.iter() {
+        let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) = constraint;
+        let [index] = indices[..] else {
+            continue;
+        };
+        let Some(column) = statistics.column_statistics.get_mut(index) else {
+            continue;
+        };
+        if column.distinct_count != Precision::Absent {
+            continue;
+        }
+        // A NULL is not a distinct value. A primary key has none; a unique column may
+        // repeat them, so an unknown count leaves the result inexact.
+        let nulls = match (constraint, column.null_count) {
+            (Constraint::PrimaryKey(_), Precision::Absent) => Precision::Exact(0),
+            (_, Precision::Absent) => Precision::Inexact(0),
+            (_, nulls) => nulls,
+        };
+        column.distinct_count = num_rows.sub(&nulls);
+    }
+}
+
 impl From<FileScanConfig> for FileScanConfigBuilder {
     fn from(config: FileScanConfig) -> Self {
         Self {
@@ -575,15 +602,52 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
     }
 }
 
-/// Builds output partitioning over `partition_cols` (resolved to their indices in
-/// `schema`) with `partition_count` partitions. Returns `None` when there are no
-/// partition columns. Callers use this to declare the output partitioning of a scan
-/// whose file groups are organized by partition column values.
+/// Builds `Partitioning::Hash` over `partition_cols` (resolved to their indices in
+/// `schema`). Returns `None` when there are no partition columns.
+#[deprecated(
+    since = "56.0.0",
+    note = "Use `output_range_partitioning_from_split_points` instead"
+)]
 pub fn output_partitioning_from_partition_fields(
     schema: &Schema,
     partition_cols: &Fields,
     partition_count: usize,
 ) -> Option<Partitioning> {
+    let exprs = partition_column_exprs(schema, partition_cols)?;
+    Some(Partitioning::Hash(exprs, partition_count))
+}
+
+/// Builds the [`Partitioning::Range`] for file groups from
+/// [`FileGroup::group_by_partition_values_with_split_points`], each column sorted with
+/// `SortOptions::default()` to match how the groups were cut. Returns `None` when there
+/// are no partition columns or one is missing from `schema`, and errors when
+/// `split_points` decrease in that ordering. Split point values must have the partition
+/// column types in `schema`.
+pub fn output_range_partitioning_from_split_points(
+    schema: &Schema,
+    partition_cols: &Fields,
+    split_points: Vec<SplitPoint>,
+) -> Result<Option<Partitioning>> {
+    let Some(exprs) = partition_column_exprs(schema, partition_cols) else {
+        return Ok(None);
+    };
+    let sort_exprs = exprs
+        .into_iter()
+        .map(PhysicalSortExpr::new_default)
+        .collect::<Vec<_>>();
+    let Some(ordering) = LexOrdering::new(sort_exprs) else {
+        return Ok(None);
+    };
+    let range = RangePartitioning::try_new(ordering, split_points)?;
+    Ok(Some(Partitioning::Range(range)))
+}
+
+/// Resolves `partition_cols` to `Column` expressions in `schema`, or `None` when there
+/// are no partition columns or one is missing.
+fn partition_column_exprs(
+    schema: &Schema,
+    partition_cols: &Fields,
+) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
     if partition_cols.is_empty() {
         return None;
     }
@@ -597,8 +661,7 @@ pub fn output_partitioning_from_partition_fields(
             .position(|field| field.name() == name)?;
         exprs.push(Arc::new(Column::new(name, idx)));
     }
-
-    Some(Partitioning::Hash(exprs, partition_count))
+    Some(exprs)
 }
 
 fn project_output_partitioning(
@@ -697,6 +760,9 @@ impl DataSource for FileScanConfig {
             .unwrap_or_else(|| context.session_config().batch_size());
 
         let source = self.file_source.with_batch_size(batch_size);
+        let source = source
+            .with_memory_pool(context.memory_pool())
+            .unwrap_or(source);
 
         let morselizer = source.create_morselizer(object_store, self, partition)?;
 
@@ -796,6 +862,23 @@ impl DataSource for FileScanConfig {
             return Ok(None);
         }
 
+        // An ordered scan can use the size-balanced split of an unordered
+        // scan when every new group is still sorted. That split keeps the
+        // files in group order and only moves the group boundaries, so groups
+        // like `[f1, f2], [f3, f4]` with a large `f1` become
+        // `[f1 head], [f1 tail, f2], ...`.
+        if output_ordering.is_some()
+            && let Some(balanced) = self.file_source.repartitioned(
+                target_partitions,
+                repartition_file_min_size,
+                None,
+                self,
+            )?
+            && balanced.validated_output_ordering() == self.validated_output_ordering()
+        {
+            return Ok(Some(Arc::new(balanced)));
+        }
+
         let source = self.file_source.repartitioned(
             target_partitions,
             repartition_file_min_size,
@@ -870,7 +953,9 @@ impl DataSource for FileScanConfig {
         )
         .with_constraints(self.constraints.clone());
 
-        if let Some(filter) = self.file_source.filter() {
+        // Only a filter that the source applies exactly gives valid equivalences.
+        // A filter that is used only for pruning lets non-matching rows through.
+        if let Some(filter) = self.file_source.exact_filter() {
             // We need to remap column indexes to match the projected schema since that's what the equivalence properties deal with.
             // Note that this will *ignore* any non-projected columns: these don't factor into ordering / equivalence.
             match Self::add_filter_equivalence_info(&filter, &mut eq_properties, schema) {
@@ -917,9 +1002,11 @@ impl DataSource for FileScanConfig {
                 // Project the statistics based on the projection
                 let output_schema = self.projected_schema()?;
                 return if let Some(projection) = self.file_source.projection() {
-                    Ok(Arc::new(
-                        projection.project_statistics(stat.clone(), &output_schema)?,
-                    ))
+                    Ok(Arc::new(projection.project_statistics_with_input_schema(
+                        stat.clone(),
+                        self.file_source.table_schema().table_schema(),
+                        &output_schema,
+                    )?))
                 } else {
                     Ok(Arc::new(stat.clone()))
                 };
@@ -934,9 +1021,11 @@ impl DataSource for FileScanConfig {
             let projection = self.file_source.projection();
             let output_schema = self.projected_schema()?;
             if let Some(projection) = &projection {
-                Ok(Arc::new(
-                    projection.project_statistics(statistics.clone(), &output_schema)?,
-                ))
+                Ok(Arc::new(projection.project_statistics_with_input_schema(
+                    statistics.clone(),
+                    self.file_source.table_schema().table_schema(),
+                    &output_schema,
+                )?))
             } else {
                 Ok(Arc::new(statistics))
             }
@@ -1055,6 +1144,8 @@ impl DataSource for FileScanConfig {
     ///   │     (natural ordering satisfies request)
     ///   │     → rebuild_with_source: sort files by stats, verify non-overlapping
     ///   │     → SortExec removed, fetch (LIMIT) pushed to DataSourceExec
+    ///   │     → if the ordering cannot be kept, continue as for Inexact
+    ///   │       with the original source
     ///   │
     ///   ├─► FileSource returns Inexact
     ///   │     (e.g. column_in_file_schema: opener will reorder RGs at runtime)
@@ -1087,54 +1178,19 @@ impl DataSource for FileScanConfig {
                 // rebuild_with_source keeps output_ordering only when all groups
                 // are non-overlapping. If output_ordering was cleared, files
                 // overlap despite within-file ordering → downgrade to Inexact.
-                if config.output_ordering.is_empty() {
-                    Ok(SortOrderPushdownResult::Inexact {
-                        inner: Arc::new(config),
-                    })
-                } else {
-                    Ok(SortOrderPushdownResult::Exact {
-                        inner: Arc::new(config),
-                    })
-                }
-            }
-            SortOrderPushdownResult::Inexact { inner } => {
-                let mut config = self.rebuild_with_source(inner, false, order)?;
-                // `rebuild_with_source` reorders files by stats; if the
-                // post-sort files are non-overlapping AND the request now
-                // validates against the new file groups, `output_ordering`
-                // is preserved and we can upgrade back to Exact. This
-                // restores the sort-elimination behaviour that lived in
-                // the `Unsupported` → `try_sort_file_groups_by_statistics`
-                // path before #21956 routed `column_in_file_schema` cases
-                // here.
-                if config.output_ordering.is_empty() {
-                    return Ok(SortOrderPushdownResult::Inexact {
+                if !config.output_ordering.is_empty() {
+                    return Ok(SortOrderPushdownResult::Exact {
                         inner: Arc::new(config),
                     });
                 }
-                // Upgrading to Exact: the post-sort file groups are
-                // non-overlapping and each file's declared ordering
-                // re-validates, so reading the files in their natural
-                // (declared-sorted) order already yields the requested
-                // ordering — exactly like the `Unsupported` → Exact path,
-                // which reads files in natural order too.
-                //
-                // Drop the runtime row-group reorder hints the Inexact
-                // source carried (`sort_order_for_reorder` /
-                // `reverse_row_groups`) by restoring the original,
-                // hint-free source. With the `SortExec` removed those
-                // hints are not just redundant but unsafe: for a DESC
-                // request the opener sorts row groups ASC-by-min and then
-                // reverses them, which reorders two row groups within a
-                // single file that share the same `min` incorrectly
-                // (e.g. a file `[10,8,8,8]` whose row groups are
-                // `[10,8]` and `[8,8]` would stream as `8,8,10,8`).
-                // The `SortExec` used to mask this; once it is gone the
-                // reordered stream is the final, wrong answer.
-                config.file_source = Arc::clone(&self.file_source);
-                Ok(SortOrderPushdownResult::Exact {
-                    inner: Arc::new(config),
-                })
+                // An exact source may read rows back to front, which only pays
+                // off when the scan replaces the sort. With the sort kept, fall
+                // back to the source as it was, so no buffering is left under
+                // it.
+                self.inexact_pushdown(Arc::clone(&self.file_source), order)
+            }
+            SortOrderPushdownResult::Inexact { inner } => {
+                self.inexact_pushdown(inner, order)
             }
             SortOrderPushdownResult::Unsupported => {
                 self.try_sort_file_groups_by_statistics(order)
@@ -1142,16 +1198,12 @@ impl DataSource for FileScanConfig {
         }
     }
 
-    fn with_preserve_order(&self, preserve_order: bool) -> Option<Arc<dyn DataSource>> {
-        if self.preserve_order == preserve_order {
-            return Some(Arc::new(self.clone()));
-        }
-
-        let new_config = FileScanConfig {
-            preserve_order,
-            ..self.clone()
-        };
-        Some(Arc::new(new_config))
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Delegate to the file source
+        self.file_source.apply_expressions(f)
     }
 
     /// Create any shared state that should be passed between sibling streams
@@ -1166,7 +1218,7 @@ impl DataSource for FileScanConfig {
         &self,
         config: &ConfigOptions,
     ) -> Option<Arc<dyn Any + Send + Sync>> {
-        if self.preserve_order
+        if self.preserves_file_order()
             || self.output_partitioning.is_some()
             || !config.execution.enable_file_stream_work_stealing
         {
@@ -1175,9 +1227,56 @@ impl DataSource for FileScanConfig {
 
         Some(Arc::new(SharedWorkSource::from_config(self)) as Arc<dyn Any + Send + Sync>)
     }
+
+    /// Serialize this file scan by delegating to the concrete
+    /// [`FileSource`]'s
+    /// [`try_to_proto`](crate::file::FileSource::try_to_proto) hook, passing
+    /// `self` as the shared spine it needs to emit the base config.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        self.file_source().try_to_proto(self, ctx)
+    }
+}
+
+/// Separates files that require statistics reasoning from files proven empty.
+///
+/// The latter must remain in the scan even though they cannot affect ordering.
+fn partition_known_empty_files<'a>(
+    files: impl IntoIterator<Item = &'a PartitionedFile>,
+) -> (Vec<&'a PartitionedFile>, Vec<&'a PartitionedFile>) {
+    files
+        .into_iter()
+        .partition(|file| !file.statistics.as_deref().is_some_and(is_known_empty))
+}
+
+/// Appends empty files to the smallest groups without affecting their row order.
+fn append_known_empty_files(
+    file_groups: &mut [FileGroup],
+    empty_files: Vec<&PartitionedFile>,
+) {
+    for file in empty_files {
+        file_groups
+            .iter_mut()
+            .min_by_key(|group| group.len())
+            .expect("non-empty files must create at least one file group")
+            .push((*file).clone());
+    }
 }
 
 impl FileScanConfig {
+    /// Returns true if files must be read in the order of the file groups.
+    ///
+    /// Parents such as `SortPreservingMergeExec` rely on the output ordering
+    /// this scan advertises, so a scan with an output ordering never shares
+    /// files between partitions (work stealing) and never skips rows based on
+    /// its limit (limit pruning).
+    pub fn preserves_file_order(&self) -> bool {
+        self.preserve_order || !self.output_ordering.is_empty()
+    }
+
     /// Returns only the output orderings that are validated against actual
     /// file group statistics.
     ///
@@ -1233,7 +1332,9 @@ impl FileScanConfig {
     /// we can't guarantee the statistics are exact because we don't know how many
     /// rows will be filtered out.
     pub fn statistics(&self) -> Statistics {
-        if self.file_source.filter().is_some() {
+        let filter_may_change_row_count = self.file_source.filter().is_some()
+            && self.statistics.num_rows != Precision::Exact(0);
+        if filter_may_change_row_count {
             self.statistics.clone().to_inexact()
         } else {
             self.statistics.clone()
@@ -1355,11 +1456,16 @@ impl FileScanConfig {
             return Ok(vec![]);
         }
 
+        let (files, empty_files) = partition_known_empty_files(flattened_files);
+        if files.is_empty() {
+            return Ok(file_groups.to_vec());
+        }
+
         let statistics = MinMaxStatistics::new_from_files(
             sort_order,
             table_schema,
             None,
-            flattened_files.iter().copied(),
+            files.iter().copied(),
         )?;
 
         let indices_sorted_by_min = statistics.min_values_sorted();
@@ -1390,17 +1496,20 @@ impl FileScanConfig {
         file_groups_indices.retain(|group| !group.is_empty());
 
         // Assemble indices back into groups of PartitionedFiles
-        Ok(file_groups_indices
+        let mut file_groups = file_groups_indices
             .into_iter()
             .map(|file_group_indices| {
                 FileGroup::new(
                     file_group_indices
                         .into_iter()
-                        .map(|idx| flattened_files[idx].clone())
+                        .map(|idx| files[idx].clone())
                         .collect(),
                 )
             })
-            .collect())
+            .collect::<Vec<_>>();
+
+        append_known_empty_files(&mut file_groups, empty_files);
+        Ok(file_groups)
     }
 
     /// Attempts to do a bin-packing on files into file groups, such that any two files
@@ -1430,11 +1539,16 @@ impl FileScanConfig {
             return Ok(vec![]);
         }
 
+        let (files, empty_files) = partition_known_empty_files(flattened_files);
+        if files.is_empty() {
+            return Ok(file_groups.to_vec());
+        }
+
         let statistics = MinMaxStatistics::new_from_files(
             sort_order,
             table_schema,
             None,
-            flattened_files.iter().copied(),
+            files.iter().copied(),
         )
         .map_err(|e| {
             e.context("construct min/max statistics for split_groups_by_statistics")
@@ -1460,15 +1574,18 @@ impl FileScanConfig {
         }
 
         // Assemble indices back into groups of PartitionedFiles
-        Ok(file_groups_indices
+        let mut file_groups = file_groups_indices
             .into_iter()
             .map(|file_group_indices| {
                 file_group_indices
                     .into_iter()
-                    .map(|idx| flattened_files[idx].clone())
-                    .collect()
+                    .map(|idx| files[idx].clone())
+                    .collect::<FileGroup>()
             })
-            .collect())
+            .collect::<Vec<_>>();
+
+        append_known_empty_files(&mut file_groups, empty_files);
+        Ok(file_groups)
     }
 
     /// Write the data_type based on file_source
@@ -1563,15 +1680,24 @@ mod tests {
     use arrow::datatypes::Field;
     use datafusion_common::ColumnStatistics;
     use datafusion_common::stats::Precision;
+    use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_common::{Result, assert_batches_eq, internal_err};
     use datafusion_execution::TaskContext;
     use datafusion_expr::SortExpr;
+    use datafusion_physical_expr::PhysicalExpr;
+
+    #[cfg(feature = "proto")]
+    use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
     use datafusion_physical_expr::create_physical_sort_expr;
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::projection::ProjectionExpr;
     use datafusion_physical_expr::projection::ProjectionExprs;
     use datafusion_physical_plan::ExecutionPlan;
     use datafusion_physical_plan::execution_plan::collect;
+    #[cfg(feature = "proto")]
+    use datafusion_physical_plan::proto::{ExecutionPlanEncode, ExecutionPlanEncodeCtx};
+    #[cfg(feature = "proto")]
+    use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalPlanNode};
     use futures::FutureExt as _;
     use futures::StreamExt as _;
     use futures::stream;
@@ -1628,6 +1754,122 @@ mod tests {
                 inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
             })
         }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    #[derive(Clone)]
+    struct ProtoHookSource {
+        metrics: ExecutionPlanMetricsSet,
+        table_schema: TableSchema,
+    }
+
+    #[cfg(feature = "proto")]
+    impl ProtoHookSource {
+        fn new(table_schema: TableSchema) -> Self {
+            Self {
+                metrics: ExecutionPlanMetricsSet::new(),
+                table_schema,
+            }
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    impl FileSource for ProtoHookSource {
+        fn create_file_opener(
+            &self,
+            _object_store: Arc<dyn ObjectStore>,
+            _base_config: &FileScanConfig,
+            _partition: usize,
+        ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn table_schema(&self) -> &TableSchema {
+            &self.table_schema
+        }
+
+        fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
+            Arc::new(self.clone())
+        }
+
+        fn metrics(&self) -> &ExecutionPlanMetricsSet {
+            &self.metrics
+        }
+
+        fn file_type(&self) -> &str {
+            "proto-hook-test"
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn try_to_proto(
+            &self,
+            _base: &FileScanConfig,
+            _ctx: &ExecutionPlanEncodeCtx<'_>,
+        ) -> Result<Option<PhysicalPlanNode>> {
+            Ok(Some(PhysicalPlanNode::default()))
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    struct UnusedPlanEncoder;
+
+    #[cfg(feature = "proto")]
+    impl ExecutionPlanEncode for UnusedPlanEncoder {
+        fn encode_plan(
+            &self,
+            _plan: &Arc<dyn ExecutionPlan>,
+        ) -> Result<PhysicalPlanNode> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_expr(&self, _expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_udf(&self, _udf: &ScalarUDF) -> Result<Option<Vec<u8>>> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_udaf(&self, _udaf: &AggregateUDF) -> Result<Option<Vec<u8>>> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_udwf(&self, _udwf: &WindowUDF) -> Result<Option<Vec<u8>>> {
+            internal_err!("not needed for proto delegation test")
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    #[test]
+    fn data_source_exec_delegates_proto_to_file_source() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let source = Arc::new(ProtoHookSource::new(TableSchema::from(&schema)));
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                .build();
+        let exec = DataSourceExec::from_data_source(config);
+        let encoder = UnusedPlanEncoder;
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+        assert_eq!(exec.try_to_proto(&ctx)?, Some(PhysicalPlanNode::default()));
+        Ok(())
     }
 
     #[test]
@@ -1954,6 +2196,9 @@ mod tests {
                         .map(|stats| {
                             stats
                                 .map(|(min, max)| ColumnStatistics {
+                                    null_count: Precision::Exact(usize::from(
+                                        min.is_none() || max.is_none(),
+                                    )),
                                     min_value: Precision::Exact(ScalarValue::Float64(
                                         min,
                                     )),
@@ -1974,6 +2219,117 @@ mod tests {
     }
 
     // sets default for configs that play no role in projections
+    fn config_with_constraints(
+        table_schema: TableSchema,
+        statistics: Statistics,
+        constraints: Vec<Constraint>,
+        projection: Option<Vec<usize>>,
+    ) -> FileScanConfig {
+        FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(table_schema)),
+        )
+        .with_statistics(statistics)
+        .with_constraints(Constraints::new_unverified(constraints))
+        .with_projection_indices(projection)
+        .unwrap()
+        .build()
+    }
+
+    /// A key column has one distinct value per row, which no file format records.
+    #[test]
+    fn key_columns_report_a_distinct_count() {
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("part", DataType::Int32, false),
+            Field::new("code", DataType::Int32, true),
+        ]));
+        let table_schema = TableSchema::builder(Arc::clone(&file_schema)).build();
+        let mut statistics = Statistics::new_unknown(&file_schema);
+        statistics.num_rows = Precision::Exact(100);
+        // A unique column may repeat NULL, which is not a distinct value.
+        statistics.column_statistics[2].null_count = Precision::Exact(10);
+
+        let stats = |constraints| {
+            config_with_constraints(
+                table_schema.clone(),
+                statistics.clone(),
+                constraints,
+                None,
+            )
+            .statistics()
+        };
+
+        // A primary key cannot be null, so the count is as exact as the row count.
+        let primary_key = stats(vec![Constraint::PrimaryKey(vec![0])]);
+        assert_eq!(
+            primary_key.column_statistics[0].distinct_count,
+            Precision::Exact(100)
+        );
+        assert_eq!(
+            primary_key.column_statistics[1].distinct_count,
+            Precision::Absent
+        );
+
+        // The nulls a unique column may repeat are known here, so this is exact too.
+        let unique = stats(vec![Constraint::Unique(vec![2])]);
+        assert_eq!(
+            unique.column_statistics[2].distinct_count,
+            Precision::Exact(90)
+        );
+
+        // With an unknown null count it is not exact.
+        let mut unknown_nulls = statistics.clone();
+        unknown_nulls.column_statistics[2].null_count = Precision::Absent;
+        let unique = config_with_constraints(
+            table_schema.clone(),
+            unknown_nulls,
+            vec![Constraint::Unique(vec![2])],
+            None,
+        )
+        .statistics();
+        assert_eq!(
+            unique.column_statistics[2].distinct_count,
+            Precision::Inexact(100)
+        );
+
+        // A composite key leaves its columns alone: only the combination is unique.
+        let composite = stats(vec![Constraint::PrimaryKey(vec![0, 1])]);
+        assert_eq!(
+            composite.column_statistics[0].distinct_count,
+            Precision::Absent
+        );
+        assert_eq!(
+            composite.column_statistics[1].distinct_count,
+            Precision::Absent
+        );
+    }
+
+    /// The count has to reach the plan, which reads statistics through the projection.
+    #[test]
+    fn a_projected_scan_keeps_the_key_distinct_count() {
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int32, true),
+            Field::new("id", DataType::Int32, false),
+        ]));
+        let table_schema = TableSchema::builder(Arc::clone(&file_schema)).build();
+        let mut statistics = Statistics::new_unknown(&file_schema);
+        statistics.num_rows = Precision::Exact(100);
+
+        let config = config_with_constraints(
+            table_schema,
+            statistics,
+            vec![Constraint::PrimaryKey(vec![1])],
+            Some(vec![1]),
+        );
+
+        let projected = config.partition_statistics(None).unwrap();
+        assert_eq!(
+            projected.column_statistics[0].distinct_count,
+            Precision::Exact(100)
+        );
+    }
+
     fn config_for_projection(
         file_schema: SchemaRef,
         projection: Option<Vec<usize>>,
@@ -2406,6 +2762,78 @@ mod tests {
     }
 
     #[test]
+    fn split_groups_by_statistics_preserves_exact_empty_files() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Float64,
+            false,
+        )]));
+        let sort_order = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
+            Column::new("value", 0),
+        ))])
+        .unwrap();
+
+        let mixed_files = vec![FileGroup::new(vec![
+            make_file_with_stats("high", 20.0, 29.0),
+            make_exact_empty_file("empty"),
+            make_file_with_stats("low", 0.0, 9.0),
+        ])];
+        let split = FileScanConfig::split_groups_by_statistics(
+            &schema,
+            &mixed_files,
+            &sort_order,
+        )?;
+        let split_with_target =
+            FileScanConfig::split_groups_by_statistics_with_target_partitions(
+                &schema,
+                &mixed_files,
+                &sort_order,
+                2,
+            )?;
+
+        for result in [split, split_with_target] {
+            assert!(verify_sort_integrity(&result));
+            let mut file_names = result
+                .iter()
+                .flat_map(FileGroup::iter)
+                .map(|file| file.object_meta.location.to_string())
+                .collect::<Vec<_>>();
+            file_names.sort();
+            assert_eq!(file_names, ["empty", "high", "low"]);
+            assert!(result.iter().all(|group| !group.is_empty()));
+        }
+
+        let empty_files = vec![FileGroup::new(vec![
+            make_exact_empty_file("empty1"),
+            make_exact_empty_file("empty2"),
+        ])];
+        let split = FileScanConfig::split_groups_by_statistics(
+            &schema,
+            &empty_files,
+            &sort_order,
+        )?;
+        let split_with_target =
+            FileScanConfig::split_groups_by_statistics_with_target_partitions(
+                &schema,
+                &empty_files,
+                &sort_order,
+                2,
+            )?;
+
+        for result in [split, split_with_target] {
+            assert!(verify_sort_integrity(&result));
+            assert_eq!(result.len(), 1);
+            let file_names = result[0]
+                .iter()
+                .map(|file| file.object_meta.location.to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(file_names, ["empty1", "empty2"]);
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_partition_statistics_projection() {
         // This test verifies that partition_statistics applies projection correctly.
         // The old implementation had a bug where it returned file group statistics
@@ -2415,7 +2843,6 @@ mod tests {
         use crate::source::DataSourceExec;
         use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 
-        // Create a schema with 4 columns
         let schema = Arc::new(Schema::new(vec![
             Field::new("col0", DataType::Int32, false),
             Field::new("col1", DataType::Int32, false),
@@ -2497,6 +2924,45 @@ mod tests {
         // Verify row count and byte size
         assert_eq!(partition_stats.num_rows, Precision::Exact(100));
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
+    }
+
+    #[test]
+    fn test_statistics_with_filter() {
+        assert_num_rows_with_filter(Precision::Absent, Precision::Absent);
+        assert_num_rows_with_filter(Precision::Exact(100), Precision::Inexact(100));
+        assert_num_rows_with_filter(Precision::Inexact(100), Precision::Inexact(100));
+        assert_num_rows_with_filter(Precision::Exact(0), Precision::Exact(0));
+
+        /// Creates a [`FileScanConfig`] with a filter and calls [`FileScanConfig::statistics`].
+        /// Then the function checks the output num_rows stats, given the input num_rows stats.
+        fn assert_num_rows_with_filter(
+            input_num_rows: Precision<usize>,
+            expected_num_rows: Precision<usize>,
+        ) {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "col0",
+                DataType::Int32,
+                false,
+            )]));
+
+            let stats =
+                Statistics::new_unknown(schema.as_ref()).with_num_rows(input_num_rows);
+            let file_group =
+                FileGroup::new(vec![PartitionedFile::new("test.parquet", 1024)]);
+
+            let table_schema = TableSchema::from(&schema);
+            let config = FileScanConfigBuilder::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                Arc::new(MockSource::new(table_schema.clone()).with_filter(Arc::new(
+                    Literal::new(ScalarValue::Boolean(Some(true))),
+                ))),
+            )
+            .with_file_groups(vec![file_group])
+            .with_statistics(stats)
+            .build();
+
+            assert_eq!(config.statistics().num_rows, expected_num_rows,);
+        }
     }
 
     /// Regression test for reusing a `DataSourceExec` after its execution-local
@@ -2581,6 +3047,39 @@ mod tests {
         }
     }
 
+    /// A scan that advertises an output ordering never shares files between
+    /// partitions, even if `preserve_order` is cleared after it is built.
+    #[test]
+    fn output_ordering_keeps_files_in_order() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let mut config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(MockSource::new(schema)),
+        )
+        .with_file_groups(vec![
+            FileGroup::new(vec![make_file_with_stats("file1", 0.0, 9.0)]),
+            FileGroup::new(vec![make_file_with_stats("file2", 10.0, 19.0)]),
+        ])
+        .with_output_ordering(vec![LexOrdering::new(vec![sort_expr]).unwrap()])
+        .build();
+        let options = ConfigOptions::default();
+
+        config.preserve_order = false;
+        assert!(config.preserves_file_order());
+        assert!(config.create_sibling_state(&options).is_none());
+
+        config.output_ordering = vec![];
+        assert!(!config.preserves_file_order());
+        assert!(config.create_sibling_state(&options).is_some());
+
+        // An explicit `preserve_order` keeps file order without an output ordering
+        config.preserve_order = true;
+        assert!(config.preserves_file_order());
+        assert!(config.create_sibling_state(&options).is_none());
+    }
+
     #[test]
     fn test_output_partitioning_not_partitioned_by_file_group() {
         let file_schema = aggr_test_schema();
@@ -2663,6 +3162,14 @@ mod tests {
 
         let partitioning = config.output_partitioning();
         assert!(matches!(partitioning, Partitioning::UnknownPartitioning(_)));
+
+        let partitioning = output_range_partitioning_from_split_points(
+            config.file_source.table_schema().table_schema(),
+            config.table_partition_cols(),
+            vec![],
+        )
+        .unwrap();
+        assert!(partitioning.is_none());
     }
 
     #[test]
@@ -2687,21 +3194,46 @@ mod tests {
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f3.parquet".to_string(), 1024)]),
         ];
-        config.output_partitioning = output_partitioning_from_partition_fields(
+        let dict = |v: &str| wrap_partition_value_in_dict(ScalarValue::from(v));
+        config.output_partitioning = output_range_partitioning_from_split_points(
             config.file_source.table_schema().table_schema(),
             config.table_partition_cols(),
-            config.file_groups.len(),
-        );
+            vec![
+                SplitPoint::new(vec![dict("2026-09")]),
+                SplitPoint::new(vec![dict("2026-10")]),
+            ],
+        )
+        .unwrap();
 
         let partitioning = config.output_partitioning();
         match partitioning {
-            Partitioning::Hash(exprs, num_partitions) => {
-                assert_eq!(num_partitions, 3);
-                assert_eq!(exprs.len(), 1);
-                assert_eq!(exprs[0].downcast_ref::<Column>().unwrap().name(), "date");
+            Partitioning::Range(range) => {
+                assert_eq!(range.partition_count(), 3);
+                assert_eq!(range.ordering().len(), 1);
+                let sort_expr = &range.ordering()[0];
+                assert_eq!(
+                    sort_expr.expr.downcast_ref::<Column>().unwrap().name(),
+                    "date"
+                );
+                assert_eq!(sort_expr.options, arrow::compute::SortOptions::default());
+                assert_eq!(range.split_points().len(), 2);
             }
-            _ => panic!("Expected Hash partitioning"),
+            other => panic!("Expected Range partitioning, got {other}"),
         }
+
+        let err = output_range_partitioning_from_split_points(
+            config.file_source.table_schema().table_schema(),
+            config.table_partition_cols(),
+            vec![
+                SplitPoint::new(vec![dict("2026-10")]),
+                SplitPoint::new(vec![dict("2026-09")]),
+            ],
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("split points must be ordered"),
+            "{err}"
+        );
 
         // Test multiple partition columns
         let multiple_partition_cols = vec![
@@ -2719,24 +3251,25 @@ mod tests {
             FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
         ];
-        config.output_partitioning = output_partitioning_from_partition_fields(
+        config.output_partitioning = output_range_partitioning_from_split_points(
             config.file_source.table_schema().table_schema(),
             config.table_partition_cols(),
-            config.file_groups.len(),
-        );
+            vec![SplitPoint::new(vec![dict("2026"), dict("09")])],
+        )
+        .unwrap();
 
         let partitioning = config.output_partitioning();
         match partitioning {
-            Partitioning::Hash(exprs, num_partitions) => {
-                assert_eq!(num_partitions, 2);
-                assert_eq!(exprs.len(), 2);
-                let col_names: Vec<_> = exprs
+            Partitioning::Range(range) => {
+                assert_eq!(range.partition_count(), 2);
+                let col_names: Vec<_> = range
+                    .ordering()
                     .iter()
-                    .map(|e| e.downcast_ref::<Column>().unwrap().name())
+                    .map(|e| e.expr.downcast_ref::<Column>().unwrap().name())
                     .collect();
                 assert_eq!(col_names, vec!["year", "month"]);
             }
-            _ => panic!("Expected Hash partitioning"),
+            other => panic!("Expected Range partitioning, got {other}"),
         }
     }
 
@@ -2805,10 +3338,191 @@ mod tests {
         ))
     }
 
+    fn ordered_scan_with_groups(file_groups: Vec<FileGroup>) -> FileScanConfig {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(MockSource::new(schema)),
+        )
+        .with_file_groups(file_groups)
+        .with_output_ordering(vec![LexOrdering::new(vec![sort_expr]).unwrap()])
+        .build()
+    }
+
+    fn sized_file_with_stats(
+        name: &str,
+        size: u64,
+        min: f64,
+        max: f64,
+    ) -> PartitionedFile {
+        let mut file = make_file_with_stats(name, min, max);
+        file.object_meta.size = size;
+        file
+    }
+
+    /// The files of each group, with whether each file reads only a range
+    fn group_files(config: &FileScanConfig) -> Vec<Vec<(&str, bool)>> {
+        config
+            .file_groups
+            .iter()
+            .map(|group| {
+                group
+                    .iter()
+                    .map(|f| (f.object_meta.location.as_ref(), f.range.is_some()))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn group_sizes(config: &FileScanConfig) -> Vec<u64> {
+        config
+            .file_groups
+            .iter()
+            .map(|group| group.iter().map(|f| f.effective_size()).sum())
+            .collect()
+    }
+
+    /// An ordered scan whose files are sorted across groups gets the same
+    /// size-balanced split as an unordered scan and keeps its ordering.
+    #[test]
+    fn repartition_balances_ordered_groups() -> Result<()> {
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![
+                sized_file_with_stats("f1", 8000, 0.0, 9.0),
+                sized_file_with_stats("f2", 8000, 10.0, 19.0),
+            ]),
+            FileGroup::new(vec![
+                sized_file_with_stats("f3", 1000, 20.0, 29.0),
+                sized_file_with_stats("f4", 1000, 30.0, 39.0),
+            ]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(group_sizes(&config), vec![16000, 2000]);
+
+        let repartitioned = DataSource::repartitioned(&config, 4, 0, ordering)?
+            .expect("ordered groups should be rebalanced");
+        let repartitioned = repartitioned
+            .downcast_ref::<FileScanConfig>()
+            .expect("expected FileScanConfig");
+        assert_eq!(group_sizes(repartitioned), vec![4500, 4500, 4500, 4500]);
+        assert_eq!(
+            repartitioned.validated_output_ordering(),
+            config.validated_output_ordering()
+        );
+        Ok(())
+    }
+
+    /// If moving the group boundaries would put overlapping files in one
+    /// group, the scan keeps its groups and its ordering.
+    #[test]
+    fn repartition_keeps_ordered_groups_when_rebalancing_breaks_order() -> Result<()> {
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![
+                sized_file_with_stats("f1", 8000, 0.0, 9.0),
+                sized_file_with_stats("f2", 8000, 10.0, 19.0),
+            ]),
+            FileGroup::new(vec![
+                sized_file_with_stats("f3", 1000, 5.0, 15.0),
+                sized_file_with_stats("f4", 1000, 16.0, 25.0),
+            ]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(config.validated_output_ordering().len(), 1);
+
+        assert!(DataSource::repartitioned(&config, 4, 0, ordering)?.is_none());
+        Ok(())
+    }
+
+    /// With `NULLS FIRST`, a file with NULLs can only be the first file of a
+    /// group, so a size-balanced split that puts it after another file is not
+    /// used.
+    #[test]
+    fn repartition_keeps_ordered_groups_when_rebalancing_misplaces_nulls() -> Result<()> {
+        let mut with_nulls = sized_file_with_stats("f2", 1000, 10.0, 19.0);
+        Arc::make_mut(with_nulls.statistics.as_mut().unwrap()).column_statistics[0]
+            .null_count = Precision::Exact(1);
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![sized_file_with_stats("f1", 8000, 0.0, 9.0)]),
+            FileGroup::new(vec![with_nulls]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(config.validated_output_ordering().len(), 1);
+
+        let repartitioned = DataSource::repartitioned(&config, 4, 0, ordering)?
+            .expect("the large file should be split");
+        let repartitioned = repartitioned
+            .downcast_ref::<FileScanConfig>()
+            .expect("expected FileScanConfig");
+        assert_eq!(
+            group_files(repartitioned),
+            vec![
+                vec![("f1", true)],
+                vec![("f2", true)],
+                vec![("f1", true)],
+                vec![("f1", true)],
+            ]
+        );
+        assert_eq!(
+            repartitioned.validated_output_ordering(),
+            config.validated_output_ordering()
+        );
+        Ok(())
+    }
+
+    /// If moving the group boundaries would put overlapping files in one
+    /// group, the ordered split is used instead: it keeps multi-file groups
+    /// and only splits single-file groups.
+    #[test]
+    fn repartition_falls_back_to_ordered_split_when_rebalancing_breaks_order()
+    -> Result<()> {
+        let config = ordered_scan_with_groups(vec![
+            FileGroup::new(vec![
+                sized_file_with_stats("f1", 8000, 0.0, 9.0),
+                sized_file_with_stats("f2", 8000, 10.0, 19.0),
+            ]),
+            FileGroup::new(vec![sized_file_with_stats("f3", 1000, 5.0, 15.0)]),
+        ]);
+        let ordering = config.output_ordering.first().cloned();
+        assert_eq!(config.validated_output_ordering().len(), 1);
+
+        let repartitioned = DataSource::repartitioned(&config, 4, 0, ordering)?
+            .expect("the single-file group should be split");
+        let repartitioned = repartitioned
+            .downcast_ref::<FileScanConfig>()
+            .expect("expected FileScanConfig");
+        assert_eq!(
+            group_files(repartitioned),
+            vec![
+                vec![("f1", false), ("f2", false)],
+                vec![("f3", true)],
+                vec![("f3", true)],
+                vec![("f3", true)],
+            ]
+        );
+        assert_eq!(
+            repartitioned.validated_output_ordering(),
+            config.validated_output_ordering()
+        );
+        Ok(())
+    }
+
+    fn make_exact_empty_file(name: &str) -> PartitionedFile {
+        PartitionedFile::new(name.to_string(), 1024).with_statistics(Arc::new(
+            Statistics {
+                num_rows: Precision::Exact(0),
+                ..Default::default()
+            },
+        ))
+    }
+
     #[derive(Clone)]
     struct ExactSortPushdownSource {
         metrics: ExecutionPlanMetricsSet,
         table_schema: TableSchema,
+        /// Whether this is the source returned by `try_pushdown_sort`.
+        pushed: bool,
     }
 
     impl ExactSortPushdownSource {
@@ -2816,6 +3530,7 @@ mod tests {
             Self {
                 metrics: ExecutionPlanMetricsSet::new(),
                 table_schema,
+                pushed: false,
             }
         }
     }
@@ -2843,7 +3558,11 @@ mod tests {
         }
 
         fn file_type(&self) -> &str {
-            "mock_exact"
+            if self.pushed {
+                "mock_exact_pushed"
+            } else {
+                "mock_exact"
+            }
         }
 
         fn try_pushdown_sort(
@@ -2851,9 +3570,18 @@ mod tests {
             _order: &[PhysicalSortExpr],
             _eq_properties: &EquivalenceProperties,
         ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+            let mut pushed = self.clone();
+            pushed.pushed = true;
             Ok(SortOrderPushdownResult::Exact {
-                inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
+                inner: Arc::new(pushed) as Arc<dyn FileSource>,
             })
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
 
@@ -2985,6 +3713,139 @@ mod tests {
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         assert!(!pushed_config.output_ordering.is_empty());
+        Ok(())
+    }
+
+    /// A source that is `Exact` for the reverse of the declared ordering
+    /// (it reads every file back to front): the files of each group are
+    /// reversed and the scan declares the reversed ordering.
+    #[test]
+    fn sort_pushdown_exact_reverse_reverses_files_and_ordering() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::from(&file_schema);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 9.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+            make_file_with_stats("file3", 20.0, 30.0),
+        ])];
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let reversed = sort_expr.reverse();
+        let result = config.try_pushdown_sort(std::slice::from_ref(&reversed))?;
+
+        let SortOrderPushdownResult::Exact { inner } = result else {
+            panic!("Expected Exact result, got {result:?}");
+        };
+        let pushed_config = inner
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let names: Vec<_> = pushed_config.file_groups[0]
+            .files()
+            .iter()
+            .map(|f| f.object_meta.location.as_ref())
+            .collect();
+        assert_eq!(names, ["file3", "file2", "file1"]);
+        assert_eq!(
+            pushed_config.output_ordering,
+            vec![LexOrdering::new(vec![reversed]).unwrap()]
+        );
+        Ok(())
+    }
+
+    /// Reading overlapping files back to front does not give an ordered
+    /// stream, so an `Exact` reverse claim is downgraded to `Inexact`.
+    #[test]
+    fn sort_pushdown_exact_reverse_overlapping_downgraded_to_inexact() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::from(&file_schema);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 15.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+        ])];
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr.reverse()])?;
+
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact result, got {result:?}");
+        };
+        let pushed_config = inner
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        assert!(pushed_config.output_ordering.is_empty());
+        // The sort stays, so the scan keeps the source it had rather than the
+        // one that would read every file back to front under it.
+        assert_eq!(pushed_config.file_source.file_type(), "mock_exact");
+        Ok(())
+    }
+
+    /// A source can be `Exact` for a request that only equivalence reasoning
+    /// recognises as the reverse of the declared ordering, here
+    /// `a DESC NULLS LAST` on a non-nullable `a` declared `a ASC NULLS LAST`.
+    /// The scan reverses its files and orderings for it just as for a literal
+    /// reverse.
+    #[test]
+    fn sort_pushdown_exact_reverse_by_equivalence() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::from(&file_schema);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+        let column = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let asc_nulls_last = PhysicalSortExpr::new(
+            Arc::clone(&column),
+            arrow::compute::SortOptions::new(false, false),
+        );
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 9.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+        ])];
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![asc_nulls_last.clone()]).unwrap(),
+                ])
+                .build();
+        let desc_nulls_last =
+            PhysicalSortExpr::new(column, arrow::compute::SortOptions::new(true, false));
+
+        let result = config.try_pushdown_sort(&[desc_nulls_last])?;
+
+        let SortOrderPushdownResult::Exact { inner } = result else {
+            panic!("Expected Exact result, got {result:?}");
+        };
+        let pushed_config = inner
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let names: Vec<_> = pushed_config.file_groups[0]
+            .files()
+            .iter()
+            .map(|f| f.object_meta.location.as_ref())
+            .collect();
+        assert_eq!(names, ["file2", "file1"]);
+        assert_eq!(
+            pushed_config.output_ordering,
+            vec![LexOrdering::new(vec![asc_nulls_last.reverse()]).unwrap()]
+        );
+        assert_eq!(pushed_config.file_source.file_type(), "mock_exact_pushed");
         Ok(())
     }
 
@@ -3324,6 +4185,114 @@ mod tests {
                 }],
             },
         ))
+    }
+
+    #[test]
+    fn file_group_ordering_includes_nulls() -> Result<()> {
+        // Arrange
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        for (descending, nulls_first) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let sort = PhysicalSortExpr::new(
+                Arc::new(Column::new("a", 0)),
+                arrow::compute::SortOptions {
+                    descending,
+                    nulls_first,
+                },
+            );
+            for null_count in [
+                Precision::Exact(0),
+                Precision::Exact(1),
+                Precision::Absent,
+                Precision::Inexact(0),
+            ] {
+                let mut files = vec![
+                    make_file_with_null_stats("low", 0.0, 9.0, 0),
+                    make_file_with_null_stats("high", 10.0, 19.0, 0),
+                ];
+                for file in &mut files {
+                    Arc::make_mut(file.statistics.as_mut().unwrap()).column_statistics
+                        [0]
+                    .null_count = null_count;
+                }
+                if descending {
+                    files.reverse();
+                }
+                let config = FileScanConfigBuilder::new(
+                    ObjectStoreUrl::local_filesystem(),
+                    Arc::new(MockSource::new(TableSchema::from(&schema))),
+                )
+                .with_file_groups(vec![FileGroup::new(files)])
+                .with_output_ordering(vec![[sort.clone()].into()])
+                .build();
+
+                // Act
+                let ordered = config.eq_properties().ordering_satisfy([sort.clone()])?;
+
+                // Assert
+                assert_eq!(
+                    ordered,
+                    null_count == Precision::Exact(0),
+                    "descending={descending}, nulls_first={nulls_first}, null_count={null_count:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn file_group_ordering_with_all_null_or_empty_file() -> Result<()> {
+        // Arrange
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        for (descending, nulls_first) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let sort = PhysicalSortExpr::new(
+                Arc::new(Column::new("a", 0)),
+                arrow::compute::SortOptions {
+                    descending,
+                    nulls_first,
+                },
+            );
+            for (num_rows, file_first) in [(0, false), (0, true), (2, false), (2, true)] {
+                let file = PartitionedFile::new("nulls_or_empty", 1024).with_statistics(
+                    Arc::new(Statistics {
+                        num_rows: Precision::Exact(num_rows),
+                        column_statistics: vec![ColumnStatistics {
+                            null_count: Precision::Exact(num_rows),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                );
+                let mut files =
+                    vec![file, make_file_with_null_stats("non_null", 1.0, 2.0, 0)];
+                if !file_first {
+                    files.reverse();
+                }
+                let config = FileScanConfigBuilder::new(
+                    ObjectStoreUrl::local_filesystem(),
+                    Arc::new(MockSource::new(TableSchema::from(&schema))),
+                )
+                .with_file_groups(vec![FileGroup::new(files)])
+                .with_output_ordering(vec![[sort.clone()].into()])
+                .build();
+
+                // Act
+                let ordered = config.eq_properties().ordering_satisfy([sort.clone()])?;
+
+                // Assert
+                assert_eq!(
+                    ordered,
+                    num_rows == 0 || file_first == nulls_first,
+                    "descending={descending}, nulls_first={nulls_first}, num_rows={num_rows}, file_first={file_first}"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]

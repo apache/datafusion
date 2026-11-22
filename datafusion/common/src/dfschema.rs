@@ -1,29 +1,18 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
+use std::fmt::Write as _;
 use std::fmt::{Display, Formatter};
-use std::hash::Hash;
-use std::sync::{Arc, LazyLock};
+use std::hash::{BuildHasher, Hash};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use crate::error::{_plan_err, _schema_err, DataFusionError, Result};
+use crate::hash_utils::RandomState;
 use crate::{
     Column, FunctionalDependencies, SchemaError, TableReference, field_not_found,
     unqualified_field_not_found,
@@ -31,8 +20,9 @@ use crate::{
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Schema, SchemaBuilder, SchemaRef,
+    DataType, Field, FieldRef, Fields, Metadata, Schema, SchemaBuilder, SchemaRef,
 };
+use hashbrown::hash_table::{Entry, HashTable};
 
 /// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -108,7 +98,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// let schema: &Schema = df_schema.as_arrow();
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct DFSchema {
     /// Inner Arrow schema reference.
     inner: SchemaRef,
@@ -117,6 +107,13 @@ pub struct DFSchema {
     field_qualifiers: Vec<Option<TableReference>>,
     /// Stores functional dependencies in the schema.
     functional_dependencies: FunctionalDependencies,
+    /// Lazily built lookup from field name to positions in `inner`, only used
+    /// for schemas with more than [`LINEAR_NAME_SCAN_MAX`] fields.
+    ///
+    /// Derived from the field names alone, so it is shared by clones and must
+    /// be reset whenever `inner` changes. It takes no part in equality,
+    /// hashing or `Debug` output.
+    name_index: OnceLock<Arc<NameIndex>>,
 }
 
 impl DFSchema {
@@ -126,6 +123,7 @@ impl DFSchema {
             inner: Arc::new(Schema::new([])),
             field_qualifiers: vec![],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         }
     }
 
@@ -153,7 +151,7 @@ impl DFSchema {
     /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
     pub fn new_with_metadata(
         qualified_fields: Vec<(Option<TableReference>, Arc<Field>)>,
-        metadata: HashMap<String, String>,
+        metadata: impl Into<Metadata>,
     ) -> Result<Self> {
         let (qualifiers, fields): (Vec<Option<TableReference>>, Vec<Arc<Field>>) =
             qualified_fields.into_iter().unzip();
@@ -164,6 +162,7 @@ impl DFSchema {
             inner: schema,
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         dfschema.check_names()?;
         Ok(dfschema)
@@ -172,7 +171,7 @@ impl DFSchema {
     /// Create a new `DFSchema` from a list of Arrow [Field]s
     pub fn from_unqualified_fields(
         fields: Fields,
-        metadata: HashMap<String, String>,
+        metadata: impl Into<Metadata>,
     ) -> Result<Self> {
         let field_count = fields.len();
         let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
@@ -180,6 +179,7 @@ impl DFSchema {
             inner: schema,
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         dfschema.check_names()?;
         Ok(dfschema)
@@ -198,6 +198,7 @@ impl DFSchema {
             inner: schema.clone().into(),
             field_qualifiers: vec![Some(qualifier); schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         schema.check_names()?;
         Ok(schema)
@@ -212,6 +213,7 @@ impl DFSchema {
             inner: Arc::clone(schema),
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         dfschema.check_names()?;
         Ok(dfschema)
@@ -233,6 +235,7 @@ impl DFSchema {
             inner: Arc::clone(&self.inner),
             field_qualifiers: qualifiers,
             functional_dependencies: self.functional_dependencies.clone(),
+            name_index: OnceLock::new(),
         })
     }
 
@@ -285,7 +288,9 @@ impl DFSchema {
     /// Create a new schema that contains the fields from this schema followed by the fields
     /// from the supplied schema. An error will be returned if there are duplicate field names.
     pub fn join(&self, schema: &DFSchema) -> Result<Self> {
-        let mut schema_builder = SchemaBuilder::new();
+        let mut schema_builder = SchemaBuilder::with_capacity(
+            self.inner.fields().len() + schema.fields().len(),
+        );
         schema_builder.extend(self.inner.fields().iter().cloned());
         schema_builder.extend(schema.fields().iter().cloned());
         let new_schema = schema_builder.finish();
@@ -301,6 +306,7 @@ impl DFSchema {
             inner: Arc::new(new_schema_with_metadata),
             field_qualifiers: new_qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         new_self.check_names()?;
         Ok(new_self)
@@ -337,7 +343,7 @@ impl DFSchema {
             .collect();
 
         let mut schema_builder = SchemaBuilder::from(self.inner.fields.clone());
-        let mut qualifiers = Vec::new();
+        let mut qualifiers = Vec::with_capacity(other_schema.inner.fields.len());
         for (qualifier, field) in other_schema.iter() {
             // skip duplicate columns
             let duplicated_field = match qualifier {
@@ -357,6 +363,7 @@ impl DFSchema {
         let finished_with_metadata = finished.with_metadata(metadata);
         self.inner = finished_with_metadata.into();
         self.field_qualifiers.extend(qualifiers);
+        self.name_index = OnceLock::new();
     }
 
     /// Get a list of fields for this schema
@@ -378,26 +385,53 @@ impl DFSchema {
         (self.field_qualifiers[i].as_ref(), self.field(i))
     }
 
+    /// Returns the indices of the fields named `name`, in ascending order.
+    ///
+    /// Narrow schemas are scanned; wider ones consult [`Self::name_index`].
+    fn indices_of_name<'a>(&'a self, name: &'a str) -> NameIndices<'a> {
+        let fields = self.fields();
+        match self.name_index() {
+            Some(index) => NameIndices::Indexed {
+                next: index.first_index_of(fields, name),
+                index,
+            },
+            None => NameIndices::Scan {
+                fields: fields.iter().enumerate(),
+                name,
+            },
+        }
+    }
+
+    /// Returns the name index, building it on first use, or `None` if the
+    /// schema is too narrow for an index to beat a scan.
+    fn name_index(&self) -> Option<&NameIndex> {
+        let fields = self.fields();
+        if fields.len() <= LINEAR_NAME_SCAN_MAX {
+            return None;
+        }
+        Some(
+            self.name_index
+                .get_or_init(|| Arc::new(NameIndex::new(fields))),
+        )
+    }
+
     pub fn index_of_column_by_name(
         &self,
         qualifier: Option<&TableReference>,
         name: &str,
     ) -> Option<usize> {
-        let mut matches = self
-            .iter()
-            .enumerate()
-            .filter(|(_, (q, f))| match (qualifier, q) {
+        self.indices_of_name(name).find(|&idx| {
+            match (qualifier, &self.field_qualifiers[idx]) {
                 // field to lookup is qualified.
                 // current field is qualified and not shared between relations, compare both
                 // qualifier and name.
-                (Some(q), Some(field_q)) => q.resolved_eq(field_q) && f.name() == name,
+                (Some(q), Some(field_q)) => q.resolved_eq(field_q),
                 // field to lookup is qualified but current field is unqualified.
                 (Some(_), None) => false,
                 // field to lookup is unqualified, no need to compare qualifier
-                (None, Some(_)) | (None, None) => f.name() == name,
-            })
-            .map(|(idx, _)| idx);
-        matches.next()
+                (None, Some(_)) | (None, None) => true,
+            }
+        })
     }
 
     /// Find the index of the column with the given qualifier and name,
@@ -475,9 +509,8 @@ impl DFSchema {
 
     /// Find all fields that match the given name
     pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&FieldRef> {
-        self.fields()
-            .iter()
-            .filter(|field| field.name() == name)
+        self.indices_of_name(name)
+            .map(|idx| self.field(idx))
             .collect()
     }
 
@@ -486,16 +519,18 @@ impl DFSchema {
         &self,
         name: &str,
     ) -> Vec<(Option<&TableReference>, &FieldRef)> {
-        self.iter()
-            .filter(|(_, field)| field.name() == name)
+        self.indices_of_name(name)
+            .map(|idx| self.qualified_field(idx))
             .collect()
     }
 
     /// Find all fields that match the given name and convert to column
     pub fn columns_with_unqualified_name(&self, name: &str) -> Vec<Column> {
-        self.iter()
-            .filter(|(_, field)| field.name() == name)
-            .map(|(qualifier, field)| Column::new(qualifier.cloned(), field.name()))
+        self.indices_of_name(name)
+            .map(|idx| {
+                let (qualifier, field) = self.qualified_field(idx);
+                Column::new(qualifier.cloned(), field.name())
+            })
             .collect()
     }
 
@@ -569,7 +604,7 @@ impl DFSchema {
 
     /// Find if the field exists with the given name
     pub fn has_column_with_unqualified_name(&self, name: &str) -> bool {
-        self.fields().iter().any(|field| field.name() == name)
+        self.indices_of_name(name).next().is_some()
     }
 
     /// Find if the field exists with the given qualified name
@@ -578,8 +613,11 @@ impl DFSchema {
         qualifier: &TableReference,
         name: &str,
     ) -> bool {
-        self.iter()
-            .any(|(q, f)| q.map(|q| q.eq(qualifier)).unwrap_or(false) && f.name() == name)
+        self.indices_of_name(name).any(|idx| {
+            self.field_qualifiers[idx]
+                .as_ref()
+                .is_some_and(|q| q.eq(qualifier))
+        })
     }
 
     /// Find if the field exists with the given qualified column
@@ -671,6 +709,8 @@ impl DFSchema {
     /// logically equivalent. For example:
     /// - a Dictionary<K,V> type is logically equal to a plain V type
     /// - a Dictionary<K1, V1> is also logically equal to Dictionary<K2, V1>
+    /// - a RunEndEncoded<K,V> type is logically equal to a plain V type
+    /// - a RunEndEncoded<K1, V1> is also logically equal to RunEndEncoded<K2, V1>
     /// - Utf8 and Utf8View are logically equal
     pub fn datatype_is_logically_equal(dt1: &DataType, dt2: &DataType) -> bool {
         // check nested fields
@@ -682,8 +722,17 @@ impl DFSchema {
             | (othertype, DataType::Dictionary(_, v1)) => {
                 Self::datatype_is_logically_equal(v1.as_ref(), othertype)
             }
+            (DataType::RunEndEncoded(_, v1), DataType::RunEndEncoded(_, v2)) => {
+                Self::datatype_is_logically_equal(v1.data_type(), v2.data_type())
+            }
+            (DataType::RunEndEncoded(_, v1), othertype)
+            | (othertype, DataType::RunEndEncoded(_, v1)) => {
+                Self::datatype_is_logically_equal(v1.data_type(), othertype)
+            }
             (DataType::List(f1), DataType::List(f2))
             | (DataType::LargeList(f1), DataType::LargeList(f2))
+            | (DataType::ListView(f1), DataType::ListView(f2))
+            | (DataType::LargeListView(f1), DataType::LargeListView(f2))
             | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _)) => {
                 // Don't compare the names of the technical inner field
                 // Usually "item" but that's not mandated
@@ -742,8 +791,17 @@ impl DFSchema {
                 Self::datatype_is_semantically_equal(k1.as_ref(), k2.as_ref())
                     && Self::datatype_is_semantically_equal(v1.as_ref(), v2.as_ref())
             }
+            (DataType::RunEndEncoded(k1, v1), DataType::RunEndEncoded(k2, v2)) => {
+                Self::datatype_is_semantically_equal(k1.data_type(), k2.data_type())
+                    && Self::datatype_is_semantically_equal(
+                        v1.data_type(),
+                        v2.data_type(),
+                    )
+            }
             (DataType::List(f1), DataType::List(f2))
             | (DataType::LargeList(f1), DataType::LargeList(f2))
+            | (DataType::ListView(f1), DataType::ListView(f2))
+            | (DataType::LargeListView(f1), DataType::LargeListView(f2))
             | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _)) => {
                 // Don't compare the names of the technical inner field
                 // Usually "item" but that's not mandated
@@ -823,6 +881,7 @@ impl DFSchema {
             field_qualifiers: vec![None; self.inner.fields.len()],
             inner: self.inner,
             functional_dependencies: self.functional_dependencies,
+            name_index: OnceLock::new(),
         }
     }
 
@@ -833,6 +892,7 @@ impl DFSchema {
             field_qualifiers: vec![Some(qualifier); self.inner.fields.len()],
             inner: self.inner,
             functional_dependencies: self.functional_dependencies,
+            name_index: OnceLock::new(),
         }
     }
 
@@ -844,7 +904,7 @@ impl DFSchema {
     }
 
     /// Get metadata of this schema
-    pub fn metadata(&self) -> &HashMap<String, String> {
+    pub fn metadata(&self) -> &Metadata {
         &self.inner.metadata
     }
 
@@ -929,9 +989,11 @@ fn format_field_with_indent(
 
     match data_type {
         DataType::List(field) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: list (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: list (nullable = {nullable_str})"
+            )
+            .ok();
             format_field_with_indent(
                 result,
                 field.name(),
@@ -941,9 +1003,11 @@ fn format_field_with_indent(
             );
         }
         DataType::LargeList(field) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: large list (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: large list (nullable = {nullable_str})"
+            )
+            .ok();
             format_field_with_indent(
                 result,
                 field.name(),
@@ -953,9 +1017,11 @@ fn format_field_with_indent(
             );
         }
         DataType::FixedSizeList(field, _size) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: fixed size list (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: fixed size list (nullable = {nullable_str})"
+            )
+            .ok();
             format_field_with_indent(
                 result,
                 field.name(),
@@ -965,9 +1031,11 @@ fn format_field_with_indent(
             );
         }
         DataType::Map(field, _) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: map (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: map (nullable = {nullable_str})"
+            )
+            .ok();
             if let DataType::Struct(inner_fields) = field.data_type()
                 && inner_fields.len() == 2
             {
@@ -995,16 +1063,18 @@ fn format_field_with_indent(
                         );
                     }
                     _ => {
-                        result.push_str(&format!("{child_indent}|-- value: {} (nullable = {value_contains_null})\n",
-                                format_simple_data_type(inner_fields[1].data_type())));
+                        writeln!(result, "{child_indent}|-- value: {} (nullable = {value_contains_null})",
+                                format_simple_data_type(inner_fields[1].data_type())).ok();
                     }
                 }
             }
         }
         DataType::Struct(fields) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: struct (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: struct (nullable = {nullable_str})"
+            )
+            .ok();
             for struct_field in fields {
                 format_field_with_indent(
                     result,
@@ -1017,9 +1087,11 @@ fn format_field_with_indent(
         }
         _ => {
             let type_str = format_simple_data_type(data_type);
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: {type_str} (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: {type_str} (nullable = {nullable_str})"
+            )
+            .ok();
         }
     }
 }
@@ -1104,12 +1176,9 @@ impl TryFrom<SchemaRef> for DFSchema {
             inner: schema,
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
-        // Without checking names, because schema here may have duplicate field names.
-        // For example, Partial AggregateMode will generate duplicate field names from
-        // state_fields.
-        // See <https://github.com/apache/datafusion/issues/17715>
-        // dfschema.check_names()?;
+        dfschema.check_names()?;
         Ok(dfschema)
     }
 }
@@ -1126,6 +1195,116 @@ impl Hash for DFSchema {
         self.inner.fields.hash(state);
         self.inner.metadata.len().hash(state); // HashMap is not hashable
     }
+}
+
+// `name_index` is derived state, so it is left out of equality and `Debug`.
+impl PartialEq for DFSchema {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+            && self.field_qualifiers == other.field_qualifiers
+            && self.functional_dependencies == other.functional_dependencies
+    }
+}
+
+impl Eq for DFSchema {}
+
+impl std::fmt::Debug for DFSchema {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DFSchema")
+            .field("inner", &self.inner)
+            .field("field_qualifiers", &self.field_qualifiers)
+            .field("functional_dependencies", &self.functional_dependencies)
+            .finish()
+    }
+}
+
+/// Schemas with up to this many fields resolve names by comparing against every
+/// field; wider ones use a lazily built [`NameIndex`]. Below it, the scan is
+/// cheaper than building the index (the same trade-off as
+/// `LINEAR_FIELD_SCAN_MAX` in `datafusion-datasource-parquet`).
+const LINEAR_NAME_SCAN_MAX: usize = 8;
+
+/// Marks the last field with a given name in [`NameIndex::next`].
+const NO_NEXT: usize = usize::MAX;
+
+/// Field positions by name, so resolving a name in a wide schema does not
+/// compare it against every field.
+///
+/// Stores indices rather than copies of the names: `first` holds the lowest
+/// index for each distinct name, and `next` links each index to the next one
+/// with the same name. Following the links visits duplicate names in ascending
+/// order, the same order as a scan.
+struct NameIndex {
+    first: HashTable<usize>,
+    next: Vec<usize>,
+}
+
+impl NameIndex {
+    fn new(fields: &Fields) -> Self {
+        let mut first = HashTable::with_capacity(fields.len());
+        let mut next = vec![NO_NEXT; fields.len()];
+        // Visit fields in reverse so each index becomes the new head of its
+        // name's list, keeping the list in ascending order.
+        for (idx, field) in fields.iter().enumerate().rev() {
+            let name = field.name().as_str();
+            match first.entry(
+                hash_name(name),
+                |&other: &usize| fields[other].name() == name,
+                |&other: &usize| hash_name(fields[other].name()),
+            ) {
+                Entry::Occupied(mut entry) => {
+                    next[idx] = *entry.get();
+                    *entry.get_mut() = idx;
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(idx);
+                }
+            }
+        }
+        Self { first, next }
+    }
+
+    /// Returns the lowest index of a field named `name`, if any. `fields` must
+    /// be the fields this index was built from.
+    fn first_index_of(&self, fields: &Fields, name: &str) -> Option<usize> {
+        self.first
+            .find(hash_name(name), |&idx| fields[idx].name() == name)
+            .copied()
+    }
+}
+
+/// Indices of the fields with a given name, in ascending order; see
+/// [`DFSchema::indices_of_name`].
+enum NameIndices<'a> {
+    Scan {
+        fields: std::iter::Enumerate<std::slice::Iter<'a, FieldRef>>,
+        name: &'a str,
+    },
+    Indexed {
+        index: &'a NameIndex,
+        next: Option<usize>,
+    },
+}
+
+impl Iterator for NameIndices<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<usize> {
+        match self {
+            Self::Scan { fields, name } => fields
+                .find(|(_, field)| field.name() == *name)
+                .map(|(idx, _)| idx),
+            Self::Indexed { index, next } => {
+                let idx = (*next)?;
+                *next = Some(index.next[idx]).filter(|&next| next != NO_NEXT);
+                Some(idx)
+            }
+        }
+    }
+}
+
+fn hash_name(name: &str) -> u64 {
+    RandomState::default().hash_one(name)
 }
 
 /// Convenience trait to convert Schema like things to DFSchema and DFSchemaRef with fewer keystrokes
@@ -1159,12 +1338,13 @@ impl ToDFSchema for Vec<Field> {
         let field_count = self.len();
         let schema = Schema {
             fields: self.into(),
-            metadata: HashMap::new(),
+            metadata: Metadata::new(),
         };
         let dfschema = DFSchema {
             inner: schema.into(),
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         Ok(dfschema)
     }
@@ -1201,7 +1381,7 @@ pub trait ExprSchema: std::fmt::Debug {
     }
 
     /// Returns the column's optional metadata.
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+    fn metadata(&self, col: &Column) -> Result<&Metadata> {
         Ok(self.field_from_column(col)?.metadata())
     }
 
@@ -1225,7 +1405,7 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
         self.as_ref().data_type(col)
     }
 
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+    fn metadata(&self, col: &Column) -> Result<&Metadata> {
         ExprSchema::metadata(self.as_ref(), col)
     }
 
@@ -1320,9 +1500,8 @@ impl SchemaExt for Schema {
 /// `format!("{q}.{name}")` when `qualifier` is `Some`, or just `name` when
 /// `None`. We avoid going through the `fmt` machinery for performance reasons.
 pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
-    let qualifier = match qualifier {
-        None => return name.to_string(),
-        Some(q) => q,
+    let Some(qualifier) = qualifier else {
+        return name.to_string();
     };
     let (first, second, third) = match qualifier {
         TableReference::Bare { table } => (table.as_ref(), None, None),
@@ -1359,6 +1538,7 @@ pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String 
 #[cfg(test)]
 mod tests {
     use crate::assert_contains;
+    use std::collections::HashMap;
 
     use super::*;
 
@@ -1651,6 +1831,7 @@ mod tests {
             inner: Arc::clone(&arrow_schema_ref),
             field_qualifiers: vec![None; arrow_schema_ref.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
         let df_schema_ref = Arc::new(df_schema.clone());
 
@@ -1697,6 +1878,7 @@ mod tests {
             inner: Arc::clone(&schema),
             field_qualifiers: vec![None; schema.fields.len()],
             functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
         };
 
         assert_eq!(df_schema.inner.metadata(), schema.metadata())
@@ -1735,6 +1917,152 @@ mod tests {
         Ok(())
     }
 
+    /// Builds a schema of `fields` padded with uniquely named fields to `width`.
+    /// Bypasses `check_names`, since `merge` can produce the same name both
+    /// qualified and unqualified.
+    fn name_lookup_schema(
+        fields: &[(Option<TableReference>, &str)],
+        width: usize,
+    ) -> DFSchema {
+        let mut qualifiers = vec![];
+        let mut arrow_fields = vec![];
+        for (qualifier, name) in fields {
+            qualifiers.push(qualifier.clone());
+            arrow_fields.push(Field::new(*name, DataType::Int32, true));
+        }
+        for i in fields.len()..width {
+            qualifiers.push(Some(TableReference::bare("pad")));
+            arrow_fields.push(Field::new(format!("pad_{i}"), DataType::Int32, true));
+        }
+        DFSchema {
+            inner: Arc::new(Schema::new(arrow_fields)),
+            field_qualifiers: qualifiers,
+            functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
+        }
+    }
+
+    /// The name lookups as they were before the name index, kept as a reference.
+    fn scan_index_of_column_by_name(
+        schema: &DFSchema,
+        qualifier: Option<&TableReference>,
+        name: &str,
+    ) -> Option<usize> {
+        schema.iter().position(|(q, f)| match (qualifier, q) {
+            (Some(q), Some(field_q)) => q.resolved_eq(field_q) && f.name() == name,
+            (Some(_), None) => false,
+            (None, _) => f.name() == name,
+        })
+    }
+
+    #[test]
+    fn name_index_matches_scan() {
+        let t1 = TableReference::bare("t1");
+        let t2 = TableReference::bare("t2");
+        let public_t1 = TableReference::partial("public", "t1");
+        let fields = [
+            (Some(t2.clone()), "a"),
+            (Some(t1.clone()), "a"),
+            (None, "a"),
+            (Some(public_t1.clone()), "a"),
+            (Some(t2.clone()), "b"),
+            (None, "c"),
+            (None, "c"),
+            (Some(t1.clone()), "ü"),
+        ];
+        let qualifiers = [
+            None,
+            Some(t1.clone()),
+            Some(t2.clone()),
+            Some(public_t1.clone()),
+            Some(TableReference::bare("missing")),
+        ];
+        let names = ["a", "b", "c", "ü", "u", "missing", "pad_40"];
+
+        for width in [LINEAR_NAME_SCAN_MAX, LINEAR_NAME_SCAN_MAX + 1, 100] {
+            // Narrow widths keep a prefix of `fields`, so the scan path is covered.
+            let schema = name_lookup_schema(&fields[..fields.len().min(width)], width);
+            for name in names {
+                let scanned: Vec<_> =
+                    schema.iter().filter(|(_, f)| f.name() == name).collect();
+                assert_eq!(
+                    schema.qualified_fields_with_unqualified_name(name),
+                    scanned,
+                    "width {width}, name {name}"
+                );
+                assert_eq!(
+                    schema.fields_with_unqualified_name(name),
+                    scanned.iter().map(|(_, f)| *f).collect::<Vec<_>>(),
+                    "width {width}, name {name}"
+                );
+                assert_eq!(
+                    schema.columns_with_unqualified_name(name),
+                    scanned
+                        .iter()
+                        .map(|(q, f)| Column::new(q.cloned(), f.name()))
+                        .collect::<Vec<_>>(),
+                    "width {width}, name {name}"
+                );
+                assert_eq!(
+                    schema.has_column_with_unqualified_name(name),
+                    !scanned.is_empty()
+                );
+                for qualifier in &qualifiers {
+                    assert_eq!(
+                        schema.index_of_column_by_name(qualifier.as_ref(), name),
+                        scan_index_of_column_by_name(&schema, qualifier.as_ref(), name),
+                        "width {width}, qualifier {qualifier:?}, name {name}"
+                    );
+                    if let Some(qualifier) = qualifier {
+                        assert_eq!(
+                            schema.has_column_with_qualified_name(qualifier, name),
+                            scanned.iter().any(|(q, _)| *q == Some(qualifier)),
+                            "width {width}, qualifier {qualifier}, name {name}"
+                        );
+                    }
+                }
+            }
+            assert_eq!(
+                schema.name_index.get().is_some(),
+                width > LINEAR_NAME_SCAN_MAX,
+                "width {width}"
+            );
+        }
+    }
+
+    #[test]
+    fn name_index_follows_schema_changes() {
+        let mut schema = name_lookup_schema(&[(None, "a")], LINEAR_NAME_SCAN_MAX + 1);
+        assert_eq!(schema.index_of_column_by_name(None, "a"), Some(0));
+        let index = Arc::clone(schema.name_index.get().unwrap());
+
+        // The index is derived state, so it must not show in equality or `Debug`.
+        let unprobed = name_lookup_schema(&[(None, "a")], LINEAR_NAME_SCAN_MAX + 1);
+        assert!(unprobed.name_index.get().is_none());
+        assert_eq!(schema, unprobed);
+        assert_eq!(format!("{schema:?}"), format!("{unprobed:?}"));
+
+        // Clones keep the fields, so they share the index.
+        assert!(Arc::ptr_eq(
+            schema.clone().name_index.get().unwrap(),
+            &index
+        ));
+        let replaced = schema.clone().replace_qualifier("t");
+        assert_eq!(
+            replaced.index_of_column_by_name(Some(&TableReference::bare("t")), "a"),
+            Some(0)
+        );
+
+        // Merging appends fields, so the index must not answer for the old ones.
+        let other = name_lookup_schema(&[(None, "b")], 1);
+        schema.merge(&other);
+        assert_eq!(
+            schema.index_of_column_by_name(None, "b"),
+            Some(LINEAR_NAME_SCAN_MAX + 1)
+        );
+        assert!(!Arc::ptr_eq(schema.name_index.get().unwrap(), &index));
+    }
+
     #[test]
     fn test_datatype_is_logically_equal() {
         assert!(DFSchema::datatype_is_logically_equal(
@@ -1754,11 +2082,19 @@ mod tests {
             &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
             &DataType::List(Field::new("element", DataType::Int8, false).into())
         ));
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::ListView(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::ListView(Field::new("element", DataType::Int8, false).into())
+        ));
 
         // Fails if element type is different
         assert!(!DFSchema::datatype_is_logically_equal(
             &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
             &DataType::List(Field::new_list_field(DataType::Int16, true).into())
+        ));
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &DataType::ListView(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::ListView(Field::new_list_field(DataType::Int16, true).into())
         ));
 
         // Test maps
@@ -1897,6 +2233,50 @@ mod tests {
     }
 
     #[test]
+    fn test_datatype_is_logically_equivalent_to_ree() {
+        // RunEndEncoded is logically equal to its value type
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::Utf8,
+            &DataType::RunEndEncoded(
+                Field::new("run", DataType::Int32, false).into(),
+                Field::new("val", DataType::Utf8, true).into(),
+            )
+        ));
+
+        // Dictionary is logically equal to the logically equivalent value type
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::Utf8View,
+            &DataType::RunEndEncoded(
+                Field::new("run", DataType::Int32, false).into(),
+                Field::new("val", DataType::Utf8, true).into(),
+            )
+        ));
+
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::RunEndEncoded(
+                Field::new("run", DataType::Int32, false).into(),
+                Field::new(
+                    "val",
+                    DataType::List(Field::new("element", DataType::Utf8, false).into()),
+                    true
+                )
+                .into(),
+            ),
+            &DataType::RunEndEncoded(
+                Field::new("run", DataType::Int64, false).into(),
+                Field::new(
+                    "val",
+                    DataType::List(
+                        Field::new("element", DataType::Utf8View, false).into()
+                    ),
+                    true
+                )
+                .into(),
+            ),
+        ));
+    }
+
+    #[test]
     fn test_datatype_is_semantically_equal() {
         assert!(DFSchema::datatype_is_semantically_equal(
             &DataType::Int8,
@@ -1945,11 +2325,19 @@ mod tests {
             &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
             &DataType::List(Field::new("element", DataType::Int8, false).into())
         ));
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::ListView(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::ListView(Field::new("element", DataType::Int8, false).into())
+        ));
 
         // Fails if element type is different
         assert!(!DFSchema::datatype_is_semantically_equal(
             &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
             &DataType::List(Field::new_list_field(DataType::Int16, true).into())
+        ));
+        assert!(!DFSchema::datatype_is_semantically_equal(
+            &DataType::ListView(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::ListView(Field::new_list_field(DataType::Int16, true).into())
         ));
 
         // Test maps
@@ -2063,6 +2451,18 @@ mod tests {
         assert!(!DFSchema::datatype_is_semantically_equal(
             &DataType::Utf8,
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        ));
+    }
+
+    #[test]
+    fn test_datatype_is_not_semantically_equivalent_to_ree() {
+        // RunEndEncoded is not semantically equal to its value type
+        assert!(!DFSchema::datatype_is_semantically_equal(
+            &DataType::Utf8,
+            &DataType::RunEndEncoded(
+                Field::new("run", DataType::Int32, false).into(),
+                Field::new("val", DataType::Utf8, true).into(),
+            )
         ));
     }
 

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! mem_profile binary entrypoint
 use clap::{Parser, Subcommand};
@@ -145,11 +132,10 @@ fn run_benchmark_as_child_process(
         env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "target".to_string());
     let command = format!("{target_dir}/{profile}/dfbench");
     // Check whether benchmark binary exists
-    if !Path::new(&command).exists() {
-        panic!(
-            "Benchmark binary not found: `{command}`\nRun this command from the top-level `datafusion/` directory so `target/{profile}/dfbench` can be found.",
-        );
-    }
+    assert!(
+        Path::new(&command).exists(),
+        "Benchmark binary not found: `{command}`\nRun this command from the top-level `datafusion/` directory so `target/{profile}/dfbench` can be found.",
+    );
     args.insert(0, command);
     let mut results = vec![];
 
@@ -339,11 +325,10 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        if !output.status.success() {
-            panic!(
-                "mem_profile failed\nstdout:\n{stdout}\nstderr:\n{stderr}---------------------",
-            );
-        }
+        assert!(
+            output.status.success(),
+            "mem_profile failed\nstdout:\n{stdout}\nstderr:\n{stderr}---------------------",
+        );
 
         assert!(
             stdout.contains("Peak RSS")

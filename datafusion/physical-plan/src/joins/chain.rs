@@ -1,26 +1,14 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt::Debug;
 use std::ops::Sub;
 
 use arrow::datatypes::ArrowNativeType;
 
-use crate::joins::MapOffset;
+use crate::joins::join_hash_map::ProbeOffset;
+use crate::joins::join_hash_map::ProbeOffset::{AtRow, MidChain};
 
 /// Traverses the chain of matching indices, collecting results up to the remaining limit.
 /// Returns `Some(offset)` if the limit was reached and there are more results to process,
@@ -34,7 +22,7 @@ pub(crate) fn traverse_chain<T>(
     input_indices: &mut Vec<u32>,
     match_indices: &mut Vec<u64>,
     is_last_input: bool,
-) -> Option<MapOffset>
+) -> Option<ProbeOffset>
 where
     T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
     <T as TryFrom<usize>>::Error: Debug,
@@ -56,8 +44,15 @@ where
             return if is_last_input && next == zero {
                 // Finished processing the last input row
                 None
+            } else if next == zero {
+                // `prob_idx` has been processed during this iteration, so the
+                // next call should start with the next input row
+                Some(AtRow { row: prob_idx + 1 })
             } else {
-                Some((prob_idx, Some(next.into())))
+                Some(MidChain {
+                    row: prob_idx,
+                    next: next.into(),
+                })
             };
         }
         if next == zero {

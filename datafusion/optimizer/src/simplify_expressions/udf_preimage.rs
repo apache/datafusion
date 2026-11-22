@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use datafusion_common::{Result, internal_err, tree_node::Transformed};
 use datafusion_expr::{Expr, Operator, and, lit, or};
@@ -71,7 +58,7 @@ mod test {
 
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Metadata};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::{
         ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
@@ -201,7 +188,7 @@ mod test {
         Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![Field::new("x", DataType::Int32, true)].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         )
@@ -215,7 +202,7 @@ mod test {
                     Field::new("y", DataType::Int32, false),
                 ]
                 .into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         )

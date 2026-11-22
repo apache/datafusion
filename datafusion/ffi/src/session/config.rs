@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::ffi::c_void;
 
@@ -60,7 +47,7 @@ unsafe impl Sync for FFI_SessionConfig {}
 
 impl FFI_SessionConfig {
     fn inner(&self) -> &SessionConfig {
-        let private_data = self.private_data as *mut SessionConfigPrivateData;
+        let private_data = self.private_data.cast::<SessionConfigPrivateData>();
         unsafe { &(*private_data).config }
     }
 }
@@ -69,7 +56,7 @@ unsafe extern "C" fn release_fn_wrapper(config: &mut FFI_SessionConfig) {
     unsafe {
         debug_assert!(!config.private_data.is_null());
         let private_data =
-            Box::from_raw(config.private_data as *mut SessionConfigPrivateData);
+            Box::from_raw(config.private_data.cast::<SessionConfigPrivateData>());
         drop(private_data);
         config.private_data = std::ptr::null_mut();
     }
@@ -77,14 +64,14 @@ unsafe extern "C" fn release_fn_wrapper(config: &mut FFI_SessionConfig) {
 
 unsafe extern "C" fn clone_fn_wrapper(config: &FFI_SessionConfig) -> FFI_SessionConfig {
     unsafe {
-        let old_private_data = config.private_data as *mut SessionConfigPrivateData;
+        let old_private_data = config.private_data.cast::<SessionConfigPrivateData>();
         let old_config = (*old_private_data).config.clone();
 
         let private_data = Box::new(SessionConfigPrivateData { config: old_config });
 
         FFI_SessionConfig {
             config_options: config.config_options.clone(),
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             library_marker_id: crate::get_library_marker_id,
@@ -106,7 +93,7 @@ impl From<&SessionConfig> for FFI_SessionConfig {
 
         Self {
             config_options,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             library_marker_id: crate::get_library_marker_id,

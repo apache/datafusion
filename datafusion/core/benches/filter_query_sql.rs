@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::{
     array::{Float32Array, Float64Array},
@@ -23,12 +10,11 @@ use arrow::{
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
-use futures::executor::block_on;
 use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-async fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {
+fn query(ctx: &SessionContext, rt: &Runtime, sql: &str) {
     // execute the query
     let df = rt.block_on(ctx.sql(sql)).unwrap();
     black_box(rt.block_on(df.collect()).unwrap());
@@ -71,28 +57,28 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("filter_array", |b| {
         let ctx = create_context(array_len, batch_size).unwrap();
-        b.iter(|| block_on(query(&ctx, &rt, "select f32, f64 from t where f32 >= f64")))
+        b.iter(|| query(&ctx, &rt, "select f32, f64 from t where f32 >= f64"))
     });
 
     c.bench_function("filter_scalar", |b| {
         let ctx = create_context(array_len, batch_size).unwrap();
         b.iter(|| {
-            block_on(query(
+            query(
                 &ctx,
                 &rt,
                 "select f32, f64 from t where f32 >= 250 and f64 > 250",
-            ))
+            )
         })
     });
 
     c.bench_function("filter_scalar in list", |b| {
         let ctx = create_context(array_len, batch_size).unwrap();
         b.iter(|| {
-            block_on(query(
+            query(
                 &ctx,
                 &rt,
                 "select f32, f64 from t where f32 in (10, 20, 30, 40)",
-            ))
+            )
         })
     });
 }

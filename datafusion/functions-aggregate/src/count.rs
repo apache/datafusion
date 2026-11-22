@@ -1,45 +1,33 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array, PrimitiveArray},
     buffer::BooleanBuffer,
     compute,
     datatypes::{
-        DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-        FieldRef, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-        Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-        Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+        DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type,
+        Decimal256Type, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int8Type,
+        Int16Type, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
+        Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
         UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
 };
 use datafusion_common::hash_utils::RandomState;
+use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::{
     HashMap, Result, ScalarValue, downcast_value, exec_err, internal_err, not_impl_err,
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupsAccumulator,
-    ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, Volatility,
-    WindowFunctionDefinition,
+    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupSelection,
+    GroupsAccumulator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs,
+    TypeSignature, Volatility, WindowFunctionDefinition,
     expr::WindowFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
-    utils::format_state_name,
+    utils::{AggregateOrderSensitivity, format_state_name},
 };
 use datafusion_functions_aggregate_common::aggregate::count_distinct::PrimitiveDistinctCountGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::{
@@ -138,7 +126,7 @@ pub fn count_all_window() -> Expr {
     sql_example = r#"```sql
 > SELECT count(column_name) FROM table_name;
 +-----------------------+
-| count(column_name)     |
+| count(column_name)    |
 +-----------------------+
 | 100                   |
 +-----------------------+
@@ -192,6 +180,13 @@ fn get_count_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
         DataType::UInt8 | DataType::Int8 | DataType::UInt16 | DataType::Int16 => {
             get_small_int_accumulator(data_type).unwrap()
         }
+
+        DataType::Decimal32(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+            Decimal32Type,
+        >::new(data_type)),
+        DataType::Decimal64(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+            Decimal64Type,
+        >::new(data_type)),
         DataType::Decimal128(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
             Decimal128Type,
         >::new(data_type)),
@@ -292,6 +287,11 @@ impl AggregateUDFImpl for Count {
         Ok(DataType::Int64)
     }
 
+    fn return_field(&self, _arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, false)))
+    }
+
+    // Keep the deprecated method consistent with `return_field` until it is removed
     fn is_nullable(&self) -> bool {
         false
     }
@@ -345,14 +345,31 @@ impl AggregateUDFImpl for Count {
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        if args.exprs.len() != 1 {
-            return false;
+        // The answer depends on nothing but the argument types and `DISTINCT`,
+        // so defer to the logical form and keep one list of supported types.
+        let arg_types = args
+            .expr_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        self.groups_accumulator_supported_for_types(&arg_types, args.is_distinct)
+            .unwrap_or(false)
+    }
+
+    fn groups_accumulator_supported_for_types(
+        &self,
+        arg_types: &[DataType],
+        is_distinct: bool,
+    ) -> Option<bool> {
+        if arg_types.len() != 1 {
+            return Some(false);
         }
-        if !args.is_distinct {
-            return true;
+        if !is_distinct {
+            return Some(true);
         }
-        matches!(
-            args.expr_fields[0].data_type(),
+        // Keep in step with `create_distinct_count_groups_accumulator`.
+        Some(matches!(
+            arg_types[0],
             DataType::Int8
                 | DataType::Int16
                 | DataType::Int32
@@ -361,7 +378,7 @@ impl AggregateUDFImpl for Count {
                 | DataType::UInt16
                 | DataType::UInt32
                 | DataType::UInt64
-        )
+        ))
     }
 
     fn create_groups_accumulator(
@@ -378,6 +395,10 @@ impl AggregateUDFImpl for Count {
         ReversedUDAF::Identical
     }
 
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
+    }
+
     fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(0)))
     }
@@ -392,7 +413,8 @@ impl AggregateUDFImpl for Count {
             // Only column references can be resolved from statistics;
             // expressions like casts or literals are not supported.
             let col_expr = expr.downcast_ref::<expressions::Column>()?;
-            if let Precision::Exact(dc) = col_stats[col_expr.index()].distinct_count {
+            if let Precision::Exact(dc) = col_stats.get(col_expr.index())?.distinct_count
+            {
                 let dc = i64::try_from(dc).ok()?;
                 return Some(ScalarValue::Int64(Some(dc)));
             }
@@ -405,15 +427,19 @@ impl AggregateUDFImpl for Count {
 
         // TODO optimize with exprs other than Column
         if let Some(col_expr) = expr.downcast_ref::<expressions::Column>() {
-            if let Precision::Exact(val) = col_stats[col_expr.index()].null_count {
+            if let Precision::Exact(val) = col_stats.get(col_expr.index())?.null_count {
                 let count = i64::try_from(num_rows - val).ok()?;
                 return Some(ScalarValue::Int64(Some(count)));
             }
-        } else if let Some(lit_expr) = expr.downcast_ref::<expressions::Literal>()
-            && lit_expr.value() == &COUNT_STAR_EXPANSION
-        {
-            let num_rows = i64::try_from(num_rows).ok()?;
-            return Some(ScalarValue::Int64(Some(num_rows)));
+        } else if let Some(lit_expr) = expr.downcast_ref::<expressions::Literal>() {
+            // A non-null literal is counted once per row (this covers the common
+            // `count(*)` construct). A non-null literal is never counted.
+            let count = if lit_expr.value().is_null() {
+                0
+            } else {
+                i64::try_from(num_rows).ok()?
+            };
+            return Some(ScalarValue::Int64(Some(count)));
         }
 
         None
@@ -555,7 +581,17 @@ impl Accumulator for SlidingDistinctCountAccumulator {
     }
 
     fn size(&self) -> usize {
+        // Mirrors `DistinctCountAccumulator::full_size`: self + HashMap
+        // bucket array + per-key inner heap + DataType inner heap.
         size_of_val(self)
+            + (size_of::<ScalarValue>() + size_of::<usize>()) * self.counts.capacity()
+            + self
+                .counts
+                .keys()
+                .map(|k| k.size() - size_of_val(k))
+                .sum::<usize>()
+            + self.data_type.size()
+            - size_of_val(&self.data_type)
     }
 }
 
@@ -696,11 +732,35 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         Ok(Arc::new(array))
     }
 
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.counts.len())?;
+        let counts = selection
+            .iter()
+            .map(|index| self.counts[index])
+            .collect::<Vec<_>>();
+        Ok(Arc::new(Int64Array::from(counts)))
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
+    }
+
     // return arrays for counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let counts = emit_to.take_needed(&mut self.counts);
         let counts: PrimitiveArray<Int64Type> = Int64Array::from(counts); // zero copy, no nulls
         Ok(vec![Arc::new(counts) as ArrayRef])
+    }
+
+    fn state_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        self.evaluate_preserving(selection).map(|array| vec![array])
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
     }
 
     /// Converts an input batch directly to a state batch
@@ -763,13 +823,8 @@ impl GroupsAccumulator for CountGroupsAccumulator {
 
         Ok(vec![state_array])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
-        self.counts.capacity() * size_of::<usize>()
+        self.counts.heap_size(&mut DFHeapSizeCtx::default())
     }
 }
 
@@ -907,7 +962,7 @@ mod tests {
 
     use super::*;
     use arrow::{
-        array::{DictionaryArray, Int32Array, NullArray, StringArray},
+        array::{DictionaryArray, Int32Array, Int64Array, NullArray, StringArray},
         datatypes::{DataType, Field, Int32Type, Schema},
     };
     use datafusion_expr::function::AccumulatorArgs;
@@ -916,7 +971,7 @@ mod tests {
     /// Helper function to create a dictionary array with non-null keys but some null values
     /// Returns a dictionary array where:
     /// - keys are [0, 1, 2, 0, 1] (all non-null)
-    /// - values are ["a", null, "c"]
+    /// - values are `["a", null, "c"]`
     /// - so the keys reference: "a", null, "c", "a", null
     fn create_dictionary_with_null_values() -> Result<DictionaryArray<Int32Type>> {
         let values = StringArray::from(vec![Some("a"), None, Some("c")]);
@@ -928,10 +983,60 @@ mod tests {
     }
 
     #[test]
+    fn count_groups_size_includes_vec_capacity() -> Result<()> {
+        let mut acc = CountGroupsAccumulator::new();
+        let empty_size = acc.size();
+        assert_eq!(empty_size, 0);
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+        acc.update_batch(&[values], &[0, 1, 2], None, 3)?;
+
+        assert!(acc.counts.capacity() > 0);
+        let allocated_size = acc.counts.heap_size(&mut DFHeapSizeCtx::default());
+        assert_eq!(allocated_size, acc.counts.capacity() * size_of::<i64>());
+        assert_eq!(acc.size(), allocated_size);
+        assert!(acc.size() > empty_size);
+
+        Ok(())
+    }
+
+    #[test]
     fn count_accumulator_nulls() -> Result<()> {
         let mut accumulator = CountAccumulator::new();
         accumulator.update_batch(&[Arc::new(NullArray::new(10))])?;
         assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_groups_preserving_reads() -> Result<()> {
+        let mut accumulator = CountGroupsAccumulator::new();
+        let values = Arc::new(Int32Array::from(vec![Some(1), None, Some(2), Some(3)]));
+        accumulator.update_batch(&[values], &[0, 1, 0, 2], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[2, 0, 3, 2], 4)?;
+        let expected = Int64Array::from(vec![1, 2, 0, 1]);
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(selection)?
+                .as_primitive::<Int64Type>(),
+            &expected
+        );
+        assert_eq!(
+            accumulator.state_preserving(selection)?[0].as_primitive::<Int64Type>(),
+            &expected
+        );
+
+        let values = Arc::new(Int32Array::from(vec![4]));
+        accumulator.update_batch(&[values], &[3], None, 4)?;
+        let expected = Int64Array::from(vec![2, 0, 1, 1]);
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(
+                    GroupSelection::try_from_indices(&[0, 1, 2, 3], 4,)?
+                )?
+                .as_primitive::<Int64Type>(),
+            &expected
+        );
         Ok(())
     }
 
@@ -1098,5 +1203,27 @@ mod tests {
         // Expect distinct {1,2,3} → count = 3
         assert_eq!(merged.evaluate()?, ScalarValue::Int64(Some(3)));
         Ok(())
+    }
+
+    /// `value_from_stats` is public and cannot return an error, so a column
+    /// without statistics gives `None` instead of a panic, as in `sum`.
+    #[test]
+    fn count_value_from_stats_out_of_bounds_column_returns_none() {
+        let statistics = datafusion_common::Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![datafusion_common::ColumnStatistics::default()],
+        };
+        let return_type = DataType::Int64;
+        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("b", 1))];
+        for is_distinct in [false, true] {
+            let statistics_args = StatisticsArgs {
+                statistics: &statistics,
+                return_type: &return_type,
+                is_distinct,
+                exprs: &exprs,
+            };
+            assert_eq!(Count::new().value_from_stats(&statistics_args), None);
+        }
     }
 }

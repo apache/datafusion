@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -79,8 +66,8 @@ pub fn physical_exprs_bag_equal(
     lhs: &[Arc<dyn PhysicalExpr>],
     rhs: &[Arc<dyn PhysicalExpr>],
 ) -> bool {
-    let mut multi_set_lhs: HashMap<_, usize> = HashMap::new();
-    let mut multi_set_rhs: HashMap<_, usize> = HashMap::new();
+    let mut multi_set_lhs: HashMap<_, usize> = HashMap::with_capacity(lhs.len());
+    let mut multi_set_rhs: HashMap<_, usize> = HashMap::with_capacity(rhs.len());
     for expr in lhs {
         *multi_set_lhs.entry(expr).or_insert(0) += 1;
     }
@@ -139,11 +126,11 @@ pub fn create_ordering(
     schema: &Schema,
     sort_order: &[Vec<SortExpr>],
 ) -> Result<Vec<LexOrdering>> {
-    let mut all_sort_orders = vec![];
+    let mut all_sort_orders = Vec::with_capacity(sort_order.len());
 
     for (group_idx, exprs) in sort_order.iter().enumerate() {
         // Construct PhysicalSortExpr objects from Expr objects:
-        let mut sort_exprs = vec![];
+        let mut sort_exprs = Vec::with_capacity(exprs.len());
         for (expr_idx, sort) in exprs.iter().enumerate() {
             match &sort.expr {
                 Expr::Column(col) => match expressions::col(&col.name, schema) {
@@ -184,7 +171,7 @@ pub fn create_lex_ordering(
 
     let df_schema = DFSchema::try_from(Arc::clone(schema))?;
 
-    let mut all_sort_orders = vec![];
+    let mut all_sort_orders = Vec::with_capacity(sort_order.len());
 
     for exprs in sort_order.iter() {
         all_sort_orders.extend(LexOrdering::new(create_physical_sort_exprs(

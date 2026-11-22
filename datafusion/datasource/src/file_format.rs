@@ -1,25 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Module containing helper methods for the various file formats
 //! See write.rs for write related helper methods
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -28,9 +15,11 @@ use crate::file_compression_type::FileCompressionType;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_sink_config::FileSinkConfig;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::{GetExt, Result, Statistics, internal_err, not_impl_err};
+use datafusion_common::{
+    GetExt, Result, SchemaError, Statistics, internal_err, not_impl_err, schema_err,
+};
 use datafusion_physical_expr::LexRequirement;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
@@ -41,6 +30,27 @@ use object_store::{ObjectMeta, ObjectStore};
 
 /// Default max records to scan to infer the schema
 pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
+
+/// Rejects an inferred schema that names the same field more than once.
+///
+/// [`Schema::try_merge`] coalesces fields by name, so callers validate each
+/// inferred file schema before merging. `seen` is cleared before use so callers
+/// can reuse its allocation across schemas.
+pub fn ensure_unique_field_names<'a>(
+    schema: &'a Schema,
+    seen: &mut HashSet<&'a str>,
+) -> Result<()> {
+    seen.clear();
+    seen.reserve(schema.fields().len());
+    for field in schema.fields() {
+        if !seen.insert(field.name()) {
+            return schema_err!(SchemaError::DuplicateUnqualifiedField {
+                name: field.name().clone(),
+            });
+        }
+    }
+    Ok(())
+}
 
 /// Metadata fetched from a file, including statistics and ordering.
 ///

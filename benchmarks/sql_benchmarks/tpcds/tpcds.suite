@@ -1,0 +1,21 @@
+description = "TPC-DS SQL benchmarks"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[path_replacements]
+DATA_DIR = "../../data"
+
+[[options]]
+name = "scale-factor"
+env = "BENCH_SIZE"
+default = "1"
+values = ["1", "10", "100", "..."]
+help = "Selects the TPC-DS scale factor."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- tpcds"
+description = "Run all TPC-DS queries at scale factor 1."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- tpcds --query 42 --scale-factor 10"
+description = "Run TPC-DS query 42 at scale factor 10."

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -38,16 +25,27 @@ struct SqlToRelRelationContext<'a, 'b, S: ContextProvider> {
     planner_context: &'a mut PlannerContext,
 }
 
+/// Look up a CTE using the same string key as DataFusion's built-in relation
+/// planning.
+fn get_cte_for_table_reference<'a>(
+    planner_context: &'a PlannerContext,
+    name: &TableReference,
+) -> Option<&'a LogicalPlan> {
+    planner_context.get_cte(&name.to_string())
+}
+
 // Implement RelationPlannerContext
-impl<'a, 'b, S: ContextProvider> RelationPlannerContext
-    for SqlToRelRelationContext<'a, 'b, S>
-{
+impl<S: ContextProvider> RelationPlannerContext for SqlToRelRelationContext<'_, '_, S> {
     fn context_provider(&self) -> &dyn ContextProvider {
         self.planner.context_provider
     }
 
     fn plan(&mut self, relation: TableFactor) -> Result<LogicalPlan> {
         self.planner.create_relation(relation, self.planner_context)
+    }
+
+    fn get_cte(&self, name: &TableReference) -> Option<&LogicalPlan> {
+        get_cte_for_table_reference(self.planner_context, name)
     }
 
     fn sql_to_expr(
@@ -186,8 +184,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 } else {
                     // Normalize name and alias
                     let table_ref = self.object_name_to_table_reference(name)?;
-                    let table_name = table_ref.to_string();
-                    let cte = planner_context.get_cte(&table_name);
+                    let cte = get_cte_for_table_reference(planner_context, &table_ref);
                     (
                         match (
                             cte,

@@ -1,33 +1,21 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::datatypes::{DataType, Field, Schema};
 
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference,
     assert_contains,
 };
-use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
+use datafusion_expr::expr::{Alias, WindowFunction, WindowFunctionParams};
 use datafusion_expr::test::function_stub::{
     count_udaf, max, max_udaf, min_udaf, sum, sum_udaf,
 };
 use datafusion_expr::{
     ColumnarValue, EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
-    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Union,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScanBuilder, Union,
     UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility, WindowFrame,
     WindowFunctionDefinition, cast, col, exists, in_subquery, lit, scalar_subquery,
     table_scan, wildcard,
@@ -55,6 +43,7 @@ use std::{fmt, vec};
 use crate::common::{MockContextProvider, MockSessionState};
 use datafusion_expr::builder::{
     project, subquery_alias, table_scan_with_filter_and_fetch, table_scan_with_filters,
+    table_source,
 };
 use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions::unicode::planner::UnicodeFunctionPlanner;
@@ -111,6 +100,50 @@ fn roundtrip_expr(table: TableReference, sql: &str) -> Result<String> {
     Ok(ast.to_string())
 }
 
+/// Removes aliases that don't change the output schema: unqualified self-aliases,
+/// and aliases nested under a top-level alias, which replaces their names.
+fn normalize_aliases(plan: LogicalPlan) -> Result<LogicalPlan> {
+    plan.transform_up_with_subqueries(|plan| {
+        plan.map_expressions(|expr| {
+            let Expr::Alias(alias) = expr else {
+                return Ok(Transformed::no(expr));
+            };
+            if alias.relation.is_none()
+                && alias.metadata.is_none()
+                && let Expr::Column(column) = alias.expr.as_ref()
+                && column.relation.is_none()
+                && column.name == alias.name
+            {
+                return Ok(Transformed::yes(*alias.expr));
+            }
+            let Alias {
+                expr: inner,
+                relation,
+                name,
+                metadata,
+            } = alias;
+            (*inner)
+                .transform_up(|e| match e {
+                    Expr::Alias(nested)
+                        if nested.relation.is_none() && nested.metadata.is_none() =>
+                    {
+                        Ok(Transformed::yes(*nested.expr))
+                    }
+                    e => Ok(Transformed::no(e)),
+                })?
+                .map_data(|inner| {
+                    Ok(Expr::Alias(Alias {
+                        expr: Box::new(inner),
+                        relation,
+                        name,
+                        metadata,
+                    }))
+                })
+        })
+    })
+    .data()
+}
+
 #[test]
 fn roundtrip_statement() -> Result<()> {
     let tests: Vec<&str> = vec![
@@ -132,6 +165,10 @@ fn roundtrip_statement() -> Result<()> {
             "select id, count(*) as cnt from (select id from person) group by id",
             "select (id-1)/2, count(*) / (sum(id/10)-1) as agg_expr from (select (id-1) as id from person) group by id",
             "select CAST(id/2 as VARCHAR) NOT LIKE 'foo*' from person where NOT EXISTS (select ta.j1_id, tb.j2_string from j1 ta join j2 tb on (ta.j1_id = tb.j2_id))",
+            "select j1_string from j1 where j1_string SIMILAR TO 'a(b|c)%'",
+            "select j1_string NOT SIMILAR TO '_b%' from j1",
+            "select j1_string from j1 where j1_string SIMILAR TO 'a!%%' ESCAPE '!'",
+            "select j1_string NOT SIMILAR TO 'a!%%' ESCAPE '!' from j1",
             r#"select "First Name" from person_quoted_cols"#,
             "select DISTINCT id FROM person",
             "select DISTINCT on (id) id, first_name from person",
@@ -221,7 +258,14 @@ fn roundtrip_statement() -> Result<()> {
             "SELECT left[1] FROM array",
             "SELECT {a:1, b:2}",
             "SELECT s.a FROM (SELECT {a:1, b:2} AS s)",
-            "SELECT MAP {'a': 1, 'b': 2}"
+            "SELECT MAP {'a': 1, 'b': 2}",
+            // Ordered aggregates, both spellings of the ordering.
+            "SELECT first_name, last_value(age ORDER BY salary) FROM person GROUP BY first_name",
+            "SELECT first_name, first_value(age ORDER BY salary DESC) FROM person GROUP BY first_name",
+            "SELECT first_name, array_agg(age ORDER BY salary) FROM person GROUP BY first_name",
+            "SELECT first_name, array_agg(DISTINCT age ORDER BY salary, id) FROM person GROUP BY first_name",
+            "SELECT first_name, string_agg(CAST(age AS VARCHAR), ',' ORDER BY salary) FROM person GROUP BY first_name",
+            "SELECT first_name, percentile_cont(0.5) WITHIN GROUP (ORDER BY age) FROM person GROUP BY first_name",
     ];
 
     // For each test sql string, we transform as follows:
@@ -241,9 +285,30 @@ fn roundtrip_statement() -> Result<()> {
             .with_aggregate_function(sum_udaf())
             .with_aggregate_function(count_udaf())
             .with_aggregate_function(max_udaf())
+            .with_aggregate_function(
+                datafusion_functions_aggregate::array_agg::array_agg_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::first_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::last_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::string_agg::string_agg_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf(),
+            )
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
-            .with_expr_planner(Arc::new(FieldAccessPlanner));
+            .with_expr_planner(Arc::new(FieldAccessPlanner))
+            .with_expr_planner(Arc::new(
+                datafusion_functions_aggregate::planner::AggregateFunctionPlanner,
+            ))
+            .with_expr_planner(Arc::new(
+                datafusion_functions_window::planner::WindowFunctionPlanner,
+            ));
         let context = MockContextProvider { state };
         let sql_to_rel = SqlToRel::new(&context);
         let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
@@ -254,7 +319,107 @@ fn roundtrip_statement() -> Result<()> {
             .sql_statement_to_plan(roundtrip_statement.clone())
             .unwrap();
 
+        // Explicit output names can add redundant aliases without changing the plan's meaning.
+        assert_eq!(normalize_aliases(plan)?, normalize_aliases(plan_roundtrip)?);
+    }
+
+    Ok(())
+}
+
+/// Folds `CAST(<string literal> AS <type>)` to a literal, as constant folding does
+/// before a plan reaches the unparser.
+fn fold_literal_casts(plan: LogicalPlan) -> Result<LogicalPlan> {
+    plan.transform_up_with_subqueries(|plan| {
+        plan.map_expressions(|expr| {
+            expr.transform_up(|expr| match &expr {
+                Expr::Cast(cast) => match cast.expr.as_ref() {
+                    Expr::Literal(value, None) => Ok(Transformed::yes(Expr::Literal(
+                        value.cast_to(cast.field.data_type())?,
+                        None,
+                    ))),
+                    _ => Ok(Transformed::no(expr)),
+                },
+                _ => Ok(Transformed::no(expr)),
+            })
+        })
+    })
+    .data()
+}
+
+#[test]
+fn roundtrip_non_finite_float_literals() -> Result<()> {
+    let tests = [
+        (
+            "SELECT * FROM t WHERE x < 'inf'::double",
+            r#"SELECT t.x FROM t WHERE (t.x < CAST('Infinity' AS DOUBLE))"#,
+        ),
+        (
+            "SELECT * FROM t WHERE x > '-inf'::double",
+            r#"SELECT t.x FROM t WHERE (t.x > CAST('-Infinity' AS DOUBLE))"#,
+        ),
+        (
+            "SELECT * FROM t WHERE x <> 'NaN'::double",
+            r#"SELECT t.x FROM t WHERE (t.x <> CAST('NaN' AS DOUBLE))"#,
+        ),
+        (
+            "SELECT * FROM t WHERE x NOT IN ('NaN'::double, 'Infinity'::double, '-Infinity'::double)",
+            r#"SELECT t.x FROM t WHERE t.x NOT IN (CAST('NaN' AS DOUBLE), CAST('Infinity' AS DOUBLE), CAST('-Infinity' AS DOUBLE))"#,
+        ),
+    ];
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    for (query, expected) in tests {
+        let statement = Parser::new(&GenericDialect {})
+            .try_with_sql(query)?
+            .parse_statement()?;
+        let plan = fold_literal_casts(sql_to_rel.sql_statement_to_plan(statement)?)?;
+
+        let roundtrip_statement = plan_to_sql(&plan)?;
+        assert_eq!(roundtrip_statement.to_string(), expected);
+
+        let plan_roundtrip =
+            fold_literal_casts(sql_to_rel.sql_statement_to_plan(roundtrip_statement)?)?;
         assert_eq!(plan, plan_roundtrip);
+    }
+
+    Ok(())
+}
+
+// `roundtrip_statement` plans the unparsed AST directly; this test also renders it
+// to SQL text and parses the text again.
+#[test]
+fn roundtrip_similar_to_sql_text() -> Result<()> {
+    let tests = [
+        "select j1_string from j1 where j1_string SIMILAR TO 'a(b|c)%'",
+        "select j1_string NOT SIMILAR TO '_b%' from j1",
+        "select j1_string from j1 where j1_string SIMILAR TO 'a!%%' ESCAPE '!'",
+        "select j1_string NOT SIMILAR TO 'a!%%' ESCAPE '!' from j1",
+    ];
+
+    let dialect = GenericDialect {};
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let sql_to_rel = SqlToRel::new(&context);
+    for query in tests {
+        let statement = Parser::new(&dialect)
+            .try_with_sql(query)?
+            .parse_statement()?;
+        let plan = sql_to_rel.sql_statement_to_plan(statement)?;
+
+        let sql = plan_to_sql(&plan)?.to_string();
+        let statement = Parser::new(&dialect)
+            .try_with_sql(&sql)?
+            .parse_statement()?;
+        let plan_roundtrip = sql_to_rel.sql_statement_to_plan(statement)?;
+
+        assert_eq!(
+            normalize_aliases(plan)?,
+            normalize_aliases(plan_roundtrip)?,
+            "{sql}"
+        );
     }
 
     Ok(())
@@ -318,6 +483,18 @@ macro_rules! roundtrip_statement_with_dialect_helper {
             )
             .with_aggregate_function(
                 datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::array_agg::array_agg_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::first_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::last_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::string_agg::string_agg_udaf(),
             )
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
@@ -393,12 +570,124 @@ fn roundtrip_statement_with_dialect_4() -> Result<(), DataFusionError> {
 }
 
 #[test]
+fn unparse_preserves_derived_aggregate_output_name() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("j1_id", DataType::Int32, false)]);
+    let aggregate = sum(col("j1.j1_id"));
+    let output = Expr::Column(Column::from_name(aggregate.schema_name().to_string()));
+    let plan = table_scan(Some("j1"), &schema, None)?
+        .aggregate(Vec::<Expr>::new(), vec![aggregate])?
+        .project(vec![output.clone().alias("visible"), output.clone()])?
+        .project(vec![output])?
+        .build()?;
+
+    let sql = Unparser::new(&UnparserPostgreSqlDialect {})
+        .plan_to_sql(&plan)?
+        .to_string();
+    println!("UNPARSED_SQL={sql}");
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "sum(j1.j1_id)" FROM (SELECT sum("j1"."j1_id") AS "visible", sum("j1"."j1_id") AS "sum(j1.j1_id)" FROM "j1") AS "derived_projection""#
+    );
+
+    let sql = Unparser::new(&BigQueryDialect {})
+        .plan_to_sql(&plan)?
+        .to_string();
+    println!("BIGQUERY_SQL={sql}");
+    assert_snapshot!(
+        sql,
+        @r#"SELECT `sum_40j1_46j1_id_41` FROM (SELECT sum(`j1`.`j1_id`) AS `visible`, sum(`j1`.`j1_id`) AS `sum_40j1_46j1_id_41` FROM `j1`)"#
+    );
+    Ok(())
+}
+
+#[test]
+fn roundtrip_rebases_derived_projection_references() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta);",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta)",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta);",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection`",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) order by j1_id;",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta) ORDER BY j1_id ASC NULLS LAST",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) order by j1_id;",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` ORDER BY `derived_projection`.`j1_id` ASC",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) where j1_id > 1;",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1_id FROM (SELECT ta.j1_id FROM j1 AS ta WHERE (ta.j1_id > 1))",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta) where j1_id > 1;",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta` WHERE (`ta`.`j1_id` > 1)) AS `derived_projection`",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select distinct ta.j1_id as j1_id from j1 ta);",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT j1_id FROM (SELECT DISTINCT ta.j1_id FROM j1 AS ta)",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select j1_id from (select distinct ta.j1_id as j1_id from j1 ta);",
+        parser_dialect: MySqlDialect {},
+        unparser_dialect: UnparserMySqlDialect {},
+        expected: @"SELECT `derived_distinct`.`j1_id` FROM (SELECT DISTINCT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_distinct`",
+    );
+
+    let statement = Parser::new(&GenericDialect {})
+        .try_with_sql("select j1_id from (select ta.j1_id as j1_id from j1 ta)")?
+        .parse_statement()?;
+    let context = MockContextProvider {
+        state: MockSessionState::default(),
+    };
+    let plan = SqlToRel::new(&context).sql_statement_to_plan(statement)?;
+    let plan = LogicalPlanBuilder::from(plan)
+        .filter(col("ta.j1_id").gt(lit(1)))?
+        .build()?;
+    let unparser = Unparser::new(&UnparserMySqlDialect {});
+    assert_snapshot!(
+        unparser.plan_to_sql(&plan)?,
+        @"SELECT `derived_projection`.`j1_id` FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` WHERE (`derived_projection`.`j1_id` > 1)"
+    );
+
+    let schema = Schema::new(vec![Field::new("j1_id", DataType::Int32, false)]);
+    let plan = table_scan(Some("j1"), &schema, None)?
+        .alias("ta")?
+        .project(vec![col("ta.j1_id")])?
+        .filter(col("ta.j1_id").gt(lit(0)))?
+        .project(vec![lit(1)])?
+        .build()?;
+    assert_snapshot!(
+        unparser.plan_to_sql(&plan)?,
+        @"SELECT 1 FROM (SELECT `ta`.`j1_id` FROM `j1` AS `ta`) AS `derived_projection` WHERE (`derived_projection`.`j1_id` > 0)"
+    );
+    Ok(())
+}
+
+#[test]
 fn roundtrip_statement_with_dialect_5() -> Result<(), DataFusionError> {
     roundtrip_statement_with_dialect_helper!(
         sql: "select j1_id from (select j1_id from j1 limit 10);",
         parser_dialect: MySqlDialect {},
         unparser_dialect: UnparserMySqlDialect {},
-        expected: @"SELECT `j1`.`j1_id` FROM (SELECT `j1`.`j1_id` FROM `j1` LIMIT 10) AS `derived_limit`",
+        expected: @"SELECT `derived_limit`.`j1_id` FROM (SELECT `j1`.`j1_id` FROM `j1` LIMIT 10) AS `derived_limit`",
     );
     Ok(())
 }
@@ -1614,7 +1903,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&query_from_table_scan_with_two_projections)?;
     assert_snapshot!(
         query_from_table_scan_with_two_projections,
-        @"SELECT t1.id, t1.age FROM (SELECT t1.id, t1.age FROM t1)"
+        @"SELECT id, age FROM (SELECT t1.id, t1.age FROM t1)"
     );
 
     let table_scan_with_filter = table_scan_with_filters(
@@ -1791,7 +2080,7 @@ fn test_sort_with_scalar_fn_and_push_down_fetch() -> Result<()> {
     let sql = plan_to_sql(&plan)?;
     assert_snapshot!(
         sql,
-        @"SELECT t1.search_phrase FROM (SELECT t1.search_phrase, t1.event_time FROM t1 WHERE (t1.search_phrase <> '') ORDER BY substr(t1.event_time, 1, 5) ASC NULLS FIRST LIMIT 10)"
+        @"SELECT search_phrase FROM (SELECT t1.search_phrase, t1.event_time FROM t1 WHERE (t1.search_phrase <> '') ORDER BY substr(t1.event_time, 1, 5) ASC NULLS FIRST LIMIT 10)"
     );
     Ok(())
 }
@@ -2049,6 +2338,39 @@ fn test_cast_to_tinyint() -> Result<(), DataFusionError> {
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserPostgreSqlDialect {},
         expected: @"SELECT CAST(3 AS SMALLINT)",
+    );
+    Ok(())
+}
+
+#[test]
+fn test_cast_to_array() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(NULL as text[])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT CAST(NULL AS VARCHAR[])",
+    );
+    Ok(())
+}
+
+#[test]
+fn test_cast_to_fixed_size_array_default_dialect() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(NULL as int[2])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT CAST(NULL AS INTEGER[2])",
+    );
+    Ok(())
+}
+
+#[test]
+fn test_cast_to_nested_array() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "select cast(NULL as int[][][])",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserPostgreSqlDialect {},
+        expected: @"SELECT CAST(NULL AS INTEGER[][][])",
     );
     Ok(())
 }
@@ -2742,6 +3064,37 @@ fn test_unparse_inner_join_with_table_scan_projection() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_unparse_asof_join() -> Result<()> {
+    let trades_schema = Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, false),
+        Field::new("ts", DataType::Int64, false),
+        Field::new("trade_id", DataType::Int32, false),
+    ]);
+    let prices_schema = Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, false),
+        Field::new("ts", DataType::Int64, false),
+        Field::new("price", DataType::Int32, false),
+    ]);
+    let trades = table_scan(Some("trades"), &trades_schema, None)?
+        .alias("t")?
+        .build()?;
+    let prices = table_scan(Some("prices"), &prices_schema, None)?
+        .alias("p")?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(trades)
+        .asof_join_on(
+            prices,
+            Some(col("t.symbol").eq(col("p.symbol"))),
+            col("t.ts").gt_eq(col("p.ts")),
+        )?
+        .project(vec![col("t.trade_id"), col("p.price")])?
+        .build()?;
+
+    assert_snapshot!(plan_to_sql(&plan)?, @r#"SELECT t.trade_id, p.price FROM trades AS t ASOF JOIN prices AS p MATCH_CONDITION ((t.ts >= p.ts)) ON t.symbol = p.symbol"#);
+    Ok(())
+}
+
 /// Build the three base table scans (`left_table`, `mid_table`, `right_table`)
 /// shared by the nested passthrough-projection join unparsing tests.
 fn nested_passthrough_join_tables() -> Result<(LogicalPlan, LogicalPlan, LogicalPlan)> {
@@ -2848,6 +3201,65 @@ fn test_unparse_projected_join_unwraps_left_nested_passthrough_projection() -> R
         sql,
         @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table INNER JOIN mid_table ON left_table.mid_id = mid_table.mid_id INNER JOIN right_table ON mid_table.right_id = right_table.right_id"#
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_nested_asof_join_inputs() -> Result<()> {
+    let (left, mid, right) = nested_passthrough_join_tables()?;
+    let nested_left = LogicalPlanBuilder::from(left)
+        .asof_join_on(
+            mid,
+            Some(col("left_table.mid_id").eq(col("mid_table.mid_id"))),
+            col("left_table.left_id").gt_eq(col("mid_table.mid_id")),
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("mid_table.right_id"),
+        ])?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(nested_left)
+        .asof_join_on(
+            right,
+            Some(col("mid_table.right_id").eq(col("right_table.right_id"))),
+            col("mid_table.right_id").gt_eq(col("right_table.right_id")),
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+    assert_snapshot!(plan_to_sql(&plan)?, @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table ASOF JOIN mid_table MATCH_CONDITION ((left_table.left_id >= mid_table.mid_id)) ON left_table.mid_id = mid_table.mid_id ASOF JOIN right_table MATCH_CONDITION ((mid_table.right_id >= right_table.right_id)) ON mid_table.right_id = right_table.right_id"#);
+
+    let (left, mid, right) = nested_passthrough_join_tables()?;
+    let nested_right = LogicalPlanBuilder::from(mid)
+        .asof_join_on(
+            right,
+            Some(col("mid_table.right_id").eq(col("right_table.right_id"))),
+            col("mid_table.right_id").gt_eq(col("right_table.right_id")),
+        )?
+        .project(vec![
+            col("mid_table.mid_id"),
+            col("mid_table.right_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(left)
+        .asof_join_on(
+            nested_right,
+            Some(col("left_table.mid_id").eq(col("mid_table.mid_id"))),
+            col("left_table.left_id").gt_eq(col("mid_table.mid_id")),
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+    assert_snapshot!(plan_to_sql(&plan)?, @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table ASOF JOIN (mid_table ASOF JOIN right_table MATCH_CONDITION ((mid_table.right_id >= right_table.right_id)) ON mid_table.right_id = right_table.right_id) MATCH_CONDITION ((left_table.left_id >= mid_table.mid_id)) ON left_table.mid_id = mid_table.mid_id"#);
 
     Ok(())
 }
@@ -4385,6 +4797,45 @@ fn roundtrip_approx_percentile_cont_within_group_with_centroids()
     Ok(())
 }
 
+/// Ordered aggregates spell their ordering in one of two ways: an argument-list
+/// clause (`array_agg(x ORDER BY y)`) or a `WITHIN GROUP` clause. The
+/// `roundtrip_*_within_group` tests above cover the `WITHIN GROUP` variant;
+/// this covers the argument-list variant.
+#[test]
+fn roundtrip_ordered_aggregate_order_by() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, last_value(age ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, last_value(person.age ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, first_value(age ORDER BY salary DESC) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, first_value(person.age ORDER BY person.salary DESC NULLS FIRST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, array_agg(age ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, array_agg(person.age ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, string_agg(CAST(age AS VARCHAR), ',' ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, string_agg(CAST(person.age AS VARCHAR), ',' ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, array_agg(DISTINCT age ORDER BY salary, id) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, array_agg(DISTINCT person.age ORDER BY person.salary ASC NULLS LAST, person.id ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    Ok(())
+}
+
 #[test]
 fn snowflake_flatten_multiple_unnest_cross_join() -> Result<(), DataFusionError> {
     // Realistic Snowflake pattern:
@@ -4402,5 +4853,26 @@ fn snowflake_flatten_multiple_unnest_cross_join() -> Result<(), DataFusionError>
         unparser_dialect: snowflake,
         expected: @r#"SELECT "a"."VALUE", "b"."VALUE" FROM "multi_array_table" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_a") AS "a" CROSS JOIN LATERAL FLATTEN(INPUT => "multi_array_table"."column_b") AS "b""#,
     );
+    Ok(())
+}
+
+#[test]
+fn test_table_scan_with_skip() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+    let scan = |skip, fetch| -> Result<String> {
+        let scan = TableScanBuilder::new("t1", table_source(&schema))
+            .with_skip(skip)
+            .with_fetch(fetch)
+            .build()?;
+        let plan = LogicalPlanBuilder::table_scan(scan)?.build()?;
+        Ok(plan_to_sql(&plan)?.to_string())
+    };
+
+    assert_snapshot!(scan(Some(5), Some(10))?, @"SELECT * FROM t1 LIMIT 10 OFFSET 5");
+    assert_snapshot!(scan(Some(5), None)?, @"SELECT * FROM t1 OFFSET 5");
+    assert_snapshot!(scan(None, Some(10))?, @"SELECT * FROM t1 LIMIT 10");
     Ok(())
 }

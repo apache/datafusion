@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt::Display;
 use std::ops::Deref;
@@ -25,11 +12,12 @@ use crate::{LexOrdering, PhysicalExpr, add_offset_to_physical_sort_exprs};
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{HashSet, Result};
+use datafusion_common::Result;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
-/// An `OrderingEquivalenceClass` keeps track of distinct alternative orderings
-/// than can describe a table. For example, consider the following table:
+/// Tracks distinct alternative orderings that describe a table.
+///
+/// For example, consider the following table:
 ///
 /// ```text
 /// ┌───┬───┬───┬───┐
@@ -43,16 +31,25 @@ use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 /// ```
 ///
 /// Here, both `[a ASC, b ASC]` and `[c DESC, d ASC]` describe the table
-/// ordering. In this case, we say that these orderings are equivalent.
+/// ordering, so these orderings are equivalent. See [Equivalent sort
+/// expressions] for more details.
 ///
-/// An `OrderingEquivalenceClass` is a set of such equivalent orderings, which
-/// is represented by a vector of `LexOrdering`s. The set does not store any
-/// redundant information by enforcing the invariant that no suffix of an
-/// ordering in the equivalence class is a prefix of another ordering in the
-/// equivalence class. The set can be empty, which means that there are no
-/// orderings that describe the table.
+/// An `OrderingEquivalenceClass` is a set of such equivalent orderings.
+///
+/// [`GroupingEquivalenceClass`] is used when groups of equal values are
+/// contiguous, but not in order.
+///
+/// [Equivalent sort expressions]: crate::equivalence::EquivalenceProperties#equivalent-sort-expressions
+/// [`GroupingEquivalenceClass`]: crate::equivalence::GroupingEquivalenceClass
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct OrderingEquivalenceClass {
+    /// Set of equivalent orderings
+    ///
+    /// Invariant: no suffix of an ordering in the equivalence class is a prefix
+    /// of another ordering in the equivalence class. This avoids redundant
+    /// information.
+    ///
+    /// If empty, means the table is unordered
     orderings: Vec<LexOrdering>,
 }
 
@@ -223,55 +220,40 @@ impl OrderingEquivalenceClass {
         None
     }
 
-    /// Checks whether the given expression is partially constant according to
-    /// this ordering equivalence class.
+    /// Checks whether `expr` has a single value according to this ordering
+    /// equivalence class: whether one ordering starts with `expr` in some
+    /// direction and another starts with it in the exact reverse, such as
+    /// `ASC NULLS LAST` and `DESC NULLS FIRST`. Rows sorted both ways all have
+    /// the same value (or are all null).
     ///
-    /// This function determines whether `expr` appears in at least one combination
-    /// of `descending` and `nulls_first` options that indicate partial constantness
-    /// in a lexicographical ordering. Specifically, an expression is considered
-    /// a partial constant in this context if its `SortOptions` satisfies either
-    /// of the following conditions:
-    /// - It is `descending` with `nulls_first` and _also_ `ascending` with
-    ///   `nulls_last`, OR
-    /// - It is `descending` with `nulls_last` and _also_ `ascending` with
-    ///   `nulls_first`.
+    /// This is how a whole-partition window aggregate records that its value
+    /// is constant within each window partition. See
+    /// [Per-partition constants from window functions].
     ///
-    /// The equivalence mechanism primarily uses `ConstExpr`s to represent globally
-    /// constant expressions. However, some expressions may only be partially
-    /// constant within a lexicographical ordering. This function helps identify
-    /// such cases. If an expression is constant within a prefix ordering, it is
-    /// added as a constant during `ordering_satisfy_requirement()` iterations
-    /// after the corresponding prefix requirement is satisfied.
-    ///
-    /// ### Future Improvements
-    ///
-    /// This function may become unnecessary if any of the following improvements
-    /// are implemented:
-    /// 1. `SortOptions` supports encoding constantness information.
-    /// 2. `EquivalenceProperties` gains `FunctionalDependency` awareness, eliminating
-    ///    the need for `Constant` and `Constraints`.
+    /// [Per-partition constants from window functions]: crate::equivalence::EquivalenceProperties#example-window-functions-with-partition-by
     pub fn is_expr_partial_const(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        let mut constantness_defining_pairs = [
-            HashSet::from([(false, false), (true, true)]),
-            HashSet::from([(false, true), (true, false)]),
-        ];
-
-        for ordering in self.iter() {
-            let leading_ordering = ordering.first();
-            if leading_ordering.expr.eq(expr) {
-                let opt = (
-                    leading_ordering.options.descending,
-                    leading_ordering.options.nulls_first,
-                );
-                constantness_defining_pairs[0].remove(&opt);
-                constantness_defining_pairs[1].remove(&opt);
-            }
-        }
-
-        constantness_defining_pairs
-            .iter()
-            .any(|pair| pair.is_empty())
+        is_partial_const(self.iter().map(|ordering| ordering.first()), expr)
     }
+}
+
+/// Checks whether `expr` has a single value according to the leading sort
+/// expressions of some orderings: whether `expr` leads one of them in some
+/// direction and another in the exact reverse. See
+/// [`OrderingEquivalenceClass::is_expr_partial_const`].
+pub(crate) fn is_partial_const<'a>(
+    leading: impl Iterator<Item = &'a PhysicalSortExpr> + Clone,
+    expr: &Arc<dyn PhysicalExpr>,
+) -> bool {
+    let leads_in = move |options: SortOptions| {
+        leading
+            .clone()
+            .any(|sort_expr| sort_expr.options == options && sort_expr.expr.eq(expr))
+    };
+    // `!` gives the exact reverse, e.g. `DESC NULLS FIRST` for `ASC NULLS LAST`.
+    let asc_nulls_first = SortOptions::default().asc().nulls_first();
+    let asc_nulls_last = SortOptions::default().asc().nulls_last();
+    (leads_in(asc_nulls_first) && leads_in(!asc_nulls_first))
+        || (leads_in(asc_nulls_last) && leads_in(!asc_nulls_last))
 }
 
 impl Deref for OrderingEquivalenceClass {
@@ -300,15 +282,32 @@ impl IntoIterator for OrderingEquivalenceClass {
     }
 }
 
+/// Renders an ordering with `NULLS FIRST`/`NULLS LAST` spelled out. The
+/// `PhysicalSortExpr` display leaves `NULLS FIRST` implicit for `ASC`, which is
+/// ambiguous when reading equivalence properties.
+pub(crate) struct ExplicitNullsOrdering<'a>(pub(crate) &'a LexOrdering);
+
+impl Display for ExplicitNullsOrdering<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (idx, sort_expr) in self.0.iter().enumerate() {
+            if idx > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{} {}", sort_expr.expr, sort_expr.options)?;
+        }
+        Ok(())
+    }
+}
+
 impl Display for OrderingEquivalenceClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[")?;
         let mut iter = self.orderings.iter();
         if let Some(ordering) = iter.next() {
-            write!(f, "[{ordering}]")?;
+            write!(f, "[{}]", ExplicitNullsOrdering(ordering))?;
         }
         for ordering in iter {
-            write!(f, ", [{ordering}]")?;
+            write!(f, ", [{}]", ExplicitNullsOrdering(ordering))?;
         }
         write!(f, "]")
     }
@@ -329,7 +328,7 @@ mod tests {
         EquivalenceClass, EquivalenceGroup, EquivalenceProperties,
         OrderingEquivalenceClass, convert_to_orderings, convert_to_sort_exprs,
     };
-    use crate::expressions::{BinaryExpr, Column, col};
+    use crate::expressions::{BinaryExpr, CastExpr, Column, col};
     use crate::utils::tests::TestScalarUDF;
     use crate::{
         AcrossPartitions, ConstExpr, PhysicalExpr, PhysicalExprRef, PhysicalSortExpr,
@@ -373,6 +372,45 @@ mod tests {
         let eq_properties_crude =
             EquivalenceProperties::new_with_orderings(Arc::clone(&input_schema), [crude]);
         assert!(!eq_properties_crude.ordering_satisfy(finer)?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_ordering_satisfy_strictly_order_preserving() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int64, true),
+        ]));
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let asc = SortOptions::default();
+        let sort_a = PhysicalSortExpr::new(Arc::clone(&col_a), asc);
+        let sort_b = PhysicalSortExpr::new(Arc::clone(&col_b), asc);
+        let eq_properties = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&schema),
+            [vec![sort_a.clone(), sort_b.clone()]],
+        );
+
+        assert!(eq_properties.ordering_satisfy(vec![sort_a.clone(), sort_b.clone()])?);
+        assert!(eq_properties.ordering_satisfy(vec![sort_a.clone()])?);
+
+        // A widening cast is strictly order-preserving: `a` is constant
+        // within each group of equal `CAST(a AS BIGINT)` values, so `b`
+        // remains sorted within those groups.
+        let widening = Arc::new(CastExpr::new(Arc::clone(&col_a), DataType::Int64, None))
+            as PhysicalExprRef;
+        let sort_widening = PhysicalSortExpr::new(widening, asc);
+        assert!(eq_properties.ordering_satisfy(vec![sort_widening, sort_b.clone()])?);
+
+        // A narrowing cast is only monotonic: it satisfies as a leading key,
+        // but it may collapse distinct `a` values, so `b` is not guaranteed
+        // to be sorted within its tie groups.
+        let narrowing = Arc::new(CastExpr::new(Arc::clone(&col_a), DataType::Int16, None))
+            as PhysicalExprRef;
+        let sort_narrowing = PhysicalSortExpr::new(narrowing, asc);
+        assert!(eq_properties.ordering_satisfy(vec![sort_narrowing.clone()])?);
+        assert!(!eq_properties.ordering_satisfy(vec![sort_narrowing, sort_b.clone()])?);
+
         Ok(())
     }
 
@@ -486,8 +524,8 @@ mod tests {
                 vec![col_e],
                 // requirement [a ASC, c ASC, a+b ASC],
                 vec![(col_a, options), (col_c, options), (&a_plus_b, options)],
-                // expected: requirement is satisfied.
-                true,
+                // expected: requirement is not satisfied because addition can wrap.
+                false,
             ),
             // ------------ TEST CASE 4 ------------
             (
@@ -633,8 +671,8 @@ mod tests {
                 vec![col_e],
                 // requirement [c ASC, d ASC, a + b ASC],
                 vec![(col_c, options), (col_d, options), (&a_plus_b, options)],
-                // expected: requirement is satisfied.
-                true,
+                // expected: requirement is not satisfied because addition can wrap.
+                false,
             ),
         ];
 
@@ -709,8 +747,7 @@ mod tests {
         ];
 
         for (reqs, expected) in test_cases {
-            let err_msg =
-                format!("error in test reqs: {reqs:?}, expected: {expected:?}",);
+            let err_msg = format!("error in test reqs: {reqs:?}, expected: {expected:?}");
             let reqs = convert_to_sort_exprs(&reqs);
             assert_eq!(eq_properties.ordering_satisfy(reqs)?, expected, "{err_msg}");
         }
@@ -949,6 +986,66 @@ mod tests {
             for elem in actual {
                 assert!(expected.contains(&elem), "{}", err_msg);
             }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_expr_partial_const() -> Result<()> {
+        let schema = create_test_schema()?;
+        let col_a = &col("a", &schema)?;
+        let col_b = &col("b", &schema)?;
+        let [
+            asc_nulls_last,
+            asc_nulls_first,
+            desc_nulls_last,
+            desc_nulls_first,
+        ] = [(false, false), (false, true), (true, false), (true, true)].map(
+            |(descending, nulls_first)| SortOptions {
+                descending,
+                nulls_first,
+            },
+        );
+
+        // The leading sort expression of each ordering, and whether `a` has a
+        // single value according to them.
+        let test_cases = vec![
+            // A direction and its exact reverse:
+            (
+                vec![(col_a, asc_nulls_last), (col_a, desc_nulls_first)],
+                true,
+            ),
+            (
+                vec![(col_a, asc_nulls_first), (col_a, desc_nulls_last)],
+                true,
+            ),
+            // Nulls first both ways, e.g. `NULL, NULL, 5, 5`:
+            (
+                vec![(col_a, asc_nulls_first), (col_a, desc_nulls_first)],
+                false,
+            ),
+            // Nulls last both ways, e.g. `5, 5, NULL, NULL`:
+            (
+                vec![(col_a, asc_nulls_last), (col_a, desc_nulls_last)],
+                false,
+            ),
+            (vec![(col_a, asc_nulls_last)], false),
+            // The reverse direction belongs to another expression:
+            (
+                vec![(col_a, asc_nulls_last), (col_b, desc_nulls_first)],
+                false,
+            ),
+        ];
+        for (leading, expected) in test_cases {
+            let oeq_class = OrderingEquivalenceClass::new(leading.into_iter().map(
+                |(expr, options)| [PhysicalSortExpr::new(Arc::clone(expr), options)],
+            ));
+            assert_eq!(
+                oeq_class.is_expr_partial_const(col_a),
+                expected,
+                "{oeq_class}"
+            );
         }
 
         Ok(())

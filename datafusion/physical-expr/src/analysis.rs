@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Interval and selectivity in [`AnalysisContext`]
 
@@ -42,7 +29,8 @@ pub struct AnalysisContext {
     pub boundaries: Vec<ExprBoundaries>,
     /// The estimated percentage of rows that this expression would select, if
     /// it were to be used as a boolean predicate on a filter. The value will be
-    /// between 0.0 (selects nothing) and 1.0 (selects everything).
+    /// between 0.0 (selects nothing) and 1.0 (selects everything), or `None`
+    /// if it cannot be estimated.
     pub selectivity: Option<f64>,
 }
 
@@ -161,6 +149,9 @@ impl ExprBoundaries {
 /// # Returns
 ///
 /// * `AnalysisContext` constructed by pruned boundaries and a selectivity value.
+///   The selectivity is `None` when the number of values of a column in `expr`
+///   is unknown, e.g. the column has no min/max statistics or its range holds
+///   more than [`u64::MAX`] values.
 pub fn analyze(
     expr: &Arc<dyn PhysicalExpr>,
     context: AnalysisContext,
@@ -198,8 +189,9 @@ pub fn analyze(
             .map(|c| Arc::new(c) as _)
             .collect::<Vec<_>>();
 
-        let mut target_indices_and_boundaries = vec![];
         let target_expr_and_indices = graph.gather_node_indices(columns.as_slice());
+        let mut target_indices_and_boundaries =
+            Vec::with_capacity(target_expr_and_indices.len());
 
         for (expr, index) in &target_expr_and_indices {
             if let Some(column) = expr.downcast_ref::<Column>()
@@ -218,9 +210,9 @@ pub fn analyze(
             }
             PropagationResult::Infeasible => {
                 // If the propagation result is infeasible, set intervals to None
-                target_boundaries
-                    .iter_mut()
-                    .for_each(|bound| bound.interval = None);
+                for bound in &mut target_boundaries {
+                    bound.interval = None;
+                }
                 Ok(AnalysisContext::new(target_boundaries).with_selectivity(0.0))
             }
             PropagationResult::CannotPropagate => {
@@ -240,17 +232,23 @@ fn shrink_boundaries(
     target_expr_and_indices: &[(Arc<dyn PhysicalExpr>, usize)],
 ) -> Result<AnalysisContext> {
     let initial_boundaries = target_boundaries.clone();
-    target_expr_and_indices.iter().for_each(|(expr, i)| {
+    let mut expr_columns = Vec::with_capacity(target_expr_and_indices.len());
+    for (expr, i) in target_expr_and_indices {
         if let Some(column) = expr.downcast_ref::<Column>()
             && let Some(bound) = target_boundaries
                 .iter_mut()
                 .find(|bound| bound.column.eq(column))
         {
             bound.interval = Some(graph.get_interval(*i));
-        };
-    });
+            expr_columns.push(column.clone());
+        }
+    }
 
-    let selectivity = calculate_selectivity(&target_boundaries, &initial_boundaries)?;
+    let Some(selectivity) =
+        calculate_selectivity(&target_boundaries, &initial_boundaries, &expr_columns)?
+    else {
+        return Ok(AnalysisContext::new(target_boundaries));
+    };
 
     assert_or_internal_err!(
         (0.0..=1.0).contains(&selectivity),
@@ -301,10 +299,15 @@ fn singleton_selectivity(
 /// This function calculates the filter predicate's selectivity by comparing
 /// the initial and pruned column boundaries. Selectivity is defined as the
 /// ratio of rows in a table that satisfy the filter's predicate.
+///
+/// Returns `None` if the number of values of one of `expr_columns`, the
+/// columns in the predicate, is unknown before or after pruning. Without it,
+/// the ratio is unknown, and assuming 1.0 would overestimate the rows.
 fn calculate_selectivity(
     target_boundaries: &[ExprBoundaries],
     initial_boundaries: &[ExprBoundaries],
-) -> Result<f64> {
+    expr_columns: &[Column],
+) -> Result<Option<f64>> {
     // Since the intervals are assumed uniform and the values
     // are not correlated, we need to multiply the selectivities
     // of multiple columns to get the overall selectivity.
@@ -328,6 +331,12 @@ fn calculate_selectivity(
                     acc *= s;
                     continue;
                 }
+                if expr_columns.contains(&target.column)
+                    && (initial_interval.cardinality().is_none()
+                        || target_interval.cardinality().is_none())
+                {
+                    return Ok(None);
+                }
                 acc *= cardinality_ratio(initial_interval, target_interval);
             }
             (None, Some(_)) => {
@@ -335,15 +344,16 @@ fn calculate_selectivity(
                     "Initial boundary cannot be None while having a Some() target boundary"
                 );
             }
-            _ => return Ok(0.0),
+            _ => return Ok(Some(0.0)),
         }
     }
 
-    Ok(acc)
+    Ok(Some(acc))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Not;
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
@@ -561,18 +571,22 @@ mod tests {
     /// cardinality ratio is 1.0 and the overall selectivity should remain 1.0.
     #[test]
     fn test_calculate_selectivity_already_singleton_initial_interval() {
+        let columns = [Column::new("a", 0)];
         let already_singleton = make_boundary(7, 7, 1);
 
         let selectivity = calculate_selectivity(
             std::slice::from_ref(&already_singleton),
             std::slice::from_ref(&already_singleton),
+            &columns,
         )
         .unwrap();
 
         let wide_initial = make_boundary(1, 100, 50);
         let same_singleton_target = make_boundary(7, 7, 50);
         let selectivity_new =
-            calculate_selectivity(&[same_singleton_target], &[wide_initial]).unwrap();
+            calculate_selectivity(&[same_singleton_target], &[wide_initial], &columns)
+                .unwrap()
+                .unwrap();
         assert!(
             (selectivity_new - 0.02).abs() < 1e-10,
             "expected selectivity 1/NDV = 0.02, got {selectivity_new}"
@@ -581,12 +595,350 @@ mod tests {
         let singleton_initial = make_boundary(7, 7, 50);
         let singleton_target = make_boundary(7, 7, 50);
         let selectivity_no_new_filter =
-            calculate_selectivity(&[singleton_target], &[singleton_initial]).unwrap();
+            calculate_selectivity(&[singleton_target], &[singleton_initial], &columns)
+                .unwrap()
+                .unwrap();
         assert!(
             (selectivity_no_new_filter - 1.0).abs() < 1e-10,
             "expected selectivity 1.0 when initial was already the same singleton, got {selectivity_no_new_filter}"
         );
 
         let _ = selectivity; // silence unused warning
+    }
+
+    /// The selectivity is unknown when the number of values of a column in
+    /// the predicate is unknown, rather than 1.0.
+    #[test]
+    fn test_calculate_selectivity_unknown_cardinality() {
+        let boundary = |lower: Option<i32>, upper: Option<i32>| ExprBoundaries {
+            column: Column::new("a", 0),
+            interval: Some(
+                Interval::try_new(ScalarValue::Int32(lower), ScalarValue::Int32(upper))
+                    .unwrap(),
+            ),
+            distinct_count: Precision::Absent,
+        };
+        let columns = [Column::new("a", 0)];
+
+        // a > 5, with no min/max for `a`:
+        let unbounded = boundary(None, None);
+        let target = boundary(Some(6), None);
+        assert_eq!(
+            calculate_selectivity(
+                std::slice::from_ref(&target),
+                std::slice::from_ref(&unbounded),
+                &columns
+            )
+            .unwrap(),
+            None
+        );
+
+        // A column that is not in the predicate keeps its selectivity of 1.0:
+        assert_eq!(
+            calculate_selectivity(
+                std::slice::from_ref(&unbounded),
+                std::slice::from_ref(&unbounded),
+                &[]
+            )
+            .unwrap(),
+            Some(1.0)
+        );
+
+        // a < 50, with `a` in [0, 99]:
+        let target = boundary(Some(0), Some(49));
+        let initial = boundary(Some(0), Some(99));
+        assert_eq!(
+            calculate_selectivity(&[target], &[initial], &columns).unwrap(),
+            Some(0.5)
+        );
+    }
+
+    /// The selectivity is unknown when a decimal range holds more than
+    /// `u64::MAX` values.
+    #[test]
+    fn test_analyze_decimal_unknown_cardinality() -> datafusion_common::Result<()> {
+        // w: Decimal128(38, 18) in [0, 99], i.e. 99 * 10^18 + 1 values
+        let schema = Arc::new(Schema::new(vec![make_field(
+            "w",
+            DataType::Decimal128(38, 18),
+        )]));
+        let scale = 10_i128.pow(18);
+        let boundaries = vec![ExprBoundaries {
+            column: Column::new("w", 0),
+            interval: Some(Interval::try_new(
+                ScalarValue::Decimal128(Some(0), 38, 18),
+                ScalarValue::Decimal128(Some(99 * scale), 38, 18),
+            )?),
+            distinct_count: Precision::Absent,
+        }];
+        // w < 10
+        let expr = col("w").lt(lit(ScalarValue::Decimal128(Some(10 * scale), 38, 18)));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema))?;
+        let physical_expr = create_physical_expr(
+            &expr,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let analysis = analyze(
+            &physical_expr,
+            AnalysisContext::new(boundaries),
+            df_schema.as_ref(),
+        )?;
+        assert_eq!(analysis.selectivity, None);
+        Ok(())
+    }
+
+    // Regression tests for #19264.
+    //
+    // `analyze` propagates constraints through `NotExpr::propagate_constraints`,
+    // which hands the underlying `Eq` node a `FALSE` parent interval. When the
+    // input domain contains `0.0` but is not equal to it, `NOT (a = 0.0)` is
+    // satisfiable, so `analyze` reports the input domain. `None` is reserved
+    // for an empty set, as documented on `ExprBoundaries::interval`.
+    fn analyze_not_eq_helper(
+        lower: f32,
+        upper: f32,
+    ) -> datafusion_common::Result<Option<Interval>> {
+        let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Float32)]));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
+
+        // Input column bounds: [lower, upper]
+        let boundaries = vec![ExprBoundaries {
+            column: Column::new("a", 0),
+            interval: Some(Interval::try_new(
+                ScalarValue::Float32(Some(lower)),
+                ScalarValue::Float32(Some(upper)),
+            )?),
+            distinct_count: Precision::Inexact(100),
+        }];
+        let ctx = AnalysisContext::new(boundaries);
+
+        // Predicate: NOT (a = 0.0)
+        let pred_not_eq = col("a").eq(lit(0.0f32)).not();
+        let phys_not = create_physical_expr(
+            &pred_not_eq,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let out = analyze(&phys_not, ctx, df_schema.as_ref())?;
+        Ok(out.boundaries[0].interval.clone())
+    }
+
+    #[test]
+    fn test_analyze_not_eq_around_zero() -> datafusion_common::Result<()> {
+        // Input domain [-1, 1] contains 0.0.
+        // `NOT (a = 0.0)` can be true everywhere except at 0.0, so the output
+        // interval should be the full input domain [-1, 1], NOT None.
+        let out = analyze_not_eq_helper(-1.0, 1.0)?;
+        let expected = Some(Interval::try_new(
+            ScalarValue::Float32(Some(-1.0)),
+            ScalarValue::Float32(Some(1.0)),
+        )?);
+        assert_eq!(
+            out, expected,
+            "NOT (a = 0.0) over [-1, 1] should yield [-1, 1], got {out:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_analyze_not_eq_clamped_at_zero() -> datafusion_common::Result<()> {
+        // Input domain [0, 0] is exactly the point where a = 0.0 is true.
+        // `NOT (a = 0.0)` is always false here, so the output interval should be None.
+        let out = analyze_not_eq_helper(0.0, 0.0)?;
+        assert_eq!(
+            out, None,
+            "NOT (a = 0.0) over [0, 0] should yield None (infeasible), got {out:?}"
+        );
+        Ok(())
+    }
+
+    fn analyze_not_eq_f64_helper(
+        lower: f64,
+        upper: f64,
+    ) -> datafusion_common::Result<Option<Interval>> {
+        let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Float64)]));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
+
+        let boundaries = vec![ExprBoundaries {
+            column: Column::new("a", 0),
+            interval: Some(Interval::try_new(
+                ScalarValue::Float64(Some(lower)),
+                ScalarValue::Float64(Some(upper)),
+            )?),
+            distinct_count: Precision::Inexact(100),
+        }];
+        let ctx = AnalysisContext::new(boundaries);
+
+        let pred_not_eq = col("a").eq(lit(0.0f64)).not();
+        let phys_not = create_physical_expr(
+            &pred_not_eq,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let out = analyze(&phys_not, ctx, df_schema.as_ref())?;
+        Ok(out.boundaries[0].interval.clone())
+    }
+
+    // Regression test for the signed-zero singleton case.
+    //
+    // `Interval::try_new` orders endpoints with `total_cmp`, so
+    // `[-0.0, +0.0]` is a valid input domain. Its endpoints differ bit-wise
+    // but denote a single value under `Eq` comparison semantics, so
+    // `a = 0.0` is certainly true over it and `NOT (a = 0.0)` is infeasible.
+    // A bit-wise singleton check in `propagate_comparison` would instead
+    // report the input domain, i.e. a false-feasibility result on the public
+    // `analyze` path.
+    #[test]
+    fn test_analyze_not_eq_signed_zero_span_infeasible() -> datafusion_common::Result<()>
+    {
+        let out = analyze_not_eq_helper(-0.0, 0.0)?;
+        assert_eq!(
+            out, None,
+            "NOT (a = 0.0) over Float32 [-0.0, +0.0] should yield None (infeasible), got {out:?}"
+        );
+
+        let out = analyze_not_eq_f64_helper(-0.0, 0.0)?;
+        assert_eq!(
+            out, None,
+            "NOT (a = 0.0) over Float64 [-0.0, +0.0] should yield None (infeasible), got {out:?}"
+        );
+        Ok(())
+    }
+
+    fn analyze_between_helper(
+        lower: f32,
+        upper: f32,
+        negated: bool,
+        explicit_not: bool,
+    ) -> datafusion_common::Result<Option<Interval>> {
+        let schema = Arc::new(Schema::new(vec![make_field("a", DataType::Float32)]));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
+        let boundaries = vec![ExprBoundaries {
+            column: Column::new("a", 0),
+            interval: Some(Interval::try_new(
+                ScalarValue::Float32(Some(lower)),
+                ScalarValue::Float32(Some(upper)),
+            )?),
+            distinct_count: Precision::Inexact(100),
+        }];
+
+        let between = col("a").between(lit(-1.0f32), lit(1.0f32));
+        let predicate = if explicit_not {
+            between.not()
+        } else if negated {
+            col("a").not_between(lit(-1.0f32), lit(1.0f32))
+        } else {
+            between
+        };
+        let physical_expr = create_physical_expr(
+            &predicate,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let output = analyze(
+            &physical_expr,
+            AnalysisContext::new(boundaries),
+            df_schema.as_ref(),
+        )?;
+        Ok(output.boundaries[0].interval.clone())
+    }
+
+    #[test]
+    fn test_analyze_not_between_clamped() -> datafusion_common::Result<()> {
+        let expected = Some(Interval::try_new(
+            ScalarValue::Float32(Some(-1.0)),
+            ScalarValue::Float32(Some(1.0)),
+        )?);
+        assert_eq!(analyze_between_helper(-1.0, 1.0, false, false)?, expected);
+        assert_eq!(analyze_between_helper(-1.0, 1.0, true, false)?, None);
+        assert_eq!(analyze_between_helper(-1.0, 1.0, false, true)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_analyze_not_between_containing() -> datafusion_common::Result<()> {
+        let between = Some(Interval::try_new(
+            ScalarValue::Float32(Some(-1.0)),
+            ScalarValue::Float32(Some(1.0)),
+        )?);
+        let containing = Some(Interval::try_new(
+            ScalarValue::Float32(Some(-2.0)),
+            ScalarValue::Float32(Some(2.0)),
+        )?);
+        assert_eq!(analyze_between_helper(-2.0, 2.0, false, false)?, between);
+        assert_eq!(analyze_between_helper(-2.0, 2.0, true, false)?, containing);
+        assert_eq!(analyze_between_helper(-2.0, 2.0, false, true)?, containing);
+        Ok(())
+    }
+
+    // Regression test for the nested signed-zero case.
+    //
+    // `NOT(a = +0.0) AND b` with `a ∈ [-0.0,-0.0]`, `b ∈ [false,true]`:
+    // `a = +0.0` is TRUE (IEEE 754), so the whole predicate is infeasible.
+    //
+    // This defeats the case-(1) short-circuit in `update_ranges`: bottom-up
+    // evaluates `a = +0.0` over `[-0.0,-0.0]` as FALSE (structural equality),
+    // so `NOT` becomes TRUE, the root becomes `TRUE_OR_FALSE`, and top-down
+    // propagation forces `a = +0.0` to FALSE, reaching
+    // `propagate_comparison(Eq, FALSE, [-0.0,-0.0], [+0.0,+0.0])`. The guard
+    // must normalize signed zero to report infeasible here.
+    #[test]
+    fn test_analyze_not_eq_nested_signed_zero_infeasible() -> datafusion_common::Result<()>
+    {
+        let schema = Arc::new(Schema::new(vec![
+            make_field("a", DataType::Float32),
+            make_field("b", DataType::Boolean),
+        ]));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
+
+        let boundaries = vec![
+            ExprBoundaries {
+                column: Column::new("a", 0),
+                interval: Some(Interval::try_new(
+                    ScalarValue::Float32(Some(-0.0f32)),
+                    ScalarValue::Float32(Some(-0.0f32)),
+                )?),
+                distinct_count: Precision::Inexact(1),
+            },
+            ExprBoundaries {
+                column: Column::new("b", 1),
+                interval: Some(Interval::try_new(
+                    ScalarValue::Boolean(Some(false)),
+                    ScalarValue::Boolean(Some(true)),
+                )?),
+                distinct_count: Precision::Inexact(2),
+            },
+        ];
+        let ctx = AnalysisContext::new(boundaries);
+
+        // NOT(a = +0.0) AND b
+        let pred = col("a").eq(lit(0.0f32)).not().and(col("b"));
+        let phys = create_physical_expr(
+            &pred,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let out = analyze(&phys, ctx, df_schema.as_ref())?;
+
+        // Infeasible: a = +0.0 is TRUE (signed zero), NOT is FALSE,
+        // FALSE AND b = FALSE. All column intervals must be None.
+        assert!(
+            out.boundaries.iter().all(|b| b.interval.is_none()),
+            "NOT(a = +0.0) AND b over a=[-0.0,-0.0] should be infeasible (all boundaries None), got {:?}",
+            out.boundaries
+        );
+        assert_eq!(
+            out.selectivity,
+            Some(0.0),
+            "selectivity should be 0.0 for an infeasible predicate, got {:?}",
+            out.selectivity
+        );
+        Ok(())
     }
 }

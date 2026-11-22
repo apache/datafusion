@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Testing
@@ -22,6 +9,8 @@
 Tests are critical to ensure that DataFusion is working properly and
 is not accidentally broken during refactorings. All new features
 should have test coverage and the entire test suite is run as part of CI.
+
+For CI workflows, documentation checks, and benchmarks, see [Testing Infrastructure](testing_infrastructure.md).
 
 ## Testing Quick Start
 
@@ -74,6 +63,50 @@ cargo nextest run
 [the book]: https://doc.rust-lang.org/book/
 [cargo-nextest]: https://nexte.st/
 
+### Code coverage
+
+The [Codecov] bot posts a coverage report on GitHub pull requests with:
+
+- `all-tests`: coverage from the workspace test suite.
+- `sqllogictests`: coverage from SQLLogicTests alone.
+
+We [prefer end-to-end tests](#choosing-what-kind-of-test-to-write) because they are
+easier to maintain and verify final results through the full query pipeline,
+including optimizer passes. The SLT report helps ensure good coverage from these
+tests alone.
+
+Coverage helps find missing tests; high coverage does not guarantee good tests:
+
+- **Do:** Enumerate edge cases to build comprehensive tests, then check the
+  coverage report for gaps.
+- **Don't:** Use Codecov to choose a minimal set of tests that covers a new feature.
+
+[codecov]: https://app.codecov.io/gh/apache/datafusion
+
+## Choosing What Kind of Test to Write
+
+When adding tests, prefer tests that exercise **user-visible behavior** over
+tests of internal implementation details. Doing so means your tests are more
+likely to keep working (and keep catching regressions) while the code is
+refactored. In rough order of preference:
+
+1. Use [sqllogictest](#sqllogictests-tests) (`.slt`) tests for any behavior that can
+   be expressed in SQL.
+
+2. End-to-end tests that use public APIs such as the DataFrame API, for behavior
+   that cannot be expressed in SQL. For example, DataFrame tests live in
+   [`datafusion/core/tests/dataframe`] and run as part of the `core_integration`
+   test binary:
+
+   ```shell
+   cargo test -p datafusion --test core_integration -- dataframe
+   ```
+
+3. Rust unit tests for logic that cannot practically be reached through
+   SQL or DataFrame public APIs.
+
+[`datafusion/core/tests/dataframe`]: https://github.com/apache/datafusion/tree/main/datafusion/core/tests/dataframe
+
 ## Unit tests
 
 Tests for code in an individual module are defined in the same source file with a `test` module, following Rust convention.
@@ -111,7 +144,7 @@ cargo test --profile=ci --test sqllogictests -- --complete
 
 Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.
 
-DataFusion has integrated [sqlite's test suite](https://sqlite.org/sqllogictest/doc/trunk/about.wiki) as a supplemental test suite that is run whenever a PR is merged into DataFusion. To run it manually please refer to the [README](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite) file for instructions.
+DataFusion runs [sqlite's test suite](https://sqlite.org/sqllogictest/doc/trunk/about.wiki) in the merge queue before merging PRs into `main`. For local instructions, see [Running Tests: sqlite](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite).
 
 ## Snapshot testing (`cargo insta`)
 
@@ -127,15 +160,15 @@ cargo insta review
 
 ## Extended Tests
 
-In addition to the standard CI test suite that is run on all PRs prior to merge,
-DataFusion has "extended" tests (defined in [extended.yml]) that are run on each
-commit to `main`. These tests rarely fail but take significantly longer to run
-than the standard test suite and add important test coverage such as ensuring
-correctness when there are hash collisions and running the relevant portions of
-the entire [sqlite test suite]. You can run the extended tests
-locally by following the [instructions in the documentation].
+DataFusion has extended tests (defined in [extended.yml]) that take significantly
+longer to run than the standard suite. They provide additional correctness
+coverage and must pass in the merge queue before a PR merges into `main`.
 
-[sqlite test suite]: https://www.sqlite.org/sqllogictest/dir?ci=tip
+To conserve CI resources, these tests do not run on ordinary PR updates. They
+also run on pushes to release branches (`branch-*`). You can run them manually.
+
+For local SQLite test instructions, see the [instructions in the documentation].
+
 [instructions in the documentation]: https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-sqlite
 [extended.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml
 
@@ -149,122 +182,31 @@ You can run these tests individually using `cargo` as normal command such as
 cargo test -p datafusion --test parquet_integration
 ```
 
-## SQL "Fuzz" testing
+## Fuzz testing
 
-DataFusion uses the [SQLancer] for "fuzz" testing: it generates random SQL
-queries and execute them against DataFusion to find bugs.
+Fuzz testing generates random inputs and configurations, then checks that a property holds for every generated case. For example, an optimized operator should produce the same results as a reference implementation.
 
-The code is in the [datafusion-sqllancer] repository, and we welcome further
-contributions. Kudos to [@2010YOUY01] for the initial implementation.
+### Fuzzing unit tests
 
-[sqlancer]: https://github.com/sqlancer/sqlancer
-[datafusion-sqllancer]: https://github.com/datafusion-contrib/datafusion-sqllancer
-[@2010youy01]: https://github.com/2010YOUY01
+For fuzzing unit tests, such as tests for a single operator or an internal utility:
 
-## Documentation Examples
+- If the test is small (easy to set up and takes a few seconds), keep it as a unit test.
+- If the test is large (requires a fuzzing driver and takes more than 10 seconds), it should implement the [`FuzzTest` trait][fuzz framework] and run through the [central fuzz-test entry point]. See the [spill-pool fuzzer] for a reference implementation.
 
-We use Rust [doctest] to verify examples from the documentation are correct and
-up-to-date. These tests are run as part of our CI and you can run them them
-locally with the following command:
+[fuzz framework]: https://github.com/apache/datafusion/blob/main/test-utils/src/fuzz.rs
+[central fuzz-test entry point]: https://github.com/apache/datafusion/blob/main/datafusion/fuzz/tests/fuzz.rs
+[spill-pool fuzzer]: https://github.com/apache/datafusion/blob/main/datafusion/fuzz/tests/suites/spill_pool.rs
 
-```shell
-cargo test --doc
+### SQL fuzz testing
+
+For SQL fuzzing of more complex queries, use [datafusion-fuzzer], which is currently maintained outside the core DataFusion repository. See [its documentation][datafusion-fuzzer-docs] for details.
+
+[datafusion-fuzzer]: https://github.com/datafusion-contrib/datafusion-fuzzer
+[datafusion-fuzzer-docs]: https://github.com/datafusion-contrib/datafusion-fuzzer/blob/main/README.md
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+testing_infrastructure
 ```
-
-### API Documentation Examples
-
-As with other Rust projects, examples in doc comments in `.rs` files are
-automatically checked to ensure they work and evolve along with the code.
-
-### User Guide Documentation
-
-Rust example code from the user guide (anything marked with \`\`\`rust) is also
-tested in the same way using the [doc_comment] crate. See the end of
-[core/src/lib.rs] for more details.
-
-[doctest]: https://doc.rust-lang.org/rust-by-example/testing/doc_testing.html
-[doc_comment]: https://docs.rs/doc-comment/latest/doc_comment
-[core/src/lib.rs]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/lib.rs#L583
-
-## Documentation Link Checks
-
-Run the internal markdown link check locally:
-
-```shell
-source ci/scripts/utils/tool_versions.sh
-cargo install lychee --locked --version "${LYCHEE_VERSION}"
-bash ci/scripts/markdown_link_check.sh
-```
-
-Notes:
-
-- The script is run with `bash` and is compatible with the default Bash on macOS (no `mapfile` dependency).
-- The CI configuration currently checks internal markdown links only. External `http(s)` and `mailto` links are excluded to avoid flaky failures.
-
-When a link is broken, lychee prints the file and URL/path that failed. For example:
-
-```text
-[docs/source/user-guide/cli/overview.md]:
-  [ERROR] file:///.../docs/source/user-guide/cli/missing-page.md | Cannot find file: File not found. Check if file exists and path is correct
-```
-
-Rust doc comments are validated by rustdoc in CI and can be checked locally with:
-
-```shell
-bash ci/scripts/rust_docs.sh
-```
-
-## Benchmarks
-
-### Criterion Benchmarks
-
-[Criterion](https://docs.rs/criterion/latest/criterion/index.html) is a statistics-driven micro-benchmarking framework used by DataFusion for evaluating the performance of specific code-paths. In particular, the criterion benchmarks help to both guide optimisation efforts, and prevent performance regressions within DataFusion.
-
-Criterion integrates with Cargo's built-in [benchmark support](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) and a given benchmark can be run with
-
-```
-cargo bench --bench BENCHMARK_NAME
-```
-
-A full list of benchmarks can be found [here](https://github.com/apache/datafusion/tree/main/datafusion/core/benches).
-
-_[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used for more advanced reporting._
-
-### Parquet SQL Benchmarks
-
-The parquet SQL benchmarks can be run with
-
-```
- cargo bench --bench parquet_query_sql
-```
-
-These randomly generate a parquet file, and then benchmark queries sourced from [parquet_query_sql.sql](../../../datafusion/core/benches/parquet_query_sql.sql) against it. This can therefore be a quick way to add coverage of particular query and/or data paths.
-
-If the environment variable `PARQUET_FILE` is set, the benchmark will run queries against this file instead of a randomly generated one. This can be useful for performing multiple runs, potentially with different code, against the same source data, or for testing against a custom dataset.
-
-The benchmark will automatically remove any generated parquet file on exit, however, if interrupted (e.g. by CTRL+C) it will not. This can be useful for analysing the particular file after the fact, or preserving it to use with `PARQUET_FILE` in subsequent runs.
-
-### Comparing Baselines
-
-By default, Criterion.rs will compare the measurements against the previous run (if any). Sometimes it's useful to keep a set of measurements around for several runs. For example, you might want to make multiple changes to the code while comparing against the master branch. For this situation, Criterion.rs supports custom baselines.
-
-```
- git checkout main
- cargo bench --bench sql_planner -- --save-baseline main
- git checkout YOUR_BRANCH
- cargo bench --bench sql_planner --  --baseline main
-```
-
-Note: For MacOS it may be required to run `cargo bench` with `sudo`
-
-```
-sudo cargo bench ...
-```
-
-More information on [Baselines](https://bheisler.github.io/criterion.rs/book/user_guide/command_line_options.html#baselines)
-
-### Upstream Benchmark Suites
-
-Instructions and tooling for running upstream benchmark suites against DataFusion can be found in [benchmarks](https://github.com/apache/datafusion/tree/main/benchmarks).
-
-These are valuable for comparative evaluation against alternative Arrow implementations and query engines.

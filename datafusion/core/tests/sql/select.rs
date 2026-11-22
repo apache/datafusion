@@ -1,24 +1,15 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashMap;
 
 use super::*;
-use datafusion_common::{ParamValues, ScalarValue, metadata::ScalarAndMetadata};
+use arrow::array::AsArray;
+use arrow::datatypes::Metadata;
+use datafusion_common::{
+    DataFusionError, ParamValues, ScalarValue, metadata::ScalarAndMetadata,
+};
 use insta::assert_snapshot;
 
 #[tokio::test]
@@ -320,6 +311,33 @@ async fn test_named_parameter_not_bound() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_optimize_union_of_aliased_placeholders_before_binding() -> Result<()> {
+    let ctx = SessionContext::new();
+    let state = ctx.state();
+    let plan = state
+        .create_logical_plan("SELECT $1 AS a UNION ALL SELECT $2 AS a")
+        .await?;
+
+    let optimized = state.optimize(&plan)?;
+    let bound = optimized.replace_params_with_values(&ParamValues::List(vec![
+        ScalarValue::from("x").into(),
+        ScalarValue::from("y").into(),
+    ]))?;
+    let batches = ctx.execute_logical_plan(bound).await?.collect().await?;
+
+    assert_snapshot!(batches_to_sort_string(&batches), @r"
+    +---+
+    | a |
+    +---+
+    | x |
+    | y |
+    +---+
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_query_parameters_with_metadata() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -356,6 +374,79 @@ async fn test_query_parameters_with_metadata() -> Result<()> {
     | 1  | two |
     +----+-----+
     ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_limit_offset_parameters_named() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx
+        .sql(
+            "SELECT value FROM (VALUES (10), (20), (30)) AS t(value) \
+             ORDER BY value LIMIT $rows OFFSET $skip",
+        )
+        .await?;
+    assert_eq!(
+        df.logical_plan().get_parameter_types()?,
+        HashMap::from([
+            ("$rows".to_string(), Some(DataType::Int64)),
+            ("$skip".to_string(), Some(DataType::Int64)),
+        ])
+    );
+    let results = df
+        .with_param_values(vec![
+            ("rows", ScalarValue::Int64(Some(1))),
+            ("skip", ScalarValue::Int64(Some(1))),
+        ])?
+        .collect()
+        .await?;
+    datafusion::assert_batches_eq!(
+        [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "| 20    |",
+            "+-------+"
+        ],
+        &results
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_limit_offset_parameters_keep_field_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+    let metadata = HashMap::from([("some_key".to_string(), "some_value".to_string())]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("value", DataType::Int32, false).with_metadata(metadata.clone()),
+    ]));
+    ctx.register_batch(
+        "t",
+        RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 1]))])?,
+    )?;
+
+    for clause in ["LIMIT", "OFFSET"] {
+        let sql = format!("SELECT $1 AS value FROM t WHERE value = $1 {clause} $1");
+        let df = ctx.sql(&sql).await?;
+        let results = df
+            .with_param_values(ParamValues::List(vec![ScalarAndMetadata::new(
+                ScalarValue::Int32(Some(1)),
+                Some(metadata.clone().into()),
+            )]))?
+            .collect()
+            .await?;
+        datafusion::assert_batches_eq!(
+            [
+                "+-------+",
+                "| value |",
+                "+-------+",
+                "| 1     |",
+                "+-------+"
+            ],
+            &results
+        );
+    }
 
     Ok(())
 }
@@ -491,5 +582,502 @@ async fn test_recursive_cte_batch_schema_stable_with_order_by_limit() -> Result<
             "batch {i} schema field names leaked from recursive branch"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_coalesce_struct_field_metadata() -> Result<()> {
+    use arrow::array::{Int64Array, NullArray, StructArray};
+    use arrow::buffer::NullBuffer;
+    use datafusion::logical_expr::{Volatility, create_udf};
+
+    let ctx = SessionContext::new();
+    let first_ordinary = Metadata::new()
+        .with("origin", "first")
+        .with("only_first", "1");
+    let first_extension = first_ordinary
+        .clone()
+        .with("ARROW:extension:name", "example.id")
+        .with("ARROW:extension:metadata", "{}");
+    let second_ordinary = Metadata::new()
+        .with("origin", "second")
+        .with("only_second", "2");
+
+    let i32_ext: ArrayRef = Arc::new(StructArray::new(
+        vec![
+            Field::new("v", DataType::Int32, false)
+                .with_metadata(first_extension.clone()),
+        ]
+        .into(),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4]))],
+        Some(NullBuffer::from(vec![true, false, false, false])),
+    ));
+    let i32_plain: ArrayRef = Arc::new(StructArray::new(
+        vec![
+            Field::new("v", DataType::Int32, true).with_metadata(second_ordinary.clone()),
+        ]
+        .into(),
+        vec![Arc::new(Int32Array::from(vec![
+            Some(10),
+            None,
+            Some(30),
+            Some(40),
+        ]))],
+        None,
+    ));
+    let i64_opt: ArrayRef = Arc::new(StructArray::new(
+        vec![
+            Field::new("v", DataType::Int64, true).with_metadata(second_ordinary.clone()),
+        ]
+        .into(),
+        vec![Arc::new(Int64Array::from(vec![
+            Some(100),
+            None,
+            Some(300),
+            Some(400),
+        ]))],
+        Some(NullBuffer::from(vec![false, true, true, false])),
+    ));
+    let null_child: ArrayRef = Arc::new(StructArray::new(
+        vec![
+            Field::new("v", DataType::Null, true).with_metadata(
+                Metadata::new()
+                    .with("ARROW:extension:name", "example.null")
+                    .with("origin", "ignored")
+                    .with("null_only", "ignored"),
+            ),
+        ]
+        .into(),
+        vec![Arc::new(NullArray::new(4))],
+        Some(NullBuffer::from(vec![false, false, true, false])),
+    ));
+
+    for (udf_name, data_type) in [
+        ("volatile_i32_ext", i32_ext.data_type().clone()),
+        ("volatile_i64_opt", i64_opt.data_type().clone()),
+        ("volatile_null_child", null_child.data_type().clone()),
+    ] {
+        ctx.register_udf(create_udf(
+            udf_name,
+            vec![data_type.clone()],
+            data_type,
+            Volatility::Volatile,
+            Arc::new(|args| Ok(args[0].clone())),
+        ));
+    }
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("i32_ext", i32_ext.data_type().clone(), true),
+        Field::new("i32_plain", i32_plain.data_type().clone(), false),
+        Field::new("i64_opt", i64_opt.data_type().clone(), true),
+        Field::new("null_child", null_child.data_type().clone(), true),
+    ]));
+    ctx.register_batch(
+        "t",
+        RecordBatch::try_new(schema, vec![i32_ext, i32_plain, i64_opt, null_child])?,
+    )?;
+
+    let cases = [
+        (
+            [
+                "SELECT coalesce(i32_ext, i32_plain) FROM t",
+                "SELECT coalesce(volatile_i32_ext(i32_ext), i32_plain) FROM t",
+            ],
+            false,
+            StructArray::new(
+                vec![
+                    Field::new("v", DataType::Int32, true)
+                        .with_metadata(first_extension.clone().with("only_second", "2")),
+                ]
+                .into(),
+                vec![Arc::new(Int32Array::from(vec![
+                    Some(1),
+                    None,
+                    Some(30),
+                    Some(40),
+                ]))],
+                None,
+            ),
+        ),
+        (
+            [
+                "SELECT coalesce(NULL, i32_ext, i64_opt) FROM t",
+                "SELECT coalesce(NULL, volatile_i32_ext(i32_ext), i64_opt) FROM t",
+            ],
+            true,
+            StructArray::new(
+                vec![
+                    Field::new("v", DataType::Int64, true)
+                        .with_metadata(first_ordinary.with("only_second", "2")),
+                ]
+                .into(),
+                vec![Arc::new(Int64Array::from(vec![
+                    Some(1),
+                    None,
+                    Some(300),
+                    None,
+                ]))],
+                Some(NullBuffer::from(vec![true, true, true, false])),
+            ),
+        ),
+        (
+            [
+                "SELECT coalesce(i64_opt, i32_ext) FROM t",
+                "SELECT coalesce(volatile_i64_opt(i64_opt), i32_ext) FROM t",
+            ],
+            true,
+            StructArray::new(
+                vec![
+                    Field::new("v", DataType::Int64, true)
+                        .with_metadata(second_ordinary.with("only_first", "1")),
+                ]
+                .into(),
+                vec![Arc::new(Int64Array::from(vec![
+                    Some(1),
+                    None,
+                    Some(300),
+                    None,
+                ]))],
+                Some(NullBuffer::from(vec![true, true, true, false])),
+            ),
+        ),
+        (
+            [
+                "SELECT coalesce(null_child, i32_ext) FROM t",
+                "SELECT coalesce(volatile_null_child(null_child), i32_ext) FROM t",
+            ],
+            true,
+            StructArray::new(
+                vec![
+                    Field::new("v", DataType::Int32, true).with_metadata(first_extension),
+                ]
+                .into(),
+                vec![Arc::new(Int32Array::from(vec![Some(1), None, None, None]))],
+                Some(NullBuffer::from(vec![true, false, true, false])),
+            ),
+        ),
+    ];
+
+    for (queries, expected_nullable, expected) in cases {
+        for sql in queries {
+            let df = ctx.sql(sql).await?;
+            assert_eq!(
+                df.schema().field(0).data_type(),
+                expected.data_type(),
+                "{sql}"
+            );
+            assert_eq!(
+                df.schema().field(0).is_nullable(),
+                expected_nullable,
+                "{sql}"
+            );
+            let batches = df.collect().await?;
+            let actual = batches[0].column(0).as_struct();
+            assert_eq!(actual.data_type(), expected.data_type(), "{sql}");
+            assert_eq!(actual.nulls(), expected.nulls(), "{sql}");
+            assert_eq!(actual, &expected, "{sql}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_reordered_struct_coercion_field_metadata() -> Result<()> {
+    use arrow::array::{Int64Array, StringArray, StructArray};
+    use arrow::buffer::NullBuffer;
+    use datafusion::logical_expr::{Volatility, create_udf};
+
+    let ctx = SessionContext::new();
+    let a_first = Metadata::new()
+        .with("ARROW:extension:name", "example.id")
+        .with("ARROW:extension:metadata", "{}")
+        .with("origin", "first")
+        .with("only_first", "1");
+    let a_second = Metadata::new()
+        .with("origin", "second")
+        .with("only_second", "2");
+    let b_left = Metadata::new()
+        .with("ARROW:extension:name", "example.label")
+        .with("ARROW:extension:metadata", "{}")
+        .with("label", "left");
+    let b_right = Metadata::new()
+        .with("ARROW:extension:name", "example.label")
+        .with("ARROW:extension:metadata", "{}")
+        .with("label", "right");
+
+    let inner_ab = StructArray::new(
+        vec![
+            Field::new("a", DataType::Int32, false).with_metadata(a_first),
+            Field::new("b", DataType::Utf8, true).with_metadata(b_left.clone()),
+        ]
+        .into(),
+        vec![
+            Arc::new(Int32Array::from(vec![10, 20])),
+            Arc::new(StringArray::from(vec![None, Some("unused")])),
+        ],
+        None,
+    );
+    let s_ab: ArrayRef = Arc::new(StructArray::new(
+        inner_ab.fields().clone(),
+        inner_ab.columns().to_vec(),
+        Some(NullBuffer::from(vec![true, false])),
+    ));
+    let s_ba: ArrayRef = Arc::new(StructArray::new(
+        vec![
+            Field::new("b", DataType::Utf8, false).with_metadata(b_right),
+            Field::new("a", DataType::Int64, true).with_metadata(a_second),
+        ]
+        .into(),
+        vec![
+            Arc::new(StringArray::from(vec!["x", "y"])),
+            Arc::new(Int64Array::from(vec![Some(30), None])),
+        ],
+        None,
+    ));
+    let nested_ab: ArrayRef = Arc::new(StructArray::new(
+        vec![Field::new("nested", inner_ab.data_type().clone(), false)].into(),
+        vec![Arc::new(inner_ab)],
+        Some(NullBuffer::from(vec![true, false])),
+    ));
+    let nested_ba: ArrayRef = Arc::new(StructArray::new(
+        vec![Field::new("nested", s_ba.data_type().clone(), true)].into(),
+        vec![Arc::clone(&s_ba)],
+        None,
+    ));
+
+    for (udf_name, data_type) in [
+        ("volatile_s_ab", s_ab.data_type().clone()),
+        ("volatile_nested_ab", nested_ab.data_type().clone()),
+    ] {
+        ctx.register_udf(create_udf(
+            udf_name,
+            vec![data_type.clone()],
+            data_type,
+            Volatility::Volatile,
+            Arc::new(|args| Ok(args[0].clone())),
+        ));
+    }
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("s_ab", s_ab.data_type().clone(), true),
+        Field::new("s_ba", s_ba.data_type().clone(), false),
+        Field::new("nested_ab", nested_ab.data_type().clone(), true),
+        Field::new("nested_ba", nested_ba.data_type().clone(), false),
+    ]));
+    ctx.register_batch(
+        "t",
+        RecordBatch::try_new(schema, vec![s_ab, s_ba, nested_ab, nested_ba])?,
+    )?;
+
+    let expected_a = Field::new("a", DataType::Int64, true).with_metadata(
+        Metadata::new()
+            .with("origin", "first")
+            .with("only_first", "1")
+            .with("only_second", "2"),
+    );
+    let expected_b = Field::new("b", DataType::Utf8, true).with_metadata(b_left);
+
+    let expected_top = StructArray::new(
+        vec![expected_b.clone(), expected_a.clone()].into(),
+        vec![
+            Arc::new(StringArray::from(vec![None, Some("y")])),
+            Arc::new(Int64Array::from(vec![Some(10), None])),
+        ],
+        None,
+    );
+    for sql in [
+        "SELECT coalesce(s_ab, s_ba) FROM t",
+        "SELECT coalesce(volatile_s_ab(s_ab), s_ba) FROM t",
+    ] {
+        let df = ctx.sql(sql).await?;
+        assert_eq!(
+            df.schema().field(0).data_type(),
+            expected_top.data_type(),
+            "{sql}"
+        );
+        assert!(!df.schema().field(0).is_nullable(), "{sql}");
+        let batches = df.collect().await?;
+        let actual = batches[0].column(0).as_struct();
+        assert_eq!(actual.data_type(), expected_top.data_type(), "{sql}");
+        assert_eq!(actual.null_count(), 0, "{sql}");
+        assert_eq!(actual, &expected_top, "{sql}");
+    }
+
+    // An enclosing ordered Struct keeps the first inner field order.
+    let expected_inner = StructArray::new(
+        vec![expected_a.clone(), expected_b.clone()].into(),
+        vec![
+            Arc::new(Int64Array::from(vec![Some(10), None])),
+            Arc::new(StringArray::from(vec![None, Some("y")])),
+        ],
+        None,
+    );
+    let expected_nested = StructArray::new(
+        vec![Field::new(
+            "nested",
+            expected_inner.data_type().clone(),
+            true,
+        )]
+        .into(),
+        vec![Arc::new(expected_inner)],
+        None,
+    );
+    for sql in [
+        "SELECT coalesce(nested_ab, nested_ba) FROM t",
+        "SELECT coalesce(volatile_nested_ab(nested_ab), nested_ba) FROM t",
+    ] {
+        let df = ctx.sql(sql).await?;
+        assert_eq!(
+            df.schema().field(0).data_type(),
+            expected_nested.data_type(),
+            "{sql}"
+        );
+        assert!(!df.schema().field(0).is_nullable(), "{sql}");
+        let batches = df.collect().await?;
+        let actual = batches[0].column(0).as_struct();
+        assert_eq!(actual.data_type(), expected_nested.data_type(), "{sql}");
+        assert_eq!(actual.null_count(), 0, "{sql}");
+        assert_eq!(actual, &expected_nested, "{sql}");
+    }
+
+    let expected_array_values = StructArray::new(
+        vec![expected_b, expected_a].into(),
+        vec![
+            Arc::new(StringArray::from(vec![None, Some("x"), None, Some("y")])),
+            Arc::new(Int64Array::from(vec![Some(10), Some(30), None, None])),
+        ],
+        Some(NullBuffer::from(vec![true, true, false, true])),
+    );
+    let expected_list_type =
+        DataType::new_list(expected_array_values.data_type().clone(), true);
+    let df = ctx.sql("SELECT make_array(s_ab, s_ba) FROM t").await?;
+    assert_eq!(df.schema().field(0).data_type(), &expected_list_type);
+    let batches = df.collect().await?;
+    let list = batches[0].column(0).as_list::<i32>();
+    assert_eq!(list.data_type(), &expected_list_type);
+    assert_eq!(list.value_offsets(), &[0, 2, 4]);
+    assert_eq!(
+        list.values().as_struct().data_type(),
+        expected_array_values.data_type()
+    );
+    assert_eq!(list.values().as_ref(), &expected_array_values);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_struct_coercion_field_metadata_conflict() -> Result<()> {
+    let ctx = SessionContext::new();
+    let struct_field = |col_name: &str, ext_name: &str| {
+        let child = Field::new("v", DataType::Utf8, true)
+            .with_metadata(Metadata::new().with("ARROW:extension:name", ext_name));
+        Field::new(col_name, DataType::Struct(vec![child].into()), true)
+    };
+    let s1 = struct_field("s1", "example.first");
+    let s2 = struct_field("s2", "example.second");
+    let n1 = Field::new(
+        "n1",
+        DataType::Struct(vec![Field::new("nested", s1.data_type().clone(), true)].into()),
+        true,
+    );
+    let n2 = Field::new(
+        "n2",
+        DataType::Struct(vec![Field::new("nested", s2.data_type().clone(), true)].into()),
+        true,
+    );
+    ctx.register_batch(
+        "t",
+        RecordBatch::new_empty(Arc::new(Schema::new(vec![s1, s2, n1, n2]))),
+    )?;
+
+    for sql in [
+        "SELECT coalesce(s1, s2) FROM t",
+        "SELECT coalesce(NULL, s1, s2) FROM t",
+        "SELECT coalesce(n1, n2) FROM t",
+        "SELECT make_array(s1, s2) FROM t",
+        "SELECT make_array(n1, n2) FROM t",
+    ] {
+        let err = ctx.sql(sql).await.unwrap_err();
+        assert!(matches!(err, DataFusionError::Plan(_)), "{sql}: {err}");
+        for expected in [
+            "Cannot merge field metadata",
+            "example.first",
+            "example.second",
+        ] {
+            assert!(err.to_string().contains(expected), "{sql}: {err}");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_conditional_functions_field_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+    let a_metadata = HashMap::from([
+        ("shared".to_string(), "a".to_string()),
+        ("only_a".to_string(), "a".to_string()),
+    ]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("flag", DataType::Utf8, true).with_metadata(HashMap::from([(
+            "only_flag".to_string(),
+            "flag".to_string(),
+        )])),
+        Field::new("a", DataType::Utf8, true).with_metadata(a_metadata.clone()),
+        Field::new("b", DataType::Utf8, true).with_metadata(HashMap::from([
+            ("shared".to_string(), "b".to_string()),
+            ("only_b".to_string(), "b".to_string()),
+        ])),
+    ]));
+    ctx.register_batch("t", RecordBatch::new_empty(schema))?;
+
+    let merged = HashMap::from([
+        ("shared".to_string(), "a".to_string()),
+        ("only_a".to_string(), "a".to_string()),
+        ("only_b".to_string(), "b".to_string()),
+    ]);
+    // `df.schema()` is the schema of the plan as first built, before these
+    // functions are rewritten to CASE.
+    for (sql, expected) in [
+        ("SELECT coalesce(a, b) FROM t", &merged),
+        ("SELECT nvl(a, b) FROM t", &merged),
+        ("SELECT ifnull(a, b) FROM t", &merged),
+        ("SELECT nvl2(flag, a, b) FROM t", &merged),
+        ("SELECT coalesce(NULL, a) FROM t", &a_metadata),
+    ] {
+        let df = ctx.sql(sql).await?;
+        assert_eq!(df.schema().field(0).metadata(), expected, "{sql}");
+    }
+    Ok(())
+}
+
+/// An optimized plan with a materialized CTE whose scans read columns that
+/// are not a prefix of the body can be analyzed and optimized again.
+#[tokio::test]
+async fn materialized_cte_optimized_plan_plans_again() -> Result<()> {
+    let config =
+        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "PostgreSQL");
+    let ctx = SessionContext::new_with_config(config);
+    ctx.sql("CREATE TABLE t(a INT, b INT, c INT, d VARCHAR) AS VALUES (1, 2, 3, 'x'), (4, 5, 3, 'y')")
+        .await?
+        .collect()
+        .await?;
+    let sql = "WITH w AS MATERIALIZED (SELECT a, b, c, d FROM t) \
+               SELECT x.c, y.b FROM w x JOIN w y ON x.c = y.c ORDER BY y.b";
+    let expected = ctx.sql(sql).await?.collect().await?;
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    let again = ctx.execute_logical_plan(plan).await?.collect().await?;
+    assert_eq!(
+        arrow::util::pretty::pretty_format_batches(&again)?.to_string(),
+        arrow::util::pretty::pretty_format_batches(&expected)?.to_string()
+    );
+    assert_snapshot!(arrow::util::pretty::pretty_format_batches(&again)?, @r"
+    +---+---+
+    | c | b |
+    +---+---+
+    | 3 | 2 |
+    | 3 | 2 |
+    | 3 | 5 |
+    | 3 | 5 |
+    +---+---+
+    ");
     Ok(())
 }

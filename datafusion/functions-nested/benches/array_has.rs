@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{
     ArrayRef, Int64Array, LargeStringArray, ListArray, StringArray, StringViewArray,
@@ -913,31 +900,42 @@ fn bench_array_has_any_scalar(c: &mut Criterion) {
         Field::new("second", list_type_i64.clone(), false).into(),
     ];
 
-    for &scalar_size in &scalar_sizes {
-        let scalar_arg = create_int64_scalar_list(scalar_size, array_size as i64);
-        let args = vec![
-            ColumnarValue::Array(first_arr_i64.clone()),
-            ColumnarValue::Scalar(scalar_arg),
-        ];
-        group.bench_with_input(
-            BenchmarkId::new("i64_no_match", scalar_size),
-            &scalar_size,
-            |b, _| {
-                let udf = ArrayHasAny::new();
-                b.iter(|| {
-                    black_box(
-                        udf.invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: arg_fields_i64.clone(),
-                            number_rows: NUM_ROWS,
-                            return_field: return_field.clone(),
-                            config_options: config_options.clone(),
-                        })
-                        .unwrap(),
-                    )
-                })
-            },
-        );
+    // The same number of visible rows, sliced from the middle of a backing
+    // array that is 100 times larger.
+    let backing_rows = NUM_ROWS * 100;
+    let sliced_arr_i64 = create_int64_list_array(backing_rows, array_size, NULL_DENSITY)
+        .slice(backing_rows / 2, NUM_ROWS);
+
+    for (name, arr) in [
+        ("i64_no_match", &first_arr_i64),
+        ("i64_no_match_sliced", &sliced_arr_i64),
+    ] {
+        for &scalar_size in &scalar_sizes {
+            let scalar_arg = create_int64_scalar_list(scalar_size, array_size as i64);
+            let args = vec![
+                ColumnarValue::Array(arr.clone()),
+                ColumnarValue::Scalar(scalar_arg),
+            ];
+            group.bench_with_input(
+                BenchmarkId::new(name, scalar_size),
+                &scalar_size,
+                |b, _| {
+                    let udf = ArrayHasAny::new();
+                    b.iter(|| {
+                        black_box(
+                            udf.invoke_with_args(ScalarFunctionArgs {
+                                args: args.clone(),
+                                arg_fields: arg_fields_i64.clone(),
+                                number_rows: NUM_ROWS,
+                                return_field: return_field.clone(),
+                                config_options: config_options.clone(),
+                            })
+                            .unwrap(),
+                        )
+                    })
+                },
+            );
+        }
     }
 
     // String benchmarks

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`MemoryPool`] for memory management during query execution, [`proxy`] for
 //! help with allocation accounting.
@@ -24,6 +11,9 @@ use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::{cmp::Ordering, sync::Arc, sync::atomic};
 
+mod drift;
+mod merge_memory_pool;
+mod peak_recording;
 mod pool;
 
 #[cfg(feature = "arrow_buffer_pool")]
@@ -36,6 +26,9 @@ pub mod proxy {
 pub use datafusion_common::{
     human_readable_count, human_readable_duration, human_readable_size, units,
 };
+pub use drift::*;
+pub use merge_memory_pool::{MergeMemoryPool, WorkspaceLoan};
+pub use peak_recording::*;
 pub use pool::*;
 
 /// Tracks and potentially limits memory use across operators during execution.
@@ -183,6 +176,9 @@ pub use pool::*;
 ///
 /// * [`TrackConsumersPool`]: Wraps another [`MemoryPool`] and tracks consumers,
 ///   providing better error messages on the largest memory users.
+///
+/// * [`MergeMemoryPool`]: Shares retained workspace across child reservations and
+///   temporary loans, charging a single consumer in its parent pool.
 pub trait MemoryPool: Any + Send + Sync + std::fmt::Debug + Display {
     /// Return pool name
     fn name(&self) -> &str;
@@ -403,7 +399,7 @@ impl MemoryReservation {
     /// Panics if `capacity` exceeds [`Self::size`]
     pub fn shrink(&self, capacity: usize) {
         self.size
-            .fetch_update(
+            .try_update(
                 atomic::Ordering::Relaxed,
                 atomic::Ordering::Relaxed,
                 |prev| prev.checked_sub(capacity),
@@ -421,7 +417,7 @@ impl MemoryReservation {
     pub fn try_shrink(&self, capacity: usize) -> Result<usize> {
         let prev = self
             .size
-            .fetch_update(
+            .try_update(
                 atomic::Ordering::Relaxed,
                 atomic::Ordering::Relaxed,
                 |prev| prev.checked_sub(capacity),
@@ -455,7 +451,7 @@ impl MemoryReservation {
                 self.try_shrink(size - capacity)?;
             }
             _ => {}
-        };
+        }
         Ok(())
     }
 
@@ -486,7 +482,7 @@ impl MemoryReservation {
     /// Panics if `capacity` exceeds [`Self::size`]
     pub fn split(&self, capacity: usize) -> MemoryReservation {
         self.size
-            .fetch_update(
+            .try_update(
                 atomic::Ordering::Relaxed,
                 atomic::Ordering::Relaxed,
                 |prev| prev.checked_sub(capacity),

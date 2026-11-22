@@ -1,37 +1,24 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Merge that deals with an arbitrary size of streaming inputs.
 //! This is an order-preserving merge.
 
 use crate::metrics::BaselineMetrics;
-use crate::sorts::multi_level_merge::MultiLevelMergeBuilder;
+use crate::sorts::multi_level_merge::{FanInHeadroom, MultiLevelMergeBuilder};
 use crate::sorts::{
     merge::SortPreservingMergeStream,
     stream::{FieldCursorStream, RowCursorStream},
 };
-use crate::{SendableRecordBatchStream, SpillManager};
+use crate::{EmptyRecordBatchStream, SendableRecordBatchStream, SpillManager};
 use arrow::array::*;
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::human_readable_size;
 use datafusion_common::{Result, assert_or_internal_err, internal_err};
 use datafusion_execution::SpillFile;
 use datafusion_execution::memory_pool::{
-    MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
+    MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool, UnboundedMemoryPool,
 };
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::sync::Arc;
@@ -43,7 +30,7 @@ macro_rules! primitive_merge_helper {
 }
 
 macro_rules! merge_helper {
-    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
+    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $max_batch_bytes:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
         let streams =
             FieldCursorStream::<$t>::new($sort, $streams, $reservation.new_empty());
         return Ok(SortPreservingMergeStream::new(
@@ -55,6 +42,7 @@ macro_rules! merge_helper {
             $reservation,
             $enable_round_robin_tie_breaker,
         )
+        .with_max_batch_bytes($max_batch_bytes)
         .into_stream());
     }};
 }
@@ -93,8 +81,16 @@ pub struct StreamingMergeBuilder<'a> {
     expressions: Option<&'a LexOrdering>,
     metrics: Option<BaselineMetrics>,
     batch_size: Option<usize>,
+    max_batch_bytes: Option<usize>,
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
+    merge_pool: Option<Arc<MergeMemoryPool>>,
+    /// Leave memory for the aggregate consuming the merged spill rows.
+    reserve_replay_headroom: bool,
+    /// Leave memory for others sharing the execution pool when seating more
+    /// than the minimum two runs.
+    fan_in_headroom: Option<FanInHeadroom>,
+    min_spill_batch_rows: Option<usize>,
     enable_round_robin_tie_breaker: bool,
 }
 
@@ -144,6 +140,12 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// See [`SortPreservingMergeStream::with_max_batch_bytes`]
+    pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
+        self.max_batch_bytes = max_batch_bytes;
+        self
+    }
+
     pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
         self.fetch = fetch;
         self
@@ -151,6 +153,49 @@ impl<'a> StreamingMergeBuilder<'a> {
 
     pub fn with_reservation(mut self, reservation: MemoryReservation) -> Self {
         self.reservation = Some(reservation);
+        self
+    }
+
+    /// Keep spill workspace until the final merge pass selects its buffer budget.
+    pub(crate) fn with_merge_pool(mut self, pool: Arc<MergeMemoryPool>) -> Self {
+        self.merge_pool = Some(pool);
+        self
+    }
+
+    /// Leave room for aggregate replay by checking that the pool can admit
+    /// merge buffers plus equal headroom. Release the headroom before replay.
+    pub(crate) fn with_replay_headroom(mut self) -> Self {
+        self.reserve_replay_headroom = true;
+        self
+    }
+
+    /// While `siblings` is true or another consumer holds memory in `pool`,
+    /// seat spill runs beyond the minimum two only if the pool can admit their
+    /// buffers plus as much again as they exceed the retained workspace.
+    /// Release the headroom before merging.
+    ///
+    /// `pool` is the execution pool: the parent of the merge pool when one is
+    /// set, not the merge pool itself. `siblings` says other partitions share
+    /// that pool even when they hold nothing at the moment.
+    pub(crate) fn with_fan_in_headroom(
+        mut self,
+        pool: Arc<dyn MemoryPool>,
+        siblings: bool,
+    ) -> Self {
+        self.fan_in_headroom = Some(FanInHeadroom { pool, siblings });
+        self
+    }
+
+    /// Limit intermediate rewrites when the retained buffer reservation can
+    /// also admit the final replay pass with its headroom.
+    /// `min_spill_batch_rows` is the minimum largest-batch row count across input
+    /// runs. A run without a full batch disables sizing for the whole replay,
+    /// since merging short batches can increase the intermediate run's budget.
+    pub(crate) fn with_intermediate_merge_sizing(
+        mut self,
+        min_spill_batch_rows: Option<usize>,
+    ) -> Self {
+        self.min_spill_batch_rows = min_spill_batch_rows;
         self
     }
 
@@ -185,7 +230,12 @@ impl<'a> StreamingMergeBuilder<'a> {
             schema,
             metrics,
             batch_size,
+            max_batch_bytes,
             reservation,
+            merge_pool,
+            reserve_replay_headroom,
+            fan_in_headroom,
+            min_spill_batch_rows,
             fetch,
             expressions,
             enable_round_robin_tie_breaker,
@@ -195,13 +245,22 @@ impl<'a> StreamingMergeBuilder<'a> {
         let Some(expressions) = expressions else {
             return internal_err!("Sort expressions cannot be empty for streaming merge");
         };
+        let schema = schema.expect("Schema cannot be empty for streaming merge");
+
+        if fetch.is_some_and(|fetch| fetch == 0) {
+            return Ok(Box::pin(EmptyRecordBatchStream::new(schema)));
+        }
+
+        let batch_size =
+            batch_size.expect("Batch size cannot be empty for streaming merge");
+
+        if batch_size == 0 {
+            return internal_err!("Batch size cannot be zero for streaming merge");
+        }
 
         if !sorted_spill_files.is_empty() {
             // Unwrapping mandatory fields
-            let schema = schema.expect("Schema cannot be empty for streaming merge");
             let metrics = metrics.expect("Metrics cannot be empty for streaming merge");
-            let batch_size =
-                batch_size.expect("Batch size cannot be empty for streaming merge");
             let reservation =
                 reservation.expect("Reservation cannot be empty for streaming merge");
 
@@ -217,6 +276,11 @@ impl<'a> StreamingMergeBuilder<'a> {
                 fetch,
                 enable_round_robin_tie_breaker,
             )
+            .with_merge_pool(merge_pool)
+            .with_replay_headroom(reserve_replay_headroom)
+            .with_fan_in_headroom(fan_in_headroom)
+            .with_intermediate_merge_sizing(min_spill_batch_rows)
+            .with_max_batch_bytes(max_batch_bytes)
             .create_spillable_merge_stream());
         }
 
@@ -227,24 +291,22 @@ impl<'a> StreamingMergeBuilder<'a> {
         );
 
         // Unwrapping mandatory fields
-        let schema = schema.expect("Schema cannot be empty for streaming merge");
         let metrics = metrics.expect("Metrics cannot be empty for streaming merge");
-        let batch_size =
-            batch_size.expect("Batch size cannot be empty for streaming merge");
         let reservation =
             reservation.expect("Reservation cannot be empty for streaming merge");
 
-        // Special case single column comparisons with optimized cursor implementations
+        // Special case single column comparisons with optimized cursor implementations.
+        // `merges_in_row_format` must match this choice.
         if expressions.len() == 1 {
             let sort = expressions[0].clone();
             let data_type = sort.expr.data_type(schema.as_ref())?;
             downcast_primitive! {
-                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker),
-                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::Utf8View => merge_helper!(StringViewArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
+                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker),
+                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::Utf8View => merge_helper!(StringViewArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
                 _ => {}
             }
         }
@@ -264,6 +326,237 @@ impl<'a> StreamingMergeBuilder<'a> {
             reservation,
             enable_round_robin_tie_breaker,
         )
+        .with_max_batch_bytes(max_batch_bytes)
         .into_stream())
+    }
+}
+
+/// Returns whether [`StreamingMergeBuilder::build`] merges on `expressions` in
+/// the row format rather than with a cursor for a single column.
+pub(crate) fn merges_in_row_format(expressions: &LexOrdering, schema: &Schema) -> bool {
+    if expressions.len() > 1 {
+        return true;
+    }
+    let Ok(data_type) = expressions[0].expr.data_type(schema) else {
+        return true;
+    };
+    !(data_type.is_primitive()
+        || matches!(
+            data_type,
+            DataType::Utf8
+                | DataType::Utf8View
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary
+        ))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{common::collect, stream::RecordBatchStreamAdapter};
+    use std::sync::Arc;
+
+    use super::*;
+
+    use arrow::array::{ArrayRef, RecordBatch};
+    use arrow::datatypes::{Field, Int32Type, Schema};
+    use arrow_schema::SortOptions;
+    use datafusion_common::Result;
+    use datafusion_execution::TaskContext;
+    use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
+    use datafusion_physical_expr_common::metrics::{
+        ExecutionPlanMetricsSet, SpillMetrics,
+    };
+
+    /// Merges a spill file of five 1000 byte rows, one per batch, with a spill
+    /// file of 1000 small rows in batches of 100.
+    async fn merge_wide_and_narrow_rows(
+        max_batch_bytes: Option<usize>,
+    ) -> Result<Vec<RecordBatch>> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+        let batch = |keys: std::ops::Range<i32>, value_len: usize| {
+            let values = keys.clone().map(|_| "x".repeat(value_len));
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from_iter_values(keys)),
+                    Arc::new(StringArray::from_iter_values(values)),
+                ],
+            )
+            .unwrap()
+        };
+        let wide: Vec<_> = (0..5).map(|key| batch(key..key + 1, 1000)).collect();
+        let narrow: Vec<_> = (0..10)
+            .map(|i| batch(10 + i * 100..10 + (i + 1) * 100, 1))
+            .collect();
+
+        let sort: LexOrdering =
+            [PhysicalSortExpr::new_default(col("key", &schema)?)].into();
+        let spill_manager = SpillManager::new(
+            Arc::new(TaskContext::default()).runtime_env(),
+            SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            Arc::clone(&schema),
+        );
+        let spill = |batches: &[RecordBatch]| SortedSpillFile {
+            file: spill_manager
+                .spill_record_batch_and_finish(batches, "test")
+                .unwrap()
+                .unwrap(),
+            max_record_batch_memory: batches
+                .iter()
+                .map(RecordBatch::get_array_memory_size)
+                .max()
+                .unwrap(),
+        };
+        let sorted_spill_files = vec![spill(&wide), spill(&narrow)];
+        let merged = StreamingMergeBuilder::new()
+            .with_schema(Arc::clone(&schema))
+            .with_expressions(&sort)
+            .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+            .with_batch_size(100)
+            .with_max_batch_bytes(max_batch_bytes)
+            .with_bypass_mempool()
+            .with_sorted_spill_files(sorted_spill_files)
+            .with_spill_manager(spill_manager)
+            .build()?;
+        let batches = collect(merged).await?;
+
+        let keys: Vec<i32> = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int32Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        let expected: Vec<i32> = (0..5).chain(10..1010).collect();
+        assert_eq!(keys, expected);
+        Ok(batches)
+    }
+
+    #[tokio::test]
+    async fn test_max_batch_bytes_limits_merged_batches() -> Result<()> {
+        let num_rows = |batches: &[RecordBatch]| -> Vec<usize> {
+            batches.iter().map(RecordBatch::num_rows).collect()
+        };
+        // By rows only, the five large rows end up in the first batch
+        let batches = merge_wide_and_narrow_rows(None).await?;
+        assert_eq!(num_rows(&batches), [vec![100; 10], vec![5]].concat());
+
+        // Three large rows exceed 3000 bytes, so the first batch holds fewer.
+        // Once the large rows are merged, batches of small rows still hold
+        // `batch_size` rows.
+        let batches = merge_wide_and_narrow_rows(Some(3000)).await?;
+        let rows = num_rows(&batches);
+        assert!(rows[0] < 5, "{rows:?}");
+        let last_wide = batches
+            .iter()
+            .position(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int32Type>()
+                    .values()
+                    .contains(&4)
+            })
+            .unwrap();
+        let narrow_only = &rows[last_wide + 1..rows.len() - 1];
+        assert!(narrow_only.len() > 5, "{rows:?}");
+        assert!(narrow_only.iter().all(|&rows| rows == 100), "{rows:?}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_merge_fetch_zero_with_only_1_stream() {
+        test_fetch_0_should_output_0_rows(1, 0).await.unwrap();
+    }
+    #[tokio::test]
+    async fn test_sort_merge_fetch_zero_with_2_streams() {
+        test_fetch_0_should_output_0_rows(2, 0).await.unwrap();
+    }
+    #[tokio::test]
+    async fn test_sort_merge_fetch_zero_with_only_1_spill_file() {
+        test_fetch_0_should_output_0_rows(0, 1).await.unwrap();
+    }
+    #[tokio::test]
+    async fn test_sort_merge_fetch_zero_with_2_spill_files() {
+        test_fetch_0_should_output_0_rows(0, 2).await.unwrap();
+    }
+    #[tokio::test]
+    async fn test_sort_merge_fetch_zero_with_1_stream_and_1_spill_file() {
+        test_fetch_0_should_output_0_rows(1, 1).await.unwrap();
+    }
+
+    async fn test_fetch_0_should_output_0_rows(
+        number_of_streams: usize,
+        number_of_spilled_files: usize,
+    ) -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 9, 3]));
+        let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"]));
+        let batch = RecordBatch::try_from_iter(vec![("a", a), ("b", b)]).unwrap();
+        let schema = batch.schema();
+
+        let sort: LexOrdering = [PhysicalSortExpr {
+            expr: col("b", &schema).unwrap(),
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }]
+        .into();
+
+        let streams = (0..number_of_streams)
+            .map(|_| {
+                Box::pin(RecordBatchStreamAdapter::new(
+                    Arc::clone(&schema),
+                    futures::stream::iter(vec![Ok(batch.clone())]),
+                )) as SendableRecordBatchStream
+            })
+            .collect::<Vec<SendableRecordBatchStream>>();
+
+        let spill_manager = SpillManager::new(
+            task_ctx.runtime_env(),
+            SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            Arc::clone(&schema),
+        );
+
+        let mut sorted_spill_files: Vec<SortedSpillFile> = vec![];
+
+        for _ in 0..number_of_spilled_files {
+            let file = spill_manager
+                .spill_record_batch_and_finish(std::slice::from_ref(&batch), "spill")
+                .unwrap()
+                .unwrap();
+            sorted_spill_files.push(SortedSpillFile {
+                file,
+                max_record_batch_memory: batch.get_array_memory_size(),
+            });
+        }
+
+        let sorted_output_stream = StreamingMergeBuilder::new()
+            .with_batch_size(100)
+            .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+            // Just to avoid having to provide memory pool
+            .with_bypass_mempool()
+            .with_schema(schema)
+            .with_streams(streams)
+            .with_sorted_spill_files(sorted_spill_files)
+            .with_spill_manager(spill_manager)
+            .with_expressions(&sort)
+            // The whole point of the test - fetch is 0
+            .with_fetch(Some(0))
+            .build()
+            .unwrap();
+
+        let collected = collect(sorted_output_stream).await.unwrap();
+        let total: usize = collected.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 0, "fetch=Some(0) must emit zero rows, got {total}");
+
+        Ok(())
     }
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Benchmarks of SQL queries on struct columns in parquet data
 
@@ -27,7 +14,6 @@ use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
 use rand::distr::Alphanumeric;
 use rand::prelude::*;
-use rand::rng;
 use std::hint::black_box;
 use std::ops::Range;
 use std::path::Path;
@@ -59,8 +45,7 @@ fn schema() -> SchemaRef {
     ]))
 }
 
-fn generate_strings(len: usize) -> ArrayRef {
-    let mut rng = rng();
+fn generate_strings(rng: &mut StdRng, len: usize) -> ArrayRef {
     Arc::new(StringArray::from_iter((0..len).map(|_| {
         let string_len = rng.random_range(STRING_LENGTH_RANGE.clone());
         Some(
@@ -71,7 +56,7 @@ fn generate_strings(len: usize) -> ArrayRef {
     })))
 }
 
-fn generate_batch(batch_id: usize) -> RecordBatch {
+fn generate_batch(rng: &mut StdRng, batch_id: usize) -> RecordBatch {
     let schema = schema();
     let len = WRITE_RECORD_BATCH_SIZE;
 
@@ -84,7 +69,7 @@ fn generate_batch(batch_id: usize) -> RecordBatch {
     let struct_id_array = Arc::new(Int32Array::from(id_values));
 
     // Generate random strings for struct value field
-    let value_array = generate_strings(len);
+    let value_array = generate_strings(rng, len);
 
     // Construct StructArray
     let struct_array = StructArray::from(vec![
@@ -120,8 +105,9 @@ fn generate_file() -> NamedTempFile {
     let mut writer =
         ArrowWriter::try_new(&mut named_file, schema, Some(properties)).unwrap();
 
+    let mut rng = StdRng::seed_from_u64(0);
     for batch_id in 0..NUM_BATCHES {
-        let batch = generate_batch(batch_id);
+        let batch = generate_batch(&mut rng, batch_id);
         writer.write(&batch).unwrap();
     }
 

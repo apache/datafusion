@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use insta::assert_snapshot;
 use std::sync::Arc;
@@ -28,16 +15,20 @@ use crate::physical_optimizer::test_utils::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
+use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::session_state::SessionState;
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, NullEquality, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{Literal, col};
 use datafusion_physical_expr::{Partitioning, RangePartitioning, SplitPoint};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
+use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
 use datafusion_physical_plan::joins::{StreamJoinPartitionMode, SymmetricHashJoinExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::{ExecutionPlan, displayable};
 
 use async_trait::async_trait;
@@ -187,6 +178,45 @@ async fn test_hash_left_join_swap() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_hash_left_semi_join() -> Result<()> {
+    // LeftSemi hash joins emit matched build-side rows only after probing
+    // completes, so their emission type is Final.
+
+    let test1 = BinaryTestCase {
+        // The optimizer swaps the inputs and changes LeftSemi to RightSemi.
+        // The bounded right table becomes the build side, allowing matched
+        // rows from the unbounded left table to be emitted incrementally.
+        source_types: (SourceType::Unbounded, SourceType::Bounded),
+        expect_fail: false,
+    };
+
+    let test2 = BinaryTestCase {
+        // LeftSemi waits for the unbounded probe side to finish before
+        // emitting matched build-side rows. SanityCheckPlan must reject
+        // this pipeline because it cannot produce output.
+        source_types: (SourceType::Bounded, SourceType::Unbounded),
+        expect_fail: true,
+    };
+
+    let test3 = BinaryTestCase {
+        // Both inputs are bounded, so probing can finish and final output
+        // can be emitted.
+        source_types: (SourceType::Bounded, SourceType::Bounded),
+        expect_fail: false,
+    };
+
+    let case = QueryCase {
+        sql: "SELECT l.c1 FROM left AS l LEFT SEMI JOIN right AS r ON l.c1 = r.c1"
+            .to_string(),
+        cases: vec![Arc::new(test1), Arc::new(test2), Arc::new(test3)],
+        error_operator: "operator: HashJoinExec".to_string(),
+    };
+
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_hash_right_join_swap() -> Result<()> {
     let test1 = BinaryTestCase {
         source_types: (SourceType::Unbounded, SourceType::Bounded),
@@ -275,6 +305,27 @@ async fn test_aggregate() -> Result<()> {
     let case = QueryCase {
         sql: "SELECT c1, MIN(c4) FROM test GROUP BY c1".to_string(),
         cases: vec![Arc::new(test1), Arc::new(test2)],
+        error_operator: "operator: AggregateExec".to_string(),
+    };
+
+    case.run().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_constant_grouping_expr_on_unbounded_input() -> Result<()> {
+    let case = QueryCase {
+        sql: "SELECT c1, c2, MIN(c4) FROM test WHERE c2 = 1 GROUP BY c1, c2".to_string(),
+        cases: vec![
+            Arc::new(UnaryTestCase {
+                source_type: SourceType::Bounded,
+                expect_fail: false,
+            }),
+            Arc::new(UnaryTestCase {
+                source_type: SourceType::Unbounded,
+                expect_fail: true,
+            }),
+        ],
         error_operator: "operator: AggregateExec".to_string(),
     };
 
@@ -394,10 +445,9 @@ fn create_test_schema2() -> SchemaRef {
 
 /// Check if sanity checker should accept or reject plans.
 fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
-    let sanity_checker = SanityCheckPlan::new();
     let opts = ConfigOptions::default();
     assert_eq!(
-        sanity_checker.optimize(plan.clone(), &opts).is_ok(),
+        check_plan_tree_sanity(plan, &opts.optimizer).is_ok(),
         is_sane
     );
 }
@@ -950,5 +1000,90 @@ async fn test_union_with_sorts_and_constants() -> Result<()> {
 
     assert_sanity_check(&plan, true);
 
+    Ok(())
+}
+
+/// Test rule that removes every [`SortExec`], so that the final check fails
+/// and its error can be checked.
+///
+/// [`SortExec`]: datafusion_physical_plan::sorts::sort::SortExec
+#[derive(Debug)]
+struct RemoveSorts;
+
+impl PhysicalOptimizerRule for RemoveSorts {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        plan.transform_up(|plan| {
+            if plan.is::<SortExec>() {
+                Ok(Transformed::yes(Arc::clone(plan.children()[0])))
+            } else {
+                Ok(Transformed::no(plan))
+            }
+        })
+        .data()
+    }
+
+    fn name(&self) -> &str {
+        "remove_sorts"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+
+async fn plan_window_query(state: SessionState) -> Result<Arc<dyn ExecutionPlan>> {
+    let ctx = SessionContext::new_with_state(state);
+    ctx.sql("CREATE TABLE t(a INT) AS VALUES (3), (1), (2)")
+        .await?
+        .collect()
+        .await?;
+    ctx.sql("SELECT a, row_number() OVER (ORDER BY a) AS rn FROM t")
+        .await?
+        .create_physical_plan()
+        .await
+}
+
+/// A rule appended after the default rules is checked, and the error names it.
+#[tokio::test]
+async fn test_final_check_names_appended_rule() -> Result<()> {
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_physical_optimizer_rule(Arc::new(RemoveSorts))
+        .build();
+    let error = plan_window_query(state).await.unwrap_err().to_string();
+    assert!(
+        error.starts_with(
+            "SanityCheckPlan: order and distribution requirements stopped holding \
+             after physical optimizer rule 'remove_sorts'"
+        ),
+        "{error}"
+    );
+    assert!(
+        error.contains("does not satisfy order requirements"),
+        "{error}"
+    );
+    Ok(())
+}
+
+/// A custom rule list is checked too. Without `EnsureRequirements`, the
+/// window's sort is never added.
+#[tokio::test]
+async fn test_final_check_without_ensure_requirements() -> Result<()> {
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_physical_optimizer_rules(vec![Arc::new(RemoveSorts)])
+        .build();
+    let error = plan_window_query(state).await.unwrap_err().to_string();
+    assert!(
+        error.starts_with(
+            "SanityCheckPlan: no physical optimizer rule produced a plan that \
+             satisfies the order and distribution requirements"
+        ),
+        "{error}"
+    );
     Ok(())
 }

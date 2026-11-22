@@ -1,22 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Logical Expressions: [`Expr`]
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter, Write};
@@ -32,7 +20,7 @@ use crate::type_coercion::functions::value_fields_with_higher_order_udf;
 use crate::{AggregateUDF, LambdaParametersProgress, ValueOrLambda, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::metadata::format_type_and_metadata;
@@ -389,19 +377,6 @@ pub enum Expr {
     SetComparison(SetComparison),
     /// Scalar subquery
     ScalarSubquery(Subquery),
-    /// Represents a reference to all available fields in a specific schema,
-    /// with an optional (schema) qualifier.
-    ///
-    /// This expr has to be resolved to a list of columns before translating logical
-    /// plan into physical plan.
-    #[deprecated(
-        since = "46.0.0",
-        note = "A wildcard needs to be resolved to concrete expressions when constructing the logical plan. See https://github.com/apache/datafusion/issues/7765"
-    )]
-    Wildcard {
-        qualifier: Option<TableReference>,
-        options: Box<WildcardOptions>,
-    },
     /// List of grouping set expressions. Only valid in the context of an aggregate
     /// GROUP BY expression list
     GroupingSet(GroupingSet),
@@ -622,7 +597,7 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
 /// See the [default_column_values.rs] example implementation.
 ///
 /// [default_column_values.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs
-pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
+pub type SchemaFieldMetadata = Metadata;
 
 /// Intersects multiple metadata instances for UNION operations.
 ///
@@ -645,6 +620,10 @@ pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
 /// # Returns
 ///
 /// A new `SchemaFieldMetadata` containing only the intersected metadata
+#[deprecated(
+    since = "56.0.0",
+    note = "UNION now merges metadata with `datafusion_common::metadata::merge_metadata_for_union`"
+)]
 pub fn intersect_metadata_for_union<'a>(
     metadatas: impl IntoIterator<Item = &'a SchemaFieldMetadata>,
 ) -> SchemaFieldMetadata {
@@ -671,22 +650,43 @@ pub fn intersect_metadata_for_union<'a>(
 }
 
 /// UNNEST expression.
+///
+/// When `outer` is `true`, the unnest should preserve `NULL` and empty input
+/// lists by emitting a single `NULL` output row for each. When `false` (the
+/// historical default), the behavior is identical to the plain `UNNEST(col)`
+/// SQL form: `NULL` and empty input lists are dropped from the output.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
     pub expr: Box<Expr>,
+    /// Outer-unnest behavior: also expand empty input lists into a single
+    /// `NULL` output row (in addition to preserving `NULL` input rows).
+    pub outer: bool,
 }
 
 impl Unnest {
-    /// Create a new Unnest expression.
+    /// Create a new Unnest expression with default (non-outer) semantics.
     pub fn new(expr: Expr) -> Self {
         Self {
             expr: Box::new(expr),
+            outer: false,
         }
     }
 
-    /// Create a new Unnest expression.
+    /// Create a new Unnest expression with default (non-outer) semantics.
     pub fn new_boxed(boxed: Box<Expr>) -> Self {
-        Self { expr: boxed }
+        Self {
+            expr: boxed,
+            outer: false,
+        }
+    }
+
+    /// Create a new Unnest expression with outer-unnest semantics: `NULL`
+    /// and empty input lists each produce a single `NULL` output row.
+    pub fn new_outer(expr: Expr) -> Self {
+        Self {
+            expr: Box::new(expr),
+            outer: true,
+        }
     }
 }
 
@@ -1380,6 +1380,54 @@ impl InSubquery {
     }
 }
 
+/// The tuple elements of a multi-column `(a, b, ...) IN (SELECT x, y, ...)`,
+/// given the compared expression `expr` and the `subquery` plan, or `None`
+/// for a single-column `IN`.
+///
+/// The tuple is planned as a `struct` call, which `simplify_expressions` folds
+/// into a struct literal when every element is a literal. It is a
+/// multi-column `IN` only when the subquery returns more than one column;
+/// against a single column the struct is one value compared with a
+/// struct-typed column.
+///
+/// Errors when the number of tuple elements does not match the number of
+/// subquery columns.
+pub fn in_subquery_tuple_values<'a>(
+    expr: &'a Expr,
+    subquery: &crate::LogicalPlan,
+) -> Result<Option<Cow<'a, [Expr]>>> {
+    let num_columns = subquery.schema().fields().len();
+    if num_columns <= 1 {
+        return Ok(None);
+    }
+    let values = match expr {
+        Expr::ScalarFunction(func) if func.func.name() == "struct" => {
+            Cow::Borrowed(func.args.as_slice())
+        }
+        Expr::Literal(ScalarValue::Struct(array), _)
+            if arrow::array::Array::is_valid(array.as_ref(), 0) =>
+        {
+            Cow::Owned(
+                array
+                    .columns()
+                    .iter()
+                    .map(|column| {
+                        Ok(Expr::Literal(ScalarValue::try_from_array(column, 0)?, None))
+                    })
+                    .collect::<Result<_>>()?,
+            )
+        }
+        _ => return Ok(None),
+    };
+    if values.len() != num_columns {
+        return plan_err!(
+            "The number of columns in the tuple ({}) must match the number of columns in the subquery ({num_columns})",
+            values.len()
+        );
+    }
+    Ok(Some(values))
+}
+
 /// Placeholder, representing bind parameter values such as `$1` or `$name`.
 ///
 /// The type of these parameters is inferred using [`Expr::infer_placeholder_types`]
@@ -1679,8 +1727,6 @@ impl Expr {
             Expr::ScalarVariable(..) => "ScalarVariable",
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
-            #[expect(deprecated)]
-            Expr::Wildcard { .. } => "Wildcard",
             Expr::Unnest { .. } => "Unnest",
             Expr::HigherOrderFunction { .. } => "HigherOrderFunction",
             Expr::Lambda { .. } => "Lambda",
@@ -2136,7 +2182,19 @@ impl Expr {
     /// - `rand()` returns `true`,
     /// - `a + rand()` returns `false`
     pub fn is_volatile_node(&self) -> bool {
-        matches!(self, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile)
+        let volatility = match self {
+            Expr::ScalarFunction(func) => func.func.signature().volatility,
+            Expr::AggregateFunction(func) => func.func.signature().volatility,
+            Expr::WindowFunction(func) => match &func.fun {
+                WindowFunctionDefinition::AggregateUDF(func) => {
+                    func.signature().volatility
+                }
+                WindowFunctionDefinition::WindowUDF(func) => func.signature().volatility,
+            },
+            Expr::HigherOrderFunction(func) => func.func.signature().volatility,
+            _ => return false,
+        };
+        volatility == Volatility::Volatile
     }
 
     /// Returns true if the expression is volatile, i.e. whether it can return different
@@ -2191,11 +2249,32 @@ impl Expr {
                     subquery,
                     negated: _,
                 }) => {
-                    rewrite_placeholder_from_subquery(
-                        "InSubquery",
-                        expr.as_mut(),
-                        subquery,
-                    )?;
+                    // Multi-column `(a, b) IN (SELECT x, y ...)`: infer each
+                    // tuple element from the subquery column at the same
+                    // position.
+                    let subquery_schema = subquery.subquery.schema();
+                    let is_tuple =
+                        in_subquery_tuple_values(expr.as_ref(), &subquery.subquery)?
+                            .is_some();
+                    match expr.as_mut() {
+                        Expr::ScalarFunction(func) if is_tuple => {
+                            for (i, arg) in func.args.iter_mut().enumerate() {
+                                // Qualified, since two subquery columns can
+                                // share a name under different qualifiers.
+                                let column = Expr::Column(Column::from(
+                                    subquery_schema.qualified_field(i),
+                                ));
+                                rewrite_placeholder(arg, &column, subquery_schema)?;
+                            }
+                        }
+                        // A struct literal holds no placeholder.
+                        _ if is_tuple => {}
+                        expr => rewrite_placeholder_from_subquery(
+                            "InSubquery",
+                            expr,
+                            subquery,
+                        )?,
+                    }
                 }
                 Expr::SetComparison(SetComparison {
                     expr,
@@ -2239,8 +2318,6 @@ impl Expr {
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
-            // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[expect(deprecated)]
             Expr::AggregateFunction(..)
             | Expr::Alias(..)
             | Expr::Between(..)
@@ -2268,7 +2345,6 @@ impl Expr {
             | Expr::OuterReferenceColumn(_, _)
             | Expr::TryCast(..)
             | Expr::Unnest(..)
-            | Expr::Wildcard { .. }
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
             | Expr::Placeholder(..)
@@ -2431,11 +2507,19 @@ impl NormalizeEq for Expr {
             | (Expr::IsNotTrue(self_expr), Expr::IsNotTrue(other_expr))
             | (Expr::IsNotFalse(self_expr), Expr::IsNotFalse(other_expr))
             | (Expr::IsNotUnknown(self_expr), Expr::IsNotUnknown(other_expr))
-            | (Expr::Negative(self_expr), Expr::Negative(other_expr))
-            | (
-                Expr::Unnest(Unnest { expr: self_expr }),
-                Expr::Unnest(Unnest { expr: other_expr }),
-            ) => self_expr.normalize_eq(other_expr),
+            | (Expr::Negative(self_expr), Expr::Negative(other_expr)) => {
+                self_expr.normalize_eq(other_expr)
+            }
+            (
+                Expr::Unnest(Unnest {
+                    expr: self_expr,
+                    outer: self_outer,
+                }),
+                Expr::Unnest(Unnest {
+                    expr: other_expr,
+                    outer: other_outer,
+                }),
+            ) => self_outer == other_outer && self_expr.normalize_eq(other_expr),
             (
                 Expr::Between(Between {
                     expr: self_expr,
@@ -2485,7 +2569,7 @@ impl NormalizeEq for Expr {
                     args: other_args,
                 }),
             ) => {
-                self_func.name() == other_func.name()
+                self_func == other_func
                     && self_args.len() == other_args.len()
                     && self_args
                         .iter()
@@ -2516,7 +2600,7 @@ impl NormalizeEq for Expr {
                         },
                 }),
             ) => {
-                self_func.name() == other_func.name()
+                self_func == other_func
                     && self_distinct == other_distinct
                     && self_null_treatment == other_null_treatment
                     && self_args.len() == other_args.len()
@@ -2569,7 +2653,7 @@ impl NormalizeEq for Expr {
                         },
                 } = other.as_ref();
 
-                self_fun.name() == other_fun.name()
+                self_fun == other_fun
                     && self_window_frame == other_window_frame
                     && match (self_filter, other_filter) {
                         (Some(a), Some(b)) => a.normalize_eq(b),
@@ -2582,10 +2666,12 @@ impl NormalizeEq for Expr {
                         .iter()
                         .zip(other_args.iter())
                         .all(|(a, b)| a.normalize_eq(b))
+                    && self_partition_by.len() == other_partition_by.len()
                     && self_partition_by
                         .iter()
                         .zip(other_partition_by.iter())
                         .all(|(a, b)| a.normalize_eq(b))
+                    && self_order_by.len() == other_order_by.len()
                     && self_order_by
                         .iter()
                         .zip(other_order_by.iter())
@@ -2864,11 +2950,6 @@ impl HashNode for Expr {
             Expr::ScalarSubquery(subquery) => {
                 subquery.hash(state);
             }
-            #[expect(deprecated)]
-            Expr::Wildcard { qualifier, options } => {
-                qualifier.hash(state);
-                options.hash(state);
-            }
             Expr::GroupingSet(grouping_set) => {
                 mem::discriminant(grouping_set).hash(state);
                 match grouping_set {
@@ -2883,7 +2964,9 @@ impl HashNode for Expr {
                 field.hash(state);
                 column.hash(state);
             }
-            Expr::Unnest(Unnest { expr: _expr }) => {}
+            Expr::Unnest(Unnest { expr: _expr, outer }) => {
+                outer.hash(state);
+            }
             Expr::HigherOrderFunction(HigherOrderFunction { func, args: _args }) => {
                 func.hash(state);
             }
@@ -2898,7 +2981,7 @@ impl HashNode for Expr {
                 name.hash(state);
                 field.hash(state);
             }
-        };
+        }
     }
 }
 
@@ -2921,7 +3004,7 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
                 *field = Some(other_field.as_ref().clone().with_nullable(true).into());
             }
         }
-    };
+    }
     Ok(())
 }
 
@@ -2961,14 +3044,11 @@ impl Display for SchemaDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
             // The same as Display
-            // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[expect(deprecated)]
             Expr::Column(_)
             | Expr::Literal(_, _)
             | Expr::ScalarVariable(..)
             | Expr::OuterReferenceColumn(..)
-            | Expr::Placeholder(_)
-            | Expr::Wildcard { .. } => write!(f, "{}", self.0),
+            | Expr::Placeholder(_) => write!(f, "{}", self.0),
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.schema_name(params) {
                     Ok(name) => {
@@ -2992,26 +3072,17 @@ impl Display for SchemaDisplay<'_> {
                 low,
                 high,
             }) => {
-                if *negated {
-                    write!(
-                        f,
-                        "{} NOT BETWEEN {} AND {}",
-                        SchemaDisplay(expr),
-                        SchemaDisplay(low),
-                        SchemaDisplay(high),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "{} BETWEEN {} AND {}",
-                        SchemaDisplay(expr),
-                        SchemaDisplay(low),
-                        SchemaDisplay(high),
-                    )
-                }
+                let not = if *negated { "NOT " } else { "" };
+                write!(
+                    f,
+                    "{} {not}BETWEEN {} AND {}",
+                    SchemaDisplay(expr),
+                    SchemaDisplay(low),
+                    SchemaDisplay(high),
+                )
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right),)
+                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right))
             }
             Expr::Case(Case {
                 expr,
@@ -3123,8 +3194,9 @@ impl Display for SchemaDisplay<'_> {
             }
             Expr::Negative(expr) => write!(f, "(- {})", SchemaDisplay(expr)),
             Expr::Not(expr) => write!(f, "NOT {}", SchemaDisplay(expr)),
-            Expr::Unnest(Unnest { expr }) => {
-                write!(f, "UNNEST({})", SchemaDisplay(expr))
+            Expr::Unnest(Unnest { expr, outer }) => {
+                let name = if *outer { "UNNEST_OUTER" } else { "UNNEST" };
+                write!(f, "{name}({})", SchemaDisplay(expr))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 match func.schema_name(args) {
@@ -3230,7 +3302,7 @@ impl Display for SchemaDisplay<'_> {
                                 " ORDER BY [{}]",
                                 schema_name_from_sorts(order_by)?
                             )?;
-                        };
+                        }
 
                         write!(f, " {window_frame}")
                     }
@@ -3273,26 +3345,17 @@ impl Display for SqlDisplay<'_> {
                 low,
                 high,
             }) => {
-                if *negated {
-                    write!(
-                        f,
-                        "{} NOT BETWEEN {} AND {}",
-                        SqlDisplay(expr),
-                        SqlDisplay(low),
-                        SqlDisplay(high),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "{} BETWEEN {} AND {}",
-                        SqlDisplay(expr),
-                        SqlDisplay(low),
-                        SqlDisplay(high),
-                    )
-                }
+                let not = if *negated { "NOT " } else { "" };
+                write!(
+                    f,
+                    "{} {not}BETWEEN {} AND {}",
+                    SqlDisplay(expr),
+                    SqlDisplay(low),
+                    SqlDisplay(high),
+                )
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right),)
+                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right))
             }
             Expr::Case(Case {
                 expr,
@@ -3306,7 +3369,7 @@ impl Display for SqlDisplay<'_> {
                 }
 
                 for (when, then) in when_then_expr {
-                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then),)?;
+                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then))?;
                 }
 
                 if let Some(e) = else_expr {
@@ -3398,8 +3461,9 @@ impl Display for SqlDisplay<'_> {
             }
             Expr::Negative(expr) => write!(f, "(- {})", SqlDisplay(expr)),
             Expr::Not(expr) => write!(f, "NOT {}", SqlDisplay(expr)),
-            Expr::Unnest(Unnest { expr }) => {
-                write!(f, "UNNEST({})", SqlDisplay(expr))
+            Expr::Unnest(Unnest { expr, outer }) => {
+                let name = if *outer { "UNNEST_OUTER" } else { "UNNEST" };
+                write!(f, "{name}({})", SqlDisplay(expr))
             }
             Expr::SimilarTo(Like {
                 negated,
@@ -3724,11 +3788,6 @@ impl Display for Expr {
                     write!(f, "{expr} IN ([{}])", expr_vec_fmt!(list))
                 }
             }
-            #[expect(deprecated)]
-            Expr::Wildcard { qualifier, options } => match qualifier {
-                Some(qualifier) => write!(f, "{qualifier}.*{options}"),
-                None => write!(f, "*{options}"),
-            },
             Expr::GroupingSet(grouping_sets) => match grouping_sets {
                 GroupingSet::Rollup(exprs) => {
                     // ROLLUP (c0, c1, c2)
@@ -3752,7 +3811,7 @@ impl Display for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
-            Expr::Unnest(Unnest { expr }) => {
+            Expr::Unnest(Unnest { expr, .. }) => {
                 write!(f, "{UNNEST_COLUMN_PREFIX}({expr})")
             }
             Expr::HigherOrderFunction(fun) => {
@@ -3798,6 +3857,7 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;
+    use crate::test::function_stub::max_udaf;
     use crate::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,
         lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
@@ -3868,7 +3928,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -3916,7 +3976,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -3970,7 +4030,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -4023,7 +4083,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -4124,9 +4184,8 @@ mod test {
     fn infer_placeholder_with_metadata() {
         // name == $1, where name is a non-nullable string
         let schema = Arc::new(Schema::new(vec![
-            Field::new("name", DataType::Utf8, false).with_metadata(
-                [("some_key".to_string(), "some_value".to_string())].into(),
-            ),
+            Field::new("name", DataType::Utf8, false)
+                .with_metadata(Metadata::new().with("some_key", "some_value")),
         ]));
         let df_schema = DFSchema::try_from(schema).unwrap();
 
@@ -4311,6 +4370,32 @@ mod test {
 
     use super::*;
     use crate::logical_plan::{EmptyRelation, LogicalPlan};
+
+    #[test]
+    fn normalize_eq_window_function_over_clause_lengths() {
+        let window = |partition_by: Vec<Expr>, order_by: Vec<Sort>| {
+            let mut window = WindowFunction::new(max_udaf(), vec![col("value")]);
+            window.params.partition_by = partition_by;
+            window.params.order_by = order_by;
+            Expr::from(window)
+        };
+        let base = window(vec![col("a")], vec![Sort::new(col("a"), true, true)]);
+
+        let extra_partition = window(
+            vec![col("a"), col("b")],
+            vec![Sort::new(col("a"), true, true)],
+        );
+        assert!(!base.normalize_eq(&extra_partition));
+
+        let extra_order = window(
+            vec![col("a")],
+            vec![
+                Sort::new(col("a"), true, true),
+                Sort::new(col("b"), true, true),
+            ],
+        );
+        assert!(!base.normalize_eq(&extra_order));
+    }
 
     #[test]
     fn test_display_wildcard() {
@@ -4558,55 +4643,56 @@ mod test {
         }
     }
 
+    #[expect(deprecated)]
     mod intersect_metadata_tests {
         use super::super::intersect_metadata_for_union;
-        use std::collections::HashMap;
+        use arrow::datatypes::Metadata;
 
         #[test]
         fn all_branches_same_metadata() {
-            let m1 = HashMap::from([("key".into(), "val".into())]);
-            let m2 = HashMap::from([("key".into(), "val".into())]);
+            let m1 = Metadata::new().with("key", "val");
+            let m2 = Metadata::new().with("key", "val");
             let result = intersect_metadata_for_union([&m1, &m2]);
-            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+            assert_eq!(result, Metadata::new().with("key", "val"));
         }
 
         #[test]
         fn conflicting_metadata_dropped() {
-            let m1 = HashMap::from([("key".into(), "a".into())]);
-            let m2 = HashMap::from([("key".into(), "b".into())]);
+            let m1 = Metadata::new().with("key", "a");
+            let m2 = Metadata::new().with("key", "b");
             let result = intersect_metadata_for_union([&m1, &m2]);
             assert!(result.is_empty());
         }
 
         #[test]
         fn empty_metadata_branch_skipped() {
-            let m1 = HashMap::from([("key".into(), "val".into())]);
-            let m2 = HashMap::new(); // e.g. NULL literal
+            let m1 = Metadata::new().with("key", "val");
+            let m2 = Metadata::new(); // e.g. NULL literal
             let result = intersect_metadata_for_union([&m1, &m2]);
-            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+            assert_eq!(result, Metadata::new().with("key", "val"));
         }
 
         #[test]
         fn empty_metadata_first_branch_skipped() {
-            let m1 = HashMap::new();
-            let m2 = HashMap::from([("key".into(), "val".into())]);
+            let m1 = Metadata::new();
+            let m2 = Metadata::new().with("key", "val");
             let result = intersect_metadata_for_union([&m1, &m2]);
-            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+            assert_eq!(result, Metadata::new().with("key", "val"));
         }
 
         #[test]
         fn all_branches_empty_metadata() {
-            let m1: HashMap<String, String> = HashMap::new();
-            let m2: HashMap<String, String> = HashMap::new();
+            let m1 = Metadata::new();
+            let m2 = Metadata::new();
             let result = intersect_metadata_for_union([&m1, &m2]);
             assert!(result.is_empty());
         }
 
         #[test]
         fn mixed_empty_and_conflicting() {
-            let m1 = HashMap::from([("key".into(), "a".into())]);
-            let m2 = HashMap::new();
-            let m3 = HashMap::from([("key".into(), "b".into())]);
+            let m1 = Metadata::new().with("key", "a");
+            let m2 = Metadata::new();
+            let m3 = Metadata::new().with("key", "b");
             let result = intersect_metadata_for_union([&m1, &m2, &m3]);
             // m2 is skipped; m1 and m3 conflict → dropped
             assert!(result.is_empty());
@@ -4614,9 +4700,7 @@ mod test {
 
         #[test]
         fn no_inputs() {
-            let result = intersect_metadata_for_union(std::iter::empty::<
-                &HashMap<String, String>,
-            >());
+            let result = intersect_metadata_for_union(std::iter::empty::<&Metadata>());
             assert!(result.is_empty());
         }
     }

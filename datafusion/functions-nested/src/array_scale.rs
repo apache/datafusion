@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarUDFImpl`] definitions for array_scale function.
 
@@ -26,7 +13,9 @@ use arrow::datatypes::{
     Field,
 };
 use datafusion_common::cast::{as_float64_array, as_generic_list_array};
-use datafusion_common::utils::{ListCoercion, coerced_type_with_base_type_only};
+use datafusion_common::utils::{
+    ListCoercion, coerced_type_with_base_type_only, offset_span_len,
+};
 use datafusion_common::{Result, internal_err, plan_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -49,11 +38,11 @@ make_udf_expr_and_func!(
     syntax_example = "array_scale(array, scalar)",
     sql_example = r#"```sql
 > select array_scale([1.0, 2.0, 3.0], 2.0);
-+----------------------------------+
++-----------------------------------------------+
 | array_scale(List([1.0,2.0,3.0]),Float64(2.0)) |
-+----------------------------------+
-| [2.0, 4.0, 6.0]                  |
-+----------------------------------+
++-----------------------------------------------+
+| [2.0, 4.0, 6.0]                               |
++-----------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -161,7 +150,7 @@ fn general_array_scale<O: OffsetSizeTrait>(
     let scalar_array = as_float64_array(scalar)?;
 
     let values = as_float64_array(list_array.values())?;
-    let offsets = list_array.value_offsets();
+    let offsets = list_array.offsets();
 
     // A row is null whenever either input row is null. The scalar applies
     // uniformly across the array, so a null scalar makes the whole row
@@ -169,7 +158,7 @@ fn general_array_scale<O: OffsetSizeTrait>(
     // rather than tracking row nulls inside the value loop.
     let row_nulls = NullBuffer::union(list_array.nulls(), scalar_array.nulls());
 
-    let mut value_builder = Float64Array::builder(values.len());
+    let mut value_builder = Float64Array::builder(offset_span_len(offsets));
     let mut new_offsets = Vec::<O>::with_capacity(list_array.len() + 1);
     new_offsets.push(O::zero());
 
@@ -203,17 +192,25 @@ fn general_array_scale<O: OffsetSizeTrait>(
     // Preserve the inner field from the input array (including any user
     // metadata). After `coerce_types` the inner type is Float64, but the
     // input may still carry field-level annotations worth keeping.
-    let field = match list_array.data_type() {
-        List(f) | LargeList(f) => Arc::clone(f),
-        other => {
-            return internal_err!("array_scale unexpected list type: {other}");
-        }
-    };
-
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        field,
+        Arc::clone(list_array.value_field()),
         OffsetBuffer::new(new_offsets.into()),
         values_array,
         row_nulls,
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            array_scale_inner(&[
+                Arc::clone(input),
+                Arc::new(Float64Array::from(vec![2.0; input.len()])),
+            ])
+        })
+    }
 }

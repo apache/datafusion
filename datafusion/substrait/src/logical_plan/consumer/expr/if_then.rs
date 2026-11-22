@@ -1,21 +1,9 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::logical_plan::consumer::SubstraitConsumer;
+use super::literal::name_struct_literals_like_first_struct_expr;
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::DFSchema;
 use datafusion::logical_expr::{Case, Expr};
 use substrait::proto::expression::IfThen;
@@ -24,10 +12,12 @@ pub async fn from_if_then(
     consumer: &impl SubstraitConsumer,
     if_then: &IfThen,
     input_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Expr> {
     // Parse `ifs`
     // If the first element does not have a `then` part, then we can assume it's a base expression
-    let mut when_then_expr: Vec<(Box<Expr>, Box<Expr>)> = vec![];
+    let mut when_then_expr: Vec<(Box<Expr>, Box<Expr>)> =
+        Vec::with_capacity(if_then.ifs.len());
     let mut expr = None;
     for (i, if_expr) in if_then.ifs.iter().enumerate() {
         if i == 0 {
@@ -35,7 +25,11 @@ pub async fn from_if_then(
             if if_expr.then.is_none() {
                 expr = Some(Box::new(
                     consumer
-                        .consume_expression(if_expr.r#if.as_ref().unwrap(), input_schema)
+                        .consume_expression(
+                            if_expr.r#if.as_ref().unwrap(),
+                            input_schema,
+                            context,
+                        )
                         .await?,
                 ));
                 continue;
@@ -44,23 +38,39 @@ pub async fn from_if_then(
         when_then_expr.push((
             Box::new(
                 consumer
-                    .consume_expression(if_expr.r#if.as_ref().unwrap(), input_schema)
+                    .consume_expression(
+                        if_expr.r#if.as_ref().unwrap(),
+                        input_schema,
+                        context,
+                    )
                     .await?,
             ),
             Box::new(
                 consumer
-                    .consume_expression(if_expr.then.as_ref().unwrap(), input_schema)
+                    .consume_expression(
+                        if_expr.then.as_ref().unwrap(),
+                        input_schema,
+                        context,
+                    )
                     .await?,
             ),
         ));
     }
     // Parse `else`
-    let else_expr = match &if_then.r#else {
+    let mut else_expr = match &if_then.r#else {
         Some(e) => Some(Box::new(
-            consumer.consume_expression(e, input_schema).await?,
+            consumer
+                .consume_expression(e, input_schema, context)
+                .await?,
         )),
         None => None,
     };
+    // the branches' results must have the same type, field names included
+    let results = when_then_expr
+        .iter_mut()
+        .map(|(_, then)| then.as_mut())
+        .chain(else_expr.as_deref_mut());
+    name_struct_literals_like_first_struct_expr(results, input_schema);
     Ok(Expr::Case(Case {
         expr,
         when_then_expr,

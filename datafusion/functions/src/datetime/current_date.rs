@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::timezone::Tz;
 use arrow::datatypes::DataType;
@@ -35,9 +22,7 @@ Returns the current date in the session time zone.
 
 The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
 "#,
-    syntax_example = r#"current_date()
-    (optional) SET datafusion.execution.time_zone = '+00:00';
-    SELECT current_date();"#,
+    syntax_example = "current_date()",
     sql_example = r#"```sql
 > SELECT current_date();
 +----------------+
@@ -121,7 +106,7 @@ impl ScalarUDFImpl for CurrentDateFunc {
             .execution
             .time_zone
             .as_ref()
-            .and_then(|tz| tz.parse::<Tz>().ok())
+            .and_then(|tz| tz.as_str().parse::<Tz>().ok())
             .map_or_else(
                 || datetime_to_days(&now_ts),
                 |tz| {

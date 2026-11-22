@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -70,7 +57,7 @@ impl FFI_PhysicalOptimizerContext {
     }
 
     fn inner(&self) -> &OptimizerContextPrivateData {
-        unsafe { &*(self.private_data as *const OptimizerContextPrivateData) }
+        unsafe { &*self.private_data.cast::<OptimizerContextPrivateData>() }
     }
 }
 
@@ -211,7 +198,7 @@ unsafe extern "C" fn schema_check_fn_wrapper(rule: &FFI_PhysicalOptimizerRule) -
 unsafe extern "C" fn release_fn_wrapper(rule: &mut FFI_PhysicalOptimizerRule) {
     unsafe {
         debug_assert!(!rule.private_data.is_null());
-        let private_data = Box::from_raw(rule.private_data as *mut RulePrivateData);
+        let private_data = Box::from_raw(rule.private_data.cast::<RulePrivateData>());
         drop(private_data);
         rule.private_data = std::ptr::null_mut();
     }
@@ -224,7 +211,7 @@ unsafe extern "C" fn clone_fn_wrapper(
     let rule = Arc::clone(rule.inner());
 
     let private_data =
-        Box::into_raw(Box::new(RulePrivateData { rule, runtime })) as *mut c_void;
+        Box::into_raw(Box::new(RulePrivateData { rule, runtime })).cast::<c_void>();
 
     FFI_PhysicalOptimizerRule {
         optimize: optimize_fn_wrapper,
@@ -258,7 +245,7 @@ impl FFI_PhysicalOptimizerRule {
         }
 
         let private_data = Box::new(RulePrivateData { rule, runtime });
-        let private_data = Box::into_raw(private_data) as *mut c_void;
+        let private_data = Box::into_raw(private_data).cast::<c_void>();
 
         Self {
             optimize: optimize_fn_wrapper,
@@ -586,7 +573,7 @@ mod tests {
 
         let ctx = ContextWithRegistry {
             config: ConfigOptions::new(),
-            registry: StatisticsRegistry::default_with_builtin_providers(),
+            registry: StatisticsRegistry::new(),
         };
 
         let plan = create_test_plan();

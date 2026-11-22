@@ -1,0 +1,25 @@
+name Q06
+group asof_join
+
+expect_plan AsOfJoinExec
+
+run
+-- Left and right: 1M rows each; one equality group contains 95% of rows.
+-- Inputs are not ordered by (key, ts), so required ordering is included.
+-- Matches the latest right row at or before each left timestamp (l.ts >= r.ts).
+WITH left_input AS (
+    SELECT CASE WHEN value % 100 < 95 THEN 0 ELSE value % 16 + 1 END AS key,
+           value / 100 + 1 AS ts,
+           value AS payload
+    FROM range(1000000)
+),
+right_input AS (
+    SELECT CASE WHEN value % 100 < 95 THEN 0 ELSE value % 16 + 1 END AS key,
+           value / 100 AS ts,
+           value AS payload
+    FROM range(1000000)
+)
+SELECT l.key, l.ts, l.payload, r.payload AS right_payload
+FROM left_input l
+ASOF JOIN right_input r MATCH_CONDITION (l.ts >= r.ts)
+ON l.key = r.key;

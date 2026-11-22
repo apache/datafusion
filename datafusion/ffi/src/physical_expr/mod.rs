@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 pub(crate) mod metrics;
 pub(crate) mod partitioning;
@@ -120,11 +107,17 @@ pub struct FFI_PhysicalExpr {
 
     pub is_volatile_node: unsafe extern "C" fn(&Self) -> bool,
 
+    pub expression_id: unsafe extern "C" fn(&Self) -> FFI_Option<u64>,
+
     // Display trait
     pub display: unsafe extern "C" fn(&Self) -> SString,
 
     // Hash trait
     pub hash: unsafe extern "C" fn(&Self) -> u64,
+
+    /// Structural equality with `other`. Returns `false` when `other` was
+    /// created by a different library.
+    pub eq: unsafe extern "C" fn(&Self, other: &Self) -> bool,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -387,6 +380,13 @@ unsafe extern "C" fn is_volatile_node_fn_wrapper(expr: &FFI_PhysicalExpr) -> boo
     let expr = expr.inner();
     expr.is_volatile_node()
 }
+
+unsafe extern "C" fn expression_id_fn_wrapper(
+    expr: &FFI_PhysicalExpr,
+) -> FFI_Option<u64> {
+    expr.inner().expression_id().into()
+}
+
 unsafe extern "C" fn display_fn_wrapper(expr: &FFI_PhysicalExpr) -> SString {
     let expr = expr.inner();
     format!("{expr}").into()
@@ -399,11 +399,20 @@ unsafe extern "C" fn hash_fn_wrapper(expr: &FFI_PhysicalExpr) -> u64 {
     hasher.finish()
 }
 
+unsafe extern "C" fn eq_fn_wrapper(
+    expr: &FFI_PhysicalExpr,
+    other: &FFI_PhysicalExpr,
+) -> bool {
+    // `other.inner()` is only valid when this library created `other`.
+    (other.library_marker_id)() == crate::get_library_marker_id()
+        && expr.inner() == other.inner()
+}
+
 unsafe extern "C" fn release_fn_wrapper(expr: &mut FFI_PhysicalExpr) {
     unsafe {
         debug_assert!(!expr.private_data.is_null());
         let private_data =
-            Box::from_raw(expr.private_data as *mut PhysicalExprPrivateData);
+            Box::from_raw(expr.private_data.cast::<PhysicalExprPrivateData>());
         drop(private_data);
         expr.private_data = std::ptr::null_mut();
     }
@@ -415,7 +424,8 @@ unsafe extern "C" fn clone_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFI_PhysicalEx
 
         let private_data = Box::into_raw(Box::new(PhysicalExprPrivateData {
             expr: Arc::clone(&(*old_private_data).expr),
-        })) as *mut c_void;
+        }))
+        .cast::<c_void>();
 
         FFI_PhysicalExpr {
             data_type: data_type_fn_wrapper,
@@ -434,8 +444,10 @@ unsafe extern "C" fn clone_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFI_PhysicalEx
             snapshot: snapshot_fn_wrapper,
             snapshot_generation: snapshot_generation_fn_wrapper,
             is_volatile_node: is_volatile_node_fn_wrapper,
+            expression_id: expression_id_fn_wrapper,
             display: display_fn_wrapper,
             hash: hash_fn_wrapper,
+            eq: eq_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -477,12 +489,14 @@ impl From<Arc<dyn PhysicalExpr>> for FFI_PhysicalExpr {
             snapshot: snapshot_fn_wrapper,
             snapshot_generation: snapshot_generation_fn_wrapper,
             is_volatile_node: is_volatile_node_fn_wrapper,
+            expression_id: expression_id_fn_wrapper,
             display: display_fn_wrapper,
             hash: hash_fn_wrapper,
+            eq: eq_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -713,13 +727,16 @@ impl PhysicalExpr for ForeignPhysicalExpr {
     fn is_volatile_node(&self) -> bool {
         unsafe { (self.expr.is_volatile_node)(&self.expr) }
     }
+
+    fn expression_id(&self) -> Option<u64> {
+        unsafe { (self.expr.expression_id)(&self.expr) }.into()
+    }
 }
 
 impl Eq for ForeignPhysicalExpr {}
 impl PartialEq for ForeignPhysicalExpr {
     fn eq(&self, other: &Self) -> bool {
-        // FFI_PhysicalExpr cannot be compared, so identity equality is the best we can do.
-        std::ptr::eq(self, other)
+        std::ptr::eq(self, other) || unsafe { (self.expr.eq)(&self.expr, &other.expr) }
     }
 }
 impl Hash for ForeignPhysicalExpr {
@@ -747,7 +764,9 @@ mod tests {
     use datafusion_expr::interval_arithmetic::Interval;
     #[expect(deprecated)]
     use datafusion_expr::statistics::Distribution;
-    use datafusion_physical_expr::expressions::{Column, NegativeExpr, NotExpr};
+    use datafusion_physical_expr::expressions::{
+        Column, DynamicFilterPhysicalExpr, NegativeExpr, NotExpr, lit,
+    };
     use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, fmt_sql};
 
     use crate::physical_expr::FFI_PhysicalExpr;
@@ -760,6 +779,21 @@ mod tests {
         let foreign_expr: Arc<dyn PhysicalExpr> = (&ffi_expr).into();
 
         (original, foreign_expr)
+    }
+
+    #[test]
+    fn ffi_physical_expr_expression_id() {
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        let expected_id = dynamic_filter
+            .expression_id()
+            .expect("dynamic filters always have an expression ID");
+        let expression: Arc<dyn PhysicalExpr> =
+            Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter);
+        let mut ffi_expr = FFI_PhysicalExpr::from(expression);
+        ffi_expr.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_expr: Arc<dyn PhysicalExpr> = (&ffi_expr).into();
+        assert_eq!(foreign_expr.expression_id(), Some(expected_id));
     }
 
     fn test_record_batch() -> RecordBatch {
@@ -974,7 +1008,7 @@ mod tests {
         let (_, foreign_1) = create_test_expr();
         let (_, foreign_2) = create_test_expr();
 
-        assert_ne!(&foreign_1, &foreign_2);
+        assert_eq!(&foreign_1, &foreign_2);
 
         let mut hasher = DefaultHasher::new();
         foreign_1.as_ref().hash(&mut hasher);

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module contains end to end tests of creating
 //! user defined window functions
@@ -22,7 +9,7 @@ use arrow::array::{
     Array, ArrayRef, AsArray, Int64Array, RecordBatch, StringArray, UInt64Array,
     record_batch,
 };
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Metadata, Schema};
 use arrow_schema::FieldRef;
 use datafusion::common::test_util::batches_to_string;
 use datafusion::common::{Result, ScalarValue};
@@ -868,11 +855,8 @@ async fn test_metadata_based_window_fn() -> Result<()> {
     let data_array = Arc::new(UInt64Array::from(vec![0, 5, 10, 15, 20])) as ArrayRef;
     let schema = Arc::new(Schema::new(vec![
         Field::new("no_metadata", DataType::UInt64, true),
-        Field::new("with_metadata", DataType::UInt64, true).with_metadata(
-            [("modify_values".to_string(), "double_output".to_string())]
-                .into_iter()
-                .collect(),
-        ),
+        Field::new("with_metadata", DataType::UInt64, true)
+            .with_metadata(Metadata::new().with("modify_values", "double_output")),
     ]));
 
     let batch = RecordBatch::try_new(
@@ -886,8 +870,7 @@ async fn test_metadata_based_window_fn() -> Result<()> {
 
     let no_output_meta_udf = WindowUDF::from(MetadataBasedWindowUdf::new(HashMap::new()));
     let with_output_meta_udf = WindowUDF::from(MetadataBasedWindowUdf::new(
-        [("output_metatype".to_string(), "custom_value".to_string())]
-            .into_iter()
+        std::iter::once(("output_metatype".to_string(), "custom_value".to_string()))
             .collect(),
     ));
 

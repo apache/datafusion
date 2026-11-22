@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Helper functions for the table implementation
 
@@ -29,8 +16,8 @@ use datafusion_datasource::{FileExtensions, ListingTableUrl};
 use datafusion_expr::{BinaryExpr, Operator, lit, utils};
 
 use arrow::{
-    array::AsArray,
-    datatypes::{DataType, Field},
+    array::{Array, AsArray},
+    datatypes::{DataType, Field, Metadata},
     record_batch::RecordBatch,
 };
 use datafusion_expr::execution_props::ExecutionProps;
@@ -124,11 +111,8 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         // - Can `Wildcard` be considered as a `Literal`?
         // - ScalarVariable could be `applicable`, but that would require access to the context
         //   https://github.com/apache/datafusion/issues/21690
-        // TODO: remove the next line after `Expr::Wildcard` is removed
-        #[expect(deprecated)]
         Expr::AggregateFunction { .. }
         | Expr::WindowFunction { .. }
-        | Expr::Wildcard { .. }
         | Expr::Unnest { .. }
         | Expr::Placeholder(_) => {
             is_applicable = false;
@@ -272,7 +256,7 @@ pub fn evaluate_partition_prefix<'a>(
         return None;
     }
 
-    let mut parts = vec![];
+    let mut parts = Vec::with_capacity(partition_cols.len());
     for (p, _) in partition_cols {
         match partition_values.get(p.as_str()) {
             Some(PartitionValue::Single(val)) => {
@@ -337,9 +321,11 @@ pub fn filter_partitioned_file(
     )?;
 
     // Since we're only operating on a single file, our batch and resulting "array" holds only one
-    // value indicating if the input file matches the provided filters
+    // value indicating if the input file matches the provided filters. A NULL is not a match:
+    // a null partition value makes that reachable, as `part = 1` is NULL for a null partition.
     let matches = expr.evaluate(&batch)?.into_array(1)?;
-    if matches.as_boolean().value(0) {
+    let matches = matches.as_boolean();
+    if matches.is_valid(0) && matches.value(0) {
         return Ok(Some(pf));
     }
 
@@ -347,13 +333,18 @@ pub fn filter_partitioned_file(
 }
 
 /// Returns `Ok(None)` when the file is not inside a valid partition path
-/// (e.g. a stale file in the table root directory). Such files are skipped
-/// because hive-style partition values are never null and there is no valid
-/// value to assign for non-partitioned files.
+/// (e.g. a stale file in the table root directory), as there is no value to
+/// assign for non-partitioned files.
+///
+/// A partition directory named `null_partition_name` is read as NULL; see
+/// [`ExecutionOptions::listing_table_hive_default_partition_name`].
+///
+/// [`ExecutionOptions::listing_table_hive_default_partition_name`]: datafusion_common::config::ExecutionOptions::listing_table_hive_default_partition_name
 fn try_into_partitioned_file(
     object_meta: ObjectMeta,
     partition_cols: &[(String, DataType)],
     table_path: &ListingTableUrl,
+    null_partition_name: &str,
 ) -> Result<Option<PartitionedFile>> {
     let cols = partition_cols.iter().map(|(name, _)| name.as_str());
     let parsed = parse_partitions_for_path(table_path, &object_meta.location, cols);
@@ -367,6 +358,9 @@ fn try_into_partitioned_file(
         .into_iter()
         .zip(partition_cols)
         .map(|(parsed, (_, datatype))| {
+            if !null_partition_name.is_empty() && parsed == null_partition_name {
+                return ScalarValue::try_new_null(datatype);
+            }
             ScalarValue::try_from_string(parsed.into_owned(), datatype)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -413,7 +407,7 @@ pub async fn pruned_partition_list<'a>(
             .try_filter_map(|object_meta| {
                 futures::future::ready(object_meta_to_partitioned_file(
                     object_meta,
-                    table_path.get_table_ref(),
+                    table_path.get_table_ref().as_ref(),
                 ))
             })
             .boxed())
@@ -423,15 +417,22 @@ pub async fn pruned_partition_list<'a>(
                 .iter()
                 .map(|(n, d)| Field::new(n, d.clone(), true))
                 .collect(),
-            Default::default(),
+            Metadata::new(),
         )?;
 
+        let null_partition_name = ctx
+            .config_options()
+            .execution
+            .listing_table_hive_default_partition_name
+            .as_str();
+
         Ok(objects
-            .try_filter_map(|object_meta| {
+            .try_filter_map(move |object_meta| {
                 futures::future::ready(try_into_partitioned_file(
                     object_meta,
                     partition_cols,
                     table_path,
+                    null_partition_name,
                 ))
             })
             .try_filter_map(move |pf| {
@@ -443,7 +444,7 @@ pub async fn pruned_partition_list<'a>(
 
 fn object_meta_to_partitioned_file(
     object_meta: ObjectMeta,
-    table_ref: &Option<TableReference>,
+    table_ref: Option<&TableReference>,
 ) -> Result<Option<PartitionedFile>> {
     Ok(Some(PartitionedFile {
         object_meta,
@@ -454,7 +455,7 @@ fn object_meta_to_partitioned_file(
         ordering: None,
         extensions: FileExtensions::new(),
         metadata_size_hint: None,
-        table_reference: table_ref.clone(),
+        table_reference: table_ref.cloned(),
     }))
 }
 
@@ -463,6 +464,15 @@ fn object_meta_to_partitioned_file(
 ///
 /// Partition values are percent-decoded to match Hive-style object-store paths
 /// that encode special characters in path segments.
+///
+/// The final path component is always treated as a filename, even if it contains
+/// `=`. Each requested partition column must match a `name=value` directory in
+/// order; this returns `None` if any of those directories is missing or mismatched,
+/// or if `file_path` is outside `table_path`.
+///
+/// For example, columns `year` and `month` match `year=2024/month=01/data.parquet`,
+/// but not `year=2024/month=01.parquet`: the latter is missing the month directory.
+/// A `key=value` filename inside a complete partition path remains valid.
 pub fn parse_partitions_for_path<'a, I>(
     table_path: &ListingTableUrl,
     file_path: &'a Path,
@@ -471,10 +481,18 @@ pub fn parse_partitions_for_path<'a, I>(
 where
     I: IntoIterator<Item = &'a str>,
 {
-    let subpath = table_path.strip_prefix(file_path)?;
+    let mut subpath = table_path.strip_prefix(file_path)?.peekable();
 
     let mut part_values = vec![];
-    for (part, expected_partition) in subpath.zip(table_partition_cols) {
+    for expected_partition in table_partition_cols {
+        let part = subpath.next()?;
+        // A partition value must come from a directory, never the filename.
+        if subpath.peek().is_none() {
+            debug!(
+                "Ignoring file: file_path='{file_path}', table_path='{table_path}', missing partition directory '{expected_partition}'",
+            );
+            return None;
+        }
         match part.split_once('=') {
             Some((name, val)) if name == expected_partition => {
                 // Preserve the original value if percent-decoding produces invalid UTF-8.
@@ -508,6 +526,7 @@ pub fn describe_partition(partition: &Partition) -> (&str, usize, Vec<&str>) {
 
 #[cfg(test)]
 mod tests {
+    use datafusion_common::config::HIVE_DEFAULT_PARTITION_NAME;
     use datafusion_datasource::file_groups::FileGroup;
     use std::ops::Not;
 
@@ -556,6 +575,18 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_partitions_for_path_with_too_few_directories() {
+        assert_eq!(
+            None,
+            parse_partitions_for_path(
+                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
+                &Path::from("bucket/mytable/mypartition=v1/otherpartition=v2.csv"),
+                vec!["mypartition", "otherpartition", "thirdpartition"]
+            )
+        );
+    }
+
+    #[test]
     fn test_parse_partitions_for_path() {
         assert_eq!(
             Some(vec![] as Vec<Cow<'_, str>>),
@@ -586,6 +617,30 @@ mod tests {
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
                 &Path::from("bucket/mytable/mypartition=v1/file.csv"),
+                vec!["mypartition"]
+            )
+        );
+        assert_eq!(
+            None,
+            parse_partitions_for_path(
+                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
+                &Path::from("bucket/mytable/mypartition=v1.csv"),
+                vec!["mypartition"]
+            )
+        );
+        assert_eq!(
+            None,
+            parse_partitions_for_path(
+                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
+                &Path::from("bucket/mytable/mypartition=v1/otherpartition=v2.csv"),
+                vec!["mypartition", "otherpartition"]
+            )
+        );
+        assert_eq!(
+            Some(vec![Cow::Borrowed("v1")]),
+            parse_partitions_for_path(
+                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
+                &Path::from("bucket/mytable/mypartition=v1/mypartition=ignored.csv"),
                 vec!["mypartition"]
             )
         );
@@ -672,8 +727,13 @@ mod tests {
             version: None,
         };
 
-        let result =
-            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+        let result = try_into_partitioned_file(
+            meta,
+            &partition_cols,
+            &table_path,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap();
         assert!(result.is_some());
         let pf = result.unwrap();
         assert_eq!(pf.partition_values.len(), 1);
@@ -698,14 +758,73 @@ mod tests {
             version: None,
         };
 
-        let result =
-            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+        let result = try_into_partitioned_file(
+            meta,
+            &partition_cols,
+            &table_path,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap();
         assert!(result.is_some());
         let pf = result.unwrap();
         assert_eq!(pf.partition_values.len(), 1);
         assert_eq!(
             pf.partition_values[0],
             ScalarValue::Utf8(Some("Electronics/Computers".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_try_into_partitioned_file_null_partition() {
+        let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
+        // A type the placeholder cannot be parsed as, which is how this used to fail.
+        let partition_cols = vec![("day".to_string(), DataType::Date32)];
+        let meta = ObjectMeta {
+            location: Path::from(
+                "bucket/mytable/day=__HIVE_DEFAULT_PARTITION__/data.parquet",
+            ),
+            last_modified: chrono::Utc::now(),
+            size: 100,
+            e_tag: None,
+            version: None,
+        };
+
+        let pf = try_into_partitioned_file(
+            meta,
+            &partition_cols,
+            &table_path,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap()
+        .expect("file should be listed");
+
+        assert_eq!(pf.partition_values, vec![ScalarValue::Date32(None)]);
+    }
+
+    #[test]
+    fn test_try_into_partitioned_file_null_partition_name_not_matched() {
+        let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
+        let partition_cols = vec![("category".to_string(), DataType::Utf8)];
+        let meta = ObjectMeta {
+            location: Path::from(
+                "bucket/mytable/category=__HIVE_DEFAULT_PARTITION__/data.parquet",
+            ),
+            last_modified: chrono::Utc::now(),
+            size: 100,
+            e_tag: None,
+            version: None,
+        };
+
+        // The empty name turns the mapping off, leaving the directory name as the value.
+        let pf = try_into_partitioned_file(meta, &partition_cols, &table_path, "")
+            .unwrap()
+            .expect("file should be listed");
+
+        assert_eq!(
+            pf.partition_values,
+            vec![ScalarValue::Utf8(Some(
+                "__HIVE_DEFAULT_PARTITION__".to_string()
+            ))]
         );
     }
 
@@ -724,8 +843,13 @@ mod tests {
             version: None,
         };
 
-        let result =
-            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+        let result = try_into_partitioned_file(
+            meta,
+            &partition_cols,
+            &table_path,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap();
         assert!(
             result.is_none(),
             "Files outside partition structure should be skipped"
@@ -745,8 +869,13 @@ mod tests {
             version: None,
         };
 
-        let result =
-            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+        let result = try_into_partitioned_file(
+            meta,
+            &partition_cols,
+            &table_path,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap();
         assert!(
             result.is_none(),
             "Files with wrong partition column name should be skipped"
@@ -768,8 +897,13 @@ mod tests {
             version: None,
         };
 
-        let result =
-            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
+        let result = try_into_partitioned_file(
+            meta,
+            &partition_cols,
+            &table_path,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap();
         assert!(result.is_some());
         let pf = result.unwrap();
         assert_eq!(pf.partition_values.len(), 2);
@@ -791,23 +925,27 @@ mod tests {
             ("year".to_string(), DataType::Utf8),
             ("month".to_string(), DataType::Utf8),
         ];
-        let meta = ObjectMeta {
-            location: Path::from("bucket/mytable/year=2024/data.parquet"),
-            last_modified: chrono::Utc::now(),
-            size: 100,
-            e_tag: None,
-            version: None,
-        };
+        for filename in ["data.parquet", "month=02.parquet"] {
+            let meta = ObjectMeta {
+                location: Path::from(format!("bucket/mytable/year=2024/{filename}")),
+                last_modified: chrono::Utc::now(),
+                size: 100,
+                e_tag: None,
+                version: None,
+            };
 
-        let result =
-            try_into_partitioned_file(meta, &partition_cols, &table_path).unwrap();
-        // File has year=2024 but no month= directory — parse_partitions_for_path
-        // returns None because the path component "data.parquet" doesn't match
-        // the expected "month=..." pattern.
-        assert!(
-            result.is_none(),
-            "Files with incomplete partition structure should be skipped"
-        );
+            let result = try_into_partitioned_file(
+                meta,
+                &partition_cols,
+                &table_path,
+                HIVE_DEFAULT_PARTITION_NAME,
+            )
+            .unwrap();
+            assert!(
+                result.is_none(),
+                "A filename must not supply the missing month partition: {filename}"
+            );
+        }
     }
 
     #[test]

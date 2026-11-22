@@ -1,52 +1,47 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module provides the bisect function, which implements binary search.
 
 pub(crate) mod aggregate;
 pub mod expr;
+pub mod hex;
 pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
 use crate::assert_or_internal_err;
-use crate::error::{_exec_datafusion_err, _exec_err, _internal_datafusion_err};
+use crate::error::{
+    _exec_datafusion_err, _exec_err, _internal_datafusion_err, _internal_err,
+    _plan_datafusion_err,
+};
+use crate::hash_utils::RandomState;
 use crate::{Result, ScalarValue};
 use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
     cast::AsArray,
 };
 use arrow::array::{
-    ArrowPrimitiveType, BooleanArray, Datum, GenericListArray, Int32Array, Int64Array,
-    MutableArrayData, PrimitiveArray, make_array,
+    ArrowPrimitiveType, BooleanArray, Datum, DictionaryArray, GenericListArray,
+    Int32Array, Int64Array, MutableArrayData, PrimitiveArray, layout, make_array,
 };
 use arrow::array::{LargeListViewArray, ListViewArray};
-use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::length::length;
-use arrow::compute::{SortColumn, SortOptions, partition};
+use arrow::compute::{SortColumn, SortOptions, nullif, partition, take};
 use arrow::datatypes::{
-    ArrowNativeType, DataType, Field, Int32Type, Int64Type, SchemaRef,
+    ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Int32Type, Int64Type,
+    Metadata, SchemaRef,
 };
+use arrow::downcast_dictionary_array;
+use arrow_select::dictionary::garbage_collect_any_dictionary;
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{Ordering, min};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::iter::repeat_n;
 use std::num::NonZero;
 use std::ops::Range;
@@ -79,9 +74,9 @@ use std::thread::available_parallelism;
 ///
 /// assert_eq!(projected_schema, expected_schema);
 /// ```
-pub fn project_schema(
+pub fn project_schema<T: AsRef<[usize]> + ?Sized>(
     schema: &SchemaRef,
-    projection: Option<&impl AsRef<[usize]>>,
+    projection: Option<&T>,
 ) -> Result<SchemaRef> {
     let schema = match projection {
         Some(columns) => Arc::new(schema.project(columns.as_ref())?),
@@ -181,9 +176,10 @@ pub fn find_bisect_point<F>(
 where
     F: Fn(&[ScalarValue], &[ScalarValue]) -> Result<bool>,
 {
+    let mut val = Vec::with_capacity(item_columns.len());
     while low < high {
         let mid = ((high - low) / 2) + low;
-        let val = get_row_at_idx(item_columns, mid)?;
+        extract_row_at_idx_to_buf(item_columns, mid, &mut val)?;
         if compare_fn(&val, target)? {
             low = mid + 1;
         } else {
@@ -228,8 +224,9 @@ pub fn search_in_slice<F>(
 where
     F: Fn(&[ScalarValue], &[ScalarValue]) -> Result<bool>,
 {
+    let mut val = Vec::new();
     while low < high {
-        let val = get_row_at_idx(item_columns, low)?;
+        extract_row_at_idx_to_buf(item_columns, low, &mut val)?;
         if !compare_fn(&val, target)? {
             break;
         }
@@ -353,7 +350,7 @@ pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<St
                 false
             };
             if is_double_quoted {
-                id[1..id.len() - 1].to_string().replace("\"\"", "\"")
+                id[1..id.len() - 1].replace("\"\"", "\"")
             } else if ignore_case {
                 id
             } else {
@@ -409,6 +406,92 @@ pub fn split_vec_min_alloc<T>(vec: &mut Vec<T>, n: usize) -> Vec<T> {
         let remaining = vec.split_off(n);
         std::mem::replace(vec, remaining)
     }
+}
+
+/// Applies `f` to the values of the dictionary `array` and keeps its keys.
+///
+/// Slices, filters and repartitioned batches keep the whole values array of
+/// the dictionary they came from, so running `f` on every value can cost far
+/// more than the batch has rows. `f` never runs on more than
+/// [`MAX_DICTIONARY_VALUES_PER_ROW`] values per row: past that, it runs on the
+/// values the rows reference instead.
+///
+/// `f` can also see values that no row references. If it fails, it runs once
+/// more on only the referenced values, so it fails only when running it on
+/// each row would.
+pub fn map_dictionary_values<F>(array: &ArrayRef, mut f: F) -> Result<ArrayRef>
+where
+    F: FnMut(&ArrayRef) -> Result<ArrayRef>,
+{
+    let compacted = downcast_dictionary_array! {
+        array => compact_oversized_dictionary(array)?.map(|d| Arc::new(d) as ArrayRef),
+        dt => return _internal_err!("expected a dictionary array, got {dt}"),
+    };
+    let mut dictionary = compacted.unwrap_or_else(|| Arc::clone(array));
+    let values = match f(dictionary.as_any_dictionary().values()) {
+        Ok(values) => values,
+        Err(e) => {
+            let referenced =
+                garbage_collect_any_dictionary(dictionary.as_any_dictionary())?;
+            if referenced.as_any_dictionary().values().len()
+                == dictionary.as_any_dictionary().values().len()
+            {
+                return Err(e);
+            }
+            dictionary = referenced;
+            f(dictionary.as_any_dictionary().values())?
+        }
+    };
+    #[expect(clippy::disallowed_methods)] // the values are bounded above
+    Ok(dictionary.as_any_dictionary().with_values(values))
+}
+
+/// The most dictionary values per row that code processing every value of a
+/// dictionary should handle. Past this, it first reduces the dictionary to the
+/// values its rows reference. This is a bound, not a tuned break-even: too high
+/// only gives up an improvement, while too low can make cheap per-value work
+/// slower than processing every value.
+pub const MAX_DICTIONARY_VALUES_PER_ROW: usize = 64;
+
+/// Returns `None` when `array` has at most [`MAX_DICTIONARY_VALUES_PER_ROW`]
+/// values per row, and otherwise [`compact_dictionary`] of it.
+pub(crate) fn compact_oversized_dictionary<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+) -> Result<Option<DictionaryArray<K>>> {
+    if array.values().len() <= MAX_DICTIONARY_VALUES_PER_ROW * array.len() {
+        return Ok(None);
+    }
+    compact_dictionary(array).map(Some)
+}
+
+/// Returns a copy of `array` that holds each value its rows reference once.
+/// This costs O(rows), and work over its values never covers more than the
+/// values of `array`, however long they are or often they repeat.
+pub fn compact_dictionary<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+) -> Result<DictionaryArray<K>> {
+    let keys = array.keys();
+    let mut new_keys =
+        HashMap::with_capacity_and_hasher(keys.len(), RandomState::default());
+    let mut referenced = Vec::with_capacity(keys.len());
+    let remapped: ScalarBuffer<K::Native> = keys
+        .iter()
+        .map(|key| match key {
+            Some(key) => *new_keys.entry(key.as_usize()).or_insert_with(|| {
+                referenced.push(key);
+                // There are at most as many distinct keys as `K` can hold
+                K::Native::usize_as(referenced.len() - 1)
+            }),
+            None => K::Native::default(),
+        })
+        .collect();
+    let values = take(
+        array.values().as_ref(),
+        &PrimitiveArray::<K>::from_iter_values(referenced),
+        None,
+    )?;
+    let keys = PrimitiveArray::<K>::new(remapped, keys.nulls().cloned());
+    Ok(DictionaryArray::try_new(keys, values)?)
 }
 
 #[cfg(test)]
@@ -556,6 +639,7 @@ pub struct SingleRowListArrayBuilder {
     /// Specify the field name for the resulting array. Defaults to value used in
     /// [`Field::new_list_field`]
     field_name: Option<String>,
+    field_metadata: Metadata,
 }
 
 impl SingleRowListArrayBuilder {
@@ -565,6 +649,7 @@ impl SingleRowListArrayBuilder {
             arr,
             nullable: true,
             field_name: None,
+            field_metadata: Metadata::default(),
         }
     }
 
@@ -580,10 +665,12 @@ impl SingleRowListArrayBuilder {
         self
     }
 
-    /// Copies field name and nullable from the specified field
-    pub fn with_field(self, field: &Field) -> Self {
-        self.with_field_name(Some(field.name().to_owned()))
-            .with_nullable(field.is_nullable())
+    /// Copies field name, nullability, and metadata from the specified field
+    pub fn with_field(mut self, field: &Field) -> Self {
+        self.field_name = Some(field.name().to_owned());
+        self.nullable = field.is_nullable();
+        self.field_metadata = field.metadata().clone();
+        self
     }
 
     /// Build a single element [`ListArray`]
@@ -656,13 +743,14 @@ impl SingleRowListArrayBuilder {
             arr,
             nullable,
             field_name,
+            field_metadata,
         } = self;
         let data_type = arr.data_type().to_owned();
         let field = match field_name {
             Some(name) => Field::new(name, data_type, nullable),
             None => Field::new_list_field(data_type, nullable),
         };
-        (Arc::new(field), arr)
+        (Arc::new(field.with_metadata(field_metadata)), arr)
     }
 }
 
@@ -949,7 +1037,7 @@ pub mod datafusion_strsim {
             let mut distance_b = i;
 
             for (j, b_elem) in b.into_iter().enumerate() {
-                let cost = if a_elem == b_elem { 0usize } else { 1usize };
+                let cost = usize::from(a_elem != b_elem);
                 let distance_a = distance_b + cost;
                 distance_b = cache[j];
                 result = min(result + 1, min(distance_a, distance_b + 1));
@@ -1031,7 +1119,7 @@ pub fn merge_and_order_indices<T: Borrow<usize>, S: Borrow<usize>>(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    result.sort();
+    result.sort_unstable();
     result
 }
 
@@ -1067,7 +1155,9 @@ pub fn transpose<T>(original: Vec<Vec<T>>) -> Vec<Vec<T>> {
     match original.as_slice() {
         [] => vec![],
         [first, ..] => {
-            let mut result = (0..first.len()).map(|_| vec![]).collect::<Vec<_>>();
+            let mut result = (0..first.len())
+                .map(|_| Vec::with_capacity(original.len()))
+                .collect::<Vec<_>>();
             for row in original {
                 for (item, transposed_row) in row.into_iter().zip(&mut result) {
                     transposed_row.push(item);
@@ -1141,6 +1231,32 @@ pub fn combine_limit(
     (combined_skip, combined_fetch)
 }
 
+/// Converts a wire integer to `usize`, rejecting out-of-range values.
+/// `context` and `field` identify the value in the error message.
+pub fn usize_from_wire<T>(value: T, context: &str, field: &str) -> Result<usize>
+where
+    T: TryInto<usize> + std::fmt::Display + Copy,
+{
+    value.try_into().map_err(|_| {
+        _plan_datafusion_err!(
+            "{context}: {field} wire value {value} is out of range for usize"
+        )
+    })
+}
+
+/// Converts a `usize` to a wire integer, rejecting out-of-range values.
+pub fn usize_to_wire<T: TryFrom<usize>>(
+    value: usize,
+    context: &str,
+    field: &str,
+) -> Result<T> {
+    T::try_from(value).map_err(|_| {
+        _plan_datafusion_err!(
+            "{context}: {field} value {value} is out of range for the plan wire format"
+        )
+    })
+}
+
 /// Returns the estimated number of threads available for parallel execution.
 ///
 /// This is a wrapper around `std::thread::available_parallelism`, providing a default value
@@ -1198,6 +1314,36 @@ pub fn take_function_args<const N: usize, T>(
     })
 }
 
+/// Returns the number of values covered by an offset buffer.
+///
+/// Slicing a variable-length array narrows its offsets but retains its entire
+/// values buffer. Use this span to size output buffers: it counts child elements
+/// for lists and bytes for strings/binary arrays, including values in null rows.
+/// An empty array still has one offset and therefore a span of zero.
+#[inline]
+pub fn offset_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize {
+    offset_span(offsets).1
+}
+
+/// Returns the start and length of the values covered by an offset buffer.
+///
+/// The returned pair can be passed to [`Array::slice`] to select the visible
+/// child values of a sliced list or map. For strings/binary arrays, the start
+/// and length are measured in bytes. Values in null rows are included.
+/// An empty array has a length of zero but may have a nonzero start.
+///
+/// ```
+/// # use arrow::buffer::OffsetBuffer;
+/// # use datafusion_common::utils::offset_span;
+/// let offsets = OffsetBuffer::new(vec![100_i32, 103, 108].into());
+/// assert_eq!(offset_span(&offsets), (100, 8));
+/// ```
+#[inline]
+pub fn offset_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
+    let start = offsets.first().as_usize();
+    (start, offsets.last().as_usize() - start)
+}
+
 /// Returns the inner values of a list, or an error otherwise
 /// For [`ListArray`] and [`LargeListArray`], if it's sliced, it returns a
 /// sliced array too. Therefore, too reconstruct a list using it,
@@ -1215,15 +1361,10 @@ pub fn list_values(array: &dyn Array) -> Result<ArrayRef> {
 
 fn sliced_list_values<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> ArrayRef {
     let values = list.values();
-    let offsets = list.offsets();
+    let (start, len) = offset_span(list.offsets());
 
-    if let (Some(first), Some(last)) = (offsets.first(), offsets.last()) {
-        let first = first.as_usize();
-        let last = last.as_usize();
-
-        if first != 0 || last != values.len() {
-            return values.slice(first, last - first);
-        }
+    if start != 0 || len != values.len() {
+        return values.slice(start, len);
     }
 
     Arc::clone(values)
@@ -1273,9 +1414,9 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
         if valid_or_empty.has_false() {
             let array_data = list.values().to_data();
             let offsets = list.offsets();
-            let capacity = offsets[offsets.len() - 1] - offsets[0];
+            let capacity = offset_span_len(offsets);
             let mut mutable_array_data =
-                MutableArrayData::new(vec![&array_data], false, capacity.as_usize());
+                MutableArrayData::new(vec![&array_data], false, capacity);
 
             let (valid_or_empty, _nulls) = valid_or_empty.into_parts();
 
@@ -1293,14 +1434,8 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
             let offsets = OffsetBuffer::from_lengths(lengths);
             let values = make_array(mutable_array_data.freeze());
 
-            let field = match list.data_type() {
-                DataType::List(field) => field,
-                DataType::LargeList(field) => field,
-                _ => unreachable!(),
-            };
-
             return Ok(GenericListArray::try_new(
-                Arc::clone(field),
+                Arc::clone(list.value_field()),
                 offsets,
                 values,
                 list.nulls().cloned(),
@@ -1379,107 +1514,169 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
 }
 
 /// Replace `-0.0` with `+0.0` in any `Float16`, `Float32`, or `Float64` array.
-/// For non-float arrays returns the input unchanged. NaN payloads are
-/// preserved.
-///
-/// Arrow's comparison kernels (`arrow::compute::kernels::cmp::eq` etc.) and
-/// row-encoding (`arrow::row::RowConverter`) use IEEE 754 totalOrder
-/// semantics, which treats `-0.0` and `+0.0` as distinct. SQL semantics
-/// (PostgreSQL / IEEE 754 equality) require them to compare equal, so
-/// callers normalize before invoking those kernels.
-///
-/// The common case - no `-0.0` present - is allocation-free: a single
-/// read-only scan of the underlying buffer (auto-vectorizable to an
-/// OR-reduction) decides whether to fall through to the rewriting path.
-/// Only arrays that actually contain `-0.0` pay for a new buffer.
+#[deprecated(
+    since = "56.0.0",
+    note = "use `datafusion_common::float_semantics::normalize` instead"
+)]
 pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
-    use arrow::array::{Float16Array, Float32Array, Float64Array};
-    use arrow::datatypes::{Float16Type, Float32Type, Float64Type};
-    // -0.0 has only the sign bit set; no other finite or NaN value shares
-    // this bit pattern, so a strict-equality scan reliably gates the rewrite.
-    const NEG_ZERO_F16_BITS: u16 = half::f16::NEG_ZERO.to_bits();
-    const NEG_ZERO_F32_BITS: u32 = (-0.0_f32).to_bits();
-    const NEG_ZERO_F64_BITS: u64 = (-0.0_f64).to_bits();
-    match array.data_type() {
-        DataType::Float32 => {
-            let arr: &Float32Array = array.as_primitive::<Float32Type>();
-            if !arr
-                .values()
-                .iter()
-                .any(|v| v.to_bits() == NEG_ZERO_F32_BITS)
-            {
-                return Arc::clone(array);
-            }
-            let normalized: Float32Array =
-                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f32 } else { v });
-            Arc::new(normalized)
-        }
-        DataType::Float64 => {
-            let arr: &Float64Array = array.as_primitive::<Float64Type>();
-            if !arr
-                .values()
-                .iter()
-                .any(|v| v.to_bits() == NEG_ZERO_F64_BITS)
-            {
-                return Arc::clone(array);
-            }
-            let normalized: Float64Array =
-                arr.unary(|v| if v.to_bits() << 1 == 0 { 0.0_f64 } else { v });
-            Arc::new(normalized)
-        }
-        DataType::Float16 => {
-            let arr: &Float16Array = array.as_primitive::<Float16Type>();
-            if !arr
-                .values()
-                .iter()
-                .any(|v| v.to_bits() == NEG_ZERO_F16_BITS)
-            {
-                return Arc::clone(array);
-            }
-            let normalized: Float16Array = arr.unary(|v| {
-                if v.to_bits() << 1 == 0 {
-                    half::f16::from_bits(0)
-                } else {
-                    v
-                }
-            });
-            Arc::new(normalized)
-        }
-        _ => Arc::clone(array),
-    }
+    crate::float_semantics::normalize(Arc::clone(array))
 }
 
+pub use crate::float_semantics::has_float_leaf;
+
 /// Replace `-0.0` with `+0.0` in `Float16`, `Float32`, or `Float64` scalar
-/// values. Other variants are returned unchanged. See [`normalize_float_zero`]
-/// for context.
+/// values.
+#[deprecated(since = "56.0.0", note = "use `ScalarValue::normalize` instead")]
 pub fn normalize_float_zero_scalar(scalar: ScalarValue) -> ScalarValue {
-    match scalar {
-        ScalarValue::Float32(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float32(Some(0.0))
-        }
-        ScalarValue::Float64(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float64(Some(0.0))
-        }
-        ScalarValue::Float16(Some(v)) if v.to_bits() << 1 == 0 => {
-            ScalarValue::Float16(Some(half::f16::from_bits(0)))
-        }
-        other => other,
+    scalar.normalize()
+}
+
+/// Apply a struct's nulls to one of its fields.
+///
+/// Arrays with validity bitmaps share their value buffers; unions and
+/// run-end encoded arrays are rebuilt.
+pub fn apply_parent_nulls(
+    col: &ArrayRef,
+    parent_nulls: Option<&NullBuffer>,
+) -> Result<ArrayRef> {
+    let Some(parent_nulls) = parent_nulls else {
+        // If there are no parent nulls to apply, we can just return
+        return Ok(Arc::clone(col));
+    };
+
+    // NullArray is already entirely null and cannot have a validity bitmap.
+    // If we have 0 parent nulls, we can also avoid extra work.
+    if col.data_type().is_null() || parent_nulls.null_count() == 0 {
+        return Ok(Arc::clone(col));
     }
+
+    if layout(col.data_type()).can_contain_null_mask {
+        // `nullif` marks a row null where the mask is true and keeps the
+        // field's own nulls. Only the validity bitmap is rebuilt; the value
+        // buffers and child arrays are shared with `col`.
+        let null_parents = BooleanArray::new(!parent_nulls.inner(), None);
+        return Ok(nullif(col.as_ref(), &null_parents)?);
+    }
+
+    // Unions and run-end encoded arrays have no validity bitmap of their own
+    // and represent nulls in their children. Rebuild the array so null parents
+    // become null values in those children.
+    let data = col.to_data();
+    let mut mutable = MutableArrayData::new(vec![&data], true, data.len());
+    let mut end = 0;
+    for (start, valid_end) in parent_nulls.valid_slices() {
+        mutable.try_extend_nulls(start - end)?;
+        mutable.try_extend(0, start, valid_end)?;
+        end = valid_end;
+    }
+    mutable.try_extend_nulls(data.len() - end)?;
+
+    Ok(make_array(mutable.freeze()))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::{
-        array::{Float64Array, Int32Array},
-        buffer::NullBuffer,
-        datatypes::Int32Type,
+        array::{Float64Array, Int32Array, NullArray, StringArray},
+        datatypes::{Int8Type, Int32Type, UInt8Type},
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
+
+    #[test]
+    fn test_list_scalar_cast_preserves_target_element_metadata() -> Result<()> {
+        let input =
+            ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(1)])]);
+        let item = Field::new("item", DataType::Int32, true)
+            .with_metadata(HashMap::from([("PARQUET:field_id".into(), "2".into())]));
+        let target = DataType::List(Arc::new(item));
+
+        let casted = ScalarValue::List(Arc::new(input)).cast_to(&target)?;
+        assert_eq!(casted.data_type(), target);
+        assert_eq!(casted.to_array_of_size(2)?.data_type(), &target);
+        Ok(())
+    }
+
+    #[test]
+    fn test_apply_parent_nulls_sliced() -> Result<()> {
+        let child = Arc::new(
+            Int32Array::from(vec![Some(1), None, Some(3), Some(4), Some(5)]).slice(1, 3),
+        ) as ArrayRef;
+        let parent_nulls =
+            NullBuffer::from(vec![true, true, true, false, true]).slice(1, 3);
+        let result = apply_parent_nulls(&child, Some(&parent_nulls))?;
+        assert_eq!(
+            result.as_ref(),
+            &Int32Array::from(vec![None, Some(3), None])
+        );
+        assert!(result.to_data().buffers()[0].ptr_eq(&child.to_data().buffers()[0]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_apply_parent_nulls_noop() -> Result<()> {
+        let child = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as ArrayRef;
+        for parent_nulls in [None, Some(NullBuffer::new_valid(3))] {
+            assert!(Arc::ptr_eq(
+                &apply_parent_nulls(&child, parent_nulls.as_ref())?,
+                &child,
+            ));
+        }
+        let child = Arc::new(NullArray::new(3)) as ArrayRef;
+        assert!(Arc::ptr_eq(
+            &apply_parent_nulls(&child, Some(&NullBuffer::new_null(3)))?,
+            &child,
+        ));
+        let empty = child.slice(0, 0);
+        assert!(Arc::ptr_eq(
+            &apply_parent_nulls(&empty, Some(&NullBuffer::new_valid(0)))?,
+            &empty,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_offset_span() {
+        let offsets = OffsetBuffer::new(vec![0_i32, 5, 8, 8, 12].into());
+        assert_eq!(offset_span(&offsets), (0, 12));
+        assert_eq!(offset_span(&offsets.slice(1, 2)), (5, 3));
+        assert_eq!(offset_span_len(&offsets.slice(1, 2)), 3);
+        assert_eq!(offset_span(&offsets.slice(2, 1)), (8, 0));
+        assert_eq!(offset_span(&offsets.slice(4, 0)), (12, 0));
+        assert_eq!(offset_span(&OffsetBuffer::<i64>::new_empty()), (0, 0));
+        let large = OffsetBuffer::new(vec![i64::MAX - 10, i64::MAX].into());
+        assert_eq!(offset_span(&large), ((i64::MAX - 10) as usize, 10));
+    }
+
+    #[test]
+    fn test_usize_wire_conversions() {
+        assert_eq!(usize_from_wire(42_u64, "SomeExec", "fetch").unwrap(), 42);
+        let err = usize_from_wire(-1_i64, "SomeExec", "skip").unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: SomeExec: skip wire value -1 is out of range for usize"
+        );
+
+        assert_eq!(usize_to_wire::<u32>(42, "SomeExec", "fetch").unwrap(), 42);
+        let err = usize_to_wire::<u8>(256, "SomeExec", "fetch").unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: SomeExec: fetch value 256 is out of range for the plan wire format"
+        );
+
+        let max = usize_from_wire(u64::MAX, "SomeExec", "fetch");
+        if usize::BITS >= u64::BITS {
+            assert_eq!(max.unwrap(), usize::MAX);
+        } else {
+            assert!(max.is_err());
+        }
+    }
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {
@@ -1984,5 +2181,157 @@ mod tests {
 
         fsl_values_row_number(-1, 2).unwrap_err();
         fsl_values_row_number(-1, 0).unwrap_err();
+    }
+
+    #[test]
+    fn map_dictionary_values_bounds_values_per_row() -> Result<()> {
+        let strings = (0..100)
+            .map(|i| (i % 5 != 1).then(|| "x".repeat(i)))
+            .collect::<Vec<_>>();
+        let dict: DictionaryArray<Int32Type> =
+            strings.iter().map(|s| s.as_deref()).collect();
+        let dict: ArrayRef = Arc::new(dict);
+        for (offset, len) in [(0, 100), (1, 1), (6, 1), (2, 1)] {
+            let slice = dict.slice(offset, len);
+            let mut seen = 0;
+            let mapped = map_dictionary_values(&slice, |values| {
+                seen = values.len();
+                Ok(length(values)?)
+            })?;
+            assert!(
+                seen <= MAX_DICTIONARY_VALUES_PER_ROW * len,
+                "{seen} values for {len} rows"
+            );
+            let expected = length(&arrow::compute::cast(&slice, &DataType::Utf8)?)?;
+            assert_eq!(&arrow::compute::cast(&mapped, &DataType::Int32)?, &expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn map_dictionary_values_fails_only_on_referenced_values() -> Result<()> {
+        let calls = Cell::new(0);
+        let fail_on_bad = |values: &ArrayRef| {
+            calls.set(calls.get() + 1);
+            if values.as_string::<i32>().iter().any(|v| v == Some("bad")) {
+                return _exec_err!("bad value");
+            }
+            Ok(length(values)?)
+        };
+        let values: ArrayRef =
+            Arc::new(StringArray::from(vec!["ok", "bad", "fine", "bad"]));
+
+        // "bad" at 1 is behind null keys only, and at 3 has no key. There are
+        // more rows than Int8 keys can index, so the retry can't give each row
+        // its own key.
+        let keys = (0..200)
+            .map(|i| [1, 0, 2][i % 3])
+            .collect::<ScalarBuffer<i8>>();
+        let nulls = NullBuffer::from_iter((0..200).map(|i| i % 3 != 0));
+        let keys = PrimitiveArray::<Int8Type>::new(keys, Some(nulls));
+        let dict: ArrayRef =
+            Arc::new(DictionaryArray::try_new(keys, Arc::clone(&values))?);
+        let mapped = map_dictionary_values(&dict, fail_on_bad)?;
+        assert_eq!(
+            mapped.data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32))
+        );
+        let expected = length(&arrow::compute::cast(&dict, &DataType::Utf8)?)?;
+        assert_eq!(&arrow::compute::cast(&mapped, &DataType::Int32)?, &expected);
+        assert_eq!(calls.get(), 2);
+
+        // A row references "bad", so `f` must still fail, without a retry when
+        // every value is referenced
+        calls.set(0);
+        let keys = PrimitiveArray::<Int8Type>::from(vec![0, 1, 2, 3]);
+        let dict: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values)?);
+        map_dictionary_values(&dict, fail_on_bad).unwrap_err();
+        assert_eq!(calls.get(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn map_dictionary_values_runs_on_each_referenced_value_once() -> Result<()> {
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..1000).map(|i| "x".repeat(i % 7)),
+        ));
+        let keys = Int32Array::from(vec![
+            Some(7),
+            Some(900),
+            None,
+            Some(7),
+            Some(42),
+            Some(900),
+            Some(7),
+            None,
+        ]);
+        let dict: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values)?);
+        let mut seen = 0;
+        let mapped = map_dictionary_values(&dict, |values| {
+            seen = values.len();
+            Ok(length(values)?)
+        })?;
+        assert_eq!(seen, 3);
+        let expected = length(&arrow::compute::cast(&dict, &DataType::Utf8)?)?;
+        assert_eq!(&arrow::compute::cast(&mapped, &DataType::Int32)?, &expected);
+
+        // No row references a value
+        let all_null = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![None; 8]),
+            Arc::clone(dict.as_any_dictionary().values()),
+        )) as ArrayRef;
+        let mapped = map_dictionary_values(&all_null, |values| {
+            seen = values.len();
+            Ok(length(values)?)
+        })?;
+        assert_eq!(seen, 0);
+        assert_eq!(mapped.null_count(), 8);
+        Ok(())
+    }
+
+    // Arrow doesn't require the key type to be able to index every value, so
+    // the row count can exceed what the key type holds.
+    #[test]
+    fn map_dictionary_values_with_more_rows_than_the_key_type_holds() -> Result<()> {
+        fn check<K: ArrowDictionaryKeyType>(distinct_keys: usize) -> Result<()> {
+            let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+                (0..20_000).map(|i| format!("v{i}")),
+            ));
+            let keys: ScalarBuffer<K::Native> = (0..300)
+                .map(|i| K::Native::usize_as(i % distinct_keys))
+                .collect();
+            let keys = PrimitiveArray::<K>::new(keys, None);
+            let dict: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values)?);
+            let mapped = map_dictionary_values(&dict, |values| Ok(Arc::clone(values)))?;
+            assert_eq!(
+                &arrow::compute::cast(&mapped, &DataType::Utf8)?,
+                &arrow::compute::cast(&dict, &DataType::Utf8)?,
+            );
+            Ok(())
+        }
+        check::<UInt8Type>(250)?;
+        check::<Int8Type>(120)
+    }
+
+    #[test]
+    fn map_dictionary_values_does_not_copy_a_value_per_row() -> Result<()> {
+        // 64 copies of this value wouldn't fit in `i32` offsets
+        const LONG: usize = 34 * 1024 * 1024;
+        let long = "x".repeat(LONG);
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..5000).map(|i| if i == 0 { long.as_str() } else { "short" }),
+        ));
+        let dict: ArrayRef = Arc::new(DictionaryArray::try_new(
+            Int32Array::from(vec![0; 64]),
+            values,
+        )?);
+        let mapped = map_dictionary_values(&dict, |values| Ok(length(values)?))?;
+        assert_eq!(
+            arrow::compute::cast(&mapped, &DataType::Int32)?
+                .as_primitive::<Int32Type>()
+                .values(),
+            &[LONG as i32; 64]
+        );
+        Ok(())
     }
 }

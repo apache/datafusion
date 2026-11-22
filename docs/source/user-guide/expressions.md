@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Expression API
@@ -191,7 +178,7 @@ select log(-1), log(0), sqrt(-1);
 | lpad(text, length, [, fill])                   | Extends the string to length (`length`) by prepending the characters (`fill`) (a space by default). Example: `lpad('bb', 5, 'a') → aaabb`                                                                                                |
 | ltrim(text, text)                              | Removes all specified characters (`characters`) from the beginning of the string (`text`). Example: `ltrim('aabchelloccb', 'abc') -> helloccb`                                                                                           |
 | md5(text)                                      | Computes the MD5 hash of the argument (`text`).                                                                                                                                                                                          |
-| octet_length(text)                             | Returns number of bytes in the string (`text`).                                                                                                                                                                                          |
+| octet_length(text)                             | Returns number of bytes in the string or binary (`text`).                                                                                                                                                                                |
 | repeat(text, number)                           | Repeats the string the specified number of times. Example: `repeat('1', 4) -> 1111`                                                                                                                                                      |
 | replace(string, from, to)                      | Replaces a specified string (`from`) with another specified string (`to`) in the string (`string`). Example: `replace('Hello', 'replace', 'el') -> Hola`                                                                                 |
 | reverse(text)                                  | Reverses the order of the characters in the string (`text`). Example: `reverse('hello') -> olleh`                                                                                                                                        |

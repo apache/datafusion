@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module provides integration benchmark for sort operation.
 //! It will run different sort SQL queries on TPCH `lineitem` parquet dataset.
@@ -187,7 +174,7 @@ impl RunOpt {
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("{query_id}"));
 
-            let query_results = self.benchmark_query(query_id).await;
+            let query_results = self.benchmark_query(query_id, &mut benchmark_run).await;
             match query_results {
                 Ok(query_results) => {
                     for iter in query_results {
@@ -207,7 +194,14 @@ impl RunOpt {
     }
 
     /// Benchmark query `query_id` in `SORT_QUERIES`
-    async fn benchmark_query(&self, query_id: usize) -> Result<Vec<QueryResult>> {
+    ///
+    /// `benchmark_run` is handed this query's runtime, which is built here so
+    /// each query gets a pool of its own.
+    async fn benchmark_query(
+        &self,
+        query_id: usize,
+        benchmark_run: &mut BenchmarkRun,
+    ) -> Result<Vec<QueryResult>> {
         let config = self.common.config()?;
         let rt = self.common.build_runtime()?;
         let state = SessionStateBuilder::new()
@@ -216,6 +210,7 @@ impl RunOpt {
             .with_default_features()
             .build();
         let ctx = SessionContext::from(state);
+        benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
 
         // register tables
         self.register_tables(&ctx).await?;
@@ -250,7 +245,7 @@ impl RunOpt {
         println!("Query {query_id} avg time: {avg:.2} ms");
 
         // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
-        print_memory_stats();
+        print_memory_stats(&*ctx.runtime_env().memory_pool);
 
         Ok(query_results)
     }

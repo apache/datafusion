@@ -1,20 +1,8 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use std::fmt::Write as _;
 use std::{collections::HashMap, sync::Arc};
 
 use super::{
@@ -24,7 +12,7 @@ use super::{
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use chrono::DateTime;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, internal_err, not_impl_err};
 use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::tokenizer::Span;
@@ -71,6 +59,15 @@ pub trait Dialect: Send + Sync {
         IntervalStyle::PostgresVerbose
     }
 
+    /// Render a non-finite float literal (`inf`, `-inf` or `NaN`).
+    ///
+    /// Return `Ok(None)` to use the default, a cast of the string `'Infinity'`, `'-Infinity'`
+    /// or `'NaN'` to the float type. Override this for a dialect whose cast does not parse
+    /// those strings, so that the unparsed SQL keeps the value or fails to unparse.
+    fn non_finite_float_to_sql(&self, _value: f64) -> Result<Option<ast::Expr>> {
+        Ok(None)
+    }
+
     /// Does the dialect use DOUBLE PRECISION to represent Float64 rather than DOUBLE?
     /// E.g. Postgres uses DOUBLE PRECISION instead of DOUBLE
     fn float64_ast_dtype(&self) -> ast::DataType {
@@ -99,6 +96,18 @@ pub trait Dialect: Send + Sync {
         DistinctFromStyle::FullText
     }
 
+    /// The syntax for Arrow list types in casts. The default is `Unsupported`,
+    /// so the unparser returns an error unless the dialect opts in.
+    fn array_type_style(&self) -> ArrayTypeStyle {
+        ArrayTypeStyle::Unsupported
+    }
+
+    /// Whether the dialect allows an array whose elements are arrays.
+    /// BigQuery, for example, does not.
+    fn supports_nested_arrays(&self) -> bool {
+        true
+    }
+
     /// The character length extraction style to use: `CharacterLengthStyle`
     fn character_length_style(&self) -> CharacterLengthStyle {
         CharacterLengthStyle::CharacterLength
@@ -120,6 +129,36 @@ pub trait Dialect: Send + Sync {
     /// Most dialects use Integer, but some, like MySQL, require SIGNED
     fn int32_cast_dtype(&self) -> ast::DataType {
         ast::DataType::Integer(None)
+    }
+
+    /// The SQL type to use for Arrow Int16 unparsing
+    /// Most dialects use SmallInt, but some, like MySQL, require SIGNED
+    fn int16_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::SmallInt(None)
+    }
+
+    /// The SQL type to use for Arrow UInt8 unparsing
+    /// Most dialects use TinyIntUnsigned, but some, like MySQL, require UNSIGNED
+    fn uint8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::TinyIntUnsigned(None)
+    }
+
+    /// The SQL type to use for Arrow UInt16 unparsing
+    /// Most dialects use SmallIntUnsigned, but some, like MySQL, require UNSIGNED
+    fn uint16_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::SmallIntUnsigned(None)
+    }
+
+    /// The SQL type to use for Arrow UInt32 unparsing
+    /// Most dialects use IntegerUnsigned, but some, like MySQL, require UNSIGNED
+    fn uint32_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::IntegerUnsigned(None)
+    }
+
+    /// The SQL type to use for Arrow UInt64 unparsing
+    /// Most dialects use BigIntUnsigned, but some, like MySQL, require UNSIGNED
+    fn uint64_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::BigIntUnsigned(None)
     }
 
     /// The SQL type to use for Timestamp unparsing
@@ -347,9 +386,24 @@ pub enum DistinctFromStyle {
     Spaceship,
 }
 
+/// `ArrayTypeStyle` to use for unparsing Arrow list types
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ArrayTypeStyle {
+    /// `INT[]`, and `INT[3]` for a fixed-size list, as in PostgreSQL and DuckDB
+    SquareBracket,
+    /// `ARRAY<INT>`, as in BigQuery. A fixed-size list is not supported.
+    AngleBracket,
+    /// The dialect has no array type, as in MySQL and SQLite
+    Unsupported,
+}
+
 pub struct DefaultDialect {}
 
 impl Dialect for DefaultDialect {
+    fn array_type_style(&self) -> ArrayTypeStyle {
+        ArrayTypeStyle::SquareBracket
+    }
+
     fn identifier_quote_style(&self, identifier: &str) -> Option<char> {
         let identifier_regex = Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap();
         let id_upper = identifier.to_uppercase();
@@ -367,6 +421,10 @@ impl Dialect for DefaultDialect {
 pub struct PostgreSqlDialect {}
 
 impl Dialect for PostgreSqlDialect {
+    fn array_type_style(&self) -> ArrayTypeStyle {
+        ArrayTypeStyle::SquareBracket
+    }
+
     fn use_array_keyword_for_array_literals(&self) -> bool {
         true
     }
@@ -464,7 +522,6 @@ impl PostgreSqlDialect {
                     kind: ast::CastKind::Cast,
                     expr: Box::new(expr.clone()),
                     data_type: ast::DataType::Numeric(ast::ExactNumberInfo::None),
-                    array: false,
                     format: None,
                 };
             }
@@ -506,6 +563,10 @@ impl DuckDBDialect {
 }
 
 impl Dialect for DuckDBDialect {
+    fn array_type_style(&self) -> ArrayTypeStyle {
+        ArrayTypeStyle::SquareBracket
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('"')
     }
@@ -562,6 +623,12 @@ impl Dialect for MySqlDialect {
         false
     }
 
+    /// MySQL `FLOAT` and `DOUBLE` cannot hold infinity or NaN, so a non-finite float literal
+    /// does not unparse.
+    fn non_finite_float_to_sql(&self, value: f64) -> Result<Option<ast::Expr>> {
+        not_impl_err!("MySQL has no literal for the float {value}")
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
@@ -598,12 +665,41 @@ impl Dialect for MySqlDialect {
         ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
     }
 
+    fn int8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
+    }
+
+    fn int16_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
+    }
+
+    fn uint8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("UNSIGNED")]), vec![])
+    }
+
+    fn uint16_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("UNSIGNED")]), vec![])
+    }
+
+    fn uint32_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("UNSIGNED")]), vec![])
+    }
+
+    fn uint64_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("UNSIGNED")]), vec![])
+    }
+
     fn timestamp_cast_dtype(
         &self,
-        _time_unit: &TimeUnit,
+        time_unit: &TimeUnit,
         _tz: &Option<Arc<str>>,
     ) -> ast::DataType {
-        ast::DataType::Datetime(None)
+        let precision = match time_unit {
+            TimeUnit::Second => None,
+            TimeUnit::Millisecond => Some(3),
+            TimeUnit::Microsecond | TimeUnit::Nanosecond => Some(6),
+        };
+        ast::DataType::Datetime(precision)
     }
 
     fn requires_derived_table_alias(&self) -> bool {
@@ -620,6 +716,11 @@ impl Dialect for MySqlDialect {
             return date_part_to_sql(unparser, self.date_field_extract_style(), args);
         }
 
+        // https://dev.mysql.com/doc/refman/9.7/en/mathematical-functions.html#function_rand
+        if func_name == "random" {
+            return Ok(Some(unparser.scalar_function_to_sql("rand", args)?));
+        }
+
         Ok(None)
     }
 }
@@ -629,6 +730,24 @@ pub struct SqliteDialect {}
 impl Dialect for SqliteDialect {
     fn supports_qualify(&self) -> bool {
         false
+    }
+
+    /// SQLite casts a string that is not a number to `0.0`, so `CAST('Infinity' AS REAL)` is
+    /// `0.0`. A literal that overflows a double is infinity in SQLite. SQLite has no literal
+    /// for NaN, so a NaN literal does not unparse.
+    fn non_finite_float_to_sql(&self, value: f64) -> Result<Option<ast::Expr>> {
+        if value.is_nan() {
+            return not_impl_err!("SQLite has no literal for a NaN float");
+        }
+        let overflow = if value.is_sign_positive() {
+            "9e999"
+        } else {
+            "-9e999"
+        };
+        Ok(Some(ast::Expr::value(ast::Value::Number(
+            overflow.to_string(),
+            false,
+        ))))
     }
 
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
@@ -687,6 +806,14 @@ impl Dialect for SqliteDialect {
 pub struct BigQueryDialect {}
 
 impl Dialect for BigQueryDialect {
+    fn supports_nested_arrays(&self) -> bool {
+        false
+    }
+
+    fn array_type_style(&self) -> ArrayTypeStyle {
+        ArrayTypeStyle::AngleBracket
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         Some('`')
     }
@@ -703,7 +830,7 @@ impl Dialect for BigQueryDialect {
             let mut encoded_name = String::new();
             for c in alias.chars() {
                 if special_chars.contains(&c) {
-                    encoded_name.push_str(&format!("_{}", c as u32));
+                    write!(encoded_name, "_{}", c as u32).ok();
                 } else {
                     encoded_name.push(c);
                 }
@@ -758,6 +885,11 @@ impl Dialect for BigQueryDialect {
     ) -> Result<Option<ast::Expr>> {
         if func_name == "date_part" {
             return date_part_to_sql(unparser, self.date_field_extract_style(), args);
+        }
+
+        // https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/mathematical_functions#rand
+        if func_name == "random" {
+            return Ok(Some(unparser.scalar_function_to_sql("rand", args)?));
         }
 
         Ok(None)
@@ -837,6 +969,11 @@ pub struct CustomDialect {
     int8_cast_dtype: ast::DataType,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
+    int16_cast_dtype: ast::DataType,
+    uint8_cast_dtype: ast::DataType,
+    uint16_cast_dtype: ast::DataType,
+    uint32_cast_dtype: ast::DataType,
+    uint64_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
     date32_cast_dtype: ast::DataType,
@@ -847,6 +984,8 @@ pub struct CustomDialect {
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
     unnest_as_lateral_flatten: bool,
+    array_type_style: ArrayTypeStyle,
+    supports_nested_arrays: bool,
 }
 
 impl Default for CustomDialect {
@@ -864,6 +1003,11 @@ impl Default for CustomDialect {
             int8_cast_dtype: ast::DataType::TinyInt(None),
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
+            int16_cast_dtype: ast::DataType::SmallInt(None),
+            uint8_cast_dtype: ast::DataType::TinyIntUnsigned(None),
+            uint16_cast_dtype: ast::DataType::SmallIntUnsigned(None),
+            uint32_cast_dtype: ast::DataType::IntegerUnsigned(None),
+            uint64_cast_dtype: ast::DataType::BigIntUnsigned(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
             timestamp_tz_cast_dtype: ast::DataType::Timestamp(
                 None,
@@ -877,11 +1021,21 @@ impl Default for CustomDialect {
             full_qualified_col: false,
             unnest_as_table_factor: false,
             unnest_as_lateral_flatten: false,
+            array_type_style: ArrayTypeStyle::Unsupported,
+            supports_nested_arrays: true,
         }
     }
 }
 
 impl Dialect for CustomDialect {
+    fn supports_nested_arrays(&self) -> bool {
+        self.supports_nested_arrays
+    }
+
+    fn array_type_style(&self) -> ArrayTypeStyle {
+        self.array_type_style
+    }
+
     fn identifier_quote_style(&self, _: &str) -> Option<char> {
         self.identifier_quote_style
     }
@@ -928,6 +1082,26 @@ impl Dialect for CustomDialect {
 
     fn int32_cast_dtype(&self) -> ast::DataType {
         self.int32_cast_dtype.clone()
+    }
+
+    fn int16_cast_dtype(&self) -> ast::DataType {
+        self.int16_cast_dtype.clone()
+    }
+
+    fn uint8_cast_dtype(&self) -> ast::DataType {
+        self.uint8_cast_dtype.clone()
+    }
+
+    fn uint16_cast_dtype(&self) -> ast::DataType {
+        self.uint16_cast_dtype.clone()
+    }
+
+    fn uint32_cast_dtype(&self) -> ast::DataType {
+        self.uint32_cast_dtype.clone()
+    }
+
+    fn uint64_cast_dtype(&self) -> ast::DataType {
+        self.uint64_cast_dtype.clone()
     }
 
     fn timestamp_cast_dtype(
@@ -1024,6 +1198,11 @@ pub struct CustomDialectBuilder {
     int8_cast_dtype: ast::DataType,
     int64_cast_dtype: ast::DataType,
     int32_cast_dtype: ast::DataType,
+    int16_cast_dtype: ast::DataType,
+    uint8_cast_dtype: ast::DataType,
+    uint16_cast_dtype: ast::DataType,
+    uint32_cast_dtype: ast::DataType,
+    uint64_cast_dtype: ast::DataType,
     timestamp_cast_dtype: ast::DataType,
     timestamp_tz_cast_dtype: ast::DataType,
     date32_cast_dtype: ast::DataType,
@@ -1034,6 +1213,8 @@ pub struct CustomDialectBuilder {
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
     unnest_as_lateral_flatten: bool,
+    array_type_style: ArrayTypeStyle,
+    supports_nested_arrays: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -1057,6 +1238,11 @@ impl CustomDialectBuilder {
             int8_cast_dtype: ast::DataType::TinyInt(None),
             int64_cast_dtype: ast::DataType::BigInt(None),
             int32_cast_dtype: ast::DataType::Integer(None),
+            int16_cast_dtype: ast::DataType::SmallInt(None),
+            uint8_cast_dtype: ast::DataType::TinyIntUnsigned(None),
+            uint16_cast_dtype: ast::DataType::SmallIntUnsigned(None),
+            uint32_cast_dtype: ast::DataType::IntegerUnsigned(None),
+            uint64_cast_dtype: ast::DataType::BigIntUnsigned(None),
             timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
             timestamp_tz_cast_dtype: ast::DataType::Timestamp(
                 None,
@@ -1070,6 +1256,8 @@ impl CustomDialectBuilder {
             full_qualified_col: false,
             unnest_as_table_factor: false,
             unnest_as_lateral_flatten: false,
+            array_type_style: ArrayTypeStyle::Unsupported,
+            supports_nested_arrays: true,
         }
     }
 
@@ -1087,6 +1275,11 @@ impl CustomDialectBuilder {
             int8_cast_dtype: self.int8_cast_dtype,
             int64_cast_dtype: self.int64_cast_dtype,
             int32_cast_dtype: self.int32_cast_dtype,
+            int16_cast_dtype: self.int16_cast_dtype,
+            uint8_cast_dtype: self.uint8_cast_dtype,
+            uint16_cast_dtype: self.uint16_cast_dtype,
+            uint32_cast_dtype: self.uint32_cast_dtype,
+            uint64_cast_dtype: self.uint64_cast_dtype,
             timestamp_cast_dtype: self.timestamp_cast_dtype,
             timestamp_tz_cast_dtype: self.timestamp_tz_cast_dtype,
             date32_cast_dtype: self.date32_cast_dtype,
@@ -1098,6 +1291,8 @@ impl CustomDialectBuilder {
             full_qualified_col: self.full_qualified_col,
             unnest_as_table_factor: self.unnest_as_table_factor,
             unnest_as_lateral_flatten: self.unnest_as_lateral_flatten,
+            array_type_style: self.array_type_style,
+            supports_nested_arrays: self.supports_nested_arrays,
         }
     }
 
@@ -1188,6 +1383,36 @@ impl CustomDialectBuilder {
         self
     }
 
+    /// Customize the dialect with a specific SQL type for Int16 casting: SmallInt, SIGNED, etc.
+    pub fn with_int16_cast_dtype(mut self, int16_cast_dtype: ast::DataType) -> Self {
+        self.int16_cast_dtype = int16_cast_dtype;
+        self
+    }
+
+    /// Customize the dialect with a specific SQL type for UInt8 casting: TinyIntUnsigned, UNSIGNED, etc.
+    pub fn with_uint8_cast_dtype(mut self, uint8_cast_dtype: ast::DataType) -> Self {
+        self.uint8_cast_dtype = uint8_cast_dtype;
+        self
+    }
+
+    /// Customize the dialect with a specific SQL type for UInt16 casting: SmallIntUnsigned, UNSIGNED, etc.
+    pub fn with_uint16_cast_dtype(mut self, uint16_cast_dtype: ast::DataType) -> Self {
+        self.uint16_cast_dtype = uint16_cast_dtype;
+        self
+    }
+
+    /// Customize the dialect with a specific SQL type for UInt32 casting: IntegerUnsigned, UNSIGNED, etc.
+    pub fn with_uint32_cast_dtype(mut self, uint32_cast_dtype: ast::DataType) -> Self {
+        self.uint32_cast_dtype = uint32_cast_dtype;
+        self
+    }
+
+    /// Customize the dialect with a specific SQL type for UInt64 casting: BigIntUnsigned, UNSIGNED, etc.
+    pub fn with_uint64_cast_dtype(mut self, uint64_cast_dtype: ast::DataType) -> Self {
+        self.uint64_cast_dtype = uint64_cast_dtype;
+        self
+    }
+
     /// Customize the dialect with a specific SQL type for Timestamp casting: Timestamp, Datetime, etc.
     pub fn with_timestamp_cast_dtype(
         mut self,
@@ -1201,6 +1426,18 @@ impl CustomDialectBuilder {
 
     pub fn with_date32_cast_dtype(mut self, date32_cast_dtype: ast::DataType) -> Self {
         self.date32_cast_dtype = date32_cast_dtype;
+        self
+    }
+
+    /// Customize the syntax for Arrow list types in casts
+    pub fn with_array_type_style(mut self, array_type_style: ArrayTypeStyle) -> Self {
+        self.array_type_style = array_type_style;
+        self
+    }
+
+    /// Customize whether the dialect allows an array whose elements are arrays
+    pub fn with_supports_nested_arrays(mut self, supports_nested_arrays: bool) -> Self {
+        self.supports_nested_arrays = supports_nested_arrays;
         self
     }
 

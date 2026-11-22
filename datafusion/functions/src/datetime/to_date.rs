@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::datetime::common::*;
 use arrow::compute::cast_with_options;
@@ -38,20 +25,20 @@ Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T0
 Returns the corresponding date.
 
 Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.",
-    syntax_example = "to_date('2017-05-31', '%Y-%m-%d')",
+    syntax_example = "to_date(expression[, format1, ..., format_n])",
     sql_example = r#"```sql
 > select to_date('2023-01-31');
-+-------------------------------+
++-----------------------------+
 | to_date(Utf8("2023-01-31")) |
-+-------------------------------+
-| 2023-01-31                    |
-+-------------------------------+
++-----------------------------+
+| 2023-01-31                  |
++-----------------------------+
 > select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');
-+---------------------------------------------------------------------+
++---------------------------------------------------------------+
 | to_date(Utf8("2023/01/31"),Utf8("%Y-%m-%d"),Utf8("%Y/%m/%d")) |
-+---------------------------------------------------------------------+
-| 2023-01-31                                                          |
-+---------------------------------------------------------------------+
++---------------------------------------------------------------+
+| 2023-01-31                                                    |
++---------------------------------------------------------------+
 ```
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
@@ -61,7 +48,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
         name = "format_n",
         description = r"Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
   they appear with the first successful one being returned. If none of the formats successfully parse the expression
-  an error will be returned."
+  an error will be returned. NULL formats are skipped. If every format is NULL the result is NULL."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -100,7 +87,7 @@ impl ToDateFunc {
                 args,
                 |s, format| {
                     string_to_timestamp_millis_formatted(s, format)
-                        .map(|n| n / (24 * 60 * 60 * 1_000))
+                        .map(|n| n.div_euclid(24 * 60 * 60 * 1_000))
                         .and_then(|v| {
                             v.try_into().map_err(|_| {
                                 internal_datafusion_err!("Unable to cast to Date32 for converting from i64 to i32 failed")
@@ -458,7 +445,7 @@ mod tests {
                     "to_date created wrong value for date with 2 format strings"
                 );
             }
-            _ => panic!("Conversion failed",),
+            _ => panic!("Conversion failed"),
         }
     }
 
@@ -518,5 +505,45 @@ mod tests {
         if let Ok(ColumnarValue::Scalar(ScalarValue::Date32(_))) = to_date_result {
             panic!("Conversion of {date_str} succeeded, but should have failed. ");
         }
+    }
+
+    /// A NULL format must be skipped even when its slot still holds parseable
+    /// bytes, otherwise it can silently win over a later valid format.
+    #[test]
+    fn test_to_date_null_format_slot_retaining_bytes() {
+        use arrow::buffer::NullBuffer;
+
+        // The first format physically holds "%d/%m/%Y", but is marked NULL.
+        let (offsets, values, _) =
+            GenericStringArray::<i32>::from(vec!["%d/%m/%Y"]).into_parts();
+        let formats =
+            GenericStringArray::new(offsets, values, Some(NullBuffer::new_null(1)));
+        assert!(formats.is_null(0));
+        assert_eq!(formats.value(0), "%d/%m/%Y");
+
+        // Without the validity check, the first format parses this as 2023-02-01
+        // and incorrectly wins over the valid second format.
+        let values = GenericStringArray::<i32>::from(vec!["01/02/2023"]);
+        let fallback_formats = GenericStringArray::<i32>::from(vec!["%m/%d/%Y"]);
+        let res = invoke_to_date_with_args(
+            vec![
+                ColumnarValue::Array(Arc::new(values)),
+                ColumnarValue::Array(Arc::new(formats)),
+                ColumnarValue::Array(Arc::new(fallback_formats)),
+            ],
+            1,
+        )
+        .unwrap();
+
+        let ColumnarValue::Array(res) = res else {
+            panic!("expected an array result");
+        };
+        let res = res.as_any().downcast_ref::<Date32Array>().unwrap();
+
+        assert!(!res.is_null(0));
+        assert_eq!(
+            res.value(0),
+            Date32Type::parse_formatted("01/02/2023", "%m/%d/%Y").unwrap()
+        );
     }
 }

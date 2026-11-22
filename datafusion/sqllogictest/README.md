@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Apache DataFusion sqllogictest
@@ -101,6 +88,45 @@ SLT_TIMING_SUMMARY=1 cargo test --test sqllogictests
 SLT_TIMING_DEBUG_SLOW_FILES=1 cargo test --test sqllogictests
 ```
 
+### Memory drift
+
+The runner compares the bytes reserved in `MemoryPool`s with the bytes actually
+allocated, to find operators whose memory is not tracked by the pool (see
+[#25650](https://github.com/apache/datafusion/issues/25650)). It is enabled by
+default and prints the largest drift seen at the end of the run. It only logs
+and never fails a test.
+
+Test files run concurrently by default, so the comparison is process-wide:
+allocated bytes across the whole process against reservations summed across all
+files. In this mode, the file in the output can be wrong. To attribute drift to
+one file, run one file at a time:
+
+```shell
+cargo test --test sqllogictests -- --test-threads 1
+```
+
+In both modes, the consumer in the output is the reservation change that took
+the sample, not necessarily the code that allocated the untracked memory. Most
+drift at this scale is memory that `MemoryPool` does not track by design (for
+example, in-flight batches and Parquet read buffers), so a large drift is a lead
+to investigate, not necessarily a bug.
+
+```shell
+# Log each 64 MB rise in drift, with the file and consumer that took the sample
+RUST_LOG=datafusion_execution::memory_pool=info cargo test --test sqllogictests
+```
+
+```shell
+# Log each 4 MB rise instead (also settable via SLT_MEMORY_DRIFT_LOG_THRESHOLD)
+RUST_LOG=datafusion_execution::memory_pool=info cargo test --test sqllogictests -- \
+  --test-threads 1 --memory-drift-log-threshold 4194304
+```
+
+```shell
+# Disable (allocations are still counted, but pools are not wrapped)
+cargo test --test sqllogictests -- --memory-drift false
+```
+
 ## Cookbook: Adding Tests
 
 1. Add queries
@@ -139,6 +165,41 @@ SELECT * from foo;
 ```
 
 Assuming it looks good, check it in!
+
+## Cookbook: Testing errors
+
+To check an error message, write it as plain text after `----`:
+
+```text
+statement error
+SELECT * FROM no_such_table;
+----
+DataFusion error: Error during planning: table 'datafusion.public.no_such_table' not found
+
+
+```
+
+The message must match exactly, and the block must end with **two** blank
+lines. With only one, the next record is read as part of the expected error:
+the test fails, and `--complete` deletes that record from the file.
+
+To fill in the message, write the query, then `----` and two blank lines, and
+run `--complete`.
+
+Avoid putting the whole message on the `statement error` line. There it is a
+regex, so `--complete` escapes every special character:
+
+```text
+statement error DataFusion error: Error during planning: table 'datafusion\.public\.no_such_table' not found
+SELECT * FROM no_such_table;
+```
+
+Use that line only to match part of a message:
+
+```text
+statement error no_such_table
+SELECT * FROM no_such_table;
+```
 
 ## Cookbook: Testing for whitespace
 
@@ -183,6 +244,57 @@ EXPLAIN ANALYZE SELECT * FROM generate_series(100);
 ----
 Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100, batch_size=8192], metrics=[output_rows=101, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
 ```
+
+## Cookbook: Sweeping config with `configMatrix`
+
+Runs the same `.slt` once per combination of config values. Each directive is a comment:
+
+```text
+# configMatrix: <key>=<v1>,<v2>[,...]
+```
+
+- Repeat the directive to nest keys. Values are the cartesian product.
+- Whitespace-trimmed and deduped; repeated keys merge value lists.
+- Unknown key or invalid value fails fast, naming the file, key, and value.
+- Each override is applied like `SET <key> = <value>`, so `datafusion.runtime.*`
+  keys (e.g. `datafusion.runtime.memory_limit`) and config-dependent UDFs behave
+  exactly as they would for an in-file `SET`.
+- Supported by the default runner, by `--substrait-round-trip`, and by
+  `--unparser-round-trip`. `--complete`
+  rejects a file that declares directives, since it would overwrite the file
+  with the output of a single combination. The Postgres runner ignores them.
+- Every combination runs even if an earlier one fails. Each failure is prefixed
+  with the combination that produced it, and a file with more than one failing
+  combination reports all of them.
+
+Nested example (2 × 2 = 4 runs):
+
+```text
+# configMatrix: datafusion.execution.parquet.coerce_int96=ms,us
+# configMatrix: datafusion.execution.parquet.coerce_int96_tz=UTC,America/New_York
+
+statement ok
+CREATE EXTERNAL TABLE int96_from_spark
+STORED AS PARQUET
+LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
+
+query I
+select count(*) from int96_from_spark
+----
+6
+```
+
+Failure output:
+
+```text
+[configMatrix: datafusion.execution.parquet.coerce_int96=ms, datafusion.execution.parquet.coerce_int96_tz=UTC]
+caused by
+External error: 1 errors in file .../parquet_int96_matrix.slt
+```
+
+When more than one combination fails, all of them are reported together under a
+`N configMatrix combinations failed:` header, each still prefixed with its own
+combination.
 
 # Reference
 
@@ -256,7 +368,13 @@ PG_COMPAT=true cargo test --features=postgres --test sqllogictests
 Test files in `tpch` directory runs against the `TPCH` data set (SF =
 0.1), which must be generated before running. You can use following
 command to generate tpch data, assuming you are in the repository
-root:
+root, either with `uvx` and `tpchgen-cli`:
+
+```shell
+uvx tpchgen-cli tbl -v -s 0.1 --output-dir datafusion/sqllogictest/test_files/tpch/data
+```
+
+or with `docker`:
 
 ```shell
 mkdir -p datafusion/sqllogictest/test_files/tpch/data
@@ -299,7 +417,7 @@ export RUST_MIN_STACK=30485760;
 PG_COMPAT=true INCLUDE_SQLITE=true cargo test --features=postgres --test sqllogictests
 ```
 
-To update the sqllite expected answers use the `datafusion/sqllogictest/regenerate_sqlite_files.sh` script.
+To update the sqlite expected answers use the `datafusion/sqllogictest/regenerate_sqlite_files.sh` script.
 
 Note this must be run with an empty postgres instance. For example
 
@@ -341,23 +459,72 @@ running tests.
 
 ## Running tests: Substrait round-trip mode
 
-This mode will run all the .slt test files in validation mode, adding a Substrait conversion round-trip for each
+This mode runs the selected `.slt` test files in validation mode, adding a Substrait conversion round-trip for each
 generated DataFusion logical plan (SQL statement → DF logical → Substrait → DF logical → DF physical → execute).
 
 Not all statements will be round-tripped, some statements like CREATE, INSERT, SET or EXPLAIN statements will be
 issued as is, but any other statement will be round-tripped to/from Substrait.
 
-_WARNING_: as there are still a lot of failures in this mode (https://github.com/apache/datafusion/issues/16248),
-it is not enforced in the CI, instead, it needs to be run manually with the following command:
+_WARNING_: this mode lives behind the `substrait` feature, and the full suite still reports failures. CI therefore
+runs `limit.slt` through `cargo xtask ci step test substrait` and optimized conditionless-join tests through
+`cargo xtask ci step test substrait-optimized`. Some of the
+failures are collected in https://github.com/apache/datafusion/issues/16248. To run the default suite in this mode:
 
 ```shell
-cargo test --test sqllogictests -- --substrait-round-trip
+cargo test --test sqllogictests --features substrait -- --substrait-round-trip
 ```
 
 For focusing on one specific failing test, a file:line filter can be used:
 
 ```shell
-cargo test --test sqllogictests -- --substrait-round-trip binary.slt:23
+cargo test --test sqllogictests --features substrait -- --substrait-round-trip binary.slt:23
+```
+
+Add `--substrait-optimize` to optimize the logical plan before serialization. This exercises
+producer inputs created by optimizer rewrites, such as conditionless joins from `LEFT JOIN ... ON true`
+and uncorrelated `WHERE EXISTS`:
+
+```shell
+cargo test --test sqllogictests --features substrait -- --substrait-round-trip --substrait-optimize joins_conditionless.slt
+```
+
+## Running tests: Unparser round-trip mode
+
+This mode runs each query through the SQL unparser. The runner plans the SQL, unparses the
+logical plan with `plan_to_sql` and the default dialect, plans the unparsed SQL again in the
+same `SessionContext`, and executes the result (SQL statement → DF logical → SQL statement →
+DF logical → DF physical → execute).
+
+The runner passes `Ddl`, `Dml`, `Copy`, `Explain`, `Analyze`, `Show` and `Statement` plans through unchanged,
+because SQL cannot express them as a query.
+
+| Failure                 | Meaning                                        |
+| ----------------------- | ---------------------------------------------- |
+| Error while unparsing   | The unparser does not support the plan.        |
+| Error while re-planning | The unparser produced SQL that does not plan.  |
+| Different rows          | The unparser changed the meaning of the query. |
+
+Many files fail in this mode. [`unparser_known_failures.txt`](unparser_known_failures.txt) lists them, one path
+relative to `test_files` per line. CI runs every other file through `cargo xtask ci step test unparser`:
+
+```shell
+cargo test --test sqllogictests -- --unparser-round-trip --unparser-known-failures unparser_known_failures.txt
+```
+
+A new `.slt` file runs in this mode by default. If the unparser cannot handle it yet, add the file to the list.
+When a fix makes a listed file pass, remove the file from the list. The runner rejects an entry that names no
+file in `test_files`.
+
+To run every file, including the listed ones, leave out `--unparser-known-failures`:
+
+```shell
+cargo test --test sqllogictests -- --unparser-round-trip
+```
+
+Add `--unparser-optimize` to optimize the logical plan before unparsing it:
+
+```shell
+cargo test --test sqllogictests -- --unparser-round-trip --unparser-optimize select.slt
 ```
 
 ## `.slt` file format
@@ -399,7 +566,7 @@ query <type_string> <sort_mode>
   - 'T' - **T**ext,
   - "?" - any other types
 - `expected_result`: In the results section, some values are converted according to some rules:
-  - floating point values are rounded to the scale of "12",
+  - floating point values are rounded to the scale of "12" and "15" for Spark,
   - NULL values are rendered as `NULL`,
   - empty strings are rendered as `(empty)`,
   - boolean values are rendered as `true`/`false`,

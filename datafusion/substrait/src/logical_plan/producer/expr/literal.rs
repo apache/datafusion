@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::producer::{SubstraitProducer, to_substrait_type};
 use crate::variation_const::{
@@ -286,19 +273,20 @@ pub(crate) fn to_substrait_literal(
                 }?;
                 LiteralType::EmptyMap(mt)
             } else {
-                let keys = (0..m.keys().len())
+                let entries = m.value(0);
+                let keys = (0..entries.len())
                     .map(|i| {
                         to_substrait_literal(
                             producer,
-                            &ScalarValue::try_from_array(&m.keys(), i)?,
+                            &ScalarValue::try_from_array(entries.column(0), i)?,
                         )
                     })
                     .collect::<datafusion::common::Result<Vec<_>>>()?;
-                let values = (0..m.values().len())
+                let values = (0..entries.len())
                     .map(|i| {
                         to_substrait_literal(
                             producer,
-                            &ScalarValue::try_from_array(&m.values(), i)?,
+                            &ScalarValue::try_from_array(entries.column(1), i)?,
                         )
                     })
                     .collect::<datafusion::common::Result<Vec<_>>>()?;
@@ -545,6 +533,32 @@ mod tests {
             57, 123456,
         ))))?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn round_trip_sliced_map_literals() -> Result<()> {
+        let mut builder =
+            MapBuilder::new(None, StringBuilder::new(), Int64Builder::new());
+        builder.keys().append_value("prefix");
+        builder.values().append_value(10);
+        builder.append(true)?;
+        builder.keys().append_value("selected");
+        builder.values().append_value(20);
+        builder.keys().append_value("null_value");
+        builder.values().append_null();
+        builder.append(true)?;
+        builder.append(true)?;
+        builder.append(false)?;
+        builder.keys().append_value("suffix");
+        builder.values().append_value(30);
+        builder.append(true)?;
+        let maps = builder.finish();
+
+        // Scalar extraction retains the other rows' entries in the backing arrays.
+        for row in 0..maps.len() {
+            round_trip_literal(ScalarValue::try_from_array(&maps, row)?)?;
+        }
         Ok(())
     }
 

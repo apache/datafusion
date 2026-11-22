@@ -1,7 +1,5 @@
--- Hidden in the data: the five markers have very different selectivities --
--- 'aaa' ~90%, 'bbb' ~86%, 'ccc' ~80%, 'ddd' ~75%, 'rare' ~0.1% -- while every
--- regexp_like costs about the same. 'rare' (most selective) is written last.
--- cf. q02 (most selective written first).
+-- Five equally expensive regexps of very different selectivity ('rare' ~0.1%, the
+-- rest 75-90%), the selective one written last. cf. q02.
 SELECT count(*) FROM t
 WHERE regexp_like(s, 'aaa')
   AND regexp_like(s, 'bbb')

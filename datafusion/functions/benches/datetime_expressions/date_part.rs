@@ -1,0 +1,440 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+use std::hint::black_box;
+use std::sync::Arc;
+
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+use arrow::array::{
+    Array, ArrayRef, Date32Array, Date64Array, DurationNanosecondArray,
+    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray,
+};
+use arrow::datatypes::{DataType, Field};
+use criterion::{Criterion, criterion_group};
+use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
+use datafusion_functions::datetime::date_part;
+use rand::prelude::StdRng;
+use rand::{Rng, SeedableRng};
+
+const BATCH_SIZE: usize = 1000;
+const TS_BOUND: i64 = 2_006_463_600;
+const SEC_DAY: i64 = 86_400;
+const DAYS_SINCE_EPOCH: i64 = TS_BOUND / SEC_DAY;
+const NULL_DENSITY: f64 = 0.1;
+
+fn generate_timestamp_ns_array(rng: &mut StdRng) -> TimestampNanosecondArray {
+    TimestampNanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..TS_BOUND * 1_000_000_000))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_timestamp_us_array(rng: &mut StdRng) -> TimestampMicrosecondArray {
+    TimestampMicrosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..TS_BOUND * 1_000_000))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_timestamp_ms_array(rng: &mut StdRng) -> TimestampMillisecondArray {
+    TimestampMillisecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..TS_BOUND * 1_000))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_timestamp_s_array(rng: &mut StdRng) -> TimestampSecondArray {
+    TimestampSecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..TS_BOUND))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_date32_array(rng: &mut StdRng) -> Date32Array {
+    // Provide days since epoch
+    Date32Array::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..DAYS_SINCE_EPOCH as i32))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_date64_array(rng: &mut StdRng) -> Date64Array {
+    // Provide milliseconds since epoch aligned to day boundaries
+    Date64Array::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..DAYS_SINCE_EPOCH) * SEC_DAY * 1_000)
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_time32_second_array(rng: &mut StdRng) -> Time32SecondArray {
+    Time32SecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..SEC_DAY as i32))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_time32_millisecond_array(rng: &mut StdRng) -> Time32MillisecondArray {
+    Time32MillisecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..(SEC_DAY * 1_000) as i32))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_time64_microsecond_array(rng: &mut StdRng) -> Time64MicrosecondArray {
+    Time64MicrosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..SEC_DAY * 1_000_000))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_time64_nanosecond_array(rng: &mut StdRng) -> Time64NanosecondArray {
+    Time64NanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..SEC_DAY * 1_000_000_000))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_interval_year_month_array(rng: &mut StdRng) -> IntervalYearMonthArray {
+    let years = 10;
+    IntervalYearMonthArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..12 * years))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_interval_day_time_array(rng: &mut StdRng) -> IntervalDayTimeArray {
+    IntervalDayTimeArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| IntervalDayTime {
+                days: rng.random_range(0..365),
+                milliseconds: rng.random_range(0..(SEC_DAY * 1_000) as i32),
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_interval_mdn_array(rng: &mut StdRng) -> IntervalMonthDayNanoArray {
+    IntervalMonthDayNanoArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| IntervalMonthDayNano {
+                months: rng.random_range(0..12),
+                days: rng.random_range(0..365),
+                nanoseconds: rng.random_range(0..SEC_DAY * 1_000_000_000),
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_duration_nanosecond_array(rng: &mut StdRng) -> DurationNanosecondArray {
+    DurationNanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..TS_BOUND * 1_000_000_000))
+            .collect::<Vec<_>>(),
+    )
+}
+
+// Durations under `i32::MAX` nanoseconds (about 2.1 seconds)
+fn generate_duration_nanosecond_small_array(rng: &mut StdRng) -> DurationNanosecondArray {
+    DurationNanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..i32::MAX as i64))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_duration_nanosecond_array_with_nulls(
+    rng: &mut StdRng,
+) -> DurationNanosecondArray {
+    DurationNanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| {
+                if rng.random_bool(NULL_DENSITY) {
+                    None
+                } else {
+                    Some(rng.random_range(0..TS_BOUND * 1_000_000_000))
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_timestamp_ns_array_with_nulls(rng: &mut StdRng) -> TimestampNanosecondArray {
+    TimestampNanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| {
+                if rng.random_bool(NULL_DENSITY) {
+                    None
+                } else {
+                    Some(rng.random_range(0..TS_BOUND * 1_000_000_000))
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_time64_nanosecond_array_with_nulls(
+    rng: &mut StdRng,
+) -> Time64NanosecondArray {
+    Time64NanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| {
+                if rng.random_bool(NULL_DENSITY) {
+                    None
+                } else {
+                    Some(rng.random_range(0..SEC_DAY * 1_000_000_000))
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn bench_date_part(
+    c: &mut Criterion,
+    udf: &Arc<ScalarUDF>,
+    bench_name: &str,
+    part: &str,
+    array: ArrayRef,
+    return_type: DataType,
+) {
+    let batch_len = array.len();
+    let part_cv = ColumnarValue::Scalar(ScalarValue::Utf8(Some(part.to_string())));
+    let array_cv = ColumnarValue::Array(array);
+    let return_field = Arc::new(Field::new("date_part", return_type, true));
+    let arg_fields = vec![
+        Field::new("a", part_cv.data_type(), true).into(),
+        Field::new("b", array_cv.data_type(), true).into(),
+    ];
+    let config_options = Arc::new(ConfigOptions::default());
+
+    c.bench_function(bench_name, |b| {
+        b.iter(|| {
+            black_box(
+                udf.invoke_with_args(ScalarFunctionArgs {
+                    args: vec![part_cv.clone(), array_cv.clone()],
+                    arg_fields: arg_fields.clone(),
+                    number_rows: batch_len,
+                    return_field: Arc::clone(&return_field),
+                    config_options: Arc::clone(&config_options),
+                })
+                .expect("date_part should work on valid values"),
+            )
+        })
+    });
+}
+
+fn criterion_benchmark(c: &mut Criterion) {
+    let mut rng = StdRng::seed_from_u64(42);
+
+    let ts_s = Arc::new(generate_timestamp_s_array(&mut rng)) as ArrayRef;
+    let ts_ms = Arc::new(generate_timestamp_ms_array(&mut rng)) as ArrayRef;
+    let ts_us = Arc::new(generate_timestamp_us_array(&mut rng)) as ArrayRef;
+    let ts_ns = Arc::new(generate_timestamp_ns_array(&mut rng)) as ArrayRef;
+    let time32_s = Arc::new(generate_time32_second_array(&mut rng)) as ArrayRef;
+    let time32_ms = Arc::new(generate_time32_millisecond_array(&mut rng)) as ArrayRef;
+    let time64_us = Arc::new(generate_time64_microsecond_array(&mut rng)) as ArrayRef;
+    let time64_ns = Arc::new(generate_time64_nanosecond_array(&mut rng)) as ArrayRef;
+    let interval_ym = Arc::new(generate_interval_year_month_array(&mut rng)) as ArrayRef;
+    let interval_dt = Arc::new(generate_interval_day_time_array(&mut rng)) as ArrayRef;
+    let interval_mdn = Arc::new(generate_interval_mdn_array(&mut rng)) as ArrayRef;
+    let duration_ns = Arc::new(generate_duration_nanosecond_array(&mut rng)) as ArrayRef;
+    let date32 = Arc::new(generate_date32_array(&mut rng)) as ArrayRef;
+    let date64 = Arc::new(generate_date64_array(&mut rng)) as ArrayRef;
+    let duration_ns_small =
+        Arc::new(generate_duration_nanosecond_small_array(&mut rng)) as ArrayRef;
+    let duration_ns_nulls =
+        Arc::new(generate_duration_nanosecond_array_with_nulls(&mut rng)) as ArrayRef;
+
+    let ts_ns_tz =
+        Arc::new(generate_timestamp_ns_array(&mut rng).with_timezone("America/New_York"))
+            as ArrayRef;
+    let ts_ns_nulls =
+        Arc::new(generate_timestamp_ns_array_with_nulls(&mut rng)) as ArrayRef;
+    let time64_ns_nulls =
+        Arc::new(generate_time64_nanosecond_array_with_nulls(&mut rng)) as ArrayRef;
+
+    let udf = date_part();
+
+    for part in ["year", "month", "week", "day", "hour", "minute"] {
+        for (name, array) in
+            [("s", &ts_s), ("ms", &ts_ms), ("us", &ts_us), ("ns", &ts_ns)]
+        {
+            bench_date_part(
+                c,
+                &udf,
+                &format!("date_part_{part}_{name}_1000"),
+                part,
+                Arc::clone(array),
+                DataType::Int32,
+            );
+        }
+    }
+    for part in ["year", "month", "week", "day"] {
+        bench_date_part(
+            c,
+            &udf,
+            &format!("date_part_{part}_date32_1000"),
+            part,
+            Arc::clone(&date32),
+            DataType::Int32,
+        );
+        bench_date_part(
+            c,
+            &udf,
+            &format!("date_part_{part}_date64_1000"),
+            part,
+            Arc::clone(&date64),
+            DataType::Int32,
+        );
+    }
+
+    for part in ["second", "millisecond", "microsecond"] {
+        for (name, array) in
+            [("s", &ts_s), ("ms", &ts_ms), ("us", &ts_us), ("ns", &ts_ns)]
+        {
+            bench_date_part(
+                c,
+                &udf,
+                &format!("date_part_{part}_{name}_1000"),
+                part,
+                Arc::clone(array),
+                DataType::Int32,
+            );
+        }
+        bench_date_part(
+            c,
+            &udf,
+            &format!("date_part_{part}_date32_1000"),
+            part,
+            Arc::clone(&date32),
+            DataType::Int32,
+        );
+        bench_date_part(
+            c,
+            &udf,
+            &format!("date_part_{part}_date64_1000"),
+            part,
+            Arc::clone(&date64),
+            DataType::Int32,
+        );
+    }
+
+    for (name, array) in [("s", &ts_s), ("ms", &ts_ms), ("us", &ts_us), ("ns", &ts_ns)] {
+        bench_date_part(
+            c,
+            &udf,
+            &format!("date_part_nanosecond_{name}_1000"),
+            "nanosecond",
+            Arc::clone(array),
+            DataType::Int64,
+        );
+    }
+    bench_date_part(
+        c,
+        &udf,
+        "date_part_nanosecond_date32_1000",
+        "nanosecond",
+        Arc::clone(&date32),
+        DataType::Int64,
+    );
+    bench_date_part(
+        c,
+        &udf,
+        "date_part_nanosecond_date64_1000",
+        "nanosecond",
+        Arc::clone(&date64),
+        DataType::Int64,
+    );
+
+    for (name, array) in [
+        ("s", &ts_s),
+        ("ms", &ts_ms),
+        ("us", &ts_us),
+        ("ns", &ts_ns),
+        ("date32", &date32),
+        ("date64", &date64),
+        ("time32_s", &time32_s),
+        ("time32_ms", &time32_ms),
+        ("time64_us", &time64_us),
+        ("time64_ns", &time64_ns),
+        ("interval_ym", &interval_ym),
+        ("interval_dt", &interval_dt),
+        ("interval_mdn", &interval_mdn),
+        ("duration_ns", &duration_ns),
+        ("duration_ns_small", &duration_ns_small),
+        ("duration_ns_nulls", &duration_ns_nulls),
+    ] {
+        bench_date_part(
+            c,
+            &udf,
+            &format!("date_part_epoch_{name}_1000"),
+            "epoch",
+            Arc::clone(array),
+            DataType::Float64,
+        );
+    }
+
+    // Durations past `i32::MAX` milliseconds or microseconds overflow `Int32`, so
+    // only `nanosecond` runs on them
+    for (part, return_type) in [
+        ("millisecond", DataType::Int32),
+        ("microsecond", DataType::Int32),
+        ("nanosecond", DataType::Int64),
+    ] {
+        let mut arrays = vec![
+            ("ns_tz", &ts_ns_tz),
+            ("ns_nulls", &ts_ns_nulls),
+            ("time32_ms", &time32_ms),
+            ("time64_ns", &time64_ns),
+            ("time64_ns_nulls", &time64_ns_nulls),
+            ("interval_dt", &interval_dt),
+            ("interval_mdn", &interval_mdn),
+            ("duration_ns_small", &duration_ns_small),
+        ];
+        if part == "nanosecond" {
+            arrays.extend([
+                ("duration_ns", &duration_ns),
+                ("duration_ns_nulls", &duration_ns_nulls),
+            ]);
+        }
+        for (name, array) in arrays {
+            bench_date_part(
+                c,
+                &udf,
+                &format!("date_part_{part}_{name}_1000"),
+                part,
+                Arc::clone(array),
+                return_type.clone(),
+            );
+        }
+    }
+
+    for part in ["quarter", "isoyear", "doy", "dow", "isodow"] {
+        bench_date_part(
+            c,
+            &udf,
+            &format!("date_part_{part}_timestamp_ns_1000"),
+            part,
+            Arc::clone(&ts_ns),
+            DataType::Int32,
+        );
+    }
+}
+
+criterion_group!(benches, criterion_benchmark);

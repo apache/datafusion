@@ -1,20 +1,6 @@
-
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-
-#   http://www.apache.org/licenses/LICENSE-2.0
-
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 query TTRRRRRRRI
 select
@@ -39,7 +25,7 @@ order by
     l_returnflag,
 	l_linestatus;
 ----
-A F 3774200 5320753880.69 5054096266.6828 5256751331.449234 25.537587 36002.123829 0.050144 147790
-N F 95257 133737795.84 127132372.6512 132286291.229445 25.300664 35521.326916 0.049394 3765
-N O 7459297 10512270008.9 9986238338.3847 10385578376.585467 25.545537 36000.924688 0.050095 292000
-R F 3785523 5337950526.47 5071818532.942 5274405503.049367 25.525943 35994.029214 0.049989 148301
+A F 3774200.00 5320753880.69 5054096266.6828 5256751331.449234 25.537587 36002.123829 0.050144 147790
+N F 95257.00 133737795.84 127132372.6512 132286291.229445 25.300664 35521.326916 0.049394 3765
+N O 7459297.00 10512270008.90 9986238338.3847 10385578376.585467 25.545537 36000.924688 0.050095 292000
+R F 3785523.00 5337950526.47 5071818532.9420 5274405503.049367 25.525943 35994.029214 0.049989 148301

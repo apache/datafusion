@@ -1,0 +1,23 @@
+subgroup window
+
+name Q19
+group h2o
+
+echo Loading ${H2O_BENCH_SIZE:-small} window ${H2O_FILE_TYPE:-csv} h2o data
+
+load sql_benchmarks/h2o/init/load_window_${H2O_BENCH_SIZE:-small}_${H2O_FILE_TYPE:-csv}.sql
+
+assert I
+SELECT COUNT(*) > 0 FROM x
+----
+true
+
+run
+-- Window Top-N (RANK top-2 per partition, ~1K partitions)
+SELECT pkey, largest_v2 FROM (
+    SELECT (id3 % 1000) AS pkey, v2 AS largest_v2,
+           RANK() OVER (PARTITION BY (id3 % 1000) ORDER BY v2 DESC) AS rk_v2
+    FROM x WHERE v2 IS NOT NULL
+) sub_query WHERE rk_v2 <= 2;
+
+result sql_benchmarks/h2o/results/window/${H2O_BENCH_SIZE:-small}/q19.csv

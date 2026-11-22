@@ -1,22 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt::{Display, Formatter};
 use std::io;
+use std::num::NonZeroU16;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -24,7 +12,7 @@ use std::sync::Arc;
 use crate::object_storage::instrumented::{
     InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry, RequestSummaries,
 };
-use crate::print_format::PrintFormat;
+use crate::print_format::{PrintFormat, TableOptions};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -73,6 +61,68 @@ impl Display for MaxRows {
     }
 }
 
+/// Target output width for tables and explain plans.
+///
+/// ```
+/// use std::num::NonZeroU16;
+/// use datafusion_cli::print_options::TargetWidth;
+///
+/// assert_eq!("auto".parse::<TargetWidth>().unwrap(), TargetWidth::Auto);
+/// assert_eq!("100".parse::<TargetWidth>().unwrap(), TargetWidth::Limited(NonZeroU16::new(100).unwrap()));
+/// assert_eq!("0".parse::<TargetWidth>().unwrap(), TargetWidth::Unlimited);
+/// ```
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum TargetWidth {
+    /// Read the current width of the output terminal before each query.
+    #[default]
+    Auto,
+    /// Do not limit output width.
+    Unlimited,
+    /// Aim for this many terminal columns.
+    Limited(NonZeroU16),
+}
+
+impl FromStr for TargetWidth {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "inf" | "infinite" | "none" | "0" => Ok(Self::Unlimited),
+            _ => value
+                .parse::<NonZeroU16>()
+                .map(Self::Limited)
+                .map_err(|_| {
+                    format!(
+                        "Invalid target width {value}. Expected auto, 1..65535, or 0/inf for no limit."
+                    )
+                }),
+        }
+    }
+}
+
+impl Display for TargetWidth {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auto => f.write_str("auto"),
+            Self::Unlimited => f.write_str("inf"),
+            Self::Limited(width) => write!(f, "{width}"),
+        }
+    }
+}
+
+impl TargetWidth {
+    pub(crate) fn resolve(self) -> Option<u16> {
+        match self {
+            Self::Auto => terminal_size::terminal_size_of(io::stdout())
+                .map(|(width, _)| width.0)
+                .filter(|width| *width > 0),
+            Self::Unlimited => None,
+            Self::Limited(width) => Some(width.get()),
+        }
+    }
+}
+
 const OBJECT_STORE_PROFILING_HEADER: &str = "Object Store Profiling";
 
 #[derive(Debug, Clone)]
@@ -80,6 +130,8 @@ pub struct PrintOptions {
     pub format: PrintFormat,
     pub quiet: bool,
     pub maxrows: MaxRows,
+    /// Target output width, independent of the selected output format.
+    pub target_width: TargetWidth,
     pub color: bool,
     pub instrumented_registry: Arc<InstrumentedObjectStoreRegistry>,
 }
@@ -115,43 +167,82 @@ impl PrintOptions {
         row_count: usize,
         format_options: &FormatOptions,
     ) -> Result<()> {
+        self.print_batches_with_options(
+            schema,
+            batches,
+            query_start_time,
+            row_count,
+            format_options,
+            TableOptions {
+                maxrows: self.maxrows,
+                width: self.target_width.resolve(),
+                explain_format: None,
+            },
+        )
+    }
+
+    pub(crate) fn print_batches_with_options(
+        &self,
+        schema: SchemaRef,
+        batches: &[RecordBatch],
+        query_start_time: Instant,
+        row_count: usize,
+        format_options: &FormatOptions,
+        table_options: TableOptions,
+    ) -> Result<()> {
         let stdout = io::stdout();
         let mut writer = stdout.lock();
+        let width = table_options.width;
+        let maxrows = if self.format == PrintFormat::Table {
+            table_options.maxrows
+        } else {
+            MaxRows::Unlimited
+        };
 
-        self.format.print_batches(
+        self.format.print_batches_with_options(
             &mut writer,
             schema,
             batches,
-            self.maxrows,
+            table_options,
             true,
             format_options,
         )?;
 
-        let formatted_exec_details = get_execution_details_formatted(
-            row_count,
-            if self.format == PrintFormat::Table {
-                self.maxrows
-            } else {
-                MaxRows::Unlimited
-            },
-            query_start_time,
-        );
-
-        self.write_output(&mut writer, &formatted_exec_details)
+        self.write_output(
+            &mut writer,
+            &get_execution_details_formatted(row_count, maxrows, query_start_time),
+            width,
+        )
     }
 
     /// Print the stream to stdout using the specified format
     pub async fn print_stream(
         &self,
+        stream: Pin<Box<dyn RecordBatchStream>>,
+        query_start_time: Instant,
+        format_options: &FormatOptions,
+    ) -> Result<()> {
+        self.print_stream_with_width(
+            stream,
+            query_start_time,
+            format_options,
+            self.target_width.resolve(),
+        )
+        .await
+    }
+
+    pub(crate) async fn print_stream_with_width(
+        &self,
         mut stream: Pin<Box<dyn RecordBatchStream>>,
         query_start_time: Instant,
         format_options: &FormatOptions,
+        width: Option<u16>,
     ) -> Result<()> {
         if self.format == PrintFormat::Table {
             return Err(DataFusionError::External(
                 "PrintFormat::Table is not implemented".to_string().into(),
             ));
-        };
+        }
 
         let stdout = io::stdout();
         let mut writer = stdout.lock();
@@ -179,13 +270,14 @@ impl PrintOptions {
             query_start_time,
         );
 
-        self.write_output(&mut writer, &formatted_exec_details)
+        self.write_output(&mut writer, &formatted_exec_details, width)
     }
 
     fn write_output<W: io::Write>(
         &self,
         writer: &mut W,
         formatted_exec_details: &str,
+        width: Option<u16>,
     ) -> Result<()> {
         if !self.quiet {
             writeln!(writer, "{formatted_exec_details}")?;
@@ -208,7 +300,19 @@ impl PrintOptions {
 
                         writeln!(writer, "Summaries:")?;
                         let summaries = RequestSummaries::new(&requests);
-                        writeln!(writer, "{summaries}")?;
+                        let batch = summaries.to_batch();
+                        PrintFormat::Table.print_batches_with_options(
+                            writer,
+                            batch.schema(),
+                            &[batch],
+                            TableOptions {
+                                maxrows: MaxRows::Unlimited,
+                                width,
+                                explain_format: None,
+                            },
+                            true,
+                            &FormatOptions::default(),
+                        )?;
                     }
                 }
             }
@@ -231,17 +335,18 @@ mod tests {
             format: PrintFormat::Automatic,
             quiet: true,
             maxrows: MaxRows::Unlimited,
+            target_width: TargetWidth::Auto,
             color: true,
             instrumented_registry: Arc::clone(&instrumented_registry),
         };
 
         let mut print_output: Vec<u8> = Vec::new();
         let exec_out = String::from("Formatted Exec Output");
-        print_options.write_output(&mut print_output, &exec_out)?;
+        print_options.write_output(&mut print_output, &exec_out, None)?;
         assert!(print_output.is_empty());
 
         print_options.quiet = false;
-        print_options.write_output(&mut print_output, &exec_out)?;
+        print_options.write_output(&mut print_output, &exec_out, None)?;
         let out_str: String = print_output
             .clone()
             .try_into()
@@ -253,7 +358,7 @@ mod tests {
         print_options
             .instrumented_registry
             .set_instrument_mode(InstrumentedObjectStoreMode::Trace);
-        print_options.write_output(&mut print_output, &exec_out)?;
+        print_options.write_output(&mut print_output, &exec_out, None)?;
         let out_str: String = print_output
             .clone()
             .try_into()

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
@@ -38,7 +25,7 @@ use syn::{DeriveInput, LitStr, parse_macro_input};
 /// #[user_doc(
 ///     doc_section(label = "Time and Date Functions"),
 ///     description = r"Converts a value to a date (`YYYY-MM-DD`).",
-///     syntax_example = "to_date('2017-05-31', '%Y-%m-%d')",
+///     syntax_example = "to_date(expression[, ..., format_n])",
 ///     sql_example = r#"```sql
 /// > select to_date('2023-01-31');
 /// +-----------------------------+
@@ -77,7 +64,7 @@ use syn::{DeriveInput, LitStr, parse_macro_input};
 ///                         description: None,
 ///                     },
 ///                     r"Converts a value to a date (`YYYY-MM-DD`).".to_string(),
-///                     "to_date('2017-05-31', '%Y-%m-%d')".to_string(),
+///                     "to_date(expression[, ..., format_n])".to_string(),
 ///                 )
 ///                 .with_sql_example(
 ///                     r#"```sql

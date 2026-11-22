@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! ParquetSource implementation for reading parquet files
 use std::fmt::Debug;
@@ -22,6 +9,7 @@ use std::sync::Arc;
 
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
+use crate::ParquetFileSchemaProvider;
 use crate::opener::ParquetMorselizer;
 use crate::opener::build_pruning_predicates;
 use crate::opener::build_virtual_columns_state;
@@ -36,16 +24,18 @@ use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::morsel::Morselizer;
 
-use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
-use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
+#[cfg(feature = "proto")]
+use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::utils::split_conjunction;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
@@ -53,6 +43,10 @@ use datafusion_physical_expr_adapter::rewrite::{
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
+#[cfg(feature = "proto")]
+use datafusion_physical_expr_common::sort_expr::{
+    optional_ordering_try_from_proto, sort_exprs_try_to_proto,
+};
 use datafusion_physical_plan::DisplayFormatType;
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::PushedDown;
@@ -63,6 +57,7 @@ use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use log::warn;
 
+use datafusion_execution::memory_pool::MemoryPool;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -298,6 +293,8 @@ pub struct ParquetSource {
     pub(crate) predicate: Option<Arc<dyn PhysicalExpr>>,
     /// Optional user defined parquet file reader factory
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
+    /// Optional policy for deriving each file's Arrow schema after footer loading.
+    pub(crate) schema_provider: Option<Arc<dyn ParquetFileSchemaProvider>>,
     /// Batch size configuration
     pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
@@ -306,10 +303,21 @@ pub struct ParquetSource {
     pub(crate) projection: ProjectionExprs,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
-    /// If true, the opener flips row-group iteration order. Within-
-    /// row-group order is on-disk order, so the scan is `Inexact` and
-    /// a `SortExec` is kept in the plan.
+    /// If true, the opener flips row-group iteration order. Unless
+    /// `reverse_rows` is also set, within-row-group order is on-disk
+    /// order, so the scan is `Inexact` and a `SortExec` is kept in the
+    /// plan.
     reverse_row_groups: bool,
+    /// If true, the opener also reverses the rows of each row group, so a
+    /// scan with `reverse_row_groups` reads every file exactly back to
+    /// front. Set only by an `Exact` reverse sort pushdown (see
+    /// [`ParquetOptions::enable_exact_reverse_scan`]).
+    ///
+    /// [`ParquetOptions::enable_exact_reverse_scan`]: datafusion_common::config::ParquetOptions::enable_exact_reverse_scan
+    reverse_rows: bool,
+    /// Pool charged for the row group a `reverse_rows` scan buffers. Set by
+    /// [`FileSource::with_memory_pool`] when the scan is opened.
+    memory_pool: Option<Arc<dyn MemoryPool>>,
     /// Sort order driving `PreparedAccessPlan::reorder_by_statistics`
     /// in the opener.
     sort_order_for_reorder: Option<LexOrdering>,
@@ -333,11 +341,14 @@ impl ParquetSource {
             metrics: ExecutionPlanMetricsSet::new(),
             predicate: None,
             parquet_file_reader_factory: None,
+            schema_provider: None,
             batch_size: None,
             metadata_size_hint: None,
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             reverse_row_groups: false,
+            reverse_rows: false,
+            memory_pool: None,
             sort_order_for_reorder: None,
         }
     }
@@ -389,12 +400,6 @@ impl ParquetSource {
         &self.table_parquet_options
     }
 
-    /// Optional predicate.
-    #[deprecated(since = "50.2.0", note = "use `filter` instead")]
-    pub fn predicate(&self) -> Option<&Arc<dyn PhysicalExpr>> {
-        self.predicate.as_ref()
-    }
-
     /// return the optional file reader factory
     pub fn parquet_file_reader_factory(
         &self,
@@ -408,6 +413,21 @@ impl ParquetSource {
         parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
     ) -> Self {
         self.parquet_file_reader_factory = Some(parquet_file_reader_factory);
+        self
+    }
+
+    /// Derive each file's Arrow schema from its physical Parquet schema during
+    /// lazy opening, before advisory Arrow metadata is parsed.
+    ///
+    /// Explicit [`PartitionedFile::arrow_schema`](datafusion_datasource::PartitionedFile::arrow_schema)
+    /// takes precedence. The provider is independent of the file reader factory
+    /// and metadata cache; see [`ParquetFileSchemaProvider`] for its contract.
+    /// Plans using a provider require a custom codec for serialization.
+    pub fn with_schema_provider(
+        mut self,
+        schema_provider: Arc<dyn ParquetFileSchemaProvider>,
+    ) -> Self {
+        self.schema_provider = Some(schema_provider);
         self
     }
 
@@ -485,6 +505,13 @@ impl ParquetSource {
         self.table_parquet_options.global.max_predicate_cache_size
     }
 
+    /// Return the maximum size of an `IN (...)` list eligible for statistics
+    /// pruning. Longer lists skip container-level pruning. Reads from
+    /// `datafusion.execution.parquet.max_in_list_size`.
+    pub fn max_in_list_size(&self) -> usize {
+        self.table_parquet_options.global.max_in_list_size
+    }
+
     #[cfg(feature = "parquet_encryption")]
     fn get_encryption_factory_with_config(
         &self,
@@ -507,37 +534,10 @@ impl ParquetSource {
     pub(crate) fn reverse_row_groups(&self) -> bool {
         self.reverse_row_groups
     }
-}
-
-/// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
-pub(crate) fn parse_coerce_int96_string(
-    str_setting: &str,
-) -> datafusion_common::Result<TimeUnit> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-
-    match str_setting_lower {
-        "ns" => Ok(TimeUnit::Nanosecond),
-        "us" => Ok(TimeUnit::Microsecond),
-        "ms" => Ok(TimeUnit::Millisecond),
-        "s" => Ok(TimeUnit::Second),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet coerce_int96: \
-        {str_setting}. Valid values are: ns, us, ms, and s."
-        ))),
+    #[cfg(test)]
+    pub(crate) fn reverse_rows(&self) -> bool {
+        self.reverse_rows
     }
-}
-
-/// Validates that `tz` is a parseable IANA timezone and returns it as an
-/// `Arc<str>` for use in `Timestamp(_, Some(tz))` types.
-pub(crate) fn parse_coerce_int96_tz_string(
-    tz: &str,
-) -> datafusion_common::Result<Arc<str>> {
-    tz.parse::<Tz>().map_err(|e| {
-        DataFusionError::Configuration(format!(
-            "Invalid parquet coerce_int96_tz {tz:?}: {e}"
-        ))
-    })?;
-    Ok(Arc::<str>::from(tz))
 }
 
 /// Allows easy conversion from ParquetSource to Arc&lt;dyn FileSource&gt;
@@ -589,15 +589,13 @@ impl FileSource for ParquetSource {
             .table_parquet_options
             .global
             .coerce_int96
-            .as_ref()
-            .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
+            .map(TimeUnit::from);
         let coerce_int96_tz = self
             .table_parquet_options
             .global
             .coerce_int96_tz
             .as_ref()
-            .map(|tz| parse_coerce_int96_tz_string(tz))
-            .transpose()?;
+            .map(|tz| Arc::<str>::from(tz.as_str()));
         if coerce_int96_tz.is_some() && coerce_int96.is_none() {
             warn!(
                 "coerce_int96_tz is set but coerce_int96 is not; the timezone will be ignored"
@@ -627,12 +625,13 @@ impl FileSource for ParquetSource {
                 .batch_size
                 .expect("Batch size must set before creating ParquetMorselizer"),
             limit: base_config.limit,
-            preserve_order: base_config.preserve_order,
+            preserve_order: base_config.preserves_file_order(),
             predicate: self.predicate.clone(),
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,
+            schema_provider: self.schema_provider.clone(),
             pushdown_filters: self.pushdown_filters(),
             reorder_filters: self.reorder_filters(),
             force_filter_selections: self.force_filter_selections(),
@@ -647,7 +646,18 @@ impl FileSource for ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
+            max_in_list_size: self.max_in_list_size(),
+            enable_rle_to_dictionary: self
+                .table_parquet_options
+                .global
+                .enable_rle_to_dictionary,
+            row_group_range_assignment: self
+                .table_parquet_options
+                .global
+                .row_group_range_assignment,
             reverse_row_groups: self.reverse_row_groups,
+            reverse_rows: self.reverse_rows,
+            memory_pool: self.memory_pool.clone(),
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
         }))
@@ -673,10 +683,41 @@ impl FileSource for ParquetSource {
         self.predicate.clone()
     }
 
+    /// The predicate is applied to every row only when filter pushdown is
+    /// enabled, and then only the conjuncts that can become a `RowFilter`.
+    /// Otherwise the predicate is used only for pruning.
+    fn exact_filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        if !self.pushdown_filters() {
+            return None;
+        }
+        let predicate = self.predicate.as_ref()?;
+        let pushable_schema = self.table_schema.schema_without_virtual_columns();
+        let exact = split_conjunction(predicate)
+            .into_iter()
+            .filter(|expr| can_expr_be_pushed_down_with_schemas(expr, pushable_schema))
+            .cloned()
+            .collect::<Vec<_>>();
+        (!exact.is_empty()).then(|| conjunction(exact))
+    }
+
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);
         Arc::new(conf)
+    }
+
+    /// Only a `reverse_rows` scan buffers between batches: it holds one row
+    /// group, which is charged to the pool.
+    fn with_memory_pool(
+        &self,
+        memory_pool: &Arc<dyn MemoryPool>,
+    ) -> Option<Arc<dyn FileSource>> {
+        if !self.reverse_rows {
+            return None;
+        }
+        let mut conf = self.clone();
+        conf.memory_pool = Some(Arc::clone(memory_pool));
+        Some(Arc::new(conf))
     }
 
     fn try_pushdown_projection(
@@ -739,13 +780,16 @@ impl FileSource for ParquetSource {
                 if self.reverse_row_groups {
                     write!(f, ", reverse_row_groups=true")?;
                 }
+                if self.reverse_rows {
+                    write!(f, ", reverse_rows=true")?;
+                }
 
                 // Plan-time marker for dynamic RG-level pruning: if the
                 // predicate is dynamic (e.g. a TopK threshold expression),
                 // the parquet opener will pause the single decoder at row
                 // group boundaries and consult `RowGroupPruner` to drop
                 // RGs the current threshold proves unwinnable, rebuilding
-                // the decoder via `into_builder().with_row_groups(...)` to
+                // the decoder via `into_builder().with_row_group_selections(...)` to
                 // skip them. The actual pruning count appears as
                 // `row_groups_pruned_dynamic_filter` in EXPLAIN ANALYZE.
                 // We use `contains_dynamic_filter()` (matches both `Watching`
@@ -781,6 +825,7 @@ impl FileSource for ParquetSource {
                         Some(predicate),
                         self.table_schema.table_schema(),
                         &predicate_creation_errors,
+                        self.max_in_list_size(),
                     ) {
                         let mut guarantees = pruning_predicate
                             .literal_guarantees()
@@ -795,16 +840,15 @@ impl FileSource for ParquetSource {
                             guarantees.join(", ")
                         )?;
                     }
-                };
-                Ok(())
+                }
             }
             DisplayFormatType::TreeRender => {
                 if let Some(predicate) = self.filter() {
                     writeln!(f, "predicate={}", fmt_sql(predicate.as_ref()))?;
                 }
-                Ok(())
             }
         }
+        Ok(())
     }
 
     fn try_pushdown_filters(
@@ -948,8 +992,7 @@ impl FileSource for ParquetSource {
         // is already in prefix order the stats-based reorder is mostly
         // a no-op anyway, so the trade-off is plainly bad.
         for prefix_len in 1..order.len() {
-            let prefix = order[..prefix_len].to_vec();
-            if eq_properties.ordering_satisfy(prefix.iter().cloned())? {
+            if eq_properties.ordering_satisfy(order[..prefix_len].iter().cloned())? {
                 return Ok(SortOrderPushdownResult::Unsupported);
             }
         }
@@ -1023,6 +1066,29 @@ impl FileSource for ParquetSource {
             })
         });
 
+        // Exact reverse: when the reversed declared ordering satisfies the
+        // request and `enable_exact_reverse_scan` is set, read every file
+        // exactly back to front, row groups and the rows inside them, so
+        // the scan itself produces the requested order. Row groups keep
+        // their on-disk order before the flip: reordering them by
+        // statistics is not order-preserving when two row groups share a
+        // `min`. `FileScanConfig` reverses the files of each group and
+        // re-validates the ordering, falling back to `Inexact` if it does
+        // not hold.
+        if reversed_satisfies
+            && self.table_parquet_options.global.enable_exact_reverse_scan
+        {
+            // Toggled, not set: pushing a reverse onto a scan that already
+            // reads back to front turns it forward again.
+            let mut new_source = self.clone();
+            new_source.sort_order_for_reorder = None;
+            new_source.reverse_row_groups = !self.reverse_rows;
+            new_source.reverse_rows = !self.reverse_rows;
+            return Ok(SortOrderPushdownResult::Exact {
+                inner: Arc::new(new_source) as Arc<dyn FileSource>,
+            });
+        }
+
         if !column_in_file_schema && !reversed_satisfies {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
@@ -1046,6 +1112,222 @@ impl FileSource for ParquetSource {
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_source) as Arc<dyn FileSource>,
         })
+    }
+
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> datafusion_common::Result<TreeNodeRecursion>,
+    ) -> datafusion_common::Result<TreeNodeRecursion> {
+        datafusion_physical_plan::apply_expression_roots(
+            self.predicate
+                .iter()
+                .chain(self.projection.iter().map(|proj_expr| &proj_expr.expr)),
+            f,
+        )
+    }
+
+    /// Emit a `ParquetScan` node wrapping the shared base config plus the
+    /// Parquet-specific pushdown predicate and `TableParquetOptions`.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        base: &FileScanConfig,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> datafusion_common::Result<
+        Option<datafusion_proto_models::protobuf::PhysicalPlanNode>,
+    > {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        let Self {
+            table_parquet_options,
+            // Runtime metrics are recreated when the source is decoded.
+            metrics: _,
+            // Carried by `base`.
+            table_schema: _,
+            predicate,
+            // Rebuilt from the decode context.
+            parquet_file_reader_factory: _,
+            // Requires a custom codec for serialization.
+            schema_provider,
+            // Applied by `FileScanConfig` before execution.
+            batch_size: _,
+            metadata_size_hint,
+            // Carried by `base` as projection expressions.
+            projection: _,
+            // Not serialized or restored by the default decoder.
+            #[cfg(feature = "parquet_encryption")]
+                encryption_factory: _,
+            reverse_row_groups,
+            reverse_rows,
+            // Runtime only: set when the scan is opened.
+            memory_pool: _,
+            sort_order_for_reorder,
+        } = self;
+
+        if schema_provider.is_some() {
+            return Ok(None);
+        }
+
+        let predicate = predicate
+            .as_ref()
+            .map(|pred| ctx.encode_expr(pred))
+            .transpose()?;
+        let sort_order_for_reorder = sort_order_for_reorder
+            .as_ref()
+            .map(|ordering| -> datafusion_common::Result<_> {
+                Ok(protobuf::PhysicalSortExprNodeCollection {
+                    physical_sort_expr_nodes: sort_exprs_try_to_proto(
+                        ordering.iter(),
+                        &ctx.expr_ctx(),
+                    )?,
+                })
+            })
+            .transpose()?;
+        let metadata_size_hint = metadata_size_hint
+            .map(|hint| usize_to_wire(hint, "ParquetSource", "metadata_size_hint"))
+            .transpose()?;
+
+        let node = protobuf::ParquetScanExecNode {
+            base_conf: Some(base.try_to_proto(ctx)?),
+            predicate,
+            parquet_options: Some(table_parquet_options.try_into()?),
+            sort_order_for_reorder,
+            reverse_row_groups: *reverse_row_groups,
+            reverse_rows: *reverse_rows,
+            metadata_size_hint,
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::ParquetScan(node)),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ParquetSource {
+    /// Reconstructs a `DataSourceExec` from a protobuf `ParquetScan`.
+    ///
+    /// Rebuilds the reader factory from the decode context because it is not serialized.
+    /// Encryption factories and crypto options are not serialized or restored;
+    /// plans that rely on them require custom handling.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> datafusion_common::Result<Arc<dyn datafusion_physical_plan::ExecutionPlan>> {
+        use crate::CachedParquetFileReaderFactory;
+        use arrow::datatypes::Schema;
+        use datafusion_common::config::TableParquetOptions;
+        use datafusion_datasource::file_scan_config::FileScanConfig;
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_execution::object_store::ObjectStoreUrl;
+        use datafusion_proto_models::protobuf;
+
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) =
+            &node.physical_plan_type
+        else {
+            return datafusion_common::internal_err!(
+                "PhysicalPlanNode is not a ParquetScan"
+            );
+        };
+
+        let protobuf::ParquetScanExecNode {
+            base_conf,
+            predicate,
+            parquet_options,
+            sort_order_for_reorder,
+            reverse_row_groups,
+            reverse_rows,
+            metadata_size_hint,
+        } = scan;
+
+        let base_conf = base_conf.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ParquetScanExecNode is missing required field 'base_conf'"
+            )
+        })?;
+
+        let schema: Arc<Schema> = Arc::new(
+            base_conf
+                .schema
+                .as_ref()
+                .ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "FileScanExecConf is missing required field 'schema'"
+                    )
+                })?
+                .try_into()?,
+        );
+
+        // The predicate was serialized against the scan's output schema, so it
+        // must be decoded against the projected schema when a projection is
+        // present.
+        let predicate_schema = if !base_conf.projection.is_empty() {
+            let projected_fields: Vec<_> = base_conf
+                .projection
+                .iter()
+                .map(|&i| schema.field(i as usize).clone())
+                .collect();
+            Arc::new(Schema::new(projected_fields))
+        } else {
+            schema
+        };
+
+        let predicate = predicate
+            .as_ref()
+            .map(|expr| ctx.decode_expr(expr, predicate_schema.as_ref()))
+            .transpose()?;
+        let sort_order_for_reorder = sort_order_for_reorder
+            .as_ref()
+            .map(|ordering| {
+                optional_ordering_try_from_proto(
+                    &ordering.physical_sort_expr_nodes,
+                    &ctx.expr_ctx(predicate_schema.as_ref()),
+                )
+            })
+            .transpose()?
+            .flatten();
+        let metadata_size_hint = metadata_size_hint
+            .map(|hint| usize_from_wire(hint, "ParquetSource", "metadata_size_hint"))
+            .transpose()?;
+
+        let mut options = TableParquetOptions::default();
+        if let Some(table_options) = parquet_options.as_ref() {
+            options = table_options.try_into()?;
+        }
+
+        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
+        let object_store_url = match base_conf.object_store_url.is_empty() {
+            false => ObjectStoreUrl::parse(&base_conf.object_store_url)?,
+            true => ObjectStoreUrl::local_filesystem(),
+        };
+        let store = ctx
+            .task_ctx()
+            .runtime_env()
+            .object_store(object_store_url)?;
+        let metadata_cache = ctx
+            .task_ctx()
+            .runtime_env()
+            .cache_manager
+            .get_file_metadata_cache();
+        let reader_factory =
+            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+
+        let mut source = ParquetSource::new(table_schema)
+            .with_parquet_file_reader_factory(reader_factory)
+            .with_table_parquet_options(options);
+        source.sort_order_for_reorder = sort_order_for_reorder;
+        source.reverse_row_groups = *reverse_row_groups;
+        source.reverse_rows = *reverse_rows;
+        source.metadata_size_hint = metadata_size_hint;
+
+        if let Some(predicate) = predicate {
+            source = source.with_predicate(predicate);
+        }
+        let base_config =
+            FileScanConfig::try_from_proto(base_conf, ctx, Arc::new(source))?;
+        Ok(DataSourceExec::from_data_source(base_config))
     }
 }
 
@@ -1119,14 +1401,39 @@ mod tests {
     use datafusion_physical_expr::expressions::lit;
 
     #[test]
-    #[expect(deprecated)]
-    fn test_parquet_source_predicate_same_as_filter() {
-        let predicate = lit(true);
+    fn partition_metrics_exclude_derived_plan_metrics() {
+        use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_execution::object_store::ObjectStoreUrl;
+        use datafusion_physical_plan::ExecutionPlan;
+        use datafusion_physical_plan::metrics::MetricBuilder;
 
-        let parquet_source =
-            ParquetSource::new(Arc::new(Schema::empty())).with_predicate(predicate);
-        // same value. but filter() call Arc::clone internally
-        assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
+        let source = Arc::new(ParquetSource::new(Arc::new(Schema::empty())));
+        let metrics = source.metrics().clone();
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                .build();
+        let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        assert_eq!(plan.metrics().unwrap().for_partition(0).iter().count(), 0);
+        MetricBuilder::new(&metrics).output_rows(0).add(10);
+        MetricBuilder::new(&metrics).output_rows(1).add(20);
+        MetricBuilder::new(&metrics).global_counter("global").add(1);
+        let selected = plan.metrics().unwrap().for_partition(0);
+        assert_eq!(selected.output_rows(), Some(10));
+        assert!(selected.iter().all(|m| m.partition() == Some(0)));
+        let full = plan.metrics().unwrap();
+        assert_eq!(full.output_rows(), Some(30));
+        assert!(
+            full.iter().any(
+                |m| m.value().name() == "output_rows_skew" && m.partition().is_none()
+            )
+        );
+        MetricBuilder::new(&metrics).output_rows(0).add(5);
+        assert_eq!(selected.output_rows(), Some(10));
+        assert_eq!(
+            plan.metrics().unwrap().for_partition(0).output_rows(),
+            Some(15)
+        );
     }
 
     #[test]
@@ -1209,6 +1516,107 @@ mod tests {
 
         assert!(source.reverse_row_groups());
         assert!(source.filter().is_some());
+    }
+
+    #[test]
+    fn parquet_file_reader_factory_downcasts_to_concrete_type() {
+        use crate::CachedParquetFileReaderFactory;
+        use datafusion_datasource::PartitionedFile;
+        use datafusion_execution::cache::cache_manager::FileMetadataCache;
+        use datafusion_execution::cache::default_cache::DefaultCache;
+        use object_store::memory::InMemory;
+        use parquet::arrow::async_reader::AsyncFileReader;
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let source = ParquetSource::new(Arc::new(Schema::empty()))
+            .with_parquet_file_reader_factory(Arc::new(
+                DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
+            ));
+        let factory = source.parquet_file_reader_factory().unwrap();
+        assert!(factory.is::<DefaultParquetFileReaderFactory>());
+        assert!(
+            factory
+                .downcast_ref::<DefaultParquetFileReaderFactory>()
+                .is_some()
+        );
+        assert!(
+            factory
+                .downcast_ref::<CachedParquetFileReaderFactory>()
+                .is_none()
+        );
+
+        let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024));
+        let source = ParquetSource::new(Arc::new(Schema::empty()))
+            .with_parquet_file_reader_factory(Arc::new(
+                CachedParquetFileReaderFactory::new(Arc::clone(&store), cache),
+            ));
+        let factory = source.parquet_file_reader_factory().unwrap();
+        assert!(factory.is::<CachedParquetFileReaderFactory>());
+        assert!(
+            factory
+                .downcast_ref::<CachedParquetFileReaderFactory>()
+                .is_some()
+        );
+        assert!(
+            factory
+                .downcast_ref::<DefaultParquetFileReaderFactory>()
+                .is_none()
+        );
+
+        // A custom factory whose Debug output resembles a built-in factory.
+        // Verifies that concrete-type downcasting avoids false-positive matches
+        // from Debug substring checks (issue #26633).
+        struct CustomParquetFileReaderFactory {
+            store: Arc<dyn ObjectStore>,
+        }
+
+        impl Debug for CustomParquetFileReaderFactory {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("DefaultParquetFileReaderFactory")
+                    .field("store", &self.store)
+                    .finish()
+            }
+        }
+
+        impl ParquetFileReaderFactory for CustomParquetFileReaderFactory {
+            fn create_reader(
+                &self,
+                _partition_index: usize,
+                _partitioned_file: PartitionedFile,
+                _metadata_size_hint: Option<usize>,
+                _metrics: &ExecutionPlanMetricsSet,
+            ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
+                unimplemented!()
+            }
+        }
+
+        let custom_factory = Arc::new(CustomParquetFileReaderFactory { store });
+        assert!(
+            format!("{custom_factory:?}")
+                .starts_with("DefaultParquetFileReaderFactory { store:")
+        );
+
+        let source = ParquetSource::new(Arc::new(Schema::empty()))
+            .with_parquet_file_reader_factory(custom_factory);
+        let factory = source.parquet_file_reader_factory().unwrap();
+        assert!(!factory.is::<DefaultParquetFileReaderFactory>());
+        assert!(!factory.is::<CachedParquetFileReaderFactory>());
+        assert!(
+            factory
+                .downcast_ref::<DefaultParquetFileReaderFactory>()
+                .is_none()
+        );
+        assert!(
+            factory
+                .downcast_ref::<CachedParquetFileReaderFactory>()
+                .is_none()
+        );
+        assert!(factory.is::<CustomParquetFileReaderFactory>());
+        assert!(
+            factory
+                .downcast_ref::<CustomParquetFileReaderFactory>()
+                .is_some()
+        );
     }
 
     /// Render a `ParquetSource`'s `fmt_extra` output as a `String` for
@@ -1453,6 +1861,106 @@ mod tests {
             matches!(result, SortOrderPushdownResult::Unsupported),
             "column not in file schema must yield Unsupported",
         );
+    }
+
+    /// Source declares `[a ASC NULLS LAST]`, request is its exact reverse
+    /// `[a DESC NULLS FIRST]`, used by the exact reverse scan tests below.
+    fn exact_reverse_case() -> (Arc<Schema>, EquivalenceProperties, Vec<PhysicalSortExpr>)
+    {
+        use arrow::compute::SortOptions;
+        use pushdown_sort_helpers::*;
+
+        let schema = schema_with_a_int();
+        let column = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let mut eq = EquivalenceProperties::new(Arc::clone(&schema));
+        eq.add_ordering(vec![PhysicalSortExpr::new(
+            Arc::clone(&column),
+            SortOptions::new(false, false),
+        )]);
+        let order = vec![PhysicalSortExpr::new(column, SortOptions::new(true, true))];
+        (schema, eq, order)
+    }
+
+    /// With `enable_exact_reverse_scan`, a request that is the reverse of
+    /// the declared ordering is `Exact`: the source reverses both the row
+    /// groups and the rows inside them, and does not reorder row groups by
+    /// statistics, which is not order-preserving for row groups that share
+    /// a `min`.
+    #[test]
+    fn try_pushdown_sort_returns_exact_for_reverse_when_enabled() {
+        let (schema, eq, order) = exact_reverse_case();
+        let mut options = TableParquetOptions::default();
+        options.global.enable_exact_reverse_scan = true;
+        let source = ParquetSource::new(schema).with_table_parquet_options(options);
+
+        let result = source.try_pushdown_sort(&order, &eq).unwrap();
+
+        let SortOrderPushdownResult::Exact { inner } = result else {
+            panic!("expected Exact, got a different variant");
+        };
+        let inner_parquet = inner
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        assert!(inner_parquet.reverse_row_groups());
+        assert!(inner_parquet.reverse_rows());
+        assert!(inner_parquet.sort_order_for_reorder.is_none());
+    }
+
+    /// Pushing a reverse onto a scan that already reads back to front turns
+    /// it forward again, rather than leaving it reversed under an ordering
+    /// that has been flipped back.
+    #[test]
+    fn try_pushdown_sort_exact_reverse_twice_reads_forward() {
+        let (schema, eq, order) = exact_reverse_case();
+        let mut options = TableParquetOptions::default();
+        options.global.enable_exact_reverse_scan = true;
+        let source = ParquetSource::new(schema).with_table_parquet_options(options);
+        let SortOrderPushdownResult::Exact { inner: reversed } =
+            source.try_pushdown_sort(&order, &eq).unwrap()
+        else {
+            panic!("expected Exact for the first pushdown");
+        };
+        let reversed = reversed
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        assert!(reversed.reverse_rows());
+
+        // The reversed scan declares the reversed ordering; ask for the
+        // original one.
+        let mut reversed_eq = eq.clone();
+        reversed_eq.clear_orderings();
+        reversed_eq.add_ordering(order.clone());
+        let forward_order: Vec<_> = order.iter().map(|expr| expr.reverse()).collect();
+        let SortOrderPushdownResult::Exact { inner } = reversed
+            .try_pushdown_sort(&forward_order, &reversed_eq)
+            .unwrap()
+        else {
+            panic!("expected Exact for the second pushdown");
+        };
+        let forward = inner
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        assert!(!forward.reverse_row_groups());
+        assert!(!forward.reverse_rows());
+    }
+
+    /// Without the option, the same request stays `Inexact` and rows keep
+    /// their on-disk order within each row group.
+    #[test]
+    fn try_pushdown_sort_returns_inexact_for_reverse_by_default() {
+        let (schema, eq, order) = exact_reverse_case();
+        let source = ParquetSource::new(schema);
+
+        let result = source.try_pushdown_sort(&order, &eq).unwrap();
+
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("expected Inexact, got a different variant");
+        };
+        let inner_parquet = inner
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        assert!(inner_parquet.reverse_row_groups());
+        assert!(!inner_parquet.reverse_rows());
     }
 
     /// Regression: when the source declares `[a DESC]` and the request is
@@ -1754,6 +2262,69 @@ mod tests {
             file_with_min("has_min", Some(10)),
         ]);
         assert_eq!(names(&reordered), vec!["has_min", "no_stats"]);
+    }
+
+    /// Multi-column TopK: when the leading column's `min` ties across
+    /// files, the secondary sort key breaks the tie (lexicographic,
+    /// mirroring the row-group level reorder).
+    #[test]
+    fn reorder_files_breaks_leading_ties_with_secondary_column() {
+        use datafusion_common::stats::Precision;
+        use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
+        use datafusion_datasource::PartitionedFile;
+        use pushdown_sort_helpers::*;
+        use reorder_files_helpers::*;
+
+        fn file_with_two_mins(
+            name: &str,
+            min_a: i32,
+            min_b: Option<i32>,
+        ) -> PartitionedFile {
+            let mut pf = PartitionedFile::new(name.to_string(), 0);
+            let col = |min: Option<i32>| ColumnStatistics {
+                null_count: Precision::Absent,
+                max_value: Precision::Absent,
+                min_value: min
+                    .map(|v| Precision::Exact(ScalarValue::Int32(Some(v))))
+                    .unwrap_or(Precision::Absent),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
+            };
+            pf.statistics = Some(Arc::new(Statistics {
+                num_rows: Precision::Absent,
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![col(Some(min_a)), col(min_b)],
+            }));
+            pf
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let mut source = ParquetSource::new(Arc::clone(&schema));
+        source.sort_order_for_reorder = Some(
+            LexOrdering::new(vec![
+                sort_expr_on(&schema, "a", false),
+                sort_expr_on(&schema, "b", false),
+            ])
+            .unwrap(),
+        );
+
+        let reordered = source.reorder_files(vec![
+            file_with_two_mins("tie_late", 1, Some(300)),
+            file_with_two_mins("first", 0, Some(999)),
+            file_with_two_mins("tie_early", 1, Some(100)),
+            file_with_two_mins("tie_no_b_stats", 1, None),
+        ]);
+
+        // `first` wins on the leading key; the `a = 1` ties order by
+        // `min(b)` ASC with missing-`b`-stats last.
+        assert_eq!(
+            names(&reordered),
+            vec!["first", "tie_early", "tie_late", "tie_no_b_stats"]
+        );
     }
 
     /// When no sort pushdown has fired (`sort_order_for_reorder` is

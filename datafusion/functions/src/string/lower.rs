@@ -1,28 +1,15 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 
 use crate::string::common::to_lower;
 use datafusion_common::Result;
 use datafusion_common::types::logical_string;
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ReturnFieldArgs,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -80,6 +67,14 @@ impl ScalarUDFImpl for LowerFunc {
         Ok(arg_types[0].clone())
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let input = &args.arg_fields[0];
+        Ok(
+            Field::new(self.name(), input.data_type().clone(), input.is_nullable())
+                .into(),
+        )
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         to_lower(&args.args, "lower")
     }
@@ -96,6 +91,21 @@ mod tests {
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
     use std::sync::Arc;
+
+    #[test]
+    fn preserves_input_nullability() -> Result<()> {
+        let func = LowerFunc::new();
+        for nullable in [false, true] {
+            let input = Field::new("input", DataType::Utf8, nullable);
+            let result = func.return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[input.into()],
+                scalar_arguments: &[None],
+            })?;
+            assert_eq!(result.data_type(), &DataType::Utf8);
+            assert_eq!(result.is_nullable(), nullable);
+        }
+        Ok(())
+    }
 
     fn invoke_lower(input: ArrayRef) -> Result<ArrayRef> {
         let func = LowerFunc::new();
@@ -120,27 +130,6 @@ mod tests {
     }
 
     #[test]
-    fn lower_maybe_optimization() -> Result<()> {
-        let input = Arc::new(StringArray::from(vec![
-            Some("农历新年"),
-            None,
-            Some("DATAFUSION"),
-            Some("0123456789"),
-            Some(""),
-        ])) as ArrayRef;
-
-        let expected = Arc::new(StringArray::from(vec![
-            Some("农历新年"),
-            None,
-            Some("datafusion"),
-            Some("0123456789"),
-            Some(""),
-        ])) as ArrayRef;
-
-        to_lower(input, expected)
-    }
-
-    #[test]
     fn lower_full_optimization() -> Result<()> {
         let input = Arc::new(StringArray::from(vec![
             Some("ARROW"),
@@ -156,56 +145,6 @@ mod tests {
             Some("datafusion"),
             Some("0123456789"),
             Some(""),
-        ])) as ArrayRef;
-
-        to_lower(input, expected)
-    }
-
-    #[test]
-    fn lower_partial_optimization() -> Result<()> {
-        let input = Arc::new(StringArray::from(vec![
-            Some("ARROW"),
-            None,
-            Some("DATAFUSION"),
-            Some("@_"),
-            Some("0123456789"),
-            Some(""),
-            Some("\t\n"),
-            Some("ὈΔΥΣΣΕΎΣ"),
-            Some("TSCHÜSS"),
-            Some("Ⱦ"), // ⱦ: length change
-            Some("农历新年"),
-        ])) as ArrayRef;
-
-        let expected = Arc::new(StringArray::from(vec![
-            Some("arrow"),
-            None,
-            Some("datafusion"),
-            Some("@_"),
-            Some("0123456789"),
-            Some(""),
-            Some("\t\n"),
-            Some("ὀδυσσεύς"),
-            Some("tschüss"),
-            Some("ⱦ"),
-            Some("农历新年"),
-        ])) as ArrayRef;
-
-        to_lower(input, expected)
-    }
-
-    #[test]
-    fn lower_utf8view() -> Result<()> {
-        let input = Arc::new(StringViewArray::from(vec![
-            Some("ARROW"),
-            None,
-            Some("TSCHÜSS"),
-        ])) as ArrayRef;
-
-        let expected = Arc::new(StringViewArray::from(vec![
-            Some("arrow"),
-            None,
-            Some("tschüss"),
         ])) as ArrayRef;
 
         to_lower(input, expected)

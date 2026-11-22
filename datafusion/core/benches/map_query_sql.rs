@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashSet;
 use std::hint::black_box;
@@ -22,8 +9,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
 use criterion::{Criterion, criterion_group, criterion_main};
 use parking_lot::Mutex;
-use rand::Rng;
-use rand::prelude::ThreadRng;
+use rand::prelude::*;
 use tokio::runtime::Runtime;
 
 use datafusion::prelude::SessionContext;
@@ -33,7 +19,7 @@ use datafusion_functions_nested::map::map;
 
 mod data_utils;
 
-fn build_keys(rng: &mut ThreadRng) -> Vec<String> {
+fn build_keys(rng: &mut StdRng) -> Vec<String> {
     let mut keys = HashSet::with_capacity(1000);
     while keys.len() < 1000 {
         let key = rng.random_range(0..9999).to_string();
@@ -42,7 +28,7 @@ fn build_keys(rng: &mut ThreadRng) -> Vec<String> {
     keys.into_iter().collect()
 }
 
-fn build_values(rng: &mut ThreadRng) -> Vec<i32> {
+fn build_values(rng: &mut StdRng) -> Vec<i32> {
     let mut values = vec![];
     for _ in 0..1000 {
         values.push(rng.random_range(0..9999));
@@ -67,7 +53,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
     let df = rt.block_on(ctx.lock().table("t")).unwrap();
 
-    let mut rng = rand::rng();
+    let mut rng = StdRng::seed_from_u64(0);
     let keys = build_keys(&mut rng);
     let values = build_values(&mut rng);
     let mut key_buffer = Vec::new();

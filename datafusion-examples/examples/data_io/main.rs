@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! # These examples of data formats and I/O
 //!
@@ -21,7 +8,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example data_io -- [all|catalog|in_memory_object_store|json_shredding|parquet_adv_idx|parquet_emb_idx|parquet_enc_with_kms|parquet_enc|parquet_exec_visitor|parquet_idx|query_http_csv|remote_catalog]
+//! cargo run --example data_io -- [all|catalog|in_memory_object_store|json_shredding|object_store_spill|parquet_adv_idx|parquet_emb_idx|parquet_enc_with_kms|parquet_enc|parquet_exec_visitor|parquet_idx|query_http_csv|remote_catalog]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -36,13 +23,16 @@
 //! - `json_shredding`
 //!   (file: json_shredding.rs, desc: Implement filter rewriting for JSON shredding)
 //!
+//! - `object_store_spill`
+//!   (file: object_store_spill.rs, desc: Use ObjectStore-backed spill files)
+//!
 //! - `parquet_adv_idx`
 //!   (file: parquet_advanced_index.rs, desc: Create a secondary index across multiple parquet files)
 //!
 //! - `parquet_emb_idx`
 //!   (file: parquet_embedded_index.rs, desc: Store a custom index inside Parquet files)
 //!
-//! - `parquet_enc`  
+//! - `parquet_enc`
 //!   (file: parquet_encrypted.rs, desc: Read & write encrypted Parquet files)
 //!
 //! - `parquet_enc_with_kms`
@@ -66,6 +56,7 @@
 mod catalog;
 mod in_memory_object_store;
 mod json_shredding;
+mod object_store_spill;
 mod parquet_advanced_index;
 mod parquet_embedded_index;
 mod parquet_encrypted;
@@ -87,6 +78,7 @@ enum ExampleKind {
     Catalog,
     InMemoryObjectStore,
     JsonShredding,
+    ObjectStoreSpill,
     ParquetAdvIdx,
     ParquetEmbIdx,
     ParquetEnc,
@@ -118,6 +110,9 @@ impl ExampleKind {
                 in_memory_object_store::in_memory_object_store().await?
             }
             ExampleKind::JsonShredding => json_shredding::json_shredding().await?,
+            ExampleKind::ObjectStoreSpill => {
+                object_store_spill::object_store_spill().await?
+            }
             ExampleKind::ParquetAdvIdx => {
                 parquet_advanced_index::parquet_advanced_index().await?
             }

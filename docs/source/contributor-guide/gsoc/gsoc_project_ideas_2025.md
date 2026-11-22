@@ -1,8 +1,14 @@
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+-->
+
 # GSoC Project Ideas (2025)
 
 ## Introduction
 
-Welcome to the Apache DataFusion Google Summer of Code (GSoC) 2025 project ideas list. Below you can find information about the projects. Please refer to [this page](https://datafusion.apache.org/contributor-guide/gsoc_application_guidelines.html) for application guidelines.
+Welcome to the Apache DataFusion Google Summer of Code (GSoC) 2025 project ideas list. Below you can find information about the projects. Please refer to [this page](https://datafusion.apache.org/contributor-guide/gsoc/gsoc_application_guidelines_2025.html) for application guidelines.
 
 ## Projects
 
