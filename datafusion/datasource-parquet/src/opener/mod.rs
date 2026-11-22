@@ -76,7 +76,9 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::file::metadata::{
+    ColumnChunkMask, PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData,
+};
 
 /// Morselizer-level state for virtual columns, precomputed once per scan
 /// partition so each file skips the validator walks, `null_replacements`
@@ -1494,21 +1496,48 @@ impl RowGroupsPrunedParquetOpen {
 
     /// Load the page index if pruning requires it and metadata did not include it.
     async fn load_page_index(mut self) -> Result<Self> {
-        self.prepared.loaded.reader_metadata = load_page_index(
-            self.prepared.loaded.reader_metadata.clone(),
-            &mut self.prepared.loaded.prepared.async_file_reader,
-            self.prepared
-                .loaded
-                .options
-                .clone()
-                .with_offset_index_policy(PageIndexPolicy::Optional)
-                .with_column_index_policy(
-                    if self.prepared.page_pruning_predicate.is_some() {
-                        PageIndexPolicy::Optional
-                    } else {
-                        PageIndexPolicy::Skip
-                    },
-                ),
+        let loaded = &mut self.prepared.loaded;
+        let metadata = &loaded.reader_metadata;
+        let schema = metadata.parquet_schema();
+        let predicate_columns: Vec<_> = self
+            .prepared
+            .page_pruning_predicate
+            .iter()
+            .flat_map(|predicate| predicate.predicate_column_names())
+            .filter_map(|name| {
+                parquet_column(schema, &loaded.prepared.physical_file_schema, name)
+                    .map(|(leaf, _)| leaf)
+            })
+            .collect();
+        let plans = match &self.decoder_read_plans {
+            Some(plans) => plans,
+            None => self
+                .decoder_read_plans
+                .insert(DecoderReadPlans::try_new(&loaded.prepared, metadata)?),
+        };
+        // Selection and decoding need offsets for every column they read.
+        // Only page-pruning predicates need the column min/max statistics.
+        // Page pruning also uses the first leaf's offset index for page metrics.
+        let offset_columns = (0..schema.num_columns()).filter(|leaf| {
+            plans.reads_leaf(*leaf)
+                || predicate_columns.contains(leaf)
+                || (*leaf == 0 && !predicate_columns.is_empty())
+        });
+        let options = loaded
+            .options
+            .clone()
+            .with_offset_index_policy(PageIndexPolicy::Optional)
+            .with_offset_index_mask(ColumnChunkMask::columns(offset_columns))
+            .with_column_index_policy(if predicate_columns.is_empty() {
+                PageIndexPolicy::Skip
+            } else {
+                PageIndexPolicy::Optional
+            })
+            .with_column_index_mask(ColumnChunkMask::columns(predicate_columns));
+        loaded.reader_metadata = load_page_index(
+            metadata.clone(),
+            &mut loaded.prepared.async_file_reader,
+            options,
         )
         .await?;
 
@@ -2173,23 +2202,37 @@ async fn load_page_index<T: AsyncFileReader>(
     options: ArrowReaderOptions,
 ) -> Result<ArrowReaderMetadata> {
     let parquet_metadata = reader_metadata.metadata();
-    let missing_column_index = options.column_index_policy() != PageIndexPolicy::Skip
-        && !parquet_metadata
-            .page_index()
-            .is_some_and(|page_index| page_index.has_column_indexes());
-    let missing_offset_index = options.offset_index_policy() != PageIndexPolicy::Skip
-        && !parquet_metadata
-            .page_index()
-            .is_some_and(|page_index| page_index.has_offset_indexes());
-    // You may ask yourself: why are we even checking if the page index is already loaded here?
-    // Didn't we explicitly *not* load it above?
-    // Well it's possible that a custom implementation of `AsyncFileReader` gives you
-    // the page index even if you didn't ask for it (e.g. because it's cached)
-    // so it's important to check that here to avoid extra work.
-    if missing_column_index || missing_offset_index {
+    // A reader factory may return metadata cached for another projection.
+    // Check the requested cells against the footer before reusing its indexes.
+    let cached = parquet_metadata.page_index();
+    let needs_index =
+        parquet_metadata
+            .row_groups()
+            .iter()
+            .enumerate()
+            .any(|(rg, group)| {
+                group.columns().iter().enumerate().any(|(leaf, chunk)| {
+                    let cols = group.num_columns();
+                    (options.column_index_policy() != PageIndexPolicy::Skip
+                        && options.column_index_mask().includes_column(leaf, cols)
+                        && chunk.column_index_offset().is_some()
+                        && cached
+                            .and_then(|index| index.column_index(rg, leaf))
+                            .is_none())
+                        || (options.offset_index_policy() != PageIndexPolicy::Skip
+                            && options.offset_index_mask().includes_column(leaf, cols)
+                            && chunk.offset_index_offset().is_some()
+                            && cached
+                                .and_then(|index| index.offset_index(rg, leaf))
+                                .is_none())
+                })
+            });
+    if needs_index {
         let m = Arc::try_unwrap(Arc::clone(parquet_metadata))
             .unwrap_or_else(|e| e.as_ref().clone());
         let mut reader = ParquetMetaDataReader::new_with_metadata(m)
+            .with_column_index_mask(options.column_index_mask().clone())
+            .with_offset_index_mask(options.offset_index_mask().clone())
             .with_column_index_policy(options.column_index_policy())
             .with_offset_index_policy(options.offset_index_policy());
         reader.load_page_index(input).await?;
@@ -5385,7 +5428,8 @@ mod test {
     #[tokio::test]
     async fn test_load_page_index_policies_and_cached_offset_index() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        let batch =
+            record_batch!(("a", Int32, [1, 2, 3]), ("b", Int32, [4, 5, 6])).unwrap();
         let schema = batch.schema();
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Page)
@@ -5414,7 +5458,8 @@ mod test {
             .options
             .clone()
             .with_column_index_policy(PageIndexPolicy::Skip)
-            .with_offset_index_policy(PageIndexPolicy::Optional);
+            .with_offset_index_policy(PageIndexPolicy::Optional)
+            .with_offset_index_mask(ColumnChunkMask::columns([1]));
         let metadata = load_page_index(
             loaded.reader_metadata,
             &mut loaded.prepared.async_file_reader,
@@ -5423,7 +5468,8 @@ mod test {
         .await
         .unwrap();
         let page_index = metadata.metadata().page_index().unwrap();
-        assert!(page_index.has_offset_indexes());
+        assert!(page_index.offset_index(0, 0).is_none());
+        assert!(page_index.offset_index(0, 1).is_some());
         assert!(!page_index.has_column_indexes());
         let bytes_scanned = counter_metric_value(&metrics, "bytes_scanned");
         let cached = load_page_index(
@@ -5443,14 +5489,33 @@ mod test {
         let metadata = load_page_index(
             cached,
             &mut loaded.prepared.async_file_reader,
-            options.with_column_index_policy(PageIndexPolicy::Optional),
+            options
+                .with_column_index_policy(PageIndexPolicy::Optional)
+                .with_column_index_mask(ColumnChunkMask::columns([0])),
         )
         .await
         .unwrap();
         let page_index = metadata.metadata().page_index().unwrap();
         assert!(page_index.has_offset_indexes());
-        assert!(page_index.has_column_indexes());
+        assert!(page_index.column_index(0, 0).is_some());
+        assert!(page_index.column_index(0, 1).is_none());
         assert!(counter_metric_value(&metrics, "bytes_scanned") > bytes_scanned);
+
+        let other = load_page_index(
+            metadata,
+            &mut loaded.prepared.async_file_reader,
+            loaded
+                .options
+                .with_column_index_policy(PageIndexPolicy::Optional)
+                .with_column_index_mask(ColumnChunkMask::columns([1]))
+                .with_offset_index_policy(PageIndexPolicy::Optional)
+                .with_offset_index_mask(ColumnChunkMask::columns([0])),
+        )
+        .await
+        .unwrap();
+        let page_index = other.metadata().page_index().unwrap();
+        assert!(page_index.column_index(0, 1).is_some());
+        assert!(page_index.offset_index(0, 0).is_some());
     }
 
     #[tokio::test]
