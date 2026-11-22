@@ -412,6 +412,30 @@ SHOW datafusion.format.date_format
 ----
 datafusion.format.date_format %Y-%m-%d
 
+# date_format: malformed and time-only patterns are rejected at SET time,
+# keeping the previous value
+statement ok
+SET datafusion.format.date_format = '%d/%m/%Y'
+
+statement error
+SET datafusion.format.date_format = '%Q'
+----
+DataFusion error: Error setting config datafusion.format.date_format
+caused by
+Invalid or Unsupported Configuration: Invalid date format: %Q. The format must render a date, e.g. %Y-%m-%d
+
+
+statement error Invalid date format: %H\.
+SET datafusion.format.date_format = '%H'
+
+query TT
+SHOW datafusion.format.date_format
+----
+datafusion.format.date_format %d/%m/%Y
+
+statement ok
+RESET datafusion.format.date_format
+
 # datetime_format
 statement ok
 SET datafusion.format.datetime_format = '%Y/%m/%d %H:%M:%S'
