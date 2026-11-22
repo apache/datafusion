@@ -6377,14 +6377,6 @@ ORDER BY l.column1, r.column2;
 1 200
 2 300
 
-query II
-SELECT l.column1, r.column2
-FROM duplicate_join_left l JOIN duplicate_join_right r ON l.column1 = r.column1
-ORDER BY l.column1, r.column2 LIMIT 2;
-----
-1 100
-1 100
-
 query IIII rowsort
 SELECT r.column2,
 row_number() OVER (ORDER BY l.column1, r.column2),
@@ -6428,6 +6420,17 @@ ORDER BY r.column1, l.column1, l.column2;
 1 1 20
 1 1 20
 2 NULL NULL
+
+# Inner join: the build-side ordering must not satisfy ORDER BY ... LIMIT.
+query II
+SELECT r.column1, l.column2
+FROM duplicate_ordering l
+JOIN duplicate_ordering r ON l.column1 = r.column1
+ORDER BY r.column1, l.column2
+LIMIT 2;
+----
+1 10
+1 10
 
 statement ok
 set datafusion.execution.target_partitions = 4;
