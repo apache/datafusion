@@ -1106,6 +1106,20 @@ explain select label from in_list_nulls where n not in (1, 11, NULL);
 ----
 logical_plan EmptyRelation: rows=0
 
+# A LIKE / ILIKE conjunct must not keep the filter alive once NOT IN with a
+# NULL member has rejected every row (https://github.com/apache/datafusion/issues/27628).
+query TT
+explain select label from in_list_nulls
+where label not in ('one', NULL) and label like 'one%';
+----
+logical_plan EmptyRelation: rows=0
+
+query TT
+explain select label from in_list_nulls
+where label not in ('one', NULL) and label ilike 'one%';
+----
+logical_plan EmptyRelation: rows=0
+
 # Lists without a NULL member are left alone.
 query TT
 explain select label from in_list_nulls where n in (1, 11, 42, 7);
@@ -1132,6 +1146,16 @@ select label from in_list_nulls where n in (NULL);
 
 query T
 select label from in_list_nulls where n not in (1, 11, 42, 7, NULL);
+----
+
+query T
+select label from in_list_nulls
+where label not in ('one', NULL) and label like 'one%';
+----
+
+query T
+select label from in_list_nulls
+where label not in ('one', NULL) and label ilike 'one%';
 ----
 
 # Outside a filter the NULL must still make the result NULL, not FALSE.
