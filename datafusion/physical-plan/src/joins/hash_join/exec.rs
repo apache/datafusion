@@ -3518,12 +3518,8 @@ fn build_in_memory(
     };
     if grouped {
         grouped_map_count.add(1);
-        let grouped_size = map_reservation.size();
-        if grouped_size >= ungrouped_size {
-            metrics.build_mem_used.add(grouped_size - ungrouped_size);
-        } else {
-            metrics.build_mem_used.sub(ungrouped_size - grouped_size);
-        }
+        metrics.build_mem_used.sub(ungrouped_size);
+        metrics.build_mem_used.add(map_reservation.size());
     }
 
     let map = Arc::new(ReservedMap::new(join_hash_map, map_reservation));
@@ -4014,7 +4010,8 @@ mod tests {
 
     /// Joins 10 build batches of 1,000 rows, whose keys are `key(row)`, with
     /// three probe rows, in `pool`, and returns how many maps had their rows
-    /// grouped.
+    /// grouped. Asserts that `build_mem_used` is what the build holds in
+    /// `pool` once it is done.
     async fn grouped_build(
         key: impl Fn(i64) -> i64,
         pool: Arc<dyn MemoryPool>,
@@ -4045,13 +4042,16 @@ mod tests {
         )?;
 
         let runtime = RuntimeEnvBuilder::new()
-            .with_memory_pool(pool)
+            .with_memory_pool(Arc::clone(&pool))
             .build_arc()?;
         let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
-        common::collect(join.execute(0, task_ctx)?).await?;
-        Ok(join
-            .metrics()
-            .unwrap()
+        let mut stream = join.execute(0, task_ctx)?;
+        while stream.next().await.transpose()?.is_some() {}
+        let metrics = join.metrics().unwrap();
+        let build_mem_used = metrics.sum_by_name("build_mem_used").unwrap();
+        assert_eq!(build_mem_used.as_usize(), pool.reserved());
+        drop(stream);
+        Ok(metrics
             .sum_by_name(GROUPED_MAP_COUNT_METRIC_NAME)
             .unwrap()
             .as_usize())
@@ -4071,8 +4071,8 @@ mod tests {
         grouped_build(|row| row * 1_000_003, Arc::clone(&pool) as _).await?;
         let limit = pool.peak_reserved();
 
-        // With 10 rows for each of 1,000 sparse keys, for a hash map
-        let key = |row| (row % 1_000) * 1_000_003;
+        // With 20 rows for each of 500 sparse keys, for a hash map
+        let key = |row| (row % 500) * 1_000_003;
 
         // The build still fits, whether or not there is room to group
         let pool = Arc::new(GreedyMemoryPool::new(limit));
