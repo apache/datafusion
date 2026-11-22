@@ -85,7 +85,7 @@ pub(crate) fn invoke_pad<S: PadSide>(args: ScalarFunctionArgs) -> Result<Columna
     if let Some(target_len) = try_as_scalar_i64(&args[1])
         && target_len <= MAX_SCALAR_TARGET_LEN
     {
-        let target_len = target_len.max(0) as usize;
+        let target_len = parse_target_len(target_len, S::NAME)?;
 
         let fill_str = if args.len() == 3 {
             try_as_scalar_str(&args[2])
