@@ -38,5 +38,6 @@ jobs:
   signal:
     name: Signal pull request update
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     steps:
       - run: echo "This run triggers the workflow_run workflows that handle the pull request."

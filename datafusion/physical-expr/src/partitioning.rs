@@ -153,9 +153,10 @@ impl Display for Partitioning {
 ///   stored separately.
 ///
 /// Comparisons use the lexicographic order defined by `ordering`, including
-/// `ASC`/`DESC` and null ordering. Samples must be strictly ordered according
-/// to that ordering, and each sample must have one value per ordering
-/// expression. See [`SplitPoint`] for the shared boundary convention.
+/// `ASC`/`DESC` and null ordering. Samples must be non-decreasing according to
+/// that ordering, and each sample must have one value per ordering expression.
+/// Equal adjacent split points describe empty partitions. See [`SplitPoint`]
+/// for the shared boundary convention.
 ///
 /// When `partition_count` is smaller than [`Self::max_partition_count`], the
 /// samples are evenly down-sampled to derive the effective split points. This
@@ -1932,7 +1933,7 @@ mod tests {
         deprecated,
         reason = "test intentionally constructs malformed range splits"
     )]
-    fn range_transform_rejects_malformed_split_points() -> Result<()> {
+    fn range_transform_validates_split_points() -> Result<()> {
         let fixture = PartitioningTestFixture::new(vec![(
             "timestamp",
             DataType::Timestamp(TimeUnit::Nanosecond, None),
@@ -1941,33 +1942,38 @@ mod tests {
         let hour = 3_600_000_000_000;
         let timestamp = |value| ScalarValue::TimestampNanosecond(Some(value), None);
 
-        for (description, descending, splits) in [
+        for (description, descending, splits, expected) in [
             (
                 "reversed ascending splits",
                 false,
                 vec![vec![timestamp(2 * hour)], vec![timestamp(hour)]],
+                false,
             ),
             (
                 "reversed descending splits",
                 true,
                 vec![vec![timestamp(hour - 1)], vec![timestamp(2 * hour - 1)]],
+                false,
             ),
             (
                 "duplicate ascending splits",
                 false,
                 vec![vec![timestamp(hour)], vec![timestamp(hour)]],
+                true,
             ),
             (
                 "duplicate descending splits",
                 true,
                 vec![vec![timestamp(hour - 1)], vec![timestamp(hour - 1)]],
+                true,
             ),
             (
                 "overwide split tuple",
                 false,
                 vec![vec![timestamp(hour), ScalarValue::Int64(Some(0))]],
+                false,
             ),
-            ("empty split tuple", false, vec![vec![]]),
+            ("empty split tuple", false, vec![vec![]], false),
         ] {
             let range = Partitioning::Range(RangePartitioning::new(
                 [PhysicalSortExpr::new(
@@ -1982,8 +1988,8 @@ mod tests {
                 &range,
                 &required,
                 &fixture.eq_properties,
-                false,
-                false,
+                expected,
+                expected,
             );
         }
         Ok(())
@@ -2594,7 +2600,7 @@ mod tests {
         assert_range_try_new_error(
             asc_a,
             vec![int_split_point([20]), int_split_point([10])],
-            "split points must be strictly ordered",
+            "split points must be ordered",
         );
 
         assert_range_try_new_error(
@@ -2603,18 +2609,23 @@ mod tests {
                 SplitPoint::new(vec![ScalarValue::Int64(None)]),
                 int_split_point([10]),
             ],
-            "split points must be strictly ordered",
+            "split points must be ordered",
         );
 
-        RangePartitioning::try_new(
+        let range = RangePartitioning::try_new(
             ordering_ab.clone(),
-            vec![int_split_point([10, 20]), int_split_point([10, 30])],
+            vec![
+                int_split_point([10, 20]),
+                int_split_point([10, 20]),
+                int_split_point([10, 30]),
+            ],
         )?;
+        assert_eq!(range.partition_count(), 4);
 
         assert_range_try_new_error(
             ordering_ab,
             vec![int_split_point([10, 30]), int_split_point([10, 20])],
-            "split points must be strictly ordered",
+            "split points must be ordered",
         );
 
         Ok(())

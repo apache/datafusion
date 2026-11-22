@@ -19,6 +19,7 @@ use datafusion_common::display::GraphvizBuilder;
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
+use crate::ExecutionPlanProperties;
 use crate::metrics::{MetricCategory, MetricType, MetricValue, MetricsSet};
 use crate::render_tree::RenderTree;
 
@@ -116,6 +117,8 @@ pub struct DisplayableExecutionPlan<'a> {
     registry: StatisticsRegistry,
     /// If schema should be displayed. See [`Self::set_show_schema`]
     show_schema: bool,
+    /// If equivalence properties should be displayed. See [`Self::set_show_equivalences`]
+    show_equivalences: bool,
     /// Which metric categories should be included when rendering
     metric_types: Vec<MetricType>,
     /// Optional filter by semantic category (rows / bytes / timing).
@@ -174,6 +177,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics,
             show_statistics: false,
             show_schema: false,
+            show_equivalences: false,
             metric_types: Self::default_metric_types(),
             metric_categories: None,
             metric_names: None,
@@ -188,6 +192,15 @@ impl<'a> DisplayableExecutionPlan<'a> {
     /// of each line. The format is `schema=[[a:Int32;N, b:Int32;N, c:Int32;N]]`
     pub fn set_show_schema(mut self, show_schema: bool) -> Self {
         self.show_schema = show_schema;
+        self
+    }
+
+    /// Enable display of equivalence properties
+    ///
+    /// If true, plans will be displayed with the equivalence properties of each
+    /// node, e.g. `facts=[order: [a@0 ASC NULLS FIRST]]`
+    pub fn set_show_equivalences(mut self, show_equivalences: bool) -> Self {
+        self.show_equivalences = show_equivalences;
         self
     }
 
@@ -282,6 +295,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: bool,
             registry: StatisticsRegistry,
             show_schema: bool,
+            show_equivalences: bool,
             metric_types: Vec<MetricType>,
             metric_categories: Option<Vec<MetricCategory>>,
             metric_names: Option<Vec<String>>,
@@ -296,6 +310,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_statistics: self.show_statistics,
                     registry: self.registry.clone(),
                     show_schema: self.show_schema,
+                    show_equivalences: self.show_equivalences,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
                     metric_names: self.metric_names.as_deref(),
@@ -310,6 +325,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_statistics: self.show_statistics,
             registry: self.registry.clone(),
             show_schema: self.show_schema,
+            show_equivalences: self.show_equivalences,
             metric_types: self.metric_types.clone(),
             metric_categories: self.metric_categories.clone(),
             metric_names: self.metric_names.clone(),
@@ -381,12 +397,14 @@ impl<'a> DisplayableExecutionPlan<'a> {
         struct Wrapper<'a> {
             plan: &'a dyn ExecutionPlan,
             maximum_render_width: usize,
+            show_equivalences: bool,
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
                 let mut visitor = TreeRenderVisitor {
                     f,
                     maximum_render_width: self.maximum_render_width,
+                    show_equivalences: self.show_equivalences,
                 };
                 visitor.visit(self.plan)
             }
@@ -394,6 +412,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
         Wrapper {
             plan: self.inner,
             maximum_render_width: self.tree_maximum_render_width,
+            show_equivalences: self.show_equivalences,
         }
     }
 
@@ -490,6 +509,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
                     show_statistics: self.show_statistics,
                     registry: self.registry.clone(),
                     show_schema: self.show_schema,
+                    show_equivalences: false,
                     metric_types: &self.metric_types,
                     metric_categories: self.metric_categories.as_deref(),
                     metric_names: self.metric_names.as_deref(),
@@ -572,6 +592,8 @@ struct IndentVisitor<'a, 'b> {
     registry: StatisticsRegistry,
     /// If schema should be displayed
     show_schema: bool,
+    /// If equivalence properties should be displayed
+    show_equivalences: bool,
     /// Which metric types should be rendered
     metric_types: &'a [MetricType],
     /// Optional filter by semantic category (rows / bytes / timing).
@@ -634,6 +656,9 @@ impl ExecutionPlanVisitor for IndentVisitor<'_, '_> {
                 ", schema={}",
                 display_schema(plan.schema().as_ref())
             )?;
+        }
+        if self.show_equivalences {
+            write!(self.f, ", facts=[{}]", plan.equivalence_properties())?;
         }
         writeln!(self.f)?;
         self.indent += 1;
@@ -1040,6 +1065,8 @@ struct TreeRenderVisitor<'a, 'b> {
     f: &'a mut Formatter<'b>,
     /// Maximum total width of the rendered tree
     maximum_render_width: usize,
+    /// If equivalence properties should be displayed
+    show_equivalences: bool,
 }
 
 impl TreeRenderVisitor<'_, '_> {
@@ -1066,7 +1093,7 @@ impl TreeRenderVisitor<'_, '_> {
     /// 2. Render node content and vertical connections
     /// 3. Render bottom borders and connections
     pub fn visit(&mut self, plan: &dyn ExecutionPlan) -> Result<(), fmt::Error> {
-        let root = RenderTree::create_tree(plan);
+        let root = RenderTree::create_tree(plan, self.show_equivalences);
 
         for y in 0..root.height {
             // Start by rendering the top layer.
@@ -1156,6 +1183,17 @@ impl TreeRenderVisitor<'_, '_> {
                     extra_info_item,
                     Self::MAX_EXTRA_LINES,
                 );
+                if let Some(facts) = &node.facts {
+                    let facts_map = HashMap::from([("facts".to_string(), facts.clone())]);
+                    let mut facts_lines = Vec::new();
+                    Self::split_up_extra_info(
+                        &facts_map,
+                        &mut facts_lines,
+                        Self::MAX_EXTRA_LINES,
+                    );
+                    extra_info_item.push(String::new());
+                    extra_info_item.extend(facts_lines);
+                }
                 if extra_info_item.len() > extra_height {
                     extra_height = extra_info_item.len();
                 }
@@ -1605,6 +1643,37 @@ mod tests {
         assert_eq!(
             TreeRenderVisitor::adjust_text_for_rendering("weather🌤conditions", 12,),
             "weather🌤c..."
+        );
+    }
+
+    #[test]
+    fn test_show_equivalences_indent_and_tree() {
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        use crate::empty::EmptyExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let plan = EmptyExec::new(schema);
+
+        assert_eq!(
+            DisplayableExecutionPlan::new(&plan)
+                .indent(false)
+                .to_string(),
+            "EmptyExec\n"
+        );
+        assert_eq!(
+            DisplayableExecutionPlan::new(&plan)
+                .set_show_equivalences(true)
+                .indent(false)
+                .to_string(),
+            "EmptyExec, facts=[none]\n"
+        );
+        assert!(
+            DisplayableExecutionPlan::new(&plan)
+                .set_show_equivalences(true)
+                .tree_render()
+                .to_string()
+                .contains("facts")
         );
     }
 

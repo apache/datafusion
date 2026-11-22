@@ -1213,6 +1213,8 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                 // a real Result rather than panicking.
                 let fresh = Self::build_group_columns(&self.schema)?;
                 let group_values = mem::replace(&mut self.group_values, fresh);
+                self.map.clear();
+                self.group_index_lists.clear();
 
                 group_values
                     .into_iter()
@@ -1385,7 +1387,8 @@ mod tests {
         PrimitiveArray, RecordBatch, StringArray, StringViewArray, UInt32Array,
     };
     use arrow::datatypes::{
-        DataType, Decimal32Type, Decimal64Type, Field, Int8Type, Schema, SchemaRef,
+        DataType, Decimal32Type, Decimal64Type, Field, Int8Type, Int32Type, Schema,
+        SchemaRef,
     };
     use arrow::{
         compute::{concat_batches, take},
@@ -2606,6 +2609,38 @@ mod tests {
             expected
         );
         assert_eq!(group_values.len(), data_set.expected_batch.num_rows());
+    }
+
+    #[test]
+    fn intern_after_emit_all_starts_new_groups() -> Result<()> {
+        fn check<const STREAMING: bool>() -> Result<()> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Utf8, false),
+            ]));
+            let mut group_values = GroupValuesColumn::<STREAMING>::try_new(schema)?;
+            let batch = |a: Vec<i32>, b: Vec<&str>| -> Vec<ArrayRef> {
+                vec![
+                    Arc::new(Int32Array::from(a)),
+                    Arc::new(StringArray::from(b)),
+                ]
+            };
+
+            let mut groups = vec![];
+            group_values
+                .intern(&batch(vec![1, 2, 3], vec!["x", "y", "z"]), &mut groups)?;
+            assert_eq!(groups, vec![0, 1, 2]);
+            group_values.emit(EmitTo::All)?;
+
+            group_values.intern(&batch(vec![3, 4], vec!["z", "w"]), &mut groups)?;
+            assert_eq!(groups, vec![0, 1]);
+            assert_eq!(group_values.len(), 2);
+            let emitted = group_values.emit(EmitTo::All)?;
+            assert_eq!(emitted[0].as_primitive::<Int32Type>().values(), &[3, 4]);
+            Ok(())
+        }
+        check::<false>()?;
+        check::<true>()
     }
 
     #[test]

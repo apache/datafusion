@@ -107,6 +107,31 @@ pub fn get_byte_metrics_exec() -> Result<crate::execution_plan::FFI_ExecutionPla
     Ok(plan)
 }
 
+/// Load [`crate::execution_plan::FFI_ExecutionPlan`] from
+/// `datafusion_ffi_test_create_exec_with_requirements`.
+pub fn get_requirements_exec(
+    hard_ordering: bool,
+) -> Result<crate::execution_plan::FFI_ExecutionPlan> {
+    let lib_path = find_library()?;
+    let lib = unsafe {
+        libloading::Library::new(&lib_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+    let create_exec: libloading::Symbol<
+        extern "C" fn(bool) -> crate::execution_plan::FFI_ExecutionPlan,
+    > = unsafe {
+        lib.get(b"datafusion_ffi_test_create_exec_with_requirements")
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+    let plan = create_exec(hard_ordering);
+
+    // Leak the library to keep it loaded for the duration of the test
+    #[expect(clippy::mem_forget)]
+    std::mem::forget(lib);
+
+    Ok(plan)
+}
+
 /// Load an independent copy of the integration-test cdylib.
 ///
 /// Copying to a unique path makes the dynamic loader create a separate image
