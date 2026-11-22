@@ -1399,6 +1399,10 @@ fn decimal_precision_and_scale(decimal_type: &DataType) -> Option<(u8, i8)> {
 /// The precision and scale an integer needs as a decimal, independent of which
 /// decimal variant holds it. The precisions are the ones spark uses:
 /// https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
+///
+/// `Int64` gets a digit more than its values need, so these differ from
+/// [`crate::casts::is_lossless_decimal_cast`]'s, which asks whether a cast
+/// keeps every value.
 fn integer_decimal_precision(integer_type: &DataType) -> Option<(u8, i8)> {
     use arrow::datatypes::DataType::*;
     match integer_type {

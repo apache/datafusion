@@ -325,7 +325,8 @@ fn is_safe_integer_cast(src: &DataType, tgt: &DataType) -> bool {
 fn is_decimal_type(dt: &DataType) -> bool {
     matches!(
         dt,
-        DataType::Decimal128(_, _)
+        DataType::Decimal256(_, _)
+            | DataType::Decimal128(_, _)
             | DataType::Decimal64(_, _)
             | DataType::Decimal32(_, _)
     )
@@ -333,7 +334,8 @@ fn is_decimal_type(dt: &DataType) -> bool {
 
 fn decimal_precision_scale(dt: &DataType) -> (u8, i8) {
     match dt {
-        DataType::Decimal128(p, s)
+        DataType::Decimal256(p, s)
+        | DataType::Decimal128(p, s)
         | DataType::Decimal64(p, s)
         | DataType::Decimal32(p, s) => (*p, *s),
         _ => unreachable!(),
@@ -644,6 +646,7 @@ fn is_supported_numeric_type(data_type: &DataType) -> bool {
             | DataType::Decimal32(_, _)
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
             | DataType::Timestamp(_, _)
     )
 }
@@ -818,6 +821,19 @@ fn try_cast_numeric_literal(
                 Some(v / (lit_scale_mul / mul))
             } else {
                 // can't convert the lit decimal to the target data type
+                None
+            }
+        }
+        ScalarValue::Decimal256(Some(v), _, scale) => {
+            // A value or scale beyond `i128` has no exact preimage, so
+            // the cast stays rather than overflowing.
+            let v = v.to_i128()?;
+            let lit_scale_mul = 10_i128.checked_pow(u32::try_from(*scale).ok()?)?;
+            if mul >= lit_scale_mul {
+                v.checked_mul(mul / lit_scale_mul)
+            } else if v % (lit_scale_mul / mul) == 0 {
+                Some(v / (lit_scale_mul / mul))
+            } else {
                 None
             }
         }
@@ -3049,7 +3065,7 @@ mod tests {
         }
 
         // The scale-only rule still rejects reduced or negative target scales,
-        // nonaligned literals, decimal → integer and Decimal256.
+        // nonaligned literals, decimal → integer and a Decimal256 target.
         assert_preimage_none(
             &DataType::Decimal128(38, 1),
             &DataType::Decimal128(38, 0),
@@ -3272,6 +3288,59 @@ mod tests {
                 .unwrap()
                 .null_count(),
             1,
+        );
+    }
+
+    #[test]
+    fn test_cast_predicate_preimage_decimal256_literal() {
+        use arrow::datatypes::i256;
+
+        // A scale of 19 or more takes a `Decimal256` common type with an
+        // integer, and its preimage is still the column's own type.
+        let five = 5 * 10_i128.pow(20);
+        assert_preimage_exact(
+            &DataType::Decimal128(38, 20),
+            &DataType::Decimal256(40, 20),
+            Operator::Gt,
+            &ScalarValue::Decimal256(Some(i256::from_i128(five)), 40, 20),
+            ScalarValue::Decimal128(Some(five), 38, 20),
+        );
+
+        // The integer side of such a comparison unwraps too.
+        assert_preimage_exact(
+            &DataType::Int64,
+            &DataType::Decimal256(40, 20),
+            Operator::Eq,
+            &ScalarValue::Decimal256(Some(i256::from_i128(five)), 40, 20),
+            ScalarValue::Int64(Some(5)),
+        );
+
+        // 5 has no room in `Decimal128(38, 38)`, so the cast stays.
+        let five = i256::from_i128(5).wrapping_mul(i256::from_i128(10).wrapping_pow(38));
+        assert_preimage_none(
+            &DataType::Decimal128(38, 38),
+            &DataType::Decimal256(58, 38),
+            Operator::Lt,
+            &ScalarValue::Decimal256(Some(five), 58, 38),
+        );
+
+        // A scale whose multiplier is beyond `i128` is rejected rather than
+        // overflowed, and so is a value beyond it.
+        assert_preimage_none(
+            &DataType::Decimal128(38, 20),
+            &DataType::Decimal256(76, 70),
+            Operator::Gt,
+            &ScalarValue::Decimal256(Some(i256::ZERO), 76, 70),
+        );
+        assert_preimage_none(
+            &DataType::Decimal128(38, 2),
+            &DataType::Decimal256(44, 2),
+            Operator::Eq,
+            &ScalarValue::Decimal256(
+                Some(i256::from_i128(i128::MAX).wrapping_mul(i256::from_i128(10))),
+                44,
+                2,
+            ),
         );
     }
 
