@@ -108,8 +108,11 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 /// are working to remove these exceptions, so that all rules can be reordered
 /// freely.
 ///
-/// After the last rule, including rules added by the user, the physical
-/// planner rejects the plan if its requirements are not satisfied (see
+/// Once [`EnsureRequirements`] has run, the physical planner checks the plan
+/// after each later rule, including rules added by the user. If a rule breaks
+/// a requirement, the planner runs [`EnsureRequirements`] again, which adds the
+/// missing sorting or repartitioning. After the last rule, the physical planner
+/// rejects the plan if its requirements are not satisfied (see
 /// [`check_plan_tree_sanity`](crate::sanity_checker::check_plan_tree_sanity)).
 ///
 /// ## Optimization Coverage Is Not Guaranteed
