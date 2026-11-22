@@ -45,8 +45,39 @@ impl SessionContext {
         self._read_type(table_paths, options).await
     }
 
-    /// Registers a CSV file as a table which can referenced from SQL
+    /// Registers a CSV file as a table which can be referenced from SQL
     /// statements executed against this context.
+    ///
+    /// Table names passed as strings are parsed as SQL identifiers: dots (`.`)
+    /// separate components, unquoted components are lowercased, and quoted
+    /// components preserve case.
+    ///
+    /// To preserve exact casing and avoid identifier parsing, [`TableReference::bare`]
+    /// is recommended for unqualified names, and [`TableReference::partial`]
+    /// for schema-qualified names.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use datafusion::prelude::*;
+    /// use datafusion::common::TableReference;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    ///
+    /// ctx.register_csv(
+    ///     TableReference::bare("Example"),
+    ///     "tests/data/example.csv",
+    ///     CsvReadOptions::new(),
+    /// )
+    /// .await?;
+    ///
+    /// # #[cfg(feature = "sql")]
+    /// let df = ctx.sql(r#"SELECT * FROM "Example""#).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn register_csv(
         &self,
         table_ref: impl Into<TableReference>,
