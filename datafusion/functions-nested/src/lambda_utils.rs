@@ -367,6 +367,15 @@ pub(crate) mod test_utils {
         list: impl Array + Clone + 'static,
         lambda_body: Expr,
     ) -> Result<ArrayRef> {
+        eval_hof_on_i32_list_with_params(func, list, &["v"], lambda_body)
+    }
+
+    pub(crate) fn eval_hof_on_i32_list_with_params(
+        func: Arc<HigherOrderUDF>,
+        list: impl Array + Clone + 'static,
+        lambda_params: &[&str],
+        lambda_body: Expr,
+    ) -> Result<ArrayRef> {
         let schema = DFSchema::from_unqualified_fields(
             vec![Field::new(
                 "list",
@@ -380,7 +389,10 @@ pub(crate) mod test_utils {
         create_physical_expr(
             &Expr::HigherOrderFunction(HigherOrderFunction::new(
                 func,
-                vec![col("list"), lambda(["v"], lambda_body)],
+                vec![
+                    col("list"),
+                    lambda(lambda_params.iter().copied(), lambda_body),
+                ],
             )),
             &schema,
             &ExecutionProps::new(),

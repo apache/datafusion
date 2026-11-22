@@ -4746,7 +4746,7 @@ array_transform(array, lambda)
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **lambda**: The lambda function used to transform each value of the array.
+- **lambda**: The lambda function used to transform each value of the array. It receives the value and, optionally, its 1-based index in the array: `(value, index) -> ...`.
 
 #### Example
 
@@ -4757,6 +4757,12 @@ array_transform(array, lambda)
 +--------------------------------------------+
 | [2, 4, 6, 8, 10]                           |
 +--------------------------------------------+
+> select array_transform([10, 20, 30], (x, i) -> x*i);
++----------------------------------------------+
+| array_transform([10, 20, 30], (x, i) -> x*i) |
++----------------------------------------------+
+| [10, 40, 90]                                 |
++----------------------------------------------+
 ```
 
 #### Aliases
