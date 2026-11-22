@@ -387,7 +387,8 @@ impl PartialHashAggregateStream {
         let input_rows = batch.num_rows();
         self.reduction_factor.add_total(input_rows);
         let groups_before = hash_table.building_group_count();
-        hash_table.aggregate_batch(batch)?;
+        let evaluated = hash_table.evaluate_batch(batch)?;
+        hash_table.aggregate_evaluated(&evaluated)?;
 
         // --------------------------------
         // Step 2: Soft limit optimization
@@ -682,7 +683,8 @@ impl FinalHashAggregateStream {
 
         while let Some(batch) = self.input.next().await.transpose()? {
             let _timer = elapsed_compute.timer();
-            hash_table.aggregate_batch(&batch)?;
+            let evaluated = hash_table.evaluate_batch(&batch)?;
+            hash_table.aggregate_evaluated(&evaluated)?;
 
             // Soft group limits are usually small and rarely coincide with
             // spilling. Once spilling has occurred, skip this optimization to

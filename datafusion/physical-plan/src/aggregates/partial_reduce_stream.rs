@@ -206,7 +206,8 @@ impl PartialReduceHashAggregateStream {
         hash_table: &mut AggregateHashTable<PartialReduceMarker>,
     ) -> Result<HandleInputResult> {
         debug_assert!(hash_table.is_building());
-        hash_table.aggregate_batch(batch)?;
+        let evaluated = hash_table.evaluate_batch(batch)?;
+        hash_table.aggregate_evaluated(&evaluated)?;
 
         let resize_result = self.reservation.try_resize(hash_table.memory_size());
         match resize_result {

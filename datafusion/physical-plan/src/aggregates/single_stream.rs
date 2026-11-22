@@ -337,7 +337,8 @@ impl Aggregating {
 
         while let Some(batch) = self.input.next().await.transpose()? {
             let _timer = elapsed_compute.timer();
-            self.hash_table.aggregate_batch(&batch)?;
+            let evaluated = self.hash_table.evaluate_batch(&batch)?;
+            self.hash_table.aggregate_evaluated(&evaluated)?;
 
             match reservation.try_resize(self.reservation_size()) {
                 Ok(()) => {}

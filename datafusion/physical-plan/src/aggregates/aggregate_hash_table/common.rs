@@ -194,7 +194,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     }
 
     /// See comments in [`EvaluatedAggregateBatch`]
-    pub(super) fn evaluate_batch(
+    pub(in crate::aggregates) fn evaluate_batch(
         &mut self,
         batch: &RecordBatch,
     ) -> Result<EvaluatedAggregateBatch> {
@@ -229,13 +229,12 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     /// Each aggregation mode chooses a different `aggregate_fn` according to its
     /// semantics. For example, partial aggregation takes raw inputs, and update them
     /// into stored partial states, so [`GroupsAccumulator::update_batch`] is used.
-    pub(super) fn aggregate_batch_inner(
+    pub(super) fn aggregate_evaluated_inner(
         &mut self,
-        batch: &RecordBatch,
+        evaluated_batch: &EvaluatedAggregateBatch,
         aggregate_fn: AggregateBatchFn,
         accumulator_phase: AccumulatorPhase,
     ) -> Result<()> {
-        let evaluated_batch = self.evaluate_batch(batch)?;
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let group_by_metrics = self.group_by_metrics.clone();
         let state = self.state.building_mut();
@@ -533,7 +532,7 @@ pub(super) struct HashAggregateAccumulator {
 
 pub(super) type AggregateAccumulator = HashAggregateAccumulator;
 
-/// Function used by [`AggregateHashTable::aggregate_batch_inner`] to update one
+/// Function used by [`AggregateHashTable::aggregate_evaluated_inner`] to update one
 /// accumulator with one evaluated input batch.
 ///
 /// Arguments:
@@ -579,7 +578,7 @@ pub(super) struct RowAlignedAccumulatorArgs {
 ///
 /// e.g., `select k+1, sum(v*v) from t group by (k+1)`, this function evaluates
 /// `k+1`, `v*v`
-pub(super) struct EvaluatedAggregateBatch {
+pub(in crate::aggregates) struct EvaluatedAggregateBatch {
     /// One entry per grouping set; each entry contains all evaluated group key
     /// arrays for the current input batch.
     pub(super) grouping_set_args: Vec<Vec<ArrayRef>>,
