@@ -26,8 +26,10 @@ physical_plan
 02)--PlaceholderRowExec
 
 # cte_use_same_name_multiple_times
-statement error DataFusion error: Error during planning: WITH query name "a" specified more than once
+statement error
 WITH a AS (SELECT 1), a AS (SELECT 2) SELECT * FROM a;
+----
+DataFusion error: Error during planning: WITH query name "a" specified more than once
 
 
 ##########
@@ -103,7 +105,7 @@ set datafusion.catalog.default_schema = "public";
 statement ok
 set datafusion.execution.enable_recursive_ctes = false;
 
-query error DataFusion error: This feature is not implemented: Recursive CTEs are not enabled
+query error
 WITH RECURSIVE nodes AS (
     SELECT 1 as id
     UNION ALL
@@ -111,6 +113,9 @@ WITH RECURSIVE nodes AS (
     FROM nodes
     WHERE id < 3
 ) SELECT * FROM nodes
+----
+DataFusion error: This feature is not implemented: Recursive CTEs are not enabled
+
 
 statement ok
 set datafusion.execution.enable_recursive_ctes = true;
@@ -219,13 +224,16 @@ SELECT n FROM t
 
 # recursive CTE column-list alias arity mismatch is rejected cleanly (raised at
 # the static term, rather than the old confusing "No field named ...")
-query error DataFusion error: Error during planning: Source table contains 1 columns but only 2 names given as column alias
+query error
 WITH RECURSIVE t(a, b) AS (
     SELECT 1
     UNION ALL
     SELECT a + 1 FROM t WHERE a < 3
 )
 SELECT * FROM t
+----
+DataFusion error: Error during planning: Source table contains 1 columns but only 2 names given as column alias
+
 
 # explain a column-list-aliased recursive CTE: the declared name is applied to
 # the static term, so there is no extra projection on top of RecursiveQuery
@@ -851,7 +859,7 @@ SELECT a FROM outer_cte;
 5
 
 # Check that CTE name shadowing is returning an error
-query error DataFusion error: Error during planning: WITH query name "outer_cte" specified more than once
+query error
 WITH RECURSIVE outer_cte AS (
     SELECT 1 as a
     UNION ALL (
@@ -875,9 +883,12 @@ WITH RECURSIVE outer_cte AS (
     )
 )
 SELECT a FROM outer_cte;
+----
+DataFusion error: Error during planning: WITH query name "outer_cte" specified more than once
+
 
 # expect error when recursive CTE is referenced multiple times in the recursive term
-query error DataFusion error: This feature is not implemented: Multiple recursive references to the same CTE are not supported
+query error
 WITH RECURSIVE my_cte AS (
     SELECT 1 as a
     UNION ALL
@@ -886,6 +897,8 @@ WITH RECURSIVE my_cte AS (
     WHERE my_cte.a<5
 )
 SELECT a FROM my_cte;
+----
+DataFusion error: This feature is not implemented: Multiple recursive references to the same CTE are not supported
 
 
 # Test issue: https://github.com/apache/datafusion/issues/9680
@@ -1142,12 +1155,15 @@ EXPLAIN WITH RECURSIVE my_cte AS (
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have different number of columns
-query error DataFusion error: Error during planning: Non\-recursive term and recursive term must have the same number of columns \(1 != 3\)
+query error
 WITH RECURSIVE my_cte AS (
     SELECT 1::bigint AS a
     UNION ALL
     SELECT a+2, 'a','c' FROM my_cte WHERE a<3
 ) SELECT * FROM my_cte;
+----
+DataFusion error: Error during planning: Non-recursive term and recursive term must have the same number of columns (1 != 3)
+
 
 # Test issue: https://github.com/apache/datafusion/issues/9794
 # Non-recursive term and recursive term have incompatible types.
@@ -1232,8 +1248,11 @@ query I rowsort
 3
 400
 
-query error DataFusion error: Error during planning: table 'datafusion\.public\.cte' not found
+query error
 (WITH cte AS (SELECT 400) SELECT * FROM cte) UNION (SELECT * FROM cte);
+----
+DataFusion error: Error during planning: table 'datafusion.public.cte' not found
+
 
 # Test duplicate CTE names in different subqueries in the FROM clause.
 query III rowsort
@@ -1246,8 +1265,11 @@ SELECT * FROM
 400 500 2
 400 500 3
 
-query error DataFusion error: Error during planning: Source table contains 3 columns but only 1 names given as column alias
+query error
 with numbers(a) as (select 1, 2, 3) select * from numbers;
+----
+DataFusion error: Error during planning: Source table contains 3 columns but only 1 names given as column alias
+
 
 query TT
 explain with numbers(a,b,c) as (select 1 as x, 2 as y, 3 as z) select * from numbers;
@@ -1747,12 +1769,15 @@ DROP TABLE recursive_cte_pk;
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;
 
-query error DataFusion error: This feature is not implemented: Recursive CTEs are not enabled
+query error
 explain WITH RECURSIVE numbers AS (
   select 1 as n
   UNION ALL
   select n + 1 FROM numbers WHERE n < 10
 ) select * from numbers;
+----
+DataFusion error: This feature is not implemented: Recursive CTEs are not enabled
+
 
 # Config reset
 statement ok
