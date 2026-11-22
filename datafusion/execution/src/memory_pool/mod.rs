@@ -19,6 +19,9 @@ mod pool;
 #[cfg(feature = "arrow_buffer_pool")]
 pub mod arrow;
 
+#[doc(hidden)]
+pub mod counting_allocator;
+
 pub mod proxy {
     pub use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 }
