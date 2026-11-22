@@ -6,6 +6,8 @@ use crate::PhysicalOptimizerRule;
 use crate::row_bound::RowBound;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::windows::BoundedWindowAggExec;
@@ -38,12 +40,13 @@ struct TraverseState {
     pub limit: Option<usize>,
     pub lookahead: usize,
     pub phase: Phase,
-    /// How many of the ordering columns of the merge the limit came from order
-    /// its rows, or `None` for a limit from somewhere that does not order them.
-    pub merge_rank: Option<usize>,
-    /// How many ordering columns a merge needs to bound what the windows
-    /// crossed so far read. See the partition count check in `apply_limit`.
-    pub rank_needed: usize,
+    /// The ordering of the merge the limit came from, in the expression space of
+    /// the node being visited.
+    pub merge_exprs: Option<Vec<Arc<dyn PhysicalExpr>>>,
+    /// Whether it separates the groups of every window crossed so far.
+    pub partitions_separated: bool,
+    /// The narrowest `PARTITION BY` over the windows crossed so far.
+    pub narrowest_partition_by: usize,
 }
 
 impl TraverseState {
@@ -56,12 +59,17 @@ impl TraverseState {
     /// Start a chain from a limit we just found, abandoning whatever chain we
     /// were walking: that one never found a sort to apply to, and this limit is
     /// the one that governs everything below here.
-    pub fn reset_limit(&mut self, limit: Option<usize>, merge_rank: Option<usize>) {
+    pub fn reset_limit(
+        &mut self,
+        limit: Option<usize>,
+        merge_exprs: Option<Vec<Arc<dyn PhysicalExpr>>>,
+    ) {
         self.limit = limit;
         self.lookahead = 0;
         self.phase = Phase::FindOrGrow;
-        self.merge_rank = merge_rank;
-        self.rank_needed = 0;
+        self.partitions_separated = merge_exprs.is_some();
+        self.merge_exprs = merge_exprs;
+        self.narrowest_partition_by = usize::MAX;
     }
 }
 
@@ -108,7 +116,10 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                 if !grow_limit(lookahead, &mut ctx) {
                     return reset(node, &mut ctx);
                 }
-                ctx.rank_needed = ctx.rank_needed.max(rank_needed(&node));
+                ctx.partitions_separated &= separates_partitions(&node, &ctx);
+                ctx.narrowest_partition_by =
+                    ctx.narrowest_partition_by.min(partition_by_width(&node));
+                carry_down(&node, &mut ctx);
                 return Ok(Transformed::no(node));
             }
 
@@ -119,12 +130,13 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                 return Ok(out);
             }
 
-            // A node that does not order its output leaves the merge above it
-            // ordering rows the sort below no longer keeps apart, which is what
-            // the rank check in `apply_limit` compares against.
+            // The ordering only holds further down while the nodes in between
+            // keep their input's order.
             if node.output_ordering().is_none() {
-                ctx.merge_rank = None;
+                ctx.merge_exprs = None;
+                ctx.partitions_separated = false;
             }
+            carry_down(&node, &mut ctx);
 
             // nodes along the way
             match node.limit_behavior() {
@@ -185,8 +197,8 @@ fn apply_limit(
     let TraverseState {
         limit,
         lookahead,
-        merge_rank,
-        rank_needed,
+        partitions_separated,
+        narrowest_partition_by,
         ..
     } = std::mem::take(ctx);
     // A fetch that overflows can't drop any rows, so skip the pushdown rather
@@ -199,23 +211,17 @@ fn apply_limit(
     // This sits before the early return below on purpose -- with no limit in hand
     // the merge is left alone, but its own fetch is still a bound to carry down.
     if let Some(merge) = node.downcast_ref::<SortPreservingMergeExec>() {
-        ctx.reset_limit(fetch.or_else(|| node.fetch()), Some(covered_rank(merge)));
+        ctx.reset_limit(fetch.or_else(|| node.fetch()), Some(merge_ordering(merge)));
     }
     let Some(fetch) = fetch else {
         return Some(Transformed::no(Arc::clone(node)));
     };
-    // A node with one output partition gives the window above it the first rows
-    // of every partition it reads; one with more keeps the globally first
-    // `fetch` rows instead, because the partitions of a single TopK share a
-    // threshold and `TopKRepartition` copies the TopK below a hash repartition.
-    // That still bounds an ordered merge above the window: a row the window got
-    // wrong lost to `fetch` rows that all reach the merge before it. The merge
-    // has to order rows of different partitions apart for that, and its
-    // ordering is a prefix of this node's, which starts with the window's
-    // `PARTITION BY`, so covering it is a question of the merge's rank.
+    // A node with more than one output partition keeps the globally first
+    // `fetch` rows, not the first rows of each partition the window reads. An
+    // ordered merge above the window makes it a bound again: a row the window
+    // got wrong lost to `fetch` rows that all reach the merge before it.
     if node.output_partitioning().partition_count() > 1
-        && !(merge_rank.is_some_and(|rank| rank >= rank_needed)
-            && keeps_partitions_whole(node, rank_needed))
+        && !(partitions_separated && keeps_partitions_whole(node, narrowest_partition_by))
     {
         return Some(Transformed::no(Arc::clone(node)));
     }
@@ -232,17 +238,14 @@ fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
         return true;
     }
     if let Some(merge) = node.downcast_ref::<SortPreservingMergeExec>() {
-        ctx.reset_limit(merge.fetch(), Some(covered_rank(merge)));
+        ctx.reset_limit(merge.fetch(), Some(merge_ordering(merge)));
         return true;
     }
     false
 }
 
 /// Whether every window partition `node` reads is whole within one of its
-/// output partitions, which the counting argument above needs so that a row's
-/// own earlier rows share its partition. Hashing on the columns the sort key
-/// starts with gives that, as long as the hash is no wider than the
-/// `PARTITION BY` -- a wider one splits a partition across hash buckets.
+/// output partitions, so that a row's own earlier rows share its partition.
 fn keeps_partitions_whole(node: &Arc<dyn ExecutionPlan>, rank_needed: usize) -> bool {
     let Partitioning::Hash(hash_exprs, _) = node.output_partitioning() else {
         return false;
@@ -256,25 +259,41 @@ fn keeps_partitions_whole(node: &Arc<dyn ExecutionPlan>, rank_needed: usize) -> 
     })
 }
 
-/// How many of `merge`'s ordering columns order its rows. A column that is
-/// constant in its input orders nothing, and dropping it leaves an equivalent
-/// ordering, so what is left is the count of the columns that are not.
-fn covered_rank(merge: &SortPreservingMergeExec) -> usize {
+/// The expressions of `merge`'s ordering that order its rows: one that is
+/// constant in its input orders nothing.
+fn merge_ordering(merge: &SortPreservingMergeExec) -> Vec<Arc<dyn PhysicalExpr>> {
     let input = merge.input().equivalence_properties();
     merge
         .expr()
         .iter()
         .filter(|sort_expr| input.is_expr_constant(&sort_expr.expr).is_none())
-        .count()
+        .map(|sort_expr| Arc::clone(&sort_expr.expr))
+        .collect()
 }
 
-/// How many ordering columns a merge above `node` needs for its fetch to bound
-/// what `node` reads: one per `PARTITION BY` column, over the widest of the
-/// node's window expressions, since the merge has to order the groups of every
-/// one of them apart. `usize::MAX` for a window no merge ordering can cover:
-/// one with no `PARTITION BY`, whose rows are one group the merge would have
-/// to order within, and one this rule cannot read the columns of.
-fn rank_needed(node: &Arc<dyn ExecutionPlan>) -> usize {
+/// Whether the ordering in hand sorts `node`'s rows into the groups its windows
+/// read: every `PARTITION BY` expression has to be one of the ordering's own. A
+/// window with no `PARTITION BY` reads one group that no ordering separates.
+fn separates_partitions(node: &Arc<dyn ExecutionPlan>, ctx: &TraverseState) -> bool {
+    let (Some(exprs), Some(window)) = (
+        ctx.merge_exprs.as_ref(),
+        node.downcast_ref::<BoundedWindowAggExec>(),
+    ) else {
+        return false;
+    };
+    !window.window_expr().is_empty()
+        && window.window_expr().iter().all(|window_expr| {
+            !window_expr.partition_by().is_empty()
+                && window_expr
+                    .partition_by()
+                    .iter()
+                    .all(|key| exprs.iter().any(|expr| expr.eq(key)))
+        })
+}
+
+/// The narrowest `PARTITION BY` of `node`'s window expressions, or `usize::MAX`
+/// for anything else -- [`separates_partitions`] blocks those on its own.
+fn partition_by_width(node: &Arc<dyn ExecutionPlan>) -> usize {
     let Some(window) = node.downcast_ref::<BoundedWindowAggExec>() else {
         return usize::MAX;
     };
@@ -282,9 +301,30 @@ fn rank_needed(node: &Arc<dyn ExecutionPlan>) -> usize {
         .window_expr()
         .iter()
         .map(|expr| expr.partition_by().len())
-        .max()
-        .filter(|keys| *keys > 0)
+        .min()
         .unwrap_or(usize::MAX)
+}
+
+/// Carry the merge's ordering from `node`'s output into its input's expression
+/// space: a projection moves and renames columns, so the ordering is rewritten
+/// through it, and a node that changes the schema any other way ends the carry.
+fn carry_down(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) {
+    let Some(exprs) = ctx.merge_exprs.take() else {
+        return;
+    };
+    let Some(child) = node.children().into_iter().next() else {
+        return;
+    };
+    ctx.merge_exprs = if let Some(projection) = node.downcast_ref::<ProjectionExec>() {
+        exprs
+            .iter()
+            .map(|expr| projection.projection_expr().unproject_expr(expr).ok())
+            .collect()
+    } else if node.schema() == child.schema() {
+        Some(exprs)
+    } else {
+        None
+    };
 }
 
 #[cfg(test)]
@@ -292,6 +332,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, FieldRef, Schema};
     use datafusion_common::ScalarValue;
+    use datafusion_expr::Operator;
     use datafusion_expr::WindowFrame;
     use datafusion_expr::function::{PartitionEvaluatorArgs, WindowUDFFieldArgs};
     use datafusion_expr::{
@@ -300,7 +341,7 @@ mod tests {
     };
     use datafusion_functions_window::row_number::{RowNumber, row_number_udwf};
     use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column, col, lit};
     use datafusion_physical_expr::window::StandardWindowExpr;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use datafusion_physical_plan::InputOrderMode;
@@ -309,6 +350,7 @@ mod tests {
     use datafusion_physical_plan::displayable;
     use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+    use datafusion_physical_plan::projection::ProjectionExec;
     use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::windows::{
         BoundedWindowAggExec, create_udwf_window_expr,
@@ -349,7 +391,6 @@ mod tests {
         window_over(udwf, name, sort, input_order_mode)
     }
 
-    /// Wrap `input` in `BoundedWindowAggExec(udwf)` ordered by `a`.
     /// The frame ends at the current row, so the window adds no lookahead of its own
     /// and the fetch a test asserts on comes only from what the rule carried down.
     fn window_over(
@@ -405,6 +446,22 @@ mod tests {
         LimitPushPastWindows::new().optimize(plan, &config).unwrap()
     }
 
+    /// The plan on both sides of the rule, in the shape `OptimizationTest` in
+    /// the core tests prints: a test that claims the rule left the plan alone
+    /// then shows that as two identical halves.
+    fn both_sides(plan: Arc<dyn ExecutionPlan>) -> String {
+        let input = indented(plan.as_ref());
+        let output = indented(optimize(plan).as_ref());
+        format!("input:\n{input}output:\n{output}")
+    }
+
+    fn indented(plan: &dyn ExecutionPlan) -> String {
+        plan_str(plan)
+            .lines()
+            .flat_map(|line| ["  ", line, "\n"])
+            .collect()
+    }
+
     /// GlobalLimitExec above a windowed sort should push fetch into the SortExec.
     #[test]
     fn global_limit_pushes_past_window() {
@@ -457,7 +514,6 @@ mod tests {
         "#);
     }
 
-    /// `PlaceholderRowExec` hashed into `partitions` output partitions.
     fn hash_repartition(partitions: usize) -> Arc<dyn ExecutionPlan> {
         let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
         let s = input.schema();
@@ -466,9 +522,7 @@ mod tests {
     }
 
     /// The window reads each partition of its input on its own, so a fetch on a
-    /// sort that keeps more than one partition does not bound what the window
-    /// needs, and a limit from a node that does not order rows cannot make up
-    /// for it. The two tests after this one vary the merge instead.
+    /// sort that keeps more than one of them does not bound what it needs.
     #[test]
     fn a_partitioned_sort_does_not_take_the_fetch() {
         let window = sort_then_window(
@@ -480,18 +534,23 @@ mod tests {
         .unwrap();
         let plan: Arc<dyn ExecutionPlan> =
             Arc::new(GlobalLimitExec::new(window, 0, Some(100)));
-        let optimized = optimize(plan);
-        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-        GlobalLimitExec: skip=0, fetch=100
-          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-            SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-              RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
-                PlaceholderRowExec
+        assert_snapshot!(both_sides(plan), @r#"
+        input:
+          GlobalLimitExec: skip=0, fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+                  PlaceholderRowExec
+        output:
+          GlobalLimitExec: skip=0, fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+                  PlaceholderRowExec
         "#);
     }
 
-    /// The same plan with a repartition that emits one partition: it is the
-    /// partition count that blocks the pushdown, not the repartition itself.
+    /// It is the partition count that blocks the pushdown, not the repartition.
     #[test]
     fn a_sort_with_one_output_partition_still_takes_the_fetch() {
         let window = sort_then_window(
@@ -503,18 +562,24 @@ mod tests {
         .unwrap();
         let plan: Arc<dyn ExecutionPlan> =
             Arc::new(GlobalLimitExec::new(window, 0, Some(100)));
-        let optimized = optimize(plan);
-        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-        GlobalLimitExec: skip=0, fetch=100
-          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-            SortExec: TopK(fetch=100), expr=[a@0 ASC], preserve_partitioning=[true]
-              RepartitionExec: partitioning=Hash([a@0], 1), input_partitions=1
-                PlaceholderRowExec
+        assert_snapshot!(both_sides(plan), @r#"
+        input:
+          GlobalLimitExec: skip=0, fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([a@0], 1), input_partitions=1
+                  PlaceholderRowExec
+        output:
+          GlobalLimitExec: skip=0, fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: TopK(fetch=100), expr=[a@0 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([a@0], 1), input_partitions=1
+                  PlaceholderRowExec
         "#);
     }
 
-    /// A merge below the window takes the fetch however many partitions it reads,
-    /// because it emits its input's first rows in order from one partition.
+    /// A merge emits its input's first rows in order from one partition, so it
+    /// takes the fetch however many partitions it reads.
     #[test]
     fn a_merge_below_a_window_still_takes_the_fetch() {
         let input = hash_repartition(4);
@@ -533,14 +598,21 @@ mod tests {
         .unwrap();
         let plan: Arc<dyn ExecutionPlan> =
             Arc::new(GlobalLimitExec::new(window, 0, Some(100)));
-        let optimized = optimize(plan);
-        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-        GlobalLimitExec: skip=0, fetch=100
-          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-            SortPreservingMergeExec: [a@0 ASC], fetch=100
-              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-                RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
-                  PlaceholderRowExec
+        assert_snapshot!(both_sides(plan), @r#"
+        input:
+          GlobalLimitExec: skip=0, fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortPreservingMergeExec: [a@0 ASC]
+                SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                  RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+                    PlaceholderRowExec
+        output:
+          GlobalLimitExec: skip=0, fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortPreservingMergeExec: [a@0 ASC], fetch=100
+                SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                  RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+                    PlaceholderRowExec
         "#);
     }
 
@@ -556,8 +628,8 @@ mod tests {
         Ok(LexOrdering::new(exprs).unwrap())
     }
 
-    /// `SortExec -> BoundedWindowAggExec(row_number PARTITION BY columns)`, with
-    /// the sort ordered by the same columns so the window can read it in order.
+    /// The sort is ordered by the same columns the window partitions by, so the
+    /// window can read it in order.
     fn sort_then_partitioned_window(
         input: Arc<dyn ExecutionPlan>,
         columns: &[&str],
@@ -596,9 +668,8 @@ mod tests {
         )?))
     }
 
-    /// A merge above the window that orders its partitions apart makes the
-    /// fetch a bound on what the window reads after all: a row the window got
-    /// wrong lost to that many rows which all reach the merge before it.
+    /// A merge that orders the window's partitions apart makes the fetch a bound
+    /// on what the window reads after all.
     #[test]
     fn a_merge_that_orders_the_partitions_apart_takes_the_fetch() {
         let window = sort_then_partitioned_window(hash_repartition(4), &["a"]).unwrap();
@@ -606,116 +677,271 @@ mod tests {
         let plan: Arc<dyn ExecutionPlan> = Arc::new(
             SortPreservingMergeExec::new(ordering, window).with_fetch(Some(100)),
         );
-        let optimized = optimize(plan);
-        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-        SortPreservingMergeExec: [a@0 ASC], fetch=100
-          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-            SortExec: TopK(fetch=100), expr=[a@0 ASC], preserve_partitioning=[true]
-              RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
-                PlaceholderRowExec
-        "#);
-    }
-
-    /// The same merge over a window that partitions by more columns than the
-    /// merge orders by: within one value of `a` the merge is free to emit the
-    /// partitions in any order, so it no longer bounds what the window reads.
-    #[test]
-    fn a_merge_that_leaves_partitions_tied_does_not() {
-        let window =
-            sort_then_partitioned_window(hash_repartition(4), &["a", "b"]).unwrap();
-        let ordering = ordered_by(&window, &["a"]).unwrap();
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(
-            SortPreservingMergeExec::new(ordering, window).with_fetch(Some(100)),
-        );
-        let optimized = optimize(plan);
-        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-        SortPreservingMergeExec: [a@0 ASC], fetch=100
-          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-            SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[true]
-              RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
-                PlaceholderRowExec
-        "#);
-    }
-
-    /// `PlaceholderRowExec` repartitioned by `partitioning`.
-    fn repartition(partitioning: Partitioning) -> Arc<dyn ExecutionPlan> {
-        let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
-        Arc::new(RepartitionExec::try_new(input, partitioning).unwrap())
-    }
-
-    /// `SortPreservingMergeExec` with a fetch, ordered by `a`, over `input`.
-    fn merge_with_fetch(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-        let ordering = ordered_by(&input, &["a"]).unwrap();
-        Arc::new(SortPreservingMergeExec::new(ordering, input).with_fetch(Some(100)))
-    }
-
-    /// The merge's ordering only stays a prefix of the sort's while every node
-    /// between them keeps its input's order. A `CoalescePartitionsExec` does
-    /// not, so the rank it was measured against no longer means anything.
-    #[test]
-    fn an_unordered_node_under_the_merge_blocks_the_pushdown() {
-        let window = sort_then_partitioned_window(hash_repartition(4), &["a"]).unwrap();
-        let coalesce: Arc<dyn ExecutionPlan> =
-            Arc::new(CoalescePartitionsExec::new(window));
-        let optimized = optimize(merge_with_fetch(coalesce));
-        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-        SortPreservingMergeExec: [a@0 ASC], fetch=100
-          CoalescePartitionsExec
+        assert_snapshot!(both_sides(plan), @r#"
+        input:
+          SortPreservingMergeExec: [a@0 ASC], fetch=100
             BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
               SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+                  PlaceholderRowExec
+        output:
+          SortPreservingMergeExec: [a@0 ASC], fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: TopK(fetch=100), expr=[a@0 ASC], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
                   PlaceholderRowExec
         "#);
     }
 
-    /// Round robin scatters a window partition over several of the sort's
-    /// partitions, so a row's own earlier rows need not share its partition.
+    /// The merge orders by `a` while the window partitions by `a, b`: within one
+    /// value of `a` it may emit the partitions in any order.
+    #[test]
+    fn a_merge_that_leaves_partitions_tied_does_not() {
+        let s = schema();
+        let hash =
+            Partitioning::Hash(vec![col("a", &s).unwrap(), col("b", &s).unwrap()], 4);
+        let window =
+            sort_then_partitioned_window(repartition(hash), &["a", "b"]).unwrap();
+        let ordering = ordered_by(&window, &["a"]).unwrap();
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(
+            SortPreservingMergeExec::new(ordering, window).with_fetch(Some(100)),
+        );
+        assert_snapshot!(both_sides(plan), @r#"
+        input:
+          SortPreservingMergeExec: [a@0 ASC], fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+                  PlaceholderRowExec
+        output:
+          SortPreservingMergeExec: [a@0 ASC], fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+                  PlaceholderRowExec
+        "#);
+    }
+
+    fn repartition(partitioning: Partitioning) -> Arc<dyn ExecutionPlan> {
+        let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
+        Arc::new(RepartitionExec::try_new(input, partitioning).unwrap())
+    }
+
+    fn merge_with_fetch(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        let ordering = ordered_by(&input, &["a"]).unwrap();
+        Arc::new(SortPreservingMergeExec::new(ordering, input).with_fetch(Some(100)))
+    }
+
+    /// A `CoalescePartitionsExec` between the merge and the window does not keep
+    /// its input's order, so the merge's ordering says nothing below it.
+    #[test]
+    fn an_unordered_node_under_the_merge_blocks_the_pushdown() {
+        let window = sort_then_partitioned_window(hash_repartition(4), &["a"]).unwrap();
+        let coalesce: Arc<dyn ExecutionPlan> =
+            Arc::new(CoalescePartitionsExec::new(window));
+        assert_snapshot!(both_sides(merge_with_fetch(coalesce)), @r#"
+        input:
+          SortPreservingMergeExec: [a@0 ASC], fetch=100
+            CoalescePartitionsExec
+              BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                  RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+                    PlaceholderRowExec
+        output:
+          SortPreservingMergeExec: [a@0 ASC], fetch=100
+            CoalescePartitionsExec
+              BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                  RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+                    PlaceholderRowExec
+        "#);
+    }
+
+    /// Round robin scatters a window partition over several of the sort's.
     #[test]
     fn a_round_robin_input_blocks_the_pushdown() {
         let input = repartition(Partitioning::RoundRobinBatch(4));
         let window = sort_then_partitioned_window(input, &["a"]).unwrap();
-        let optimized = optimize(merge_with_fetch(window));
-        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-        SortPreservingMergeExec: [a@0 ASC], fetch=100
-          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-            SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                PlaceholderRowExec
+        assert_snapshot!(both_sides(merge_with_fetch(window)), @r#"
+        input:
+          SortPreservingMergeExec: [a@0 ASC], fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  PlaceholderRowExec
+        output:
+          SortPreservingMergeExec: [a@0 ASC], fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                  PlaceholderRowExec
         "#);
     }
 
-    /// The same when the hash is on a column the window does not partition by.
     #[test]
     fn a_hash_on_another_column_blocks_the_pushdown() {
         let s = schema();
         let input = repartition(Partitioning::Hash(vec![col("b", &s).unwrap()], 4));
         let window = sort_then_partitioned_window(input, &["a"]).unwrap();
-        let optimized = optimize(merge_with_fetch(window));
-        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-        SortPreservingMergeExec: [a@0 ASC], fetch=100
-          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-            SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-              RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=1
-                PlaceholderRowExec
+        assert_snapshot!(both_sides(merge_with_fetch(window)), @r#"
+        input:
+          SortPreservingMergeExec: [a@0 ASC], fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=1
+                  PlaceholderRowExec
+        output:
+          SortPreservingMergeExec: [a@0 ASC], fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([b@1], 4), input_partitions=1
+                  PlaceholderRowExec
         "#);
     }
 
     /// A hash wider than the `PARTITION BY` splits one window partition across
-    /// buckets, so it blocks the pushdown even though it is a prefix of the
-    /// sort's ordering.
+    /// buckets, even though it is a prefix of the sort's ordering.
     #[test]
     fn a_hash_wider_than_the_partition_by_blocks_the_pushdown() {
         let s = schema();
         let hash =
             Partitioning::Hash(vec![col("a", &s).unwrap(), col("b", &s).unwrap()], 4);
         let window = sort_then_partitioned_window(repartition(hash), &["a"]).unwrap();
-        let optimized = optimize(merge_with_fetch(window));
-        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
-        SortPreservingMergeExec: [a@0 ASC], fetch=100
-          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-            SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
-              RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
-                PlaceholderRowExec
+        assert_snapshot!(both_sides(merge_with_fetch(window)), @r#"
+        input:
+          SortPreservingMergeExec: [a@0 ASC], fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+                  PlaceholderRowExec
+        output:
+          SortPreservingMergeExec: [a@0 ASC], fetch=100
+            BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+              SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+                  PlaceholderRowExec
+        "#);
+    }
+
+    fn wide_hash() -> Arc<dyn ExecutionPlan> {
+        let s = schema();
+        repartition(Partitioning::Hash(
+            vec![col("a", &s).unwrap(), col("b", &s).unwrap()],
+            4,
+        ))
+    }
+
+    /// The shape `SELECT ..., <expr> AS <name>` plans to.
+    fn projection_adding(
+        input: Arc<dyn ExecutionPlan>,
+        expr: Arc<dyn PhysicalExpr>,
+        name: &str,
+    ) -> Arc<dyn ExecutionPlan> {
+        let s = input.schema();
+        let mut exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = s
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                (
+                    Arc::new(Column::new(field.name(), index)) as Arc<dyn PhysicalExpr>,
+                    field.name().to_string(),
+                )
+            })
+            .collect();
+        exprs.push((expr, name.to_string()));
+        Arc::new(ProjectionExec::try_new(exprs, input).unwrap())
+    }
+
+    /// The ordering is rewritten through the projection, so `a2` is read as the
+    /// `a` the window partitions by. The `topk_repartition` benchmark plans this.
+    #[test]
+    fn a_merge_ordered_by_an_alias_above_a_projection_takes_the_fetch() {
+        let window = sort_then_partitioned_window(hash_repartition(4), &["a"]).unwrap();
+        let s = window.schema();
+        let projection = projection_adding(window, col("a", &s).unwrap(), "a2");
+        let ordering = ordered_by(&projection, &["a2"]).unwrap();
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(
+            SortPreservingMergeExec::new(ordering, projection).with_fetch(Some(100)),
+        );
+        assert_snapshot!(both_sides(plan), @r#"
+        input:
+          SortPreservingMergeExec: [a2@3 ASC], fetch=100
+            ProjectionExec: expr=[a@0 as a, b@1 as b, row_number@2 as row_number, a@0 as a2]
+              BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                  RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+                    PlaceholderRowExec
+        output:
+          SortPreservingMergeExec: [a2@3 ASC], fetch=100
+            ProjectionExec: expr=[a@0 as a, b@1 as b, row_number@2 as row_number, a@0 as a2]
+              BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                SortExec: TopK(fetch=100), expr=[a@0 ASC], preserve_partitioning=[true]
+                  RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+                    PlaceholderRowExec
+        "#);
+    }
+
+    /// `a2` is `a`, so `[a, a2]` separates the groups of a window partitioned by
+    /// `a` and not those of one partitioned by `a, b`, two expressions or not.
+    #[test]
+    fn a_merge_ordered_by_an_alias_of_a_key_does_not_cover_the_other_key() {
+        let window = sort_then_partitioned_window(wide_hash(), &["a", "b"]).unwrap();
+        let s = window.schema();
+        let projection = projection_adding(window, col("a", &s).unwrap(), "a2");
+        let ordering = ordered_by(&projection, &["a", "a2"]).unwrap();
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(
+            SortPreservingMergeExec::new(ordering, projection).with_fetch(Some(100)),
+        );
+        assert_snapshot!(both_sides(plan), @r#"
+        input:
+          SortPreservingMergeExec: [a@0 ASC, a2@3 ASC], fetch=100
+            ProjectionExec: expr=[a@0 as a, b@1 as b, row_number@2 as row_number, a@0 as a2]
+              BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[true]
+                  RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+                    PlaceholderRowExec
+        output:
+          SortPreservingMergeExec: [a@0 ASC, a2@3 ASC], fetch=100
+            ProjectionExec: expr=[a@0 as a, b@1 as b, row_number@2 as row_number, a@0 as a2]
+              BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[true]
+                  RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+                    PlaceholderRowExec
+        "#);
+    }
+
+    /// `b % 2` leaves rows whose `b` differs tied. The rule does not tell which
+    /// expressions keep the groups apart, so only the key itself passes.
+    #[test]
+    fn a_merge_ordered_by_an_expression_of_a_key_blocks_the_pushdown() {
+        let window = sort_then_partitioned_window(wide_hash(), &["a", "b"]).unwrap();
+        let s = window.schema();
+        let modulo = Arc::new(BinaryExpr::new(
+            col("b", &s).unwrap(),
+            Operator::Modulo,
+            lit(2_i64),
+        )) as Arc<dyn PhysicalExpr>;
+        let projection = projection_adding(window, modulo, "b2");
+        let ordering = ordered_by(&projection, &["a", "b2"]).unwrap();
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(
+            SortPreservingMergeExec::new(ordering, projection).with_fetch(Some(100)),
+        );
+        assert_snapshot!(both_sides(plan), @r#"
+        input:
+          SortPreservingMergeExec: [a@0 ASC, b2@3 ASC], fetch=100
+            ProjectionExec: expr=[a@0 as a, b@1 as b, row_number@2 as row_number, b@1 % 2 as b2]
+              BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[true]
+                  RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+                    PlaceholderRowExec
+        output:
+          SortPreservingMergeExec: [a@0 ASC, b2@3 ASC], fetch=100
+            ProjectionExec: expr=[a@0 as a, b@1 as b, row_number@2 as row_number, b@1 % 2 as b2]
+              BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[true]
+                  RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+                    PlaceholderRowExec
         "#);
     }
 

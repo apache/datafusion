@@ -1574,14 +1574,11 @@ SELECT count(*) FROM (SELECT * FROM (SELECT a FROM sorted_offset_t OFFSET 2) ORD
 
 # https://github.com/apache/datafusion/issues/27457: a fetch on a sort that
 # keeps more than one partition bounds each of those partitions, not what the
-# window above reads. The window then sees a group's later rows without its
-# earlier ones and numbers them from 1. Nothing above puts the row back in
-# either shape below: both end in a `CoalescePartitionsExec`, which does not
-# order, so its own fetch takes whichever rows reach it first. Both returned a
-# row (5, 2, 1) in every run before this was fixed.
+# window above reads, so the window numbers a group's later rows from 1. The
+# first two shapes returned a row (5, 2, 1) in every run before this was fixed.
 #
-# Which three rows come back is up to the partitions' timing, so each shape
-# asserts instead that every row it does return is a row of the full result.
+# Which rows a `LIMIT` returns here is up to the partitions' timing, so each
+# shape asserts that every row it does return is a row of the full result.
 
 statement ok
 SET datafusion.execution.batch_size = 1;
@@ -1595,8 +1592,7 @@ CREATE TABLE w27457_two_partitions (a INT, b INT) AS VALUES (5, 1), (0, 1), (0, 
 statement ok
 CREATE TABLE w27457_one_partition (a INT, b INT) AS VALUES (5, 2);
 
-# A subset check is vacuous if the limited query returns nothing, so pin that
-# it returns three rows first.
+# A subset check is vacuous on an empty result, so pin the row count first.
 query I
 SELECT count(*) FROM (
   SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
@@ -1607,8 +1603,7 @@ SELECT count(*) FROM (
 3
 
 # `TopKRepartition` copies the TopK below the shuffle, where it keeps the first
-# rows of each input partition instead: the first table drops (5, 1), leaving
-# the group a = 5 with only (5, 2).
+# rows of each input partition: the first table drops (5, 1).
 query I
 SELECT count(*) FROM (
   SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
@@ -1650,7 +1645,7 @@ physical_plan
 # The partitions of one `SortExec` also share a TopK threshold, so the same
 # wrong value comes back with `TopKRepartition` off. The rows arrive as
 # (5,2), (0,1), (0,2), (0,3), 1000 x (9,9), (5,1): the group a = 0 sets the
-# threshold to (0,3) before (5,1) arrives, and the group a = 5 then drops it.
+# threshold to (0,3) before (5,1) arrives.
 statement ok
 SET datafusion.execution.target_partitions = 1;
 
@@ -1713,12 +1708,8 @@ statement ok
 RESET datafusion.optimizer.enable_topk_repartition;
 
 # An ordered merge above the window bounds what it reads only when it orders
-# the window's partitions apart. These two shapes returned wrong values in
-# every run with the merge's rank taken at face value.
-#
-# The merge orders by `a` alone while the window partitions by `a, b`, so the
-# groups sharing a value of `a` reach it in no fixed order and none of them is
-# held back by the others. Rows arrive as (1,5,2), (1,6,2), (1,7,2), (1,8,2),
+# the window's partitions apart; here it orders by `a` alone while the window
+# partitions by `a, b`. Rows arrive as (1,5,2), (1,6,2), (1,7,2), (1,8,2),
 # (1,0,1..3), 1000 x (1,9,9), then (1,5,1), (1,6,1), (1,7,1), (1,8,1): the
 # group b = 0 sets the threshold to (1,0,3), which drops every late row, and
 # the groups b = 5..8 number their early row from 1.
@@ -1786,8 +1777,7 @@ physical_plan
 
 # The same with a constant in the way: `a` is constant under the filter, so the
 # merge's two ordering columns separate the groups by `b` alone while the window
-# partitions by `b, c`. Counting the constant column would make the rank look
-# like it covers them.
+# partitions by `b, c`.
 
 statement ok
 SET datafusion.execution.target_partitions = 1;
@@ -1862,6 +1852,74 @@ physical_plan
 07)------------FilterExec: a@0 = 1
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------DataSourceExec: partitions=1, partition_sizes=[1019]
+
+# Two orderings over a window partitioned by `a, d` that separate nothing:
+# `a, a AS a2` orders by `a` twice, and `a, floor(d)` leaves rows whose `d`
+# differs tied. With the fetch on the four-partition sort both returned a row
+# whose `rn` is 1 where the full result says 2 -- the first in 17 to 19 of 20
+# runs, the second in 6 to 19. The unit tests on the rule pin both plans.
+
+statement ok
+CREATE TABLE w27457_alias_in_merge_key (a INT, d INT, b INT) AS VALUES (1, 2, 3), (1, 1, 1), (1, 1, 2), (1, 1, 3);
+
+statement ok
+CREATE TABLE w27457_alias_in_merge_key_late (a INT, d INT, b INT) AS VALUES (1, 2, 5);
+
+query I
+SELECT count(*) FROM (
+  SELECT a, a2, d, b, rn FROM (
+    SELECT a, a AS a2, d, b, row_number() OVER (PARTITION BY a, d ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM (SELECT * FROM w27457_alias_in_merge_key UNION ALL SELECT * FROM w27457_alias_in_merge_key_late)
+  ) ORDER BY a, a2 LIMIT 3
+);
+----
+3
+
+query I
+SELECT count(*) FROM (
+  SELECT a, a2, d, b, rn FROM (
+    SELECT a, a AS a2, d, b, row_number() OVER (PARTITION BY a, d ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM (SELECT * FROM w27457_alias_in_merge_key UNION ALL SELECT * FROM w27457_alias_in_merge_key_late)
+  ) ORDER BY a, a2 LIMIT 3
+) l WHERE NOT EXISTS (
+  SELECT 1 FROM (
+    SELECT a, d, b, row_number() OVER (PARTITION BY a, d ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM (SELECT * FROM w27457_alias_in_merge_key UNION ALL SELECT * FROM w27457_alias_in_merge_key_late)
+  ) f WHERE f.a = l.a AND f.d = l.d AND f.b = l.b AND f.rn = l.rn
+);
+----
+0
+
+statement ok
+CREATE TABLE w27457_function_in_merge_key (a INT, d DOUBLE, b INT) AS VALUES (1, 1.3, 3), (1, 1.0, 1), (1, 1.0, 2), (1, 1.0, 3);
+
+statement ok
+CREATE TABLE w27457_function_in_merge_key_late (a INT, d DOUBLE, b INT) AS VALUES (1, 1.3, 5);
+
+query I
+SELECT count(*) FROM (
+  SELECT a, d, b, rn FROM (
+    SELECT a, d, b, row_number() OVER (PARTITION BY a, d ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM (SELECT * FROM w27457_function_in_merge_key UNION ALL SELECT * FROM w27457_function_in_merge_key_late)
+  ) ORDER BY a, floor(d) LIMIT 3
+);
+----
+3
+
+query I
+SELECT count(*) FROM (
+  SELECT a, d, b, rn FROM (
+    SELECT a, d, b, row_number() OVER (PARTITION BY a, d ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM (SELECT * FROM w27457_function_in_merge_key UNION ALL SELECT * FROM w27457_function_in_merge_key_late)
+  ) ORDER BY a, floor(d) LIMIT 3
+) l WHERE NOT EXISTS (
+  SELECT 1 FROM (
+    SELECT a, d, b, row_number() OVER (PARTITION BY a, d ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM (SELECT * FROM w27457_function_in_merge_key UNION ALL SELECT * FROM w27457_function_in_merge_key_late)
+  ) f WHERE f.a = l.a AND f.d = l.d AND f.b = l.b AND f.rn = l.rn
+);
+----
+0
 
 statement ok
 RESET datafusion.optimizer.repartition_file_scans;
