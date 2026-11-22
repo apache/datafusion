@@ -321,7 +321,7 @@ async fn main_inner() -> Result<()> {
         if !rc.is_empty() {
             exec::exec_from_files(&ctx, rc, &print_options).await?;
         }
-        let repl_options = get_repl_options(&args.history_file);
+        let repl_options = get_repl_options(args.history_file.as_deref());
 
         // TODO maybe we can have thiserror for cli but for now let's keep it simple
         return exec::exec_from_repl(&ctx, &mut print_options, &repl_options)
@@ -428,7 +428,7 @@ fn parse_command(command: &str) -> Result<String, String> {
     }
 }
 
-fn get_repl_options(history_file: &Option<String>) -> ReplOptions {
+fn get_repl_options(history_file: Option<&str>) -> ReplOptions {
     if let Some(history_file) = history_file {
         ReplOptions {
             history_file: PathBuf::from(history_file),
