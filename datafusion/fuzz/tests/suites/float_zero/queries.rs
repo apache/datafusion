@@ -18,7 +18,9 @@ pub struct Query {
 }
 
 /// When a query is known to give a wrong result. Remove it when the bug is
-/// fixed; the fixed-table test fails until then.
+/// fixed; the fixed-table test fails until then. This suite runs only in the
+/// merge queue, so a PR that fixes one of these bugs should run
+/// `cargo test -p datafusion-fuzz --features extended_tests --test fuzz float_zero_fixed`.
 #[derive(Debug)]
 pub struct KnownFailure {
     pub applies: fn(&Setting) -> bool,
