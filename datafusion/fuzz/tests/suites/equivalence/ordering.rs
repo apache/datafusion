@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::fuzz_cases::equivalence::utils::{
-    ALL_SORT_OPTIONS, NULL_PCTS, TestScalarUDF, assert_random_ordering_satisfy_is_sound,
+use super::utils::{
+    ALL_SORT_OPTIONS, TestScalarUDF, assert_random_ordering_satisfy_is_sound,
     contains_conservative_ordering_op, create_random_schema,
     create_random_table_with_casts_and_windows, create_test_params, create_test_schema_2,
     generate_table_for_eq_properties, generate_table_for_orderings,
@@ -28,9 +28,10 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use std::sync::Arc;
 
-#[test]
-fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
-    const N_RANDOM_SCHEMA: usize = 5;
+pub(crate) fn test_ordering_satisfy_with_equivalence_random(
+    seed: u64,
+    null_pct: f64,
+) -> Result<()> {
     const N_ELEMENTS: usize = 125;
     const N_DISTINCT: usize = 5;
     const SORT_OPTIONS: SortOptions = SortOptions {
@@ -38,56 +39,52 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
         nulls_first: false,
     };
 
-    for (seed, &null_pct) in (0..N_RANDOM_SCHEMA).cartesian_product(NULL_PCTS) {
-        // Create a random schema with random properties
-        let (test_schema, eq_properties) = create_random_schema(seed as u64, null_pct)?;
-        // Generate a data that satisfies properties given
-        let table_data_with_properties = generate_table_for_eq_properties(
-            &eq_properties,
-            N_ELEMENTS,
-            N_DISTINCT,
-            null_pct,
-        )?;
-        let col_exprs = [
-            col("a", &test_schema)?,
-            col("b", &test_schema)?,
-            col("c", &test_schema)?,
-            col("d", &test_schema)?,
-            col("e", &test_schema)?,
-            col("f", &test_schema)?,
-        ];
+    // Create a random schema with random properties
+    let (test_schema, eq_properties) = create_random_schema(seed, null_pct)?;
+    // Generate a data that satisfies properties given
+    let table_data_with_properties = generate_table_for_eq_properties(
+        &eq_properties,
+        N_ELEMENTS,
+        N_DISTINCT,
+        null_pct,
+    )?;
+    let col_exprs = [
+        col("a", &test_schema)?,
+        col("b", &test_schema)?,
+        col("c", &test_schema)?,
+        col("d", &test_schema)?,
+        col("e", &test_schema)?,
+        col("f", &test_schema)?,
+    ];
 
-        let mut options_rng = StdRng::seed_from_u64(seed as u64);
-        for n_req in 1..=col_exprs.len() {
-            for exprs in col_exprs.iter().combinations(n_req) {
-                assert_random_ordering_satisfy_is_sound(
-                    &eq_properties,
-                    &exprs,
-                    &table_data_with_properties,
-                    &mut options_rng,
-                    &format!("seed: {seed}, null_pct: {null_pct}"),
-                )?;
-                let sort_exprs = exprs
-                    .into_iter()
-                    .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS));
-                let Some(ordering) = LexOrdering::new(sort_exprs) else {
-                    unreachable!("Test should always produce non-degenerate orderings");
-                };
-                let expected = is_table_same_after_sort(
-                    ordering.clone(),
-                    &table_data_with_properties,
-                )?;
-                let err_msg = format!(
-                    "Error in test case seed: {seed}, null_pct: {null_pct}, requirement:{ordering:?}, expected: {expected:?}, eq_properties {eq_properties}"
-                );
-                // Check whether ordering_satisfy API result and
-                // experimental result matches.
-                assert_eq!(
-                    eq_properties.ordering_satisfy(ordering)?,
-                    expected,
-                    "{err_msg}"
-                );
-            }
+    let mut options_rng = StdRng::seed_from_u64(seed);
+    for n_req in 1..=col_exprs.len() {
+        for exprs in col_exprs.iter().combinations(n_req) {
+            assert_random_ordering_satisfy_is_sound(
+                &eq_properties,
+                &exprs,
+                &table_data_with_properties,
+                &mut options_rng,
+                &format!("seed: {seed}, null_pct: {null_pct}"),
+            )?;
+            let sort_exprs = exprs
+                .into_iter()
+                .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS));
+            let Some(ordering) = LexOrdering::new(sort_exprs) else {
+                unreachable!("Test should always produce non-degenerate orderings");
+            };
+            let expected =
+                is_table_same_after_sort(ordering.clone(), &table_data_with_properties)?;
+            let err_msg = format!(
+                "Error in test case seed: {seed}, null_pct: {null_pct}, requirement:{ordering:?}, expected: {expected:?}, eq_properties {eq_properties}"
+            );
+            // Check whether ordering_satisfy API result and
+            // experimental result matches.
+            assert_eq!(
+                eq_properties.ordering_satisfy(ordering)?,
+                expected,
+                "{err_msg}"
+            );
         }
     }
 
@@ -107,9 +104,10 @@ fn is_combination_selected(indices: &[usize], rng: &mut StdRng) -> bool {
         || rng.random_bool(SAMPLED_COMBINATION_PROBABILITY)
 }
 
-#[test]
-fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
-    const N_RANDOM_SCHEMA: usize = 100;
+pub(crate) fn test_ordering_satisfy_with_equivalence_complex_random(
+    seed: u64,
+    null_pct: f64,
+) -> Result<()> {
     const N_ELEMENTS: usize = 125;
     const N_DISTINCT: usize = 5;
     const SORT_OPTIONS: SortOptions = SortOptions {
@@ -117,119 +115,115 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
         nulls_first: false,
     };
 
-    for (seed, &null_pct) in (0..N_RANDOM_SCHEMA).cartesian_product(NULL_PCTS) {
-        // Create a random schema with random properties
-        let (test_schema, eq_properties) = create_random_schema(seed as u64, null_pct)?;
-        // Generate a data that satisfies properties given
-        let table_data_with_properties = generate_table_for_eq_properties(
-            &eq_properties,
-            N_ELEMENTS,
-            N_DISTINCT,
-            null_pct,
-        )?;
+    // Create a random schema with random properties
+    let (test_schema, eq_properties) = create_random_schema(seed, null_pct)?;
+    // Generate a data that satisfies properties given
+    let table_data_with_properties = generate_table_for_eq_properties(
+        &eq_properties,
+        N_ELEMENTS,
+        N_DISTINCT,
+        null_pct,
+    )?;
 
-        let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
-        let col_a = col("a", &test_schema)?;
-        let floor_a = Arc::new(ScalarFunctionExpr::try_new(
-            Arc::clone(&test_fun),
-            vec![col_a],
-            &test_schema,
-            Arc::new(ConfigOptions::default()),
-        )?);
-        let a_plus_b = Arc::new(BinaryExpr::new(
-            col("a", &test_schema)?,
-            Operator::Plus,
-            col("b", &test_schema)?,
-        )) as Arc<dyn PhysicalExpr>;
-        let binary = |lhs: Arc<dyn PhysicalExpr>, op, rhs: Arc<dyn PhysicalExpr>| {
-            Arc::new(BinaryExpr::new(lhs, op, rhs)) as Arc<dyn PhysicalExpr>
-        };
-        // Ordered when `a` and `b` lead orderings in opposite directions.
-        let a_gt_b = binary(
-            col("a", &test_schema)?,
-            Operator::Gt,
-            col("b", &test_schema)?,
-        );
-        // `e` is constant, so each operand has the ordering of its column.
-        // `a` and `b` lead separate orderings whose NULLs sit in different
-        // rows, which is where Kleene `AND`/`OR` can break an ordering.
-        let a_gt_e = binary(
-            col("a", &test_schema)?,
-            Operator::Gt,
-            col("e", &test_schema)?,
-        );
-        let b_gt_e = binary(
-            col("b", &test_schema)?,
-            Operator::Gt,
-            col("e", &test_schema)?,
-        );
-        let a_gt_e_and_b_gt_e =
-            binary(Arc::clone(&a_gt_e), Operator::And, Arc::clone(&b_gt_e));
-        let a_gt_e_or_b_gt_e = binary(a_gt_e, Operator::Or, b_gt_e);
-        let exprs = [
-            col("a", &test_schema)?,
-            col("b", &test_schema)?,
-            col("c", &test_schema)?,
-            col("d", &test_schema)?,
-            col("e", &test_schema)?,
-            col("f", &test_schema)?,
-            floor_a,
-            a_plus_b,
-            a_gt_b,
-            a_gt_e_and_b_gt_e,
-            a_gt_e_or_b_gt_e,
-        ];
+    let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
+    let col_a = col("a", &test_schema)?;
+    let floor_a = Arc::new(ScalarFunctionExpr::try_new(
+        Arc::clone(&test_fun),
+        vec![col_a],
+        &test_schema,
+        Arc::new(ConfigOptions::default()),
+    )?);
+    let a_plus_b = Arc::new(BinaryExpr::new(
+        col("a", &test_schema)?,
+        Operator::Plus,
+        col("b", &test_schema)?,
+    )) as Arc<dyn PhysicalExpr>;
+    let binary = |lhs: Arc<dyn PhysicalExpr>, op, rhs: Arc<dyn PhysicalExpr>| {
+        Arc::new(BinaryExpr::new(lhs, op, rhs)) as Arc<dyn PhysicalExpr>
+    };
+    // Ordered when `a` and `b` lead orderings in opposite directions.
+    let a_gt_b = binary(
+        col("a", &test_schema)?,
+        Operator::Gt,
+        col("b", &test_schema)?,
+    );
+    // `e` is constant, so each operand has the ordering of its column.
+    // `a` and `b` lead separate orderings whose NULLs sit in different
+    // rows, which is where Kleene `AND`/`OR` can break an ordering.
+    let a_gt_e = binary(
+        col("a", &test_schema)?,
+        Operator::Gt,
+        col("e", &test_schema)?,
+    );
+    let b_gt_e = binary(
+        col("b", &test_schema)?,
+        Operator::Gt,
+        col("e", &test_schema)?,
+    );
+    let a_gt_e_and_b_gt_e =
+        binary(Arc::clone(&a_gt_e), Operator::And, Arc::clone(&b_gt_e));
+    let a_gt_e_or_b_gt_e = binary(a_gt_e, Operator::Or, b_gt_e);
+    let exprs = [
+        col("a", &test_schema)?,
+        col("b", &test_schema)?,
+        col("c", &test_schema)?,
+        col("d", &test_schema)?,
+        col("e", &test_schema)?,
+        col("f", &test_schema)?,
+        floor_a,
+        a_plus_b,
+        a_gt_b,
+        a_gt_e_and_b_gt_e,
+        a_gt_e_or_b_gt_e,
+    ];
 
-        let mut options_rng = StdRng::seed_from_u64(seed as u64);
-        let mut selection_rng = StdRng::seed_from_u64(!(seed as u64));
-        for n_req in 1..=exprs.len() {
-            for indices in (0..exprs.len()).combinations(n_req) {
-                if !is_combination_selected(&indices, &mut selection_rng) {
-                    continue;
-                }
-                let exprs = indices.iter().map(|&i| &exprs[i]).collect::<Vec<_>>();
-                assert_random_ordering_satisfy_is_sound(
-                    &eq_properties,
-                    &exprs,
-                    &table_data_with_properties,
-                    &mut options_rng,
-                    &format!("seed: {seed}, null_pct: {null_pct}"),
-                )?;
-                let sort_exprs = exprs
-                    .into_iter()
-                    .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS));
-                let Some(ordering) = LexOrdering::new(sort_exprs) else {
-                    unreachable!("Test should always produce non-degenerate orderings");
-                };
-                let expected = is_table_same_after_sort(
-                    ordering.clone(),
-                    &table_data_with_properties,
-                )?;
-                let err_msg = format!(
-                    "Error in test case seed: {seed}, null_pct: {null_pct}, requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}",
-                );
-                // A rejection turns inconclusive only from the first key with
-                // a conservative ordering rule onwards (see
-                // `contains_conservative_ordering_op`), since such a rule can
-                // make an ordering underivable even when the sample happens
-                // to be sorted. A table sorted by the full ordering is sorted
-                // by every prefix of it, so a rejected prefix without such
-                // keys still proves the rejection is genuine.
-                let conclusive_prefix = LexOrdering::new(
-                    ordering
-                        .iter()
-                        .take_while(|sort_expr| {
-                            !contains_conservative_ordering_op(&sort_expr.expr)
-                        })
-                        .cloned(),
-                );
-                if eq_properties.ordering_satisfy(ordering)? {
-                    assert!(expected, "{err_msg}");
-                } else if let Some(prefix) = conclusive_prefix
-                    && !eq_properties.ordering_satisfy(prefix)?
-                {
-                    assert!(!expected, "{err_msg}");
-                }
+    let mut options_rng = StdRng::seed_from_u64(seed);
+    let mut selection_rng = StdRng::seed_from_u64(!seed);
+    for n_req in 1..=exprs.len() {
+        for indices in (0..exprs.len()).combinations(n_req) {
+            if !is_combination_selected(&indices, &mut selection_rng) {
+                continue;
+            }
+            let exprs = indices.iter().map(|&i| &exprs[i]).collect::<Vec<_>>();
+            assert_random_ordering_satisfy_is_sound(
+                &eq_properties,
+                &exprs,
+                &table_data_with_properties,
+                &mut options_rng,
+                &format!("seed: {seed}, null_pct: {null_pct}"),
+            )?;
+            let sort_exprs = exprs
+                .into_iter()
+                .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS));
+            let Some(ordering) = LexOrdering::new(sort_exprs) else {
+                unreachable!("Test should always produce non-degenerate orderings");
+            };
+            let expected =
+                is_table_same_after_sort(ordering.clone(), &table_data_with_properties)?;
+            let err_msg = format!(
+                "Error in test case seed: {seed}, null_pct: {null_pct}, requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}",
+            );
+            // A rejection turns inconclusive only from the first key with
+            // a conservative ordering rule onwards (see
+            // `contains_conservative_ordering_op`), since such a rule can
+            // make an ordering underivable even when the sample happens
+            // to be sorted. A table sorted by the full ordering is sorted
+            // by every prefix of it, so a rejected prefix without such
+            // keys still proves the rejection is genuine.
+            let conclusive_prefix = LexOrdering::new(
+                ordering
+                    .iter()
+                    .take_while(|sort_expr| {
+                        !contains_conservative_ordering_op(&sort_expr.expr)
+                    })
+                    .cloned(),
+            );
+            if eq_properties.ordering_satisfy(ordering)? {
+                assert!(expected, "{err_msg}");
+            } else if let Some(prefix) = conclusive_prefix
+                && !eq_properties.ordering_satisfy(prefix)?
+            {
+                assert!(!expected, "{err_msg}");
             }
         }
     }
@@ -241,59 +235,58 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
 /// of whole-partition windows (see `create_random_table_with_casts_and_windows`):
 /// every ordering it claims must hold on the rows, and the orderings that
 /// follow from the declared properties must be claimed.
-#[test]
-fn test_ordering_satisfy_with_casts_and_windows_random() -> Result<()> {
-    const N_RANDOM_TABLES: u64 = 100;
+pub(crate) fn test_ordering_satisfy_with_casts_and_windows_random(
+    seed: u64,
+    null_pct: f64,
+) -> Result<()> {
     const N_ELEMENTS: usize = 125;
     const N_DISTINCT: usize = 5;
     const MAX_KEYS: usize = 4;
     const SAMPLED_REQUIREMENT_PROBABILITY: f64 = 0.3;
 
-    for (seed, &null_pct) in (0..N_RANDOM_TABLES).cartesian_product(NULL_PCTS) {
-        let table = create_random_table_with_casts_and_windows(
-            seed, null_pct, N_ELEMENTS, N_DISTINCT,
-        )?;
-        let eq_properties = &table.eq_properties;
-        let context =
-            format!("seed: {seed}, null_pct: {null_pct}, eq_properties: {eq_properties}");
-        for ordering in &table.provable_orderings {
-            assert!(
-                is_table_same_after_sort(ordering.clone(), &table.batch)?,
-                "{context}, does not hold: {ordering}"
-            );
-            assert!(
-                eq_properties.ordering_satisfy(ordering.clone())?,
-                "{context}, not proven: {ordering}"
-            );
-        }
+    let table = create_random_table_with_casts_and_windows(
+        seed, null_pct, N_ELEMENTS, N_DISTINCT,
+    )?;
+    let eq_properties = &table.eq_properties;
+    let context =
+        format!("seed: {seed}, null_pct: {null_pct}, eq_properties: {eq_properties}");
+    for ordering in &table.provable_orderings {
+        assert!(
+            is_table_same_after_sort(ordering.clone(), &table.batch)?,
+            "{context}, does not hold: {ordering}"
+        );
+        assert!(
+            eq_properties.ordering_satisfy(ordering.clone())?,
+            "{context}, not proven: {ordering}"
+        );
+    }
 
-        let mut rng = StdRng::seed_from_u64(seed);
-        for n_keys in 1..=MAX_KEYS {
-            for mut indices in (0..table.keys.len()).combinations(n_keys) {
-                if n_keys > 2 && !rng.random_bool(SAMPLED_REQUIREMENT_PROBABILITY) {
-                    continue;
-                }
-                indices.shuffle(&mut rng);
-                // Mostly in the direction each key is sorted in, so that many
-                // requirements hold and their claims get checked:
-                let sort_exprs = indices
-                    .iter()
-                    .map(|&idx| {
-                        let (expr, options) = &table.keys[idx];
-                        let options = match options {
-                            Some(options) if rng.random_bool(0.75) => *options,
-                            _ => random_sort_options(&mut rng),
-                        };
-                        PhysicalSortExpr::new(Arc::clone(expr), options)
-                    })
-                    .collect::<Vec<_>>();
-                let ordering = LexOrdering::new(sort_exprs).unwrap();
-                if eq_properties.ordering_satisfy(ordering.clone())? {
-                    assert!(
-                        is_table_same_after_sort(ordering.clone(), &table.batch)?,
-                        "{context}, claimed: {ordering}"
-                    );
-                }
+    let mut rng = StdRng::seed_from_u64(seed);
+    for n_keys in 1..=MAX_KEYS {
+        for mut indices in (0..table.keys.len()).combinations(n_keys) {
+            if n_keys > 2 && !rng.random_bool(SAMPLED_REQUIREMENT_PROBABILITY) {
+                continue;
+            }
+            indices.shuffle(&mut rng);
+            // Mostly in the direction each key is sorted in, so that many
+            // requirements hold and their claims get checked:
+            let sort_exprs = indices
+                .iter()
+                .map(|&idx| {
+                    let (expr, options) = &table.keys[idx];
+                    let options = match options {
+                        Some(options) if rng.random_bool(0.75) => *options,
+                        _ => random_sort_options(&mut rng),
+                    };
+                    PhysicalSortExpr::new(Arc::clone(expr), options)
+                })
+                .collect::<Vec<_>>();
+            let ordering = LexOrdering::new(sort_exprs).unwrap();
+            if eq_properties.ordering_satisfy(ordering.clone())? {
+                assert!(
+                    is_table_same_after_sort(ordering.clone(), &table.batch)?,
+                    "{context}, claimed: {ordering}"
+                );
             }
         }
     }
