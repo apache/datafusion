@@ -15,7 +15,9 @@ use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 use super::GroupClusteringMode;
-use super::aggregate_hash_table::{AggregateHashTable, PartialReduceMarker};
+use super::aggregate_hash_table::{
+    AggregateHashTable, EvaluatedAggregateBatch, PartialReduceMarker,
+};
 use crate::SendableRecordBatchStream;
 use crate::metrics::{BaselineMetrics, Count, MetricBuilder, RecordOutput, SpillMetrics};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
@@ -159,9 +161,30 @@ impl PartialReduceHashAggregateStream {
             let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
             while let Some(batch) = self.input.next().await.transpose()? {
-                let timer = elapsed_compute.timer();
+                let mut timer = elapsed_compute.timer();
 
-                let state = self.handle_input_batch(&batch, &mut hash_table)?;
+                let evaluated = hash_table.evaluate_batch(&batch)?;
+                if self.reserve_batch_peak(&hash_table, &evaluated)?
+                    == HandleInputResult::OOM
+                {
+                    let materialized_group_states = hash_table.take_state_batch()?.ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "Partial reduce hash aggregate ran out of memory with no aggregated groups"
+                        )
+                    })?;
+
+                    self.early_emit_count.add(1);
+                    timer.done();
+                    self.emit_on_memory_pressure(
+                        materialized_group_states,
+                        &mut emitter,
+                        hash_table.memory_size(),
+                    )
+                    .await?;
+                    timer = elapsed_compute.timer();
+                }
+
+                let state = self.handle_input_batch(evaluated, &mut hash_table)?;
                 // Avoid holding on the batch
                 drop(batch);
 
@@ -199,15 +222,44 @@ impl PartialReduceHashAggregateStream {
         })
     }
 
+    /// Reserves the peak memory of aggregating `num_rows` more rows before the
+    /// group values grow.
+    ///
+    /// Returns [`HandleInputResult::OOM`] if the reservation fails while the
+    /// table holds groups that an early emit can release. An empty table has
+    /// nothing to emit, so the check after the batch decides whether its
+    /// actual size fits.
+    fn reserve_batch_peak(
+        &mut self,
+        hash_table: &AggregateHashTable<PartialReduceMarker>,
+        evaluated: &EvaluatedAggregateBatch,
+    ) -> Result<HandleInputResult> {
+        let peak_size = hash_table
+            .memory_size()
+            .saturating_add(hash_table.max_evaluated_growth(evaluated));
+        match self.reservation.try_resize(peak_size) {
+            Ok(()) => Ok(HandleInputResult::ProcessNext),
+            Err(DataFusionError::ResourcesExhausted(_))
+                if hash_table.building_group_count() > 0 =>
+            {
+                Ok(HandleInputResult::OOM)
+            }
+            Err(DataFusionError::ResourcesExhausted(_)) => {
+                Ok(HandleInputResult::ProcessNext)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Aggregate partial state batch into the hash table
     fn handle_input_batch(
         &mut self,
-        batch: &RecordBatch,
+        evaluated: EvaluatedAggregateBatch,
         hash_table: &mut AggregateHashTable<PartialReduceMarker>,
     ) -> Result<HandleInputResult> {
         debug_assert!(hash_table.is_building());
-        let evaluated = hash_table.evaluate_batch(batch)?;
         hash_table.aggregate_evaluated(&evaluated)?;
+        drop(evaluated);
 
         let resize_result = self.reservation.try_resize(hash_table.memory_size());
         match resize_result {

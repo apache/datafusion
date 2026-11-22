@@ -17,7 +17,8 @@ use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::StreamExt;
 
 use super::aggregate_hash_table::{
-    AggregateHashTable, ClusteredAggregateTableMetrics, SingleMarker,
+    AggregateHashTable, ClusteredAggregateTableMetrics, EvaluatedAggregateBatch,
+    SingleMarker,
 };
 use super::order::GroupClusteringMode;
 use super::spill::AggregateSpill;
@@ -297,6 +298,26 @@ impl SingleHashAggregateStream {
 
 impl Aggregating {
     /// Reserve memory for the current aggregate table.
+    /// Returns the bytes that aggregating `num_rows` rows may add to
+    /// [`Self::reservation_size`] at its peak, including the spill headroom
+    /// for the groups that the batch can add.
+    fn max_batch_growth(
+        &self,
+        evaluated: &EvaluatedAggregateBatch,
+        num_rows: usize,
+    ) -> usize {
+        let headroom = if self.spill_context.is_some() {
+            self.hash_table
+                .max_new_groups(num_rows)
+                .saturating_mul(size_of::<u32>())
+        } else {
+            0
+        };
+        self.hash_table
+            .max_evaluated_growth(evaluated)
+            .saturating_add(headroom)
+    }
+
     fn reservation_size(&self) -> usize {
         let table_size = self.hash_table.memory_size();
         if self.spill_context.is_some() {
@@ -325,6 +346,32 @@ impl Aggregating {
             .is_some_and(|limit| limit <= self.hash_table.building_group_count())
     }
 
+    /// Moves all current states into one sorted spill run and shrinks the
+    /// reservation to the emptied table.
+    ///
+    /// `oom` is the error that the failed reservation returned. It is returned
+    /// with context when spilling is disabled.
+    fn spill(
+        &mut self,
+        reservation: &MemoryReservation,
+        oom: DataFusionError,
+    ) -> Result<()> {
+        let Some(spill_context) = self.spill_context.as_mut() else {
+            return Err(oom.context(
+                "Single hash aggregate cannot spill because temporary files are not enabled in the DiskManager",
+            ));
+        };
+        assert_ne_or_internal_err!(
+            self.hash_table.building_group_count(),
+            0,
+            "Single hash aggregate ran out of memory with no aggregated groups"
+        );
+        spill_context.sort_and_spill(self.hash_table.take_state_batch()?)?;
+        reservation
+            .try_resize(self.hash_table.memory_size())
+            .map_err(|e| e.context("Decreasing allocation after spilling should succeed"))
+    }
+
     /// Aggregates raw input batches until the input is exhausted or the soft
     /// group limit is reached, then moves to output or spill replay.
     async fn handle_stage(
@@ -337,30 +384,34 @@ impl Aggregating {
 
         while let Some(batch) = self.input.next().await.transpose()? {
             let _timer = elapsed_compute.timer();
+
+            // Reserve the peak of the batch before the group values grow.
             let evaluated = self.hash_table.evaluate_batch(&batch)?;
+            let peak_size = self
+                .reservation_size()
+                .saturating_add(self.max_batch_growth(&evaluated, batch.num_rows()));
+            match reservation.try_resize(peak_size) {
+                Ok(()) => {}
+                Err(oom @ DataFusionError::ResourcesExhausted(_))
+                    if self.hash_table.building_group_count() > 0
+                        && self.spill_context.is_some() =>
+                {
+                    self.spill(reservation, oom)?;
+                }
+                // Without groups or without spilling there is nothing to
+                // release first. The check after the batch decides whether
+                // its actual size fits.
+                Err(DataFusionError::ResourcesExhausted(_)) => {}
+                Err(e) => return Err(e),
+            }
+
             self.hash_table.aggregate_evaluated(&evaluated)?;
+            drop(evaluated);
 
             match reservation.try_resize(self.reservation_size()) {
                 Ok(()) => {}
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
-                    let Some(spill_context) = self.spill_context.as_mut() else {
-                        return Err(oom.context(
-                            "Single hash aggregate cannot spill because temporary files are not enabled in the DiskManager",
-                        ));
-                    };
-                    assert_ne_or_internal_err!(
-                        self.hash_table.building_group_count(),
-                        0,
-                        "Single hash aggregate ran out of memory with no aggregated groups"
-                    );
-                    spill_context.sort_and_spill(self.hash_table.take_state_batch()?)?;
-                    reservation
-                        .try_resize(self.hash_table.memory_size())
-                        .map_err(|e| {
-                            e.context(
-                                "Decreasing allocation after spilling should succeed",
-                            )
-                        })?;
+                    self.spill(reservation, oom)?;
                     continue;
                 }
                 Err(e) => return Err(e),

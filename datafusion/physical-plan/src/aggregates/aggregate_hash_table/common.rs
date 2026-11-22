@@ -24,7 +24,7 @@ use crate::PhysicalExpr;
 use crate::aggregates::aggregate_argument::{AggregateArgument, AggregateFilter};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
-    GroupByMetrics, GroupValues, new_group_values,
+    GroupByMetrics, GroupValues, new_group_values, vec_growth,
 };
 use crate::aggregates::order::GroupClustering;
 use crate::aggregates::{
@@ -348,6 +348,48 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             }
             AggregateHashTableState::Done => 0,
         }
+    }
+
+    /// Returns an upper bound on the bytes, above [`Self::memory_size`], that
+    /// aggregating `evaluated` may hold at its peak.
+    ///
+    /// The bound counts only the group keys that the table does not store
+    /// yet. So a batch of existing keys reserves no table growth. It does not
+    /// cover accumulator state, because [`GroupsAccumulator`] does not report
+    /// its capacity.
+    pub(in crate::aggregates) fn max_evaluated_growth(
+        &self,
+        evaluated_batch: &EvaluatedAggregateBatch,
+    ) -> usize {
+        let AggregateHashTableState::Building(state) = &self.state else {
+            return 0;
+        };
+        let num_rows = evaluated_batch
+            .grouping_set_args
+            .first()
+            .and_then(|cols| cols.first())
+            .map_or(0, |c| c.len());
+        // Grouping sets intern one after another, so a key that one set adds
+        // is not visible when the next set is probed. The sum stays an upper
+        // bound.
+        evaluated_batch
+            .grouping_set_args
+            .iter()
+            .map(|cols| state.group_values.max_intern_growth_for(cols))
+            .sum::<usize>()
+            + vec_growth(
+                &state.batch_group_indices,
+                num_rows.saturating_sub(state.batch_group_indices.len()),
+            )
+    }
+
+    /// Returns the most groups that aggregating a batch of `num_rows` rows
+    /// can add. Each grouping set interns every row.
+    pub(in crate::aggregates) fn max_new_groups(&self, num_rows: usize) -> usize {
+        let AggregateHashTableState::Building(state) = &self.state else {
+            return 0;
+        };
+        num_rows.saturating_mul(state.group_by.groups().len().max(1))
     }
 
     /// Returns the number of distinct groups accumulated so far.
