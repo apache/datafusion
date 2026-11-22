@@ -247,6 +247,69 @@ fn reorders_a_late_reducer() -> Result<()> {
     Ok(())
 }
 
+/// A Q5-shaped snowflake: only one of five regions survives a filter. Its
+/// restriction reaches orders through nation and customer.
+#[test]
+fn applies_a_selective_dimension_chain_before_the_fact_join() -> Result<()> {
+    let orders = scan(
+        1_500_000,
+        &[("o_order", 1_500_000), ("o_customer", 150_000)],
+    );
+    let items = scan(6_000_000, &[("l_order", 1_500_000)]);
+    let customers = scan(150_000, &[("c_customer", 150_000), ("c_nation", 25)]);
+    let nations = scan(25, &[("n_nation", 25), ("n_region", 5)]);
+    let regions = scan(1, &[("r_region", 1)]);
+
+    let plan = join(orders, items, &[("o_order", "l_order")])?;
+    let plan = join(plan, customers, &[("o_customer", "c_customer")])?;
+    let plan = join(plan, nations, &[("c_nation", "n_nation")])?;
+    let plan = join(plan, regions, &[("n_region", "r_region")])?;
+    let optimized = optimize(plan, &ConfigOptions::new())?;
+
+    // Locate the join that first brings orders and lineitem together. Allow
+    // either build orientation and any equivalent ordering of the dimensions.
+    let mut fact_join = &optimized;
+    while let Some(child) = fact_join.children().into_iter().find(|child| {
+        let schema = child.schema();
+        schema.index_of("o_order").is_ok() && schema.index_of("l_order").is_ok()
+    }) {
+        fact_join = child;
+    }
+    assert!(
+        fact_join.schema().index_of("r_region").is_ok(),
+        "{}",
+        formatted(&optimized)
+    );
+    Ok(())
+}
+
+#[test]
+fn joins_through_an_implied_key_before_reading_the_bridge() -> Result<()> {
+    let large = scan(1_000_000, &[("b_key", 1_000)]);
+    let small = scan(10_000, &[("a_key", 1_000)]);
+    let filtered = scan(1, &[("c_key", 1)]);
+    let plan = join(large, small, &[("b_key", "a_key")])?;
+    let plan = join(plan, filtered, &[("b_key", "c_key")])?;
+    let optimized = optimize(plan, &ConfigOptions::new())?;
+    // Only B = A and B = C were supplied. A child of the final join should
+    // already have matched A to C without reading B.
+    let mut root = &optimized;
+    while root.children().len() == 1 {
+        root = root.children()[0];
+    }
+    assert!(
+        root.children().into_iter().any(|child| {
+            let schema = child.schema();
+            schema.index_of("a_key").is_ok()
+                && schema.index_of("c_key").is_ok()
+                && schema.index_of("b_key").is_err()
+        }),
+        "{}",
+        formatted(&optimized)
+    );
+    Ok(())
+}
+
 #[test]
 fn respects_the_config_flag() -> Result<()> {
     let mut config = ConfigOptions::new();
@@ -424,9 +487,11 @@ fn star_schema_context(
 /// A plain join tree, `EXISTS`, `NOT EXISTS`, a non-equi predicate, a left outer join
 /// whose right side matches only a few of the rows it extends, and an `EXISTS` inside a
 /// disjunction, which the planner decorrelates into a mark join.
-const STAR_QUERIES: [&str; 6] = [
+const STAR_QUERIES: [&str; 7] = [
     "select f_id, f_type, f_region from fact, ids, types, regions \
      where f_id = o_id and f_type = t_type and f_region = r_region order by f_id",
+    "select f_id, f_type, o_id, t_type from fact, ids, types \
+     where f_type = o_id and o_id = t_type order by f_id",
     "select f_id, f_type from fact where exists \
      (select 1 from types where t_type = f_type) \
      and f_id in (select o_id from ids) order by f_id",

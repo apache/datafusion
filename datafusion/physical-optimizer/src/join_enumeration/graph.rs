@@ -21,6 +21,7 @@
 //! [`JoinCostModel`](super::JoinCostModel) estimates over and what the rebuilt tree is
 //! assembled from.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use datafusion_common::error::Result;
@@ -66,7 +67,7 @@ pub fn covers(mask: RelSet, required: RelSet) -> bool {
 
 /// One column of one relation, tracked instead of a plain index because reordering
 /// moves columns to other positions.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct ColRef {
     /// Index into [`JoinGraph::relations`].
     pub rel: usize,
@@ -207,6 +208,9 @@ pub struct Edge {
     pub left: Key,
     /// The key it is compared against.
     pub right: Key,
+    /// For an implied equality, the relation supplying the shared key.
+    /// Once present, the original predicates already enforce this equality.
+    pub via: Option<usize>,
 }
 
 /// A non-equi join predicate, moved along with its column references rewritten.
@@ -287,6 +291,50 @@ pub struct JoinGraph {
 }
 
 impl JoinGraph {
+    /// Expose A = C as a possible join when A = B and B = C. This lets a
+    /// filtered dimension reduce another input before either joins B.
+    fn add_implied_edges(&mut self) {
+        if self.applied != 0 || self.null_equality() != NullEquality::NullEqualsNothing {
+            return;
+        }
+
+        let mut neighbors: BTreeMap<ColRef, Vec<ColRef>> = BTreeMap::new();
+        for edge in &self.edges {
+            if edge.left.wrapper.is_none() && edge.right.wrapper.is_none() {
+                let (a, b) = (edge.left.column, edge.right.column);
+                neighbors.entry(a).or_default().push(b);
+                neighbors.entry(b).or_default().push(a);
+            }
+        }
+        // Add at most one edge per shared key. Closing large equality classes
+        // into cliques would increase the number of connected subsets to search.
+        for (middle, ends) in neighbors {
+            let [a, c] = ends.as_slice() else { continue };
+            if a.rel == c.rel
+                || self.edges.iter().any(|edge| {
+                    let pair = (edge.left.column.rel, edge.right.column.rel);
+                    pair == (a.rel, c.rel) || pair == (c.rel, a.rel)
+                })
+            {
+                continue;
+            }
+            let a_schema = self.relations[a.rel].plan.schema();
+            let b_schema = self.relations[middle.rel].plan.schema();
+            let c_schema = self.relations[c.rel].plan.schema();
+            let key_type = b_schema.field(middle.col).data_type();
+            if a_schema.field(a.col).data_type() != key_type
+                || c_schema.field(c.col).data_type() != key_type
+            {
+                continue;
+            }
+            self.edges.push(Edge {
+                left: Key::bare(*a),
+                right: Key::bare(*c),
+                via: Some(middle.rel),
+            });
+        }
+    }
+
     /// Distinct values estimated for one column.
     pub fn ndv(&self, col: ColRef) -> f64 {
         self.relations[col.rel].ndv[col.col]
@@ -585,6 +633,7 @@ impl<'a, 's> Extractor<'a, 's> {
         if reordering_would_move_a_predicate {
             return Ok(None);
         }
+        graph.add_implied_edges();
         Ok(Some(graph))
     }
 
@@ -665,7 +714,11 @@ impl<'a, 's> Extractor<'a, 's> {
             else {
                 return Ok(None);
             };
-            let edge = Edge { left, right };
+            let edge = Edge {
+                left,
+                right,
+                via: None,
+            };
             // Duplicates would be double counted by the cost model.
             if !self.graph.edges.iter().any(|other| {
                 (other.left.column, other.right.column)

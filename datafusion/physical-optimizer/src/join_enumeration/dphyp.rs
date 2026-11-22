@@ -276,6 +276,7 @@ mod tests {
             }
             let parent = connected[rng.below(connected.len())];
             graph.edges.push(Edge {
+                via: None,
                 left: key(parent, rng.below(COLUMNS)),
                 right: key(rel, rng.below(COLUMNS)),
             });
@@ -285,6 +286,7 @@ mod tests {
             let (left, right) = (rng.below(relations), rng.below(relations));
             if left != right {
                 graph.edges.push(Edge {
+                    via: None,
                     left: key(left, rng.below(COLUMNS)),
                     right: key(right, rng.below(COLUMNS)),
                 });

@@ -610,7 +610,10 @@ impl DefaultJoinCostModel<'_> {
             .map(|relations| (relations & mask).count_ones().saturating_sub(1))
             .collect();
         for denominator in &self.denominators {
-            if covers(mask, denominator.pair) && budget[denominator.equality] > 0 {
+            if covers(mask, denominator.pair)
+                && denominator.bridge & mask == 0
+                && budget[denominator.equality] > 0
+            {
                 budget[denominator.equality] -= 1;
                 rows /= denominator.denominator;
             }
@@ -626,6 +629,8 @@ impl DefaultJoinCostModel<'_> {
 
 /// What one joined relation pair divides the row count by.
 struct Denominator {
+    /// An implied equality no longer reduces rows once its bridge is present.
+    bridge: RelSet,
     /// The two relations, as a mask.
     pair: RelSet,
     /// Their most selective key's distinct count.
@@ -643,7 +648,7 @@ fn denominators(graph: &JoinGraph) -> (Vec<Denominator>, Vec<RelSet>) {
     let mut equalities = vec![0; classes.iter().max().map_or(0, |last| last + 1)];
     // Denominate each pair by its most selective key, as `estimate_inner_join_cardinality`
     // does, so the two models agree on a pair.
-    let mut pairs: HashMap<RelSet, (f64, usize)> = HashMap::new();
+    let mut pairs: HashMap<RelSet, Denominator> = HashMap::new();
     for (edge, class) in graph.edges.iter().zip(&classes) {
         let (a, b) = (edge.left.column.rel, edge.right.column.rel);
         equalities[*class] |= bit(a) | bit(b);
@@ -651,24 +656,20 @@ fn denominators(graph: &JoinGraph) -> (Vec<Denominator>, Vec<RelSet>) {
             .ndv(edge.left.column)
             .max(graph.ndv(edge.right.column))
             .max(1.0);
-        pairs
-            .entry(bit(a) | bit(b))
-            .and_modify(|current| {
-                if ndv > current.0 {
-                    *current = (ndv, *class);
-                }
-            })
-            .or_insert((ndv, *class));
+        let pair = bit(a) | bit(b);
+        let current = pairs.entry(pair).or_insert(Denominator {
+            pair,
+            denominator: ndv,
+            equality: *class,
+            bridge: edge.via.map_or(0, bit),
+        });
+        if ndv > current.denominator {
+            current.denominator = ndv;
+            current.equality = *class;
+        }
     }
 
-    let mut denominators: Vec<Denominator> = pairs
-        .into_iter()
-        .map(|(pair, (denominator, equality))| Denominator {
-            pair,
-            denominator,
-            equality,
-        })
-        .collect();
+    let mut denominators: Vec<_> = pairs.into_values().collect();
     // `HashMap` iteration order is not deterministic, but plans must be.
     denominators.sort_unstable_by(|a, b| {
         b.denominator
@@ -1047,6 +1048,12 @@ impl Rebuilder<'_> {
         // Each edge crosses exactly one cut, at the lowest node holding both endpoints.
         let mut keys: Vec<(&Key, &Key)> = vec![];
         for edge in &self.graph.edges {
+            if edge
+                .via
+                .is_some_and(|via| bit(via) & (left_mask | right_mask) != 0)
+            {
+                continue;
+            }
             let (left, right) = (&edge.left, &edge.right);
             if left_mask & bit(left.column.rel) != 0
                 && right_mask & bit(right.column.rel) != 0
