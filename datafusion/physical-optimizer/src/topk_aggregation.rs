@@ -142,8 +142,8 @@ impl TopKAggregation {
                     .get(sort_col.index())
                     .and_then(|e| e.expr.downcast_ref::<Column>())
                 else {
-                    // A computed expression can produce values that aggregation did not see.
-                    // We cannot apply the topk optimization then
+                    // The sort orders by the computed value, whose order can differ
+                    // from the aggregate's (e.g. `-min(x)` reverses it).
                     cardinality_preserved = false;
                     return Ok(Transformed::no(plan));
                 };

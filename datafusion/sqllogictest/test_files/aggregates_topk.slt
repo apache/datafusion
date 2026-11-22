@@ -921,5 +921,14 @@ physical_plan
 06)----------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[min(topk_computed_alias.x)]
 07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# The same bug for SELECT DISTINCT, where the reused name is a plain column name
+query I
+SELECT -g AS g FROM (SELECT DISTINCT g FROM topk_computed_alias)
+ORDER BY g DESC
+LIMIT 2;
+----
+-1
+-2
+
 statement ok
 DROP TABLE topk_computed_alias;
