@@ -398,3 +398,16 @@ incremental = false
 [profile.ci-bench]
 inherits = "ci"
 opt-level = 1
+
+# Pin Arrow for apache/arrow-rs#12059 benchmark validation.
+[patch.crates-io]
+arrow-array = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "4661ae77c184d470f5c6fe65ecf5a373f73f8c98" }
+arrow-buffer = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "4661ae77c184d470f5c6fe65ecf5a373f73f8c98" }
+arrow-cmp = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "4661ae77c184d470f5c6fe65ecf5a373f73f8c98" }
+arrow-data = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "4661ae77c184d470f5c6fe65ecf5a373f73f8c98" }
+arrow-ipc = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "4661ae77c184d470f5c6fe65ecf5a373f73f8c98" }
+arrow-ord = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "4661ae77c184d470f5c6fe65ecf5a373f73f8c98" }
+arrow-schema = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "4661ae77c184d470f5c6fe65ecf5a373f73f8c98" }
+arrow-select = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "4661ae77c184d470f5c6fe65ecf5a373f73f8c98" }
+arrow-string = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "4661ae77c184d470f5c6fe65ecf5a373f73f8c98" }
+parquet = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "4661ae77c184d470f5c6fe65ecf5a373f73f8c98" }
