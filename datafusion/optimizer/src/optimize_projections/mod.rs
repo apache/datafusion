@@ -138,6 +138,7 @@ fn optimize_projections(
                 .transform_data(|plan| optimize_subqueries(plan, config));
         }
         LogicalPlan::Aggregate(aggregate) => {
+            let group_count = aggregate.group_expr.len();
             // Split parent requirements to GROUP BY and aggregate sections:
             let n_group_exprs = aggregate.group_expr_len()?;
             // Offset aggregate indices so that they point to valid indices at
@@ -195,6 +196,9 @@ fn optimize_projections(
                 )));
             }
 
+            let keep_exprs = group_count == new_group_bys.len()
+                && aggregate.aggr_expr.len() == new_aggr_expr.len();
+            let input_schema = Arc::clone(aggregate.input.schema());
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
             let schema = aggregate.input.schema();
             let necessary_indices =
@@ -214,6 +218,17 @@ fn optimize_projections(
                 add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)
             })?
             .map_data(|aggregate_input| {
+                // Both expression lists are ordered subsets. If neither was pruned
+                // and the input schema is unchanged, the existing schema is valid.
+                if keep_exprs && Arc::ptr_eq(&input_schema, aggregate_input.schema()) {
+                    return Aggregate::try_new_with_schema(
+                        Arc::new(aggregate_input),
+                        new_group_bys,
+                        new_aggr_expr,
+                        aggregate.schema,
+                    )
+                    .map(LogicalPlan::Aggregate);
+                }
                 // Create a new aggregate plan with the updated input and only the
                 // absolutely necessary fields:
                 Aggregate::try_new(
@@ -259,6 +274,15 @@ fn optimize_projections(
                     let window_child =
                         add_projection_on_top_if_helpful(window_child, required_exprs)?
                             .data;
+                    if new_window_expr.len() == window.window_expr.len()
+                        && Arc::ptr_eq(&input_schema, window_child.schema())
+                    {
+                        return Ok(Transformed::yes(LogicalPlan::Window(Window {
+                            input: Arc::new(window_child),
+                            window_expr: window.window_expr,
+                            schema: window.schema,
+                        })));
+                    }
                     Window::try_new(new_window_expr, Arc::new(window_child))
                         .map(LogicalPlan::Window)
                         .map(Transformed::yes)
@@ -273,6 +297,9 @@ fn optimize_projections(
                 Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
                 None => indices.into_inner(),
             };
+            if table_scan.projection.as_ref() == Some(&projection) {
+                return optimize_subqueries(LogicalPlan::TableScan(table_scan), config);
+            }
             let new_scan = TableScanBuilder::from(table_scan)
                 .with_projection(Some(projection))
                 .build()?;
@@ -1152,6 +1179,18 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::{count, max, min};
     use datafusion_functions_aggregate::min_max::max_udaf;
+
+    #[test]
+    fn reuse_unchanged_projected_scan() -> Result<()> {
+        let rule = OptimizeProjections::new();
+        let config = OptimizerContext::new();
+        let first = rule.rewrite(test_table_scan()?, &config)?.data;
+        let schema = Arc::clone(first.schema());
+        let second = rule.rewrite(first, &config)?;
+        assert!(!second.transformed);
+        assert!(Arc::ptr_eq(&schema, second.data.schema()));
+        Ok(())
+    }
 
     macro_rules! assert_optimized_plan_equal {
         (
