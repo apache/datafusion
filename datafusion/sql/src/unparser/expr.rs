@@ -3296,6 +3296,26 @@ mod tests {
     }
 
     #[test]
+    fn postgres_integer_casts() -> Result<()> {
+        let unparser = Unparser::new(&PostgreSqlDialect {});
+        for (data_type, expected) in [
+            (Int8, "CAST(\"a\" AS SMALLINT)"),
+            (DataType::Int16, "CAST(\"a\" AS SMALLINT)"),
+            (DataType::Int32, "CAST(\"a\" AS INTEGER)"),
+            (DataType::Int64, "CAST(\"a\" AS BIGINT)"),
+            (DataType::UInt8, "CAST(\"a\" AS SMALLINT)"),
+            (DataType::UInt16, "CAST(\"a\" AS INTEGER)"),
+            (DataType::UInt32, "CAST(\"a\" AS BIGINT)"),
+            (DataType::UInt64, "CAST(\"a\" AS BIGINT)"),
+        ] {
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), data_type));
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(format!("{ast}"), expected);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn default_and_custom_dialect_integer_casts() -> Result<()> {
         let custom_dialect = CustomDialectBuilder::new()
             .with_int8_cast_dtype(ast::DataType::SmallInt(None))
