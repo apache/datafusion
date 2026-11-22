@@ -2020,9 +2020,19 @@ impl<S: StoreSlots> PartitionedTopKCore<S> {
         // every row a new best that displaces one. Back to front, the first K
         // per partition fill the state and the boundary check drops the rest,
         // which only saves work when partitions get more than K rows each.
+        // Only rows of one partition compete, so the last row is compared with
+        // the nearest earlier row of its own partition: in input sorted by the
+        // partition key, the batch's first row belongs to another partition.
+        let last = num_rows - 1;
+        let last_pk = self.partition_scratch_rows.row(last);
         let backwards = S::ORDER_FREE
             && num_rows > self.k.saturating_mul(self.partitions.len())
-            && self.scratch_rows.row(num_rows - 1) < self.scratch_rows.row(0);
+            && (0..last)
+                .rev()
+                .find(|&row| self.partition_scratch_rows.row(row) == last_pk)
+                .is_some_and(|prev| {
+                    self.scratch_rows.row(last) < self.scratch_rows.row(prev)
+                });
         for i in 0..num_rows {
             let row = if backwards { num_rows - 1 - i } else { i };
             let pk = self.partition_scratch_rows.row(row);
@@ -8084,6 +8094,43 @@ mod tests {
 
         let rows = pk_val_rows(state.emit()?).await?;
         assert_eq!(rows, vec![(1, 1), (2, 100), (3, 100), (4, 100)]);
+        Ok(())
+    }
+
+    /// A batch sorted by partition key, each partition's best row first, is
+    /// walked front to back even though its last row ranks above its first:
+    /// those rows belong to different partitions.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_rising_runs_across_partitions() -> Result<()>
+    {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(1)?;
+
+        let pks: Vec<i32> = [1; 500].into_iter().chain([2; 500]).collect();
+        let vals: Vec<i32> = (1000..1500).chain(0..500).collect();
+        state.insert_batch(&pk_val_batch(&schema, pks, vals)?)?;
+        assert_eq!(state.core.metrics.row_replacements.value(), 0);
+
+        let rows = pk_val_rows(state.emit()?).await?;
+        assert_eq!(rows, vec![(1, 1000), (2, 0)]);
+        Ok(())
+    }
+
+    /// Interleaved partitions whose values fall at different levels are
+    /// walked back to front, although the last row ranks below the first.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_falling_partitions_at_different_levels()
+    -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(1)?;
+
+        let pks: Vec<i32> = (0..1000).map(|i| 1 + i % 2).collect();
+        let vals: Vec<i32> = (0..1000)
+            .map(|i| if i % 2 == 0 { 1000 - i } else { 5000 - i })
+            .collect();
+        state.insert_batch(&pk_val_batch(&schema, pks, vals)?)?;
+        assert_eq!(state.core.metrics.row_replacements.value(), 0);
+
+        let rows = pk_val_rows(state.emit()?).await?;
+        assert_eq!(rows, vec![(1, 2), (2, 4001)]);
         Ok(())
     }
 
