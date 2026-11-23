@@ -20,7 +20,10 @@ use arrow::compute::{SortOptions};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
-use datafusion_common::{create_array, DataFusionError, NullEquality, Result, TableReference};
+use datafusion_common::{
+    Constraint, Constraints, create_array, DataFusionError, NullEquality, Result,
+    TableReference,
+};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr_common::operator::Operator;
@@ -94,6 +97,7 @@ fn csv_exec_sorted(
 pub(crate) struct EnforceSortingTest {
     plan: Arc<dyn ExecutionPlan>,
     repartition_sorts: bool,
+    target_partitions: usize,
 }
 
 impl EnforceSortingTest {
@@ -101,12 +105,19 @@ impl EnforceSortingTest {
         Self {
             plan,
             repartition_sorts: false,
+            target_partitions: 10,
         }
     }
 
     /// Set whether to repartition sorts
     pub(crate) fn with_repartition_sorts(mut self, repartition_sorts: bool) -> Self {
         self.repartition_sorts = repartition_sorts;
+        self
+    }
+
+    /// Set the number of target partitions used by the optimizer.
+    pub(crate) fn with_target_partitions(mut self, target_partitions: usize) -> Self {
+        self.target_partitions = target_partitions;
         self
     }
 
@@ -122,7 +133,7 @@ impl EnforceSortingTest {
         // nodes in the output plan; without pinning, snapshots taken on
         // an N-core machine fail on an M-core machine. 10 matches the
         // existing convention in `enforce_distribution.rs`.
-        config.execution.target_partitions = 10;
+        config.execution.target_partitions = self.target_partitions;
 
         // This file has 4 sub-rules that use tree node; apply them in the same
         // order EnsureRequirements does internally. After these operations the
@@ -2711,6 +2722,91 @@ async fn test_replace_with_partial_sort2() -> Result<()> {
       StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC, c@2 ASC]
     ");
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_remove_sort_when_unbounded_input_satisfies_full_ordering() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let input_ordering = [sort_expr("a", &schema), sort_expr("c", &schema)].into();
+    let unbounded_input = stream_exec_ordered(&schema, input_ordering);
+    let physical_plan = sort_exec_with_fetch(
+        [sort_expr("a", &schema), sort_expr("c", &schema)].into(),
+        Some(1),
+        unbounded_input,
+    );
+
+    let test = EnforceSortingTest::new(physical_plan).with_target_partitions(1);
+    assert_snapshot!(test.run(), @r"
+    Input Plan:
+    SortExec: TopK(fetch=1), expr=[a@0 ASC, c@2 ASC], preserve_partitioning=[false], sort_prefix=[a@0 ASC, c@2 ASC]
+      StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC, c@2 ASC]
+
+    Optimized Plan:
+    GlobalLimitExec: skip=0, fetch=1
+      StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC, c@2 ASC]
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_unique_build_key_satisfies_unbounded_join_ordering() -> Result<()> {
+    let build_schema = Arc::new(Schema::new(vec![
+        Field::new("build_k", DataType::Int32, false),
+        Field::new("build_v", DataType::Int32, true),
+    ]));
+    let probe_schema = Arc::new(Schema::new(vec![Field::new(
+        "probe_k",
+        DataType::Int32,
+        true,
+    )]));
+    let build_config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test:///")?,
+        Arc::new(CsvSource::new(Arc::clone(&build_schema))),
+    )
+    .with_file(PartitionedFile::new("build.csv", 100))
+    .with_constraints(Constraints::new_unverified(vec![Constraint::PrimaryKey(
+        vec![0],
+    )]))
+    .build();
+    let build = DataSourceExec::from_data_source(build_config);
+    let probe_ordering = [sort_expr("probe_k", &probe_schema)].into();
+    let probe = stream_exec_ordered(&probe_schema, probe_ordering);
+    let join = Arc::new(HashJoinExec::try_new(
+        build,
+        probe,
+        vec![(
+            Arc::new(Column::new("build_k", 0)),
+            Arc::new(Column::new("probe_k", 0)),
+        )],
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?);
+    let sort_ordering = [
+        sort_expr("probe_k", &join.schema()),
+        sort_expr("build_v", &join.schema()),
+    ]
+    .into();
+    let physical_plan = sort_exec_with_fetch(sort_ordering, Some(1), join);
+
+    let test = EnforceSortingTest::new(physical_plan).with_target_partitions(1);
+    assert_snapshot!(test.run(), @r#"
+    Input Plan:
+    SortExec: TopK(fetch=1), expr=[probe_k@2 ASC, build_v@1 ASC], preserve_partitioning=[false], sort_prefix=[build_k@0 ASC, build_v@1 ASC]
+      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(build_k@0, probe_k@0)]
+        DataSourceExec: file_groups={1 group: [[build.csv]]}, projection=[build_k, build_v], constraints=[PrimaryKey([0])], file_type=csv, has_header=true
+        StreamingTableExec: partition_sizes=1, projection=[probe_k], infinite_source=true, output_ordering=[probe_k@0 ASC]
+
+    Optimized Plan:
+    GlobalLimitExec: skip=0, fetch=1
+      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(build_k@0, probe_k@0)]
+        DataSourceExec: file_groups={1 group: [[build.csv]]}, projection=[build_k, build_v], constraints=[PrimaryKey([0])], file_type=csv, has_header=true
+        StreamingTableExec: partition_sizes=1, projection=[probe_k], infinite_source=true, output_ordering=[probe_k@0 ASC]
+    "#);
     Ok(())
 }
 
