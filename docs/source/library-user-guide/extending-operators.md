@@ -6,7 +6,7 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 
 # Extending Operators
 
-DataFusion supports extending operators by transforming [`LogicalPlan`] and [`ExecutionPlan`] through customized [optimizer rules](https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html). This section will use the µWheel project to illustrate such capabilities.
+DataFusion supports extending operators with custom [`LogicalPlan`] and [`ExecutionPlan`] nodes and [optimizer rules](https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html). The examples below show two ways to extend query planning.
 
 [`logicalplan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
 [`executionplan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
@@ -47,3 +47,282 @@ fn agg_to_table_scan(result: f64, schema: SchemaRef) -> Result<LogicalPlan> {
 ```
 
 To get a deeper dive into the usage of the µWheel project, visit the [blog post](https://uwheel.rs/post/datafusion_uwheel/) by Max Meldrum.
+
+## A custom TopK operator
+
+The [TopK example] shows how to add a custom operator that finds the rows with
+the highest values. It uses a query like this one to find the three customers
+with the highest revenue:
+
+```sql
+SELECT customer_id, revenue FROM sales ORDER BY revenue DESC LIMIT 3;
+```
+
+DataFusion already has optimized support for TopK queries. This example is for
+learning how to connect a custom operator to DataFusion, not for replacing the
+built-in implementation.
+
+### Describe the operation
+
+The example defines `TopKPlanNode`, a custom logical plan node. A logical plan
+describes the operations in a query. The node implements
+`UserDefinedLogicalNodeCore` so DataFusion can inspect and update it. Its main
+fields are:
+
+```rust
+# use datafusion::logical_expr::{LogicalPlan, SortExpr};
+struct TopKPlanNode {
+    k: usize,
+    input: LogicalPlan,
+    expr: SortExpr,
+}
+```
+
+- `input` describes where the rows come from, such as the `sales` table.
+- `expr` describes how to rank the rows, such as by revenue in descending order.
+- `k` is the number of rows to keep. In this query, `k` is 3.
+
+### Add the node to the plan
+
+`TopKOptimizerRule` looks for a sort that has a row limit. The limit can be
+part of the sort, or it can be a separate limit directly above the sort. The
+sort must have exactly one sort expression. The rule replaces that part of the
+plan with a `TopKPlanNode`:
+
+```rust
+# use std::fmt;
+# use std::sync::Arc;
+# use datafusion::common::DFSchemaRef;
+# use datafusion::error::Result;
+# use datafusion::logical_expr::{
+#     Expr, Extension, LogicalPlan, SortExpr, UserDefinedLogicalNodeCore,
+# };
+# #[derive(Debug, PartialEq, Eq, PartialOrd, Hash)]
+# struct TopKPlanNode {
+#     k: usize,
+#     input: LogicalPlan,
+#     expr: SortExpr,
+# }
+# impl UserDefinedLogicalNodeCore for TopKPlanNode {
+#     fn name(&self) -> &str {
+#         "TopK"
+#     }
+#     fn inputs(&self) -> Vec<&LogicalPlan> {
+#         vec![&self.input]
+#     }
+#     fn schema(&self) -> &DFSchemaRef {
+#         self.input.schema()
+#     }
+#     fn expressions(&self) -> Vec<Expr> {
+#         vec![self.expr.expr.clone()]
+#     }
+#     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+#         write!(f, "TopK: k={}", self.k)
+#     }
+#     fn with_exprs_and_inputs(
+#         &self,
+#         mut exprs: Vec<Expr>,
+#         mut inputs: Vec<LogicalPlan>,
+#     ) -> Result<Self> {
+#         Ok(Self {
+#             k: self.k,
+#             input: inputs.swap_remove(0),
+#             expr: self.expr.with_expr(exprs.swap_remove(0)),
+#         })
+#     }
+# }
+# fn make_topk(fetch: &usize, input: &Arc<LogicalPlan>, expr: &[SortExpr]) -> LogicalPlan {
+LogicalPlan::Extension(Extension {
+    node: Arc::new(TopKPlanNode {
+        k: *fetch,
+        input: input.as_ref().clone(),
+        expr: expr[0].clone(),
+    }),
+})
+# }
+```
+
+The rule takes `k` from the row limit. It copies the input and the sort
+expression from the sort. `LogicalPlan::Extension` wraps the custom node so
+that it can be part of a logical plan.
+
+For the query above, the new plan includes:
+
+```text
+TopK: k=3
+  TableScan: sales
+```
+
+### Register the rule and the planner
+
+Add the rule and a query planner when you build the session state:
+
+```rust
+# use std::sync::Arc;
+# use async_trait::async_trait;
+# use datafusion::catalog::Session;
+# use datafusion::common::tree_node::Transformed;
+# use datafusion::error::Result;
+# use datafusion::execution::context::QueryPlanner;
+# use datafusion::execution::SessionStateBuilder;
+# use datafusion::logical_expr::LogicalPlan;
+# use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
+# use datafusion::physical_plan::ExecutionPlan;
+# use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
+# use datafusion::prelude::SessionContext;
+# #[derive(Debug)]
+# struct TopKQueryPlanner {}
+# #[async_trait]
+# impl QueryPlanner for TopKQueryPlanner {
+#     async fn create_physical_plan(
+#         &self,
+#         logical_plan: &LogicalPlan,
+#         session_state: &dyn Session,
+#     ) -> Result<Arc<dyn ExecutionPlan>> {
+#         DefaultPhysicalPlanner::default()
+#             .create_physical_plan(logical_plan, session_state)
+#             .await
+#     }
+# }
+# #[derive(Debug, Default)]
+# struct TopKOptimizerRule {}
+# impl OptimizerRule for TopKOptimizerRule {
+#     fn name(&self) -> &str {
+#         "topk"
+#     }
+#     fn rewrite(
+#         &self,
+#         plan: LogicalPlan,
+#         _config: &dyn OptimizerConfig,
+#     ) -> Result<Transformed<LogicalPlan>> {
+#         Ok(Transformed::no(plan))
+#     }
+# }
+let state = SessionStateBuilder::new()
+    .with_default_features()
+    .with_query_planner(Arc::new(TopKQueryPlanner {}))
+    .with_optimizer_rule(Arc::new(TopKOptimizerRule::default()))
+    .build();
+let ctx = SessionContext::new_with_state(state);
+```
+
+`TopKQueryPlanner` uses DataFusion's normal physical planner. It adds
+`TopKPlanner`, which knows how to plan the custom node:
+
+```rust
+# use std::sync::Arc;
+# use async_trait::async_trait;
+# use datafusion::catalog::Session;
+# use datafusion::error::Result;
+# use datafusion::execution::context::QueryPlanner;
+# use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
+# use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
+# use datafusion::physical_plan::ExecutionPlan;
+# use datafusion::physical_planner::{
+#     DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
+# };
+# #[derive(Debug)]
+# struct TopKQueryPlanner {}
+# struct TopKPlanner {}
+# #[async_trait]
+# impl ExtensionPlanner for TopKPlanner {
+#     async fn plan_extension(
+#         &self,
+#         _planner: &dyn PhysicalPlanner,
+#         _node: &dyn UserDefinedLogicalNode,
+#         _logical_inputs: &[&LogicalPlan],
+#         _physical_inputs: &[Arc<dyn ExecutionPlan>],
+#         _session_state: &dyn Session,
+#         _planning_ctx: &PhysicalPlanningContext,
+#     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+#         Ok(None)
+#     }
+# }
+#[async_trait]
+impl QueryPlanner for TopKQueryPlanner {
+    async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        session_state: &dyn Session,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let physical_planner =
+            DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+                TopKPlanner {},
+            )]);
+        physical_planner
+            .create_physical_plan(logical_plan, session_state)
+            .await
+    }
+}
+```
+
+Without `TopKPlanner`, queries that the rule changed fail during physical
+planning.
+
+### Execute the operation
+
+`TopKPlanner` converts the logical `TopKPlanNode` into `TopKExec`, a physical
+operator. It returns `None` for other nodes, so DataFusion can try other
+planners:
+
+```rust
+# use std::sync::Arc;
+# use async_trait::async_trait;
+# use datafusion::catalog::Session;
+# use datafusion::error::Result;
+# use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
+# use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
+# use datafusion::physical_plan::ExecutionPlan;
+# use datafusion::physical_planner::{
+#     ExtensionPlanner, PhysicalPlanner,
+# };
+# use datafusion::physical_plan::limit::GlobalLimitExec;
+# struct TopKPlanNode {
+#     k: usize,
+# }
+# struct TopKExec;
+# impl TopKExec {
+#     fn new(input: Arc<dyn ExecutionPlan>, k: usize) -> GlobalLimitExec {
+#         GlobalLimitExec::new(input, 0, Some(k))
+#     }
+# }
+# struct TopKPlanner {}
+#[async_trait]
+impl ExtensionPlanner for TopKPlanner {
+    async fn plan_extension(
+        &self,
+        _planner: &dyn PhysicalPlanner,
+        node: &dyn UserDefinedLogicalNode,
+        _logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        _session_state: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(
+            if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
+                Some(Arc::new(TopKExec::new(
+                    physical_inputs[0].clone(),
+                    topk_node.k,
+                )))
+            } else {
+                None
+            },
+        )
+    }
+}
+```
+
+`TopKExec` reads its input and uses `TopKReader` to keep the highest values.
+Once it has read the input, the reader returns the retained rows.
+
+`TopKPlanner` does not pass the sort expression (`expr`) to `TopKExec`. So
+`TopKReader` does not know the sort order. It always keeps the highest values
+from input column 1. This means a query with `ORDER BY revenue ASC` gives wrong
+results. It returns the highest values, not the lowest.
+
+The example is specialized for its test data. It expects particular columns
+and types, and its map stores only one customer per revenue value. It does not
+handle all sort options or other edge cases, so it should not be used as a
+general-purpose TopK operator.
+
+[topk example]: https://github.com/apache/datafusion/blob/main/datafusion/core/tests/user_defined/user_defined_plan.rs

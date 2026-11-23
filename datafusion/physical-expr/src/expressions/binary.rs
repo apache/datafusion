@@ -36,7 +36,6 @@ use datafusion_expr::statistics::{
 };
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp};
-
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -52,9 +51,9 @@ pub struct BinaryExpr {
     right: Arc<dyn PhysicalExpr>,
     /// Specifies whether an error is returned on overflow or not
     fail_on_overflow: bool,
-    /// Computed once in [`BinaryExpr::new`] for `AND` / `OR` (the operators
-    /// that short-circuit), so the children are not walked for every batch.
-    /// `None` for other operators. Children never change after construction.
+    /// Whether each child is volatile, computed once in [`BinaryExpr::new`]
+    /// for `AND` / `OR` so it is not walked for every batch. `None` for other
+    /// operators.
     children_volatility: Option<ChildrenVolatility>,
 }
 
@@ -622,12 +621,17 @@ impl PhysicalExpr for BinaryExpr {
             Ok(rhs) => rhs,
             // A deterministic RHS may fail on rows the LHS already decided
             // (e.g. `x = 0 OR 1 / x > 1`), so retry on the undecided rows only.
-            Err(e) => match or_rows_to_retry(&lhs, &self.op) {
-                Some(mask) => {
-                    return self.evaluate_pre_selection(batch, lhs, &mask, true);
-                }
-                None => return Err(e),
-            },
+            Err(e) if self.op == Operator::Or => {
+                // Treating the RHS as volatile gives `PreSelection` exactly
+                // when some rows are decided and some are not.
+                return match check_short_circuit_for_or(&lhs, true) {
+                    ShortCircuitStrategy::PreSelection { mask, fill_value } => {
+                        self.evaluate_pre_selection(batch, lhs, &mask, fill_value)
+                    }
+                    _ => Err(e),
+                };
+            }
+            Err(e) => return Err(e),
         };
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
@@ -980,6 +984,10 @@ impl PhysicalExpr for BinaryExpr {
         write_child(f, self.right.as_ref(), precedence)
     }
 
+    fn short_circuits(&self) -> bool {
+        matches!(self.op, Operator::And | Operator::Or)
+    }
+
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
@@ -992,7 +1000,7 @@ impl PhysicalExpr for BinaryExpr {
             op,
             right,
             fail_on_overflow,
-            // Derived from the children, not serialized
+            // Derived from right, not serialized
             children_volatility: _,
         } = self;
 
@@ -1244,8 +1252,7 @@ impl BinaryExpr {
                     pre_selection_scatter(mask, Some(boolean_array), fill_value)?;
                 // Selected rows may have a NULL LHS (`NULL OR x`), so combine
                 // with the LHS; unselected rows are `fill_value` on both sides.
-                if lhs.data_type() == DataType::Boolean
-                    && let ColumnarValue::Array(lhs) = &lhs
+                if let ColumnarValue::Array(lhs) = &lhs
                     && lhs.null_count() > 0
                 {
                     let scattered = scattered.into_array(batch.num_rows())?;
@@ -1329,7 +1336,7 @@ enum ShortCircuitStrategy {
     None,
     ReturnLeft,
     ReturnRight,
-    /// Evaluate the RHS where the LHS is `false`; fill other rows with `true`.
+    /// Evaluate the RHS where the LHS is not `true`; fill other rows with `true`.
     PreSelection {
         mask: BooleanArray,
         fill_value: bool,
@@ -1434,31 +1441,6 @@ fn check_short_circuit_for_or(
 
     // Evaluate both sides normally.
     ShortCircuitStrategy::None
-}
-
-/// The rows to retry the RHS of `OR` on after it failed on the whole batch:
-/// the rows the LHS did not decide, if it decided any.
-fn or_rows_to_retry(lhs: &ColumnarValue, op: &Operator) -> Option<BooleanArray> {
-    if *op != Operator::Or || lhs.data_type() != DataType::Boolean {
-        return None;
-    }
-    match lhs {
-        ColumnarValue::Array(array) => {
-            let mask = not_true(array.as_boolean());
-            let undecided = mask.true_count();
-            (undecided > 0 && undecided < array.len()).then_some(mask)
-        }
-        ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {
-            unreachable!("should not evaluate rhs on scalar true lhs")
-        }
-        ColumnarValue::Scalar(ScalarValue::Boolean(_)) => {
-            // Nothing should be retried since rhs should be evaluated on all rows
-            None
-        }
-        ColumnarValue::Scalar(_) => {
-            unreachable!("verified above that the data type is boolean")
-        }
-    }
 }
 
 /// Avoids scattering when the selected RHS rows are uniform.
@@ -1711,7 +1693,7 @@ fn not_false(array: &BooleanArray) -> BooleanArray {
 /// A null-free mask of the rows of `array` that are `false` or `NULL`.
 fn not_true(array: &BooleanArray) -> BooleanArray {
     let values = match array.nulls() {
-        Some(nulls) => &!array.values() | &!nulls.inner(),
+        Some(nulls) => !&(array.values() & nulls.inner()),
         None => !array.values(),
     };
     BooleanArray::new(values, None)
@@ -6648,10 +6630,25 @@ mod tests {
             Field::new("d", DataType::Boolean, true),
         ]));
 
-        // `c` is mostly true (2/10 false => 20% <= threshold) so OR pre-selects.
-        let c = BooleanArray::from(vec![
-            true, true, false, true, true, true, true, false, true, true,
-        ]);
+        // `c` is mostly true (2/10 not true => 20% <= threshold) so OR pre-selects.
+        let c_cases = vec![
+            BooleanArray::from(vec![
+                true, true, false, true, true, true, true, false, true, true,
+            ]),
+            // NULL LHS with a `false` RHS on row 0: `NULL OR false` is NULL.
+            BooleanArray::from(vec![
+                None,
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(true),
+            ]),
+        ];
 
         let d_cases = vec![
             // Mixed RHS with nulls exercises scatter and null copy.
@@ -6673,25 +6670,28 @@ mod tests {
             BooleanArray::from(vec![Some(false); 10]),
         ];
 
-        for d in d_cases {
-            let batch = RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(c.clone()) as ArrayRef,
-                    Arc::new(d.clone()) as ArrayRef,
-                ],
-            )
-            .unwrap();
+        for c in &c_cases {
+            for d in &d_cases {
+                let batch = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(c.clone()) as ArrayRef,
+                        Arc::new(d.clone()) as ArrayRef,
+                    ],
+                )
+                .unwrap();
 
-            let expr = logical2physical(&logical_col("c").or(logical_col("d")), &schema);
-            let result = expr.evaluate(&batch).unwrap().into_array(c.len()).unwrap();
+                let expr =
+                    logical2physical(&logical_col("c").or(logical_col("d")), &schema);
+                let result = expr.evaluate(&batch).unwrap().into_array(c.len()).unwrap();
 
-            let expected = or_kleene(&c, &d).unwrap();
-            assert_eq!(
-                expected,
-                *result.as_boolean(),
-                "OR pre-selection must match Kleene OR for d = {d:?}"
-            );
+                let expected = or_kleene(c, d).unwrap();
+                assert_eq!(
+                    expected,
+                    *result.as_boolean(),
+                    "OR pre-selection must match Kleene OR for c = {c:?}, d = {d:?}"
+                );
+            }
         }
     }
 
@@ -7571,18 +7571,16 @@ mod tests {
         ];
 
         // -------------------------------------------------------------------
-        // 1. stateful RHS: evaluated exactly once on each needed row
+        // 1. volatile RHS: evaluated exactly once on each needed row
         //    (the probe panics if it sees any other row)
         // -------------------------------------------------------------------
 
-        // Stateful/non-deterministic expression must only be evaluated on rows that pass the previues conditions
-        // to make sure the expression return the expected results (for example `rand` with predefined seed, calling on unneeded rows will update the internal state and return different results)
         #[test]
-        fn and_stateful_rhs_only_evaluated_on_needed_rows() {
+        fn and_volatile_rhs_only_evaluated_on_needed_rows() {
             let batch = batch();
             for &s in SELECTIVITIES {
                 // `col_1 < s AND probe`: only rows where col_1 < s need the probe
-                let probe = Probe::new(Mode::Stateful, 0.0..s);
+                let probe = Probe::new(Mode::Volatile, 0.0..s);
                 let expr = and(col_1_lt(s), Arc::clone(&probe) as _);
 
                 let result = evaluate(&expr, &batch).unwrap();
@@ -7590,10 +7588,10 @@ mod tests {
                 let expected: BooleanArray = col_1(&batch)
                     .iter()
                     .map(|v| match v {
-                        // the probe returns NULL for NULL, and NULL AND/OR NULL is NULL
+                        // the probe returns NULL for NULL, and NULL AND NULL is NULL
                         None => None,
-                        Some(v) if v < s => Some(probe_value(v)),
-                        Some(_) => Some(false),
+                        Some(v) if v >= s => Some(false),
+                        Some(v) => probe_value(v),
                     })
                     .collect();
                 assert_eq!(result, expected, "selectivity={s}");
@@ -7606,40 +7604,12 @@ mod tests {
         }
 
         #[test]
-        fn or_stateful_rhs_only_evaluated_on_needed_rows() {
-            let batch = batch();
-            for &s in SELECTIVITIES {
-                // `col_1 >= s OR probe`: only rows where col_1 < s need the probe
-                let probe = Probe::new(Mode::Stateful, 0.0..s);
-                let expr = or(col_1_gt_eq(s), Arc::clone(&probe) as _);
-
-                let result = evaluate(&expr, &batch).unwrap();
-
-                let expected: BooleanArray = col_1(&batch)
-                    .iter()
-                    .map(|v| match v {
-                        // the probe returns NULL for NULL, and NULL AND/OR NULL is NULL
-                        None => None,
-                        Some(v) if v >= s => Some(true),
-                        Some(v) => Some(probe_value(v)),
-                    })
-                    .collect();
-                assert_eq!(result, expected, "selectivity={s}");
-                assert_eq!(
-                    probe.rows.load(Relaxed),
-                    needed_rows(&batch, 0.0..s),
-                    "selectivity={s}"
-                );
-            }
-        }
-
-        #[test]
-        fn nested_and_stateful_rhs_only_evaluated_on_needed_rows() {
+        fn nested_and_volatile_rhs_only_evaluated_on_needed_rows() {
             let batch = batch();
             for &s in SELECTIVITIES {
                 // `col_1 < s AND (col_1 >= s/2 AND probe)`:
                 // only rows where s/2 <= col_1 < s need the probe
-                let probe = Probe::new(Mode::Stateful, s / 2.0..s);
+                let probe = Probe::new(Mode::Volatile, s / 2.0..s);
                 let expr = and(
                     col_1_lt(s),
                     and(col_1_gt_eq(s / 2.0), Arc::clone(&probe) as _),
@@ -7650,10 +7620,10 @@ mod tests {
                 let expected: BooleanArray = col_1(&batch)
                     .iter()
                     .map(|v| match v {
-                        // the probe returns NULL for NULL, and NULL AND/OR NULL is NULL
+                        // the probe returns NULL for NULL, and NULL AND NULL is NULL
                         None => None,
-                        Some(v) if v < s && v >= s / 2.0 => Some(probe_value(v)),
-                        Some(_) => Some(false),
+                        Some(v) if v >= s || v < s / 2.0 => Some(false),
+                        Some(v) => probe_value(v),
                     })
                     .collect();
                 assert_eq!(result, expected, "selectivity={s}");
@@ -7666,12 +7636,114 @@ mod tests {
         }
 
         #[test]
-        fn nested_or_stateful_rhs_only_evaluated_on_needed_rows() {
+        fn and_volatile_rhs_only_evaluated_on_needed_rows_with_null_lhs() {
+            // NULL rows count as needed: a NULL LHS does not decide the row
+            let batch = batch_with_nulls();
+            for &s in SELECTIVITIES {
+                for null_output in [None, Some(false)] {
+                    // `col_1 < s AND probe`: only rows where col_1 < s or col_1 is NULL need the probe
+                    let probe =
+                        Probe::with_null_output(Mode::Volatile, 0.0..s, null_output);
+                    let expr = and(col_1_lt(s), Arc::clone(&probe) as _);
+
+                    let result = evaluate(&expr, &batch).unwrap();
+
+                    let expected: BooleanArray = col_1(&batch)
+                        .iter()
+                        .map(|v| match v {
+                            // NULL AND NULL is NULL, NULL AND false is false
+                            None => null_output,
+                            Some(v) if v >= s => Some(false),
+                            Some(v) => probe_value(v),
+                        })
+                        .collect();
+                    assert_eq!(
+                        result, expected,
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                    assert_eq!(
+                        probe.rows.load(Relaxed),
+                        needed_rows(&batch, 0.0..s),
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn nested_and_volatile_rhs_only_evaluated_on_needed_rows_with_null_lhs() {
+            // NULL rows count as needed: a NULL LHS does not decide the row
+            let batch = batch_with_nulls();
+            for &s in SELECTIVITIES {
+                for null_output in [None, Some(false)] {
+                    // `col_1 < s AND (col_1 >= s/2 AND probe)`:
+                    // only rows where s/2 <= col_1 < s or col_1 is NULL need the probe
+                    let probe =
+                        Probe::with_null_output(Mode::Volatile, s / 2.0..s, null_output);
+                    let expr = and(
+                        col_1_lt(s),
+                        and(col_1_gt_eq(s / 2.0), Arc::clone(&probe) as _),
+                    );
+
+                    let result = evaluate(&expr, &batch).unwrap();
+
+                    let expected: BooleanArray = col_1(&batch)
+                        .iter()
+                        .map(|v| match v {
+                            // NULL AND NULL is NULL, NULL AND false is false
+                            None => null_output,
+                            Some(v) if v >= s || v < s / 2.0 => Some(false),
+                            Some(v) => probe_value(v),
+                        })
+                        .collect();
+                    assert_eq!(
+                        result, expected,
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                    assert_eq!(
+                        probe.rows.load(Relaxed),
+                        needed_rows(&batch, s / 2.0..s),
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn or_volatile_rhs_only_evaluated_on_needed_rows() {
+            let batch = batch();
+            for &s in SELECTIVITIES {
+                // `col_1 >= s OR probe`: only rows where col_1 < s need the probe
+                let probe = Probe::new(Mode::Volatile, 0.0..s);
+                let expr = or(col_1_gt_eq(s), Arc::clone(&probe) as _);
+
+                let result = evaluate(&expr, &batch).unwrap();
+
+                let expected: BooleanArray = col_1(&batch)
+                    .iter()
+                    .map(|v| match v {
+                        // the probe returns NULL for NULL, and NULL OR NULL is NULL
+                        None => None,
+                        Some(v) if v >= s => Some(true),
+                        Some(v) => probe_value(v),
+                    })
+                    .collect();
+                assert_eq!(result, expected, "selectivity={s}");
+                assert_eq!(
+                    probe.rows.load(Relaxed),
+                    needed_rows(&batch, 0.0..s),
+                    "selectivity={s}"
+                );
+            }
+        }
+
+        #[test]
+        fn nested_or_volatile_rhs_only_evaluated_on_needed_rows() {
             let batch = batch();
             for &s in SELECTIVITIES {
                 // `col_1 >= s OR (col_1 < s/2 OR probe)`:
                 // only rows where s/2 <= col_1 < s need the probe
-                let probe = Probe::new(Mode::Stateful, s / 2.0..s);
+                let probe = Probe::new(Mode::Volatile, s / 2.0..s);
                 let expr = or(
                     col_1_gt_eq(s),
                     or(col_1_lt(s / 2.0), Arc::clone(&probe) as _),
@@ -7682,10 +7754,10 @@ mod tests {
                 let expected: BooleanArray = col_1(&batch)
                     .iter()
                     .map(|v| match v {
-                        // the probe returns NULL for NULL, and NULL AND/OR NULL is NULL
+                        // the probe returns NULL for NULL, and NULL OR NULL is NULL
                         None => None,
                         Some(v) if v >= s || v < s / 2.0 => Some(true),
-                        Some(v) => Some(probe_value(v)),
+                        Some(v) => probe_value(v),
                     })
                     .collect();
                 assert_eq!(result, expected, "selectivity={s}");
@@ -7698,69 +7770,84 @@ mod tests {
         }
 
         #[test]
-        fn and_stateful_rhs_only_evaluated_on_needed_rows_with_null_lhs() {
+        fn or_volatile_rhs_only_evaluated_on_needed_rows_with_null_lhs() {
             // NULL rows count as needed: a NULL LHS does not decide the row
             let batch = batch_with_nulls();
             for &s in SELECTIVITIES {
-                // `col_1 < s AND probe`: rows where col_1 < s or col_1 is NULL
-                // need the probe (`NULL AND false` is false)
-                let probe = Probe::new(Mode::Stateful, 0.0..s);
-                let expr = and(col_1_lt(s), Arc::clone(&probe) as _);
+                for null_output in [None, Some(false)] {
+                    // `col_1 >= s OR probe`: rows where col_1 < s or col_1 is NULL
+                    // need the probe (`NULL OR true` is true)
+                    let probe =
+                        Probe::with_null_output(Mode::Volatile, 0.0..s, null_output);
+                    let expr = or(col_1_gt_eq(s), Arc::clone(&probe) as _);
 
-                let result = evaluate(&expr, &batch).unwrap();
+                    let result = evaluate(&expr, &batch).unwrap();
 
-                let expected: BooleanArray = col_1(&batch)
-                    .iter()
-                    .map(|v| match v {
-                        // the probe returns NULL for NULL, and NULL AND/OR NULL is NULL
-                        None => None,
-                        Some(v) if v < s => Some(probe_value(v)),
-                        Some(_) => Some(false),
-                    })
-                    .collect();
-                assert_eq!(result, expected, "selectivity={s}");
-                assert_eq!(
-                    probe.rows.load(Relaxed),
-                    needed_rows(&batch, 0.0..s),
-                    "selectivity={s}"
-                );
+                    let expected: BooleanArray = col_1(&batch)
+                        .iter()
+                        .map(|v| match v {
+                            // NULL OR NULL and NULL OR false are both NULL
+                            None => None,
+                            Some(v) if v >= s => Some(true),
+                            Some(v) => probe_value(v),
+                        })
+                        .collect();
+                    assert_eq!(
+                        result, expected,
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                    assert_eq!(
+                        probe.rows.load(Relaxed),
+                        needed_rows(&batch, 0.0..s),
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                }
             }
         }
 
         #[test]
-        fn or_stateful_rhs_only_evaluated_on_needed_rows_with_null_lhs() {
+        fn nested_or_volatile_rhs_only_evaluated_on_needed_rows_with_null_lhs() {
             // NULL rows count as needed: a NULL LHS does not decide the row
             let batch = batch_with_nulls();
             for &s in SELECTIVITIES {
-                // `col_1 >= s OR probe`: rows where col_1 < s or col_1 is NULL
-                // need the probe (`NULL OR true` is true)
-                let probe = Probe::new(Mode::Stateful, 0.0..s);
-                let expr = or(col_1_gt_eq(s), Arc::clone(&probe) as _);
+                for null_output in [None, Some(false)] {
+                    // `col_1 >= s OR (col_1 < s/2 OR probe)`: rows where
+                    // s/2 <= col_1 < s or col_1 is NULL need the probe
+                    let probe =
+                        Probe::with_null_output(Mode::Volatile, s / 2.0..s, null_output);
+                    let expr = or(
+                        col_1_gt_eq(s),
+                        or(col_1_lt(s / 2.0), Arc::clone(&probe) as _),
+                    );
 
-                let result = evaluate(&expr, &batch).unwrap();
+                    let result = evaluate(&expr, &batch).unwrap();
 
-                let expected: BooleanArray = col_1(&batch)
-                    .iter()
-                    .map(|v| match v {
-                        // the probe returns NULL for NULL, and NULL AND/OR NULL is NULL
-                        None => None,
-                        Some(v) if v >= s => Some(true),
-                        Some(v) => Some(probe_value(v)),
-                    })
-                    .collect();
-                assert_eq!(result, expected, "selectivity={s}");
-                assert_eq!(
-                    probe.rows.load(Relaxed),
-                    needed_rows(&batch, 0.0..s),
-                    "selectivity={s}"
-                );
+                    let expected: BooleanArray = col_1(&batch)
+                        .iter()
+                        .map(|v| match v {
+                            // NULL OR NULL and NULL OR false are both NULL
+                            None => None,
+                            Some(v) if v >= s || v < s / 2.0 => Some(true),
+                            Some(v) => probe_value(v),
+                        })
+                        .collect();
+                    assert_eq!(
+                        result, expected,
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                    assert_eq!(
+                        probe.rows.load(Relaxed),
+                        needed_rows(&batch, s / 2.0..s),
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                }
             }
         }
 
         // -------------------------------------------------------------------
         // 2. deterministic RHS that returns an error on unneeded rows:
         //    the result is still correct
-        //    for example having `x != 0` AND `1 / x`
+        //    for example having `x == 0` OR `1 / x > 0.1`
         // -------------------------------------------------------------------
 
         #[test]
@@ -7776,33 +7863,10 @@ mod tests {
                 let expected: BooleanArray = col_1(&batch)
                     .iter()
                     .map(|v| match v {
-                        // the probe returns NULL for NULL, and NULL AND/OR NULL is NULL
+                        // the probe returns NULL for NULL, and NULL AND NULL is NULL
                         None => None,
-                        Some(v) if v < s => Some(probe_value(v)),
-                        Some(_) => Some(false),
-                    })
-                    .collect();
-                assert_eq!(result, expected, "selectivity={s}");
-            }
-        }
-
-        #[test]
-        fn or_failing_rhs_returns_correct_result() {
-            let batch = batch();
-            for &s in SELECTIVITIES {
-                let probe = Probe::new(Mode::FailOnUnneeded, 0.0..s);
-                let expr = or(col_1_gt_eq(s), probe);
-
-                let result = evaluate(&expr, &batch)
-                    .unwrap_or_else(|e| panic!("selectivity={s}: {e}"));
-
-                let expected: BooleanArray = col_1(&batch)
-                    .iter()
-                    .map(|v| match v {
-                        // the probe returns NULL for NULL, and NULL AND/OR NULL is NULL
-                        None => None,
-                        Some(v) if v >= s => Some(true),
-                        Some(v) => Some(probe_value(v)),
+                        Some(v) if v >= s => Some(false),
+                        Some(v) => probe_value(v),
                     })
                     .collect();
                 assert_eq!(result, expected, "selectivity={s}");
@@ -7822,10 +7886,101 @@ mod tests {
                 let expected: BooleanArray = col_1(&batch)
                     .iter()
                     .map(|v| match v {
-                        // the probe returns NULL for NULL, and NULL AND/OR NULL is NULL
+                        // the probe returns NULL for NULL, and NULL AND NULL is NULL
                         None => None,
-                        Some(v) if v < s && v >= s / 2.0 => Some(probe_value(v)),
-                        Some(_) => Some(false),
+                        Some(v) if v >= s || v < s / 2.0 => Some(false),
+                        Some(v) => probe_value(v),
+                    })
+                    .collect();
+                assert_eq!(result, expected, "selectivity={s}");
+            }
+        }
+
+        #[test]
+        fn and_failing_rhs_returns_correct_result_with_null_lhs() {
+            // NULL rows count as needed: a NULL LHS does not decide the row
+            let batch = batch_with_nulls();
+            for &s in SELECTIVITIES {
+                for null_output in [None, Some(false)] {
+                    let probe = Probe::with_null_output(
+                        Mode::FailOnUnneeded,
+                        0.0..s,
+                        null_output,
+                    );
+                    let expr = and(col_1_lt(s), probe);
+
+                    let result = evaluate(&expr, &batch).unwrap_or_else(|e| {
+                        panic!("selectivity={s} null_output={null_output:?}: {e}")
+                    });
+
+                    let expected: BooleanArray = col_1(&batch)
+                        .iter()
+                        .map(|v| match v {
+                            // NULL AND NULL is NULL, NULL AND false is false
+                            None => null_output,
+                            Some(v) if v >= s => Some(false),
+                            Some(v) => probe_value(v),
+                        })
+                        .collect();
+                    assert_eq!(
+                        result, expected,
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn nested_and_failing_rhs_returns_correct_result_with_null_lhs() {
+            // NULL rows count as needed: a NULL LHS does not decide the row
+            let batch = batch_with_nulls();
+            for &s in SELECTIVITIES {
+                for null_output in [None, Some(false)] {
+                    let probe = Probe::with_null_output(
+                        Mode::FailOnUnneeded,
+                        s / 2.0..s,
+                        null_output,
+                    );
+                    let expr = and(col_1_lt(s), and(col_1_gt_eq(s / 2.0), probe));
+
+                    let result = evaluate(&expr, &batch).unwrap_or_else(|e| {
+                        panic!("selectivity={s} null_output={null_output:?}: {e}")
+                    });
+
+                    let expected: BooleanArray = col_1(&batch)
+                        .iter()
+                        .map(|v| match v {
+                            // NULL AND NULL is NULL, NULL AND false is false
+                            None => null_output,
+                            Some(v) if v >= s || v < s / 2.0 => Some(false),
+                            Some(v) => probe_value(v),
+                        })
+                        .collect();
+                    assert_eq!(
+                        result, expected,
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn or_failing_rhs_returns_correct_result() {
+            let batch = batch();
+            for &s in SELECTIVITIES {
+                let probe = Probe::new(Mode::FailOnUnneeded, 0.0..s);
+                let expr = or(col_1_gt_eq(s), probe);
+
+                let result = evaluate(&expr, &batch)
+                    .unwrap_or_else(|e| panic!("selectivity={s}: {e}"));
+
+                let expected: BooleanArray = col_1(&batch)
+                    .iter()
+                    .map(|v| match v {
+                        // the probe returns NULL for NULL, and NULL OR NULL is NULL
+                        None => None,
+                        Some(v) if v >= s => Some(true),
+                        Some(v) => probe_value(v),
                     })
                     .collect();
                 assert_eq!(result, expected, "selectivity={s}");
@@ -7845,34 +8000,10 @@ mod tests {
                 let expected: BooleanArray = col_1(&batch)
                     .iter()
                     .map(|v| match v {
-                        // the probe returns NULL for NULL, and NULL AND/OR NULL is NULL
+                        // the probe returns NULL for NULL, and NULL OR NULL is NULL
                         None => None,
                         Some(v) if v >= s || v < s / 2.0 => Some(true),
-                        Some(v) => Some(probe_value(v)),
-                    })
-                    .collect();
-                assert_eq!(result, expected, "selectivity={s}");
-            }
-        }
-
-        #[test]
-        fn and_failing_rhs_returns_correct_result_with_null_lhs() {
-            // NULL rows count as needed: a NULL LHS does not decide the row
-            let batch = batch_with_nulls();
-            for &s in SELECTIVITIES {
-                let probe = Probe::new(Mode::FailOnUnneeded, 0.0..s);
-                let expr = and(col_1_lt(s), probe);
-
-                let result = evaluate(&expr, &batch)
-                    .unwrap_or_else(|e| panic!("selectivity={s}: {e}"));
-
-                let expected: BooleanArray = col_1(&batch)
-                    .iter()
-                    .map(|v| match v {
-                        // the probe returns NULL for NULL, and NULL AND/OR NULL is NULL
-                        None => None,
-                        Some(v) if v < s => Some(probe_value(v)),
-                        Some(_) => Some(false),
+                        Some(v) => probe_value(v),
                     })
                     .collect();
                 assert_eq!(result, expected, "selectivity={s}");
@@ -7884,22 +8015,66 @@ mod tests {
             // NULL rows count as needed: a NULL LHS does not decide the row
             let batch = batch_with_nulls();
             for &s in SELECTIVITIES {
-                let probe = Probe::new(Mode::FailOnUnneeded, 0.0..s);
-                let expr = or(col_1_gt_eq(s), probe);
+                for null_output in [None, Some(false)] {
+                    let probe = Probe::with_null_output(
+                        Mode::FailOnUnneeded,
+                        0.0..s,
+                        null_output,
+                    );
+                    let expr = or(col_1_gt_eq(s), probe);
 
-                let result = evaluate(&expr, &batch)
-                    .unwrap_or_else(|e| panic!("selectivity={s}: {e}"));
+                    let result = evaluate(&expr, &batch).unwrap_or_else(|e| {
+                        panic!("selectivity={s} null_output={null_output:?}: {e}")
+                    });
 
-                let expected: BooleanArray = col_1(&batch)
-                    .iter()
-                    .map(|v| match v {
-                        // the probe returns NULL for NULL, and NULL AND/OR NULL is NULL
-                        None => None,
-                        Some(v) if v >= s => Some(true),
-                        Some(v) => Some(probe_value(v)),
-                    })
-                    .collect();
-                assert_eq!(result, expected, "selectivity={s}");
+                    let expected: BooleanArray = col_1(&batch)
+                        .iter()
+                        .map(|v| match v {
+                            // NULL OR NULL and NULL OR false are both NULL
+                            None => None,
+                            Some(v) if v >= s => Some(true),
+                            Some(v) => probe_value(v),
+                        })
+                        .collect();
+                    assert_eq!(
+                        result, expected,
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn nested_or_failing_rhs_returns_correct_result_with_null_lhs() {
+            // NULL rows count as needed: a NULL LHS does not decide the row
+            let batch = batch_with_nulls();
+            for &s in SELECTIVITIES {
+                for null_output in [None, Some(false)] {
+                    let probe = Probe::with_null_output(
+                        Mode::FailOnUnneeded,
+                        s / 2.0..s,
+                        null_output,
+                    );
+                    let expr = or(col_1_gt_eq(s), or(col_1_lt(s / 2.0), probe));
+
+                    let result = evaluate(&expr, &batch).unwrap_or_else(|e| {
+                        panic!("selectivity={s} null_output={null_output:?}: {e}")
+                    });
+
+                    let expected: BooleanArray = col_1(&batch)
+                        .iter()
+                        .map(|v| match v {
+                            // NULL OR NULL and NULL OR false are both NULL
+                            None => None,
+                            Some(v) if v >= s || v < s / 2.0 => Some(true),
+                            Some(v) => probe_value(v),
+                        })
+                        .collect();
+                    assert_eq!(
+                        result, expected,
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                }
             }
         }
 
@@ -7922,19 +8097,6 @@ mod tests {
         }
 
         #[test]
-        fn or_infallible_rhs_evaluated_at_most_once() {
-            let batch = batch();
-            for &s in SELECTIVITIES {
-                let probe = Probe::new(Mode::Infallible, 0.0..s);
-                let expr = or(col_1_gt_eq(s), Arc::clone(&probe) as _);
-
-                evaluate(&expr, &batch).unwrap();
-
-                assert!(probe.calls.load(Relaxed) <= 1, "selectivity={s}");
-            }
-        }
-
-        #[test]
         fn nested_and_infallible_rhs_evaluated_at_most_once() {
             let batch = batch();
             for &s in SELECTIVITIES {
@@ -7943,6 +8105,19 @@ mod tests {
                     col_1_lt(s),
                     and(col_1_gt_eq(s / 2.0), Arc::clone(&probe) as _),
                 );
+
+                evaluate(&expr, &batch).unwrap();
+
+                assert!(probe.calls.load(Relaxed) <= 1, "selectivity={s}");
+            }
+        }
+
+        #[test]
+        fn or_infallible_rhs_evaluated_at_most_once() {
+            let batch = batch();
+            for &s in SELECTIVITIES {
+                let probe = Probe::new(Mode::Infallible, 0.0..s);
+                let expr = or(col_1_gt_eq(s), Arc::clone(&probe) as _);
 
                 evaluate(&expr, &batch).unwrap();
 
@@ -7983,18 +8158,6 @@ mod tests {
         }
 
         #[test]
-        fn or_rhs_not_evaluated_when_lhs_all_true() {
-            let batch = batch();
-            let probe = Probe::new(Mode::Infallible, 0.0..0.0);
-            // col_1 >= 0 is true for every row
-            let expr = or(col_1_gt_eq(0.0), Arc::clone(&probe) as _);
-
-            evaluate(&expr, &batch).unwrap();
-
-            assert_eq!(probe.calls.load(Relaxed), 0);
-        }
-
-        #[test]
         fn nested_and_rhs_not_evaluated_when_lhs_all_false() {
             let batch = batch();
             let probe = Probe::new(Mode::Infallible, 0.0..0.0);
@@ -8003,6 +8166,18 @@ mod tests {
                 col_1_lt(0.0),
                 and(col_1_gt_eq(0.0), Arc::clone(&probe) as _),
             );
+
+            evaluate(&expr, &batch).unwrap();
+
+            assert_eq!(probe.calls.load(Relaxed), 0);
+        }
+
+        #[test]
+        fn or_rhs_not_evaluated_when_lhs_all_true() {
+            let batch = batch();
+            let probe = Probe::new(Mode::Infallible, 0.0..0.0);
+            // col_1 >= 0 is true for every row
+            let expr = or(col_1_gt_eq(0.0), Arc::clone(&probe) as _);
 
             evaluate(&expr, &batch).unwrap();
 
@@ -8105,8 +8280,12 @@ mod tests {
         }
 
         /// Deterministic probe output for a non-NULL value
-        fn probe_value(v: f32) -> bool {
-            ((v * N as f32).round() as usize).is_multiple_of(3)
+        fn probe_value(v: f32) -> Option<bool> {
+            match (v * N as f32).round() as usize % 3 {
+                0 => Some(true),
+                1 => None,
+                _ => Some(false),
+            }
         }
 
         // -------------------------------------------------------------------
@@ -8116,8 +8295,8 @@ mod tests {
         /// What the probe does when evaluated on a row it does not need
         #[derive(Debug, Clone, Copy)]
         enum Mode {
-            /// Panic: a stateful expression must never see unneeded rows
-            Stateful,
+            /// Panic: a volatile expression must never see unneeded rows
+            Volatile,
             /// Return `Err`: the caller must retry on the needed rows only
             FailOnUnneeded,
             /// Compute normally
@@ -8131,6 +8310,8 @@ mod tests {
             input: Arc<dyn PhysicalExpr>,
             mode: Mode,
             needed: Range<f32>,
+            /// output for a NULL input
+            null_output: Option<bool>,
             /// number of successful `evaluate` calls
             calls: AtomicUsize,
             /// total rows across successful `evaluate` calls
@@ -8139,10 +8320,19 @@ mod tests {
 
         impl Probe {
             fn new(mode: Mode, needed: Range<f32>) -> Arc<Self> {
+                Self::with_null_output(mode, needed, None)
+            }
+
+            fn with_null_output(
+                mode: Mode,
+                needed: Range<f32>,
+                null_output: Option<bool>,
+            ) -> Arc<Self> {
                 Arc::new(Self {
                     input: col("col_1", &schema()).unwrap(),
                     mode,
                     needed,
+                    null_output,
                     calls: AtomicUsize::new(0),
                     rows: AtomicUsize::new(0),
                 })
@@ -8168,8 +8358,8 @@ mod tests {
                     .count();
                 if unneeded > 0 {
                     match self.mode {
-                        Mode::Stateful => {
-                            panic!("stateful probe evaluated on {unneeded} unneeded rows")
+                        Mode::Volatile => {
+                            panic!("volatile probe evaluated on {unneeded} unneeded rows")
                         }
                         Mode::FailOnUnneeded => {
                             return exec_err!(
@@ -8181,13 +8371,15 @@ mod tests {
                 }
                 self.calls.fetch_add(1, Relaxed);
                 self.rows.fetch_add(batch.num_rows(), Relaxed);
-                let output: BooleanArray =
-                    input.iter().map(|v| v.map(probe_value)).collect();
+                let output: BooleanArray = input
+                    .iter()
+                    .map(|v| v.map_or(self.null_output, probe_value))
+                    .collect();
                 Ok(ColumnarValue::Array(Arc::new(output)))
             }
 
             fn is_volatile_node(&self) -> bool {
-                matches!(self.mode, Mode::Stateful)
+                matches!(self.mode, Mode::Volatile)
             }
 
             fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
