@@ -40,13 +40,22 @@ CREATE TABLE reprobe_expected AS SELECT * FROM reprobe_result;
 statement ok
 SET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.8;
 
+statement ok
+CREATE TABLE reprobe_actual AS SELECT * FROM reprobe_result;
+
 # Compare every group and accumulator state across skip/probe transitions,
 # including multi-column and null keys and differently filtered accumulators.
+# Signed row counts preserve null equality and also catch duplicate rows.
 query I
 SELECT COUNT(*) FROM (
-    (SELECT * FROM reprobe_result EXCEPT SELECT * FROM reprobe_expected)
-    UNION ALL
-    (SELECT * FROM reprobe_expected EXCEPT SELECT * FROM reprobe_result)
+    SELECT k, category, n, nv, total, mean, smallest, largest, filtered, nulls
+    FROM (
+        SELECT *, 1 AS delta FROM reprobe_actual
+        UNION ALL
+        SELECT *, -1 AS delta FROM reprobe_expected
+    )
+    GROUP BY k, category, n, nv, total, mean, smallest, largest, filtered, nulls
+    HAVING SUM(delta) <> 0
 );
 ----
 0
@@ -72,6 +81,9 @@ DROP TABLE reprobe_input;
 
 statement ok
 DROP TABLE reprobe_expected;
+
+statement ok
+DROP TABLE reprobe_actual;
 
 statement ok
 RESET datafusion.execution.batch_size;
