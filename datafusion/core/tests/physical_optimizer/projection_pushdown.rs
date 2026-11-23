@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow::array::RecordBatch;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::listing::PartitionedFile;
@@ -35,6 +36,7 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
+use datafusion_physical_plan::buffer::BufferExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::coop::CooperativeExec;
 use datafusion_physical_plan::filter::{FilterExec, FilterExecBuilder};
@@ -43,6 +45,7 @@ use datafusion_physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr, update_expr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -52,6 +55,8 @@ use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{ExecutionPlan, displayable};
 
 use insta::assert_snapshot;
+
+use crate::physical_optimizer::test_utils::OptimizationTest;
 use itertools::Itertools;
 
 /// Mocked UDF
@@ -2031,6 +2036,493 @@ async fn split_declines_hash_repartition() -> Result<()> {
     ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
       RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+fn limit_split_scan() -> Result<(SchemaRef, Arc<dyn ExecutionPlan>)> {
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new(
+            "s",
+            DataType::Struct(vec![Field::new("value", DataType::Int64, true)].into()),
+            true,
+        ),
+    ]));
+    let config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        Arc::new(ParquetSource::new(Arc::clone(&schema))),
+    )
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .build();
+    Ok((schema, DataSourceExec::from_data_source(config)))
+}
+
+fn limit_split_exprs(schema: &SchemaRef) -> Result<Vec<ProjectionExpr>> {
+    let leaf: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::new(
+        "get_field",
+        datafusion_functions::core::get_field(),
+        vec![
+            col("s", schema)?,
+            Arc::new(Literal::new(ScalarValue::from("value"))),
+        ],
+        Arc::new(Field::new("v", DataType::Int64, true)),
+        Arc::new(ConfigOptions::default()),
+    ));
+    Ok(vec![
+        ProjectionExpr {
+            expr: leaf,
+            alias: "v".to_string(),
+        },
+        ProjectionExpr {
+            expr: binary(
+                col("id", schema)?,
+                Operator::Plus,
+                Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+                schema,
+            )?,
+            alias: "w".to_string(),
+        },
+    ])
+}
+
+#[tokio::test]
+async fn split_descends_through_global_limit() -> Result<()> {
+    let (schema, scan) = limit_split_scan()?;
+    // `skip` and `fetch` differ so that swapping them would show.
+    let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(scan, 1, Some(3)));
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(limit_split_exprs(&schema)?, limit)?);
+
+    assert_snapshot!(
+        OptimizationTest::new(projection, ProjectionPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+        -   GlobalLimitExec: skip=1, fetch=3
+        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+      output:
+        Ok:
+          - ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+          -   GlobalLimitExec: skip=1, fetch=3
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+/// The no-leaf `EXPLAIN` in the `.slt` cannot pin this, because the plan is the
+/// same either way.
+#[tokio::test]
+async fn split_declines_global_limit_without_leaf() -> Result<()> {
+    let (schema, scan) = limit_split_scan()?;
+    let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(scan, 1, Some(3)));
+    let exprs = vec![limit_split_exprs(&schema)?.swap_remove(1)];
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(exprs, limit)?);
+
+    assert_snapshot!(
+        OptimizationTest::new(projection, ProjectionPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - ProjectionExec: expr=[id@0 + 1 as w]
+        -   GlobalLimitExec: skip=1, fetch=3
+        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+      output:
+        Ok:
+          - ProjectionExec: expr=[id@0 + 1 as w]
+          -   GlobalLimitExec: skip=1, fetch=3
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+/// `LocalLimitExec` is left out of `split_host_child`: no query in the test
+/// suite strands a leaf expression above one. This pins that choice.
+#[tokio::test]
+async fn split_declines_local_limit() -> Result<()> {
+    let (schema, scan) = limit_split_scan()?;
+    let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(scan, 2));
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(limit_split_exprs(&schema)?, limit)?);
+
+    assert_snapshot!(
+        OptimizationTest::new(projection, ProjectionPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+        -   LocalLimitExec: fetch=2
+        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+      output:
+        Ok:
+          - ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+          -   LocalLimitExec: fetch=2
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+/// A scan with more than one file group: a single `OFFSET` already stacks two
+/// hosts, so stopping at the first would leave the scan reading the struct.
+#[tokio::test]
+async fn split_descends_through_limit_and_coalesce() -> Result<()> {
+    let (schema, scan) = limit_split_scan()?;
+    let coalesce: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(scan));
+    let limit: Arc<dyn ExecutionPlan> =
+        Arc::new(GlobalLimitExec::new(coalesce, 1, Some(3)));
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(limit_split_exprs(&schema)?, limit)?);
+
+    assert_snapshot!(
+        OptimizationTest::new(projection, ProjectionPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+        -   GlobalLimitExec: skip=1, fetch=3
+        -     CoalescePartitionsExec
+        -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+      output:
+        Ok:
+          - ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+          -   GlobalLimitExec: skip=1, fetch=3
+          -     CoalescePartitionsExec
+          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+/// `fetch = None`, which plain SQL does not reach: an `OFFSET` with no `LIMIT`
+/// is not pushed into the scan, so only a hand-built plan covers it.
+#[tokio::test]
+async fn split_descends_through_global_limit_without_fetch() -> Result<()> {
+    let (schema, scan) = limit_split_scan()?;
+    let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(scan, 2, None));
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(limit_split_exprs(&schema)?, limit)?);
+
+    assert_snapshot!(
+        OptimizationTest::new(projection, ProjectionPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+        -   GlobalLimitExec: skip=2, fetch=None
+        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+      output:
+        Ok:
+          - ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+          -   GlobalLimitExec: skip=2, fetch=None
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+/// A host carrying a `fetch` of its own has to keep it across the rebuild. The
+/// `.slt` plans show a fetch on this node, but `LimitPushdown` puts it there
+/// after the split, so they do not cover this.
+#[tokio::test]
+async fn split_keeps_the_coalesce_fetch() -> Result<()> {
+    let (schema, scan) = limit_split_scan()?;
+    let coalesce: Arc<dyn ExecutionPlan> =
+        Arc::new(CoalescePartitionsExec::new(scan).with_fetch(Some(4)));
+    let limit: Arc<dyn ExecutionPlan> =
+        Arc::new(GlobalLimitExec::new(coalesce, 1, Some(3)));
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(limit_split_exprs(&schema)?, limit)?);
+
+    assert_snapshot!(
+        OptimizationTest::new(projection, ProjectionPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+        -   GlobalLimitExec: skip=1, fetch=3
+        -     CoalescePartitionsExec: fetch=4
+        -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+      output:
+        Ok:
+          - ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+          -   GlobalLimitExec: skip=1, fetch=3
+          -     CoalescePartitionsExec: fetch=4
+          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+/// Each of the three limits keeps its own `skip` and `fetch` after the rebuild.
+#[tokio::test]
+async fn split_descends_through_three_hosts() -> Result<()> {
+    let (schema, scan) = limit_split_scan()?;
+    let inner: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(scan, 1, Some(9)));
+    let middle: Arc<dyn ExecutionPlan> =
+        Arc::new(GlobalLimitExec::new(inner, 2, Some(6)));
+    let outer: Arc<dyn ExecutionPlan> =
+        Arc::new(GlobalLimitExec::new(middle, 3, Some(3)));
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(limit_split_exprs(&schema)?, outer)?);
+
+    assert_snapshot!(
+        OptimizationTest::new(projection, ProjectionPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+        -   GlobalLimitExec: skip=3, fetch=3
+        -     GlobalLimitExec: skip=2, fetch=6
+        -       GlobalLimitExec: skip=1, fetch=9
+        -         DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+      output:
+        Ok:
+          - ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+          -   GlobalLimitExec: skip=3, fetch=3
+          -     GlobalLimitExec: skip=2, fetch=6
+          -       GlobalLimitExec: skip=1, fetch=9
+          -         DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+/// `CooperativeExec` and `BufferExec` are not hosts, but as the *bottom* of the
+/// chain they delegate the swap to their own input, so the split commits and
+/// the scan narrows in one pass.
+#[tokio::test]
+async fn split_commits_at_a_pass_through_bottom() -> Result<()> {
+    let (schema, scan) = limit_split_scan()?;
+    let cooperative: Arc<dyn ExecutionPlan> = Arc::new(CooperativeExec::new(scan));
+    let limit: Arc<dyn ExecutionPlan> =
+        Arc::new(GlobalLimitExec::new(cooperative, 1, Some(3)));
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(limit_split_exprs(&schema)?, limit)?);
+
+    assert_snapshot!(
+        OptimizationTest::new(projection, ProjectionPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+        -   GlobalLimitExec: skip=1, fetch=3
+        -     CooperativeExec
+        -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+      output:
+        Ok:
+          - ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+          -   GlobalLimitExec: skip=1, fetch=3
+          -     CooperativeExec
+          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+    "
+    );
+
+    let (schema, scan) = limit_split_scan()?;
+    let buffer: Arc<dyn ExecutionPlan> = Arc::new(BufferExec::new(scan, 4));
+    let limit: Arc<dyn ExecutionPlan> =
+        Arc::new(GlobalLimitExec::new(buffer, 1, Some(3)));
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(limit_split_exprs(&schema)?, limit)?);
+
+    assert_snapshot!(
+        OptimizationTest::new(projection, ProjectionPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+        -   GlobalLimitExec: skip=1, fetch=3
+        -     BufferExec: capacity=4
+        -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+      output:
+        Ok:
+          - ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+          -   GlobalLimitExec: skip=1, fetch=3
+          -     BufferExec: capacity=4
+          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+/// A `FilterExec` bottom takes the lower projection by holding it over its own
+/// input, so after one pass the scan still reads everything and the plan has
+/// gained a node. This rule is scheduled twice, and the second run is what
+/// pushes the projection into the source. Nothing else states that dependency.
+#[tokio::test]
+async fn split_below_a_filter_narrows_on_the_second_run() -> Result<()> {
+    // Three columns so the lower projection narrows; with two it does not, and
+    // `FilterExec` declines before reaching the branch this test is about.
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new(
+            "s",
+            DataType::Struct(vec![Field::new("value", DataType::Int64, true)].into()),
+            true,
+        ),
+        Field::new("k", DataType::Int64, true),
+    ]));
+    let config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        Arc::new(ParquetSource::new(Arc::clone(&schema))),
+    )
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .build();
+    let predicate = binary(
+        col("id", &schema)?,
+        Operator::Gt,
+        Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
+        &schema,
+    )?;
+    let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+        predicate,
+        DataSourceExec::from_data_source(config),
+    )?);
+    let limit: Arc<dyn ExecutionPlan> =
+        Arc::new(GlobalLimitExec::new(filter, 1, Some(3)));
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(limit_split_exprs(&schema)?, limit)?);
+
+    let first = ProjectionPushdown::new()
+        .optimize(Arc::clone(&projection), &ConfigOptions::default())?;
+    assert_snapshot!(
+        OptimizationTest::new(projection, ProjectionPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+        -   GlobalLimitExec: skip=1, fetch=3
+        -     FilterExec: id@0 > 0
+        -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s, k], file_type=parquet
+      output:
+        Ok:
+          - ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+          -   GlobalLimitExec: skip=1, fetch=3
+          -     FilterExec: id@0 > 0
+          -       ProjectionExec: expr=[id@0 as id, get_field(s@1, value) as __datafusion_leaf_0]
+          -         DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s, k], file_type=parquet
+    "
+    );
+
+    assert_snapshot!(
+        OptimizationTest::new(first, ProjectionPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+        -   GlobalLimitExec: skip=1, fetch=3
+        -     FilterExec: id@0 > 0
+        -       ProjectionExec: expr=[id@0 as id, get_field(s@1, value) as __datafusion_leaf_0]
+        -         DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s, k], file_type=parquet
+      output:
+        Ok:
+          - ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+          -   GlobalLimitExec: skip=1, fetch=3
+          -     FilterExec: id@0 > 0
+          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+/// A memory source declines an aliased `get_field`, so the split must not
+/// commit: it would add a projection below the limit that nobody absorbs.
+#[tokio::test]
+async fn split_declines_when_the_child_refuses_the_projection() -> Result<()> {
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new(
+            "s",
+            DataType::Struct(vec![Field::new("value", DataType::Int64, true)].into()),
+            true,
+        ),
+    ]));
+    let batch = RecordBatch::new_empty(Arc::clone(&schema));
+    let source = MemorySourceConfig::try_new(&[vec![batch]], Arc::clone(&schema), None)?;
+    let scan = DataSourceExec::from_data_source(source);
+    let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(scan, 1, Some(3)));
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(limit_split_exprs(&schema)?, limit)?);
+
+    assert_snapshot!(
+        OptimizationTest::new(projection, ProjectionPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+        -   GlobalLimitExec: skip=1, fetch=3
+        -     DataSourceExec: partitions=1, partition_sizes=[1]
+      output:
+        Ok:
+          - ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+          -   GlobalLimitExec: skip=1, fetch=3
+          -     DataSourceExec: partitions=1, partition_sizes=[1]
+    "
+    );
+    Ok(())
+}
+
+/// `file_row_index()` as the leaf, which is what #27494 reports. Unlike
+/// `get_field` it cannot be evaluated above the scan at all, so the output
+/// shows the source resolving it into its hidden column.
+#[tokio::test]
+async fn split_descends_through_global_limit_with_a_marker() -> Result<()> {
+    let schema: SchemaRef =
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+    let config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        Arc::new(ParquetSource::new(Arc::clone(&schema))),
+    )
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .build();
+    let marker: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::new(
+        "file_row_index",
+        datafusion_functions::core::file_row_index(),
+        vec![],
+        Arc::new(Field::new("r", DataType::Int64, true)),
+        Arc::new(ConfigOptions::default()),
+    ));
+    let exprs = vec![
+        ProjectionExpr {
+            expr: marker,
+            alias: "r".to_string(),
+        },
+        ProjectionExpr {
+            expr: binary(
+                col("id", &schema)?,
+                Operator::Plus,
+                Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+                &schema,
+            )?,
+            alias: "w".to_string(),
+        },
+    ];
+    let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(
+        DataSourceExec::from_data_source(config),
+        1,
+        Some(3),
+    ));
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(exprs, limit)?);
+
+    assert_snapshot!(
+        OptimizationTest::new(projection, ProjectionPushdown::new(), false),
+        @r"
+    OptimizationTest:
+      input:
+        - ProjectionExec: expr=[file_row_index() as r, id@0 + 1 as w]
+        -   GlobalLimitExec: skip=1, fetch=3
+        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[id], file_type=parquet
+      output:
+        Ok:
+          - ProjectionExec: expr=[__datafusion_leaf_0@1 as r, id@0 + 1 as w]
+          -   GlobalLimitExec: skip=1, fetch=3
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, CAST(__datafusion_file_row_index@1 AS Int64;N) as __datafusion_leaf_0], file_type=parquet
     "
     );
     Ok(())

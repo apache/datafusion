@@ -23,8 +23,10 @@ use datafusion_physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
 use datafusion_physical_expr::projection::ProjectionExpr;
 use datafusion_physical_expr::{conjunction, split_conjunction};
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion_physical_plan::limit::GlobalLimitExec;
 use datafusion_physical_plan::projection::{
     ProjectionExec, remove_unnecessary_projections,
 };
@@ -68,11 +70,12 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
             .map(|t| t.data)?;
 
         // Push what can already descend, then split the projections that are
-        // stuck above a `RepartitionExec`. The split needs no cleanup pass of
-        // its own: the outer projection it leaves either keeps every expression
-        // a plain column, and is then no narrower than the widened child, or it
-        // narrows and holds a computed one. `RepartitionExec` declines both, it
-        // is not removable because it renames, and nothing else moved.
+        // stuck above a node that will not take a whole projection. The split
+        // needs no cleanup pass of its own: the outer projection it leaves
+        // either keeps every expression a plain column, and is then no narrower
+        // than the widened child, or it narrows and holds a computed one. Every
+        // node `split_host_child` allows declines both, the outer projection is
+        // not removable because it renames, and nothing else moved.
         let plan = plan.transform_down(remove_unnecessary_projections).data()?;
         plan.transform_down(|plan| {
             Ok(match try_split_leaf_projection(&plan)? {
@@ -507,6 +510,59 @@ fn leaf_column_name(index: usize) -> String {
     format!("{LEAF_COLUMN_PREFIX}_{index}")
 }
 
+/// Returns the input of `node` if the split may place the leaf projection
+/// below it.
+///
+/// The split gives `node` an input with different columns, so `node` must not
+/// reference its input's columns and must output them unchanged, or the outer
+/// projection's column indices would point at the wrong columns. The arms are
+/// an allowlist: satisfying that is necessary, not sufficient.
+fn split_host_child(node: &Arc<dyn ExecutionPlan>) -> Option<&Arc<dyn ExecutionPlan>> {
+    if let Some(repartition) = node.downcast_ref::<RepartitionExec>() {
+        // Hash and Range partitioning reference columns by index, which would
+        // have to be remapped against the rewritten child schema. Round robin
+        // carries no column references, and is what `EnsureRequirements`
+        // inserts here.
+        if !matches!(repartition.partitioning(), Partitioning::RoundRobinBatch(_)) {
+            return None;
+        }
+        Some(repartition.input())
+    } else if let Some(limit) = node.downcast_ref::<GlobalLimitExec>() {
+        // A source that supports skip pushdown wraps its scan in this for the
+        // skip, which leaves the projection holding the leaf above it.
+        Some(limit.input())
+    } else if let Some(coalesce) = node.downcast_ref::<CoalescePartitionsExec>() {
+        // A scan with more than one file group puts this between that limit
+        // and the source.
+        Some(coalesce.input())
+    } else {
+        None
+    }
+}
+
+/// The hosts between a projection and the child the split places the leaf
+/// projection on.
+struct SplitHostChain<'a> {
+    /// Outermost first, so the rebuild walks this in reverse.
+    hosts: Vec<&'a Arc<dyn ExecutionPlan>>,
+    child: &'a Arc<dyn ExecutionPlan>,
+}
+
+/// Walks down from `node` for as long as [`split_host_child`] allows, so that
+/// stacked hosts are descended in one go rather than one per pass.
+fn split_host_chain(node: &Arc<dyn ExecutionPlan>) -> Option<SplitHostChain<'_>> {
+    let mut hosts = vec![];
+    let mut current = node;
+    while let Some(child) = split_host_child(current) {
+        hosts.push(current);
+        current = child;
+    }
+    (!hosts.is_empty()).then_some(SplitHostChain {
+        hosts,
+        child: current,
+    })
+}
+
 /// Splits a `ProjectionExec` that mixes leaf expressions with ones that must
 /// stay in place, moving the leaves into a projection the source absorbs.
 ///
@@ -515,21 +571,22 @@ fn leaf_column_name(index: usize) -> String {
 /// and stops that projection descending past it, so a `MoveTowardsLeafNodes`
 /// expression sharing it never reaches the source. Splitting leaves the
 /// computation above the repartition, still parallelised.
+///
+/// A source that pushes a skip down strands those leaves the same way: it wraps
+/// its scan in a `GlobalLimitExec` for the skip, and no projection at all swaps
+/// past that node. With more than one file group a `CoalescePartitionsExec`
+/// sits under that limit too, so the split walks a chain of such nodes rather
+/// than a single one.
 fn try_split_leaf_projection(
     plan: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
         return Ok(None);
     };
-    let Some(repartition) = projection.input().downcast_ref::<RepartitionExec>() else {
+    let Some(SplitHostChain { hosts, child }) = split_host_chain(projection.input())
+    else {
         return Ok(None);
     };
-    // Hash and Range partitioning reference columns by index, which would have
-    // to be remapped against the rewritten child schema. Round robin carries no
-    // column references, and is what `EnsureRequirements` inserts here.
-    if !matches!(repartition.partitioning(), Partitioning::RoundRobinBatch(_)) {
-        return Ok(None);
-    }
 
     let leaves = collect_leaf_exprs(projection.expr())?;
     if leaves.is_empty() {
@@ -540,7 +597,6 @@ fn try_split_leaf_projection(
     // column used *only* inside an extracted leaf must be dropped, otherwise the
     // source keeps reading it: for `s['a'] + 1` that would read the whole struct
     // alongside the extracted field, which is worse than not splitting at all.
-    let child = repartition.input();
     let child_schema = child.schema();
     let passthrough_indices = collect_outer_columns(projection.expr(), &leaves)?;
     let mut lower_exprs = passthrough_indices
@@ -561,8 +617,9 @@ fn try_split_leaf_projection(
     }
     let lower_projection = ProjectionExec::try_new(lower_exprs, Arc::clone(child))?;
 
-    // Only commit the split if the child really absorbs the leaf projection.
-    // Otherwise this would just add a projection that helps nobody.
+    // Commit only if the child takes the lower projection. A `Some` does not
+    // always mean the source absorbed it: `FilterExec` takes it by holding it
+    // over its own input, so the scan narrows on this rule's second run.
     let Some(new_child) = child.try_swapping_with_projection(&lower_projection)? else {
         return Ok(None);
     };
@@ -583,18 +640,21 @@ fn try_split_leaf_projection(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // The child gained the leaf columns, so the repartition's properties have to
-    // be recomputed rather than carried over.
-    let new_repartition = Arc::clone(projection.input()).replace_children(
-        vec![new_child],
-        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-    )?;
+    // The child gained the leaf columns, so every host's properties have to be
+    // recomputed rather than carried over. Innermost host first.
+    let mut new_host = new_child;
+    for host in hosts.iter().rev() {
+        new_host = Arc::clone(host).replace_children(
+            vec![new_host],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+    }
     // `try_new` would derive the output schema from the expressions alone and
     // drop the metadata the planner set, which `schema_check` then rejects.
     Ok(Some(Arc::new(
         ProjectionExec::try_new_with_schema_metadata(
             new_exprs,
-            new_repartition,
+            new_host,
             projection.schema().as_ref(),
         )?,
     )))
