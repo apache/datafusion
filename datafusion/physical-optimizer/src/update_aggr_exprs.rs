@@ -180,15 +180,21 @@ fn try_convert_aggregate_if_better(
                         .map(|e| e.reverse().into())
                         .collect::<Vec<_>>(),
                 ))? {
-                    // Converting to reverse enables more efficient execution
-                    // given the existing ordering (if possible):
-                    aggr_expr
-                        .reverse_expr()
-                        .map(Arc::new)
-                        .unwrap_or(aggr_expr)
+
+                
+
+                    // Use reversed ordering only if the aggregate supports reversal.
+                    // Otherwise, fall back to sorting within the aggregate.
+                    match aggr_expr.reverse_expr() {
+                    Some(reversed) => Arc::new(reversed)
                         .with_beneficial_ordering(true)?
-                        .map(Arc::new)
-                } else {
+                        .map(Arc::new),
+
+                    None => aggr_expr
+                        .with_beneficial_ordering(false)?
+                        .map(Arc::new),
+                    }
+       } else {
                     // There is no beneficial ordering present -- aggregation
                     // will still work albeit in a less efficient mode.
                     aggr_expr.with_beneficial_ordering(false)?.map(Arc::new)

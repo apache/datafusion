@@ -222,6 +222,7 @@ impl AggregateUDFImpl for MapAgg {
     }
 
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
+        // Not Supported because order matters for first-wins semantics for duplicate keys
         datafusion_expr::ReversedUDAF::NotSupported
     }
 

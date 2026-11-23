@@ -311,3 +311,21 @@ ORDER BY v
 
 statement ok
 DROP VIEW map_partitions
+
+# Assumes sorted for sorted values in a opposite order
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+query ?
+SELECT map_agg(k, v ORDER BY v ASC NULLS LAST)
+FROM (
+  SELECT *
+  FROM (VALUES ('a', 20), ('b', 5), ('a', 10), ('z', 0)) t(k, v)
+  ORDER BY v DESC NULLS FIRST
+  LIMIT 3
+) s;
+----
+{b: 5, a: 5}
+
+statement ok
+set datafusion.execution.target_partitions = 4
