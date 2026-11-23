@@ -964,14 +964,22 @@ impl ParquetMorselizer {
         // filter that can prune via partition-value folding) and returns `None`
         // otherwise. For a static predicate the pruner's tracker reports no
         // changes, so it runs once and adds no ongoing cost.
-        let file_pruner = predicate.as_ref().and_then(|p| {
-            FilePruner::try_new(
-                Arc::clone(p),
-                &logical_file_schema,
-                &partitioned_file,
-                predicate_creation_errors.clone(),
-            )
-        });
+        //
+        // With row-group statistics pruning disabled the collected file
+        // statistics must not skip a file either, so no pruner is built at all.
+        let file_pruner = self
+            .enable_row_group_stats_pruning
+            .then(|| {
+                predicate.as_ref().and_then(|p| {
+                    FilePruner::try_new(
+                        Arc::clone(p),
+                        &logical_file_schema,
+                        &partitioned_file,
+                        predicate_creation_errors.clone(),
+                    )
+                })
+            })
+            .flatten();
 
         let byte_progress = ByteProgress::new(
             partitioned_file.effective_size(),
@@ -2487,6 +2495,43 @@ mod test {
         open.should_load_page_index().unwrap()
     }
 
+    /// With row-group statistics pruning disabled, no `FilePruner` may be
+    /// built, so a file whose collected statistics prove the predicate
+    /// unsatisfiable is still scanned (#27622).
+    #[test]
+    fn file_pruner_disabled_without_row_group_stats_pruning() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let predicate = logical2physical(&col("a").gt(lit(10)), &schema);
+        // The min/max range of 0..5 proves `a > 10` cannot match this file.
+        let file = PartitionedFile::new("test.parquet".to_string(), 100).with_statistics(
+            Arc::new(Statistics {
+                num_rows: Precision::Inexact(10),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![ColumnStatistics {
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(0))),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(5))),
+                    ..Default::default()
+                }],
+            }),
+        );
+
+        for (pruning_enabled, expect_pruner) in [(true, true), (false, false)] {
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(Arc::clone(&predicate))
+                .with_row_group_stats_pruning(pruning_enabled)
+                .build();
+            let prepared = morselizer.prepare_open_file(file.clone()).unwrap();
+            assert_eq!(
+                prepared.file_pruner.is_some(),
+                expect_pruner,
+                "with row-group statistics pruning = {pruning_enabled}"
+            );
+        }
+    }
+
     impl ParquetMorselizerBuilder {
         /// Create a new builder with sensible defaults for tests.
         fn new() -> Self {
@@ -3976,6 +4021,9 @@ mod test {
                 .with_table_schema(table_schema_for_opener.clone())
                 .with_projection_indices(&[0])
                 .with_predicate(predicate)
+                // File pruning only happens with statistics pruning enabled,
+                // as in a default session.
+                .with_row_group_stats_pruning(true)
                 .build()
         };
 

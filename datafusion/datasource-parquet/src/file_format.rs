@@ -433,6 +433,10 @@ impl FileFormat for ParquetFormat {
         ParquetFormatFactory::new().get_ext()
     }
 
+    fn statistics_pruning_enabled(&self) -> bool {
+        self.enable_pruning()
+    }
+
     fn get_ext_with_compression(
         &self,
         file_compression_type: &FileCompressionType,
@@ -920,6 +924,16 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
 mod schema_presence_tests {
     use super::*;
     use arrow::datatypes::Field;
+
+    #[test]
+    fn statistics_pruning_enabled_follows_pruning_option() {
+        assert!(ParquetFormat::default().statistics_pruning_enabled());
+        assert!(
+            !ParquetFormat::default()
+                .with_enable_pruning(false)
+                .statistics_pruning_enabled()
+        );
+    }
 
     fn structure(include_y: bool) -> DataType {
         let mut fields = vec![Field::new("x", DataType::Int32, false)];
