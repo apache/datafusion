@@ -14,7 +14,7 @@ CREATE TABLE t (p INT, o INT, payload VARCHAR) AS VALUES
   (2, 30, 'd');
 
 # ---------------------------------------------------------------------------
-# Rule disabled (the default): the plan keeps the Window + Filter shape.
+# Rule disabled via config: the plan keeps the Window + Filter shape.
 # ---------------------------------------------------------------------------
 
 statement ok
@@ -240,7 +240,7 @@ SELECT * FROM (
 2 30 d 1
 
 statement ok
-set datafusion.optimizer.enable_row_number_to_aggregate = false;
+reset datafusion.optimizer.enable_row_number_to_aggregate;
 
 statement ok
 DROP TABLE t;
