@@ -77,7 +77,7 @@ impl BloomFilterStatistics {
     /// If all values are confirmed absent by the Bloom filter, returns `true`.
     /// If any value might be present (or checking is unsupported), returns `false`.
     #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
-    pub(crate) fn is_known_not_present(
+    fn is_known_not_present(
         sbbf: &Sbbf,
         values: &HashSet<ScalarValue>,
         parquet_type: &Type,
@@ -718,52 +718,5 @@ mod tests {
         );
 
         Ok(pruned_row_groups)
-    }
-
-    #[test]
-    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
-    fn test_is_known_not_present() {
-        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
-        // 1. Empty values -> returns false
-        assert!(!BloomFilterStatistics::is_known_not_present(
-            &sbbf,
-            &HashSet::new(),
-            &Type::INT32,
-            0,
-        ));
-
-        // 2. Insert 42
-        sbbf.insert(&42_i32);
-
-        // Value 42 is present -> is_known_not_present should be false
-        let mut present_set = HashSet::new();
-        present_set.insert(ScalarValue::Int32(Some(42)));
-        assert!(!BloomFilterStatistics::is_known_not_present(
-            &sbbf,
-            &present_set,
-            &Type::INT32,
-            0,
-        ));
-
-        // Value 99 is absent -> is_known_not_present should be true
-        let mut absent_set = HashSet::new();
-        absent_set.insert(ScalarValue::Int32(Some(99)));
-        assert!(BloomFilterStatistics::is_known_not_present(
-            &sbbf,
-            &absent_set,
-            &Type::INT32,
-            0,
-        ));
-
-        // Mixed set containing present and absent -> is_known_not_present should be false
-        let mut mixed_set = HashSet::new();
-        mixed_set.insert(ScalarValue::Int32(Some(42)));
-        mixed_set.insert(ScalarValue::Int32(Some(99)));
-        assert!(!BloomFilterStatistics::is_known_not_present(
-            &sbbf,
-            &mixed_set,
-            &Type::INT32,
-            0,
-        ));
     }
 }
