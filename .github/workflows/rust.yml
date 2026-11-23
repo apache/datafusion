@@ -706,6 +706,7 @@ jobs:
         run: |
           cargo xtask ci step test substrait
           cargo xtask ci step test substrait-optimized
+          cargo xtask ci step test unparser
 
   #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
   #  Waiting for new Windows 2025 github runner

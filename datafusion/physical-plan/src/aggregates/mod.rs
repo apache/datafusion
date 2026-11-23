@@ -5366,6 +5366,62 @@ mod tests {
     }
 
     #[rstest::rstest]
+    fn clustered_aggregate_clears_explicit_grouping(
+        #[values(AggregateMode::Partial, AggregateMode::Single)] mode: AggregateMode,
+    ) -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+            Field::new("value", DataType::Int64, true),
+        ]));
+        let a = col("a", &schema)?;
+        let c = col("c", &schema)?;
+        let input = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+            .try_with_sort_information(vec![
+                [PhysicalSortExpr::new_default(Arc::clone(&a))].into(),
+            ])?
+            .try_with_grouping_information(vec![vec![Arc::clone(&c)]])?;
+        assert!(
+            input
+                .properties()
+                .equivalence_properties()
+                .grouping_satisfy([Arc::clone(&c)])?
+        );
+        let aggregate = AggregateExec::try_new(
+            mode,
+            PhysicalGroupBy::new_single(vec![
+                (a, "group_a".to_string()),
+                (c, "group_c".to_string()),
+            ]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(value)")
+                    .build()?,
+            )],
+            vec![None],
+            Arc::new(input),
+            schema,
+        )?;
+
+        assert_eq!(
+            aggregate.group_clustering_mode(),
+            &GroupClusteringMode::Partial(vec![0])
+        );
+        let properties = aggregate.properties().equivalence_properties();
+        // Preserving the ordering on a does not preserve the grouping on c.
+        assert!(
+            properties.ordering_satisfy([PhysicalSortExpr::new_default(col(
+                "group_a",
+                &aggregate.schema(),
+            )?)])?
+        );
+        assert!(properties.geq_class().is_empty());
+        assert!(!properties.grouping_satisfy([col("group_c", &aggregate.schema())?])?);
+        Ok(())
+    }
+
+    #[rstest::rstest]
     #[case::full(true)]
     #[case::partial(false)]
     fn group_clustering_preserves_sort_options(
