@@ -80,7 +80,6 @@ impl FuzzTest for MergeFuzzer {
         // Seven consecutive case seeds cover every output batch size on one dataset.
         let batch_size = [1, 2, 7, 49, 50, 51, 100][(seed % 7) as usize];
         let name = dataset.name;
-        eprintln!("Merge layout: {name}, batch size: {batch_size}");
         let schema = dataset.input[0][0].schema();
         let sort = [PhysicalSortExpr::new(
             col("x", &schema)?,
