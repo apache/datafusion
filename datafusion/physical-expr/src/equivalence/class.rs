@@ -187,8 +187,9 @@ impl EquivalenceClass {
     pub fn new(exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>) -> Self {
         let mut class = Self::default();
         for expr in exprs {
-            class.push(expr);
+            class.insert(expr);
         }
+        class.promote_sub_expressions();
         class
     }
 
@@ -201,6 +202,13 @@ impl EquivalenceClass {
     /// Insert the expression into this class, meaning it is known to be equal to
     /// all other expressions in this class.
     pub fn push(&mut self, expr: Arc<dyn PhysicalExpr>) {
+        self.insert(expr);
+        self.promote_sub_expressions();
+    }
+
+    /// Inserts the expression without checking the canonical expression, so
+    /// the caller must call `promote_sub_expressions` afterwards.
+    fn insert(&mut self, expr: Arc<dyn PhysicalExpr>) {
         if let Some(lit) = expr.downcast_ref::<Literal>() {
             let expr_across = AcrossPartitions::Uniform(Some(lit.value().clone()));
             if let Some(across) = self.constant.as_mut() {
@@ -213,6 +221,38 @@ impl EquivalenceClass {
             }
         }
         self.exprs.insert(expr);
+    }
+
+    /// Makes sure the canonical expression does not contain another expression
+    /// of this class. Otherwise, with `a + b` as the canonical expression of a
+    /// class that also holds `a`, normalization would replace the `a` inside
+    /// `a + b` and turn `a + b` into `(a + b) + b`.
+    fn promote_sub_expressions(&mut self) {
+        // Each promoted expression is inside the previous canonical
+        // expression, so there are at most as many rounds as members.
+        for _ in 0..self.exprs.len() {
+            let Some(canonical) = self.exprs.first() else {
+                return;
+            };
+            let children = canonical.children();
+            // Only the children are searched: an expression equal to the
+            // canonical expression itself is not inside it.
+            let Some(idx) =
+                self.exprs
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .find_map(|(idx, expr)| {
+                        children
+                            .iter()
+                            .any(|child| child.exists(|node| Ok(node == expr)).unwrap())
+                            .then_some(idx)
+                    })
+            else {
+                return;
+            };
+            self.exprs.move_index(idx, 0);
+        }
     }
 
     /// Inserts all the expressions from other into this class.
@@ -228,6 +268,7 @@ impl EquivalenceClass {
             (None, Some(_)) => self.constant = other.constant,
             (_, None) => {}
         }
+        self.promote_sub_expressions();
     }
 
     /// Returns whether this equivalence class has any entries in common with
@@ -1735,6 +1776,50 @@ mod tests {
         assert_eq!(bridged.len(), 1, "expected a single bridged class");
         assert!(bridged.has_same_classes(&direct));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_sub_expression_is_canonical_on_every_path() -> Result<()> {
+        let schema = abc_schema();
+        let (a, b, c) = (col("a", &schema)?, col("b", &schema)?, col("c", &schema)?);
+        let a_plus_b = binary(Arc::clone(&a), Operator::Plus, b, &schema)?;
+
+        // A class built directly, with the larger expression first
+        let group = EquivalenceGroup::new([EquivalenceClass::new([
+            Arc::clone(&a_plus_b),
+            Arc::clone(&a),
+        ])]);
+        assert_eq!(&group.normalize_expr(Arc::clone(&a_plus_b)), &a);
+
+        // Two classes bridged by `extend` through the shared `c`
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(Arc::clone(&a_plus_b), Arc::clone(&c));
+        let mut other = EquivalenceGroup::default();
+        other.add_equal_conditions(c, Arc::clone(&a));
+        group.extend(other);
+        assert_eq!(&group.normalize_expr(a_plus_b), &a);
+        Ok(())
+    }
+
+    #[test]
+    fn test_sub_expression_promotion_takes_several_rounds() -> Result<()> {
+        let schema = abc_schema();
+        let (a, b, c) = (col("a", &schema)?, col("b", &schema)?, col("c", &schema)?);
+        let a_plus_b = binary(Arc::clone(&a), Operator::Plus, Arc::clone(&b), &schema)?;
+        let a_plus_b_plus_c = binary(
+            Arc::clone(&a_plus_b),
+            Operator::Plus,
+            Arc::clone(&c),
+            &schema,
+        )?;
+
+        // `b * c` is canonical in `other`, so `a + b` stays ahead of `a` there
+        let b_times_c = binary(b, Operator::Multiply, c, &schema)?;
+        let other = EquivalenceClass::new([b_times_c, a_plus_b, Arc::clone(&a)]);
+        let mut class = EquivalenceClass::new([a_plus_b_plus_c]);
+        class.extend(other);
+        assert_eq!(class.canonical_expr().unwrap(), &a);
         Ok(())
     }
 }

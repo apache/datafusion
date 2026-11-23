@@ -1,0 +1,180 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+use std::sync::Arc;
+use std::{path::PathBuf, time::Duration};
+
+use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
+use crate::engines::datafusion_engine::Result;
+use crate::engines::output::{DFColumnType, DFOutput};
+use crate::engines::skips_round_trip;
+use crate::memory_drift::rewrap_replaced_pool;
+use crate::{DFSqlLogicTestError, convert_batches, convert_schema_to_types};
+use arrow::record_batch::RecordBatch;
+use async_trait::async_trait;
+use datafusion::physical_plan::common::collect;
+use datafusion::physical_plan::execute_stream;
+use datafusion::prelude::SessionContext;
+use datafusion::sql::unparser::plan_to_sql;
+use indicatif::ProgressBar;
+use log::Level::{Debug, Info};
+use log::{debug, log_enabled, warn};
+use sqllogictest::DBOutput;
+use tokio::time::Instant;
+
+/// A sqllogictest engine that unparses each query's logical plan to SQL with
+/// [`plan_to_sql`] and plans that SQL again before it runs the query.
+pub struct DataFusionUnparserRoundTrip {
+    ctx: SessionContext,
+    relative_path: PathBuf,
+    pb: ProgressBar,
+    currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    optimize_before_round_trip: bool,
+}
+
+impl DataFusionUnparserRoundTrip {
+    pub fn new(ctx: SessionContext, relative_path: PathBuf, pb: ProgressBar) -> Self {
+        Self {
+            ctx,
+            relative_path,
+            pb,
+            currently_executing_sql_tracker: CurrentlyExecutingSqlTracker::default(),
+            optimize_before_round_trip: false,
+        }
+    }
+
+    /// Optimize the logical plan before unparsing it to SQL.
+    pub fn with_optimization(mut self, optimize: bool) -> Self {
+        self.optimize_before_round_trip = optimize;
+        self
+    }
+
+    /// Add a tracker that will track the currently executed SQL statement.
+    ///
+    /// This is useful for logging and debugging purposes.
+    pub fn with_currently_executing_sql_tracker(
+        self,
+        currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
+    ) -> Self {
+        Self {
+            currently_executing_sql_tracker,
+            ..self
+        }
+    }
+
+    fn update_slow_count(&self) {
+        let msg = self.pb.message();
+        let split: Vec<&str> = msg.split(' ').collect();
+        let mut current_count = 0;
+
+        if split.len() > 2 {
+            // third match will be current slow count
+            current_count = split[2].parse::<i32>().unwrap();
+        }
+
+        current_count += 1;
+
+        self.pb
+            .set_message(format!("{} - {} took > 500 ms", split[0], current_count));
+    }
+}
+
+#[async_trait]
+impl sqllogictest::AsyncDB for DataFusionUnparserRoundTrip {
+    type Error = DFSqlLogicTestError;
+    type ColumnType = DFColumnType;
+
+    async fn run(&mut self, sql: &str) -> Result<DFOutput> {
+        if log_enabled!(Debug) {
+            debug!(
+                "[{}] Running query: \"{}\"",
+                self.relative_path.display(),
+                sql
+            );
+        }
+
+        let tracked_sql = self.currently_executing_sql_tracker.set_sql(sql);
+
+        let start = Instant::now();
+        let result = run_query_unparser_round_trip(
+            &self.ctx,
+            sql,
+            self.optimize_before_round_trip,
+        )
+        .await;
+        let duration = start.elapsed();
+        rewrap_replaced_pool(&self.ctx, &self.relative_path.display().to_string());
+
+        self.currently_executing_sql_tracker.remove_sql(tracked_sql);
+
+        if duration.gt(&Duration::from_millis(500)) {
+            self.update_slow_count();
+        }
+
+        self.pb.inc(1);
+
+        if log_enabled!(Info) && duration.gt(&Duration::from_secs(2)) {
+            warn!(
+                "[{}] Running query took more than 2 sec ({duration:?}): \"{sql}\"",
+                self.relative_path.display()
+            );
+        }
+
+        result
+    }
+
+    /// Engine name of current database.
+    fn engine_name(&self) -> &str {
+        "DataFusionUnparserRoundTrip"
+    }
+
+    /// `DataFusion` calls this function to perform sleep.
+    ///
+    /// The default implementation is `std::thread::sleep`, which is universal to any async runtime
+    /// but would block the current thread. If you are running in tokio runtime, you should override
+    /// this by `tokio::time::sleep`.
+    async fn sleep(dur: Duration) {
+        tokio::time::sleep(dur).await;
+    }
+
+    async fn shutdown(&mut self) {}
+}
+
+async fn run_query_unparser_round_trip(
+    ctx: &SessionContext,
+    sql: impl Into<String>,
+    optimize: bool,
+) -> Result<DFOutput> {
+    // `SessionContext::sql` runs DDL eagerly and returns an empty plan in its
+    // place, so plan the statement first to see the original plan.
+    let state = ctx.state();
+    let logical_plan = state.create_logical_plan(&sql.into()).await?;
+    let round_tripped_plan = if skips_round_trip(&logical_plan) {
+        logical_plan
+    } else {
+        let to_unparse = if optimize {
+            state.optimize(&logical_plan)?
+        } else {
+            logical_plan
+        };
+        let unparsed_sql = plan_to_sql(&to_unparse)?.to_string();
+        debug!("Unparsed SQL: \"{unparsed_sql}\"");
+        state.create_logical_plan(&unparsed_sql).await?
+    };
+
+    let df = ctx.execute_logical_plan(round_tripped_plan).await?;
+    let task_ctx = Arc::new(df.task_ctx());
+    let physical_plan = df.create_physical_plan().await?;
+    let schema = physical_plan.schema();
+    let stream = execute_stream(physical_plan, task_ctx)?;
+    let types = convert_schema_to_types(stream.schema().fields());
+    let results: Vec<RecordBatch> = collect(stream).await?;
+    let rows = convert_batches(&schema, results, false)?;
+
+    if rows.is_empty() && types.is_empty() {
+        Ok(DBOutput::StatementComplete(0))
+    } else {
+        Ok(DBOutput::Rows { types, rows })
+    }
+}
