@@ -63,18 +63,6 @@ impl AggregateArgument {
         })
     }
 
-    /// Keeps the expression and its type without retaining a literal array.
-    pub(in crate::aggregates) fn empty_like(&self) -> Self {
-        Self {
-            expr: Arc::clone(&self.expr),
-            data_type: self.data_type.clone(),
-            literal: self
-                .literal
-                .as_ref()
-                .map(|literal| LiteralArray::new(literal.value.clone())),
-        }
-    }
-
     pub(in crate::aggregates) fn null_array(&self, num_rows: usize) -> ArrayRef {
         new_null_array(&self.data_type, num_rows)
     }
@@ -168,10 +156,6 @@ impl AggregateFilter {
             argument_columns,
             selected_schema: None,
         }
-    }
-
-    pub(in crate::aggregates) fn predicate(&self) -> &Arc<dyn PhysicalExpr> {
-        &self.predicate
     }
 
     /// Evaluates the filter predicate for every row of `batch`.

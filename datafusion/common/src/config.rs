@@ -1146,12 +1146,16 @@ config_namespace! {
         /// Aggregation ratio (number of groups the partial aggregation creates /
         /// number of input rows) threshold for skipping partial aggregation. A key
         /// that returns after an early emit under memory pressure counts again.
-        /// If the value is greater then partial aggregation will skip aggregation
-        /// for further input
+        /// If the ratio exceeds this threshold, partial aggregation bypasses grouping
+        /// temporarily, then probes again with an empty table. Values at or above 1.0
+        /// disable skipping; non-positive values keep skipping once it starts.
         pub skip_partial_aggregation_probe_ratio_threshold: f64, default = 0.8
 
         /// Number of input rows partial aggregation partition should process, before
-        /// aggregation ratio check and trying to switch to skipping aggregation mode
+        /// aggregation ratio check and trying to switch to skipping aggregation mode.
+        /// Skipping initially lasts four times the larger of this threshold and the
+        /// triggering batch's row count. Consecutive unsuccessful probes increase
+        /// the multiplier to eight and then sixteen. A useful probe resets it to four.
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
 
         /// Should DataFusion use row number estimates at the input to decide

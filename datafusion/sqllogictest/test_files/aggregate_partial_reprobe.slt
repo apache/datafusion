@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# configMatrix: datafusion.execution.enable_migration_aggregate=true,false
+
+statement ok
+SET datafusion.execution.batch_size = 128;
+
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 128;
+
+statement ok
+CREATE TABLE reprobe_input AS
+SELECT CASE WHEN value % 16 = 0 THEN NULL
+            WHEN value % 2048 < 256 THEN value
+            ELSE value % 4 END AS k,
+       CAST(value % 3 AS VARCHAR) AS category,
+       CASE WHEN value % 7 = 0 THEN NULL ELSE value % 11 END AS v
+FROM generate_series(0, 24575);
+
+statement ok
+CREATE VIEW reprobe_result AS
+SELECT k, category, COUNT(*) AS n, COUNT(v) AS nv, SUM(v) AS total,
+       AVG(v) AS mean, MIN(v) AS smallest, MAX(v) AS largest,
+       SUM(v) FILTER (WHERE v > 2) AS filtered,
+       COUNT(*) FILTER (WHERE v IS NULL) AS nulls
+FROM reprobe_input
+GROUP BY k, category;
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 1.0;
+
+statement ok
+CREATE TABLE reprobe_expected AS SELECT * FROM reprobe_result;
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.8;
+
+# Compare every group and accumulator state across skip/probe transitions,
+# including multi-column and null keys and differently filtered accumulators.
+query I
+SELECT COUNT(*) FROM (
+    (SELECT * FROM reprobe_result EXCEPT SELECT * FROM reprobe_expected)
+    UNION ALL
+    (SELECT * FROM reprobe_expected EXCEPT SELECT * FROM reprobe_result)
+);
+----
+0
+
+query II
+SELECT SUM(n), SUM(nv) FROM reprobe_result;
+----
+24576 21065
+
+# An empty input must not produce a group when there is no empty grouping set.
+query I
+SELECT COUNT(*) FROM (
+    SELECT k, category, COUNT(*) FROM reprobe_input WHERE false GROUP BY k, category
+);
+----
+0
+
+statement ok
+DROP VIEW reprobe_result;
+
+statement ok
+DROP TABLE reprobe_input;
+
+statement ok
+DROP TABLE reprobe_expected;
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_rows_threshold;
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold;
