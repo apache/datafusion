@@ -30,7 +30,9 @@ pub(super) struct SkipAggregationProbe {
     // ========================================================================
     /// Number of processed input rows (updated during probing)
     input_rows: usize,
-    /// Number of total group values for `input_rows` (updated during probing)
+    /// Number of groups created for `input_rows` (updated during probing).
+    /// A key that returns after an early emit is counted again, so this is the
+    /// number of rows the stream outputs for `input_rows`.
     num_groups: usize,
 
     /// Flag indicating further data aggregation may be skipped (decision made
@@ -70,17 +72,16 @@ impl SkipAggregationProbe {
     }
 
     /// Updates `SkipAggregationProbe` state:
-    /// - increments the number of input rows
-    /// - replaces the number of groups with the new value
+    /// - adds the input rows of a batch and the groups it created
     /// - on `probe_rows_threshold` exceeded calculates
     ///   aggregation ratio and sets `should_skip` flag
     /// - if `should_skip` is set, locks further state updates
-    pub(super) fn update_state(&mut self, input_rows: usize, num_groups: usize) {
+    pub(super) fn update_state(&mut self, input_rows: usize, new_groups: usize) {
         if self.is_locked {
             return;
         }
         self.input_rows += input_rows;
-        self.num_groups = num_groups;
+        self.num_groups += new_groups;
         if self.input_rows >= self.probe_rows_threshold {
             self.should_skip = self.num_groups as f64 / self.input_rows as f64
                 > self.probe_ratio_threshold;

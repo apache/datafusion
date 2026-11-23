@@ -21,6 +21,7 @@ jobs:
     # A fork that syncs its main branch also gets this push, and has nothing to label.
     if: github.repository == 'apache/datafusion'
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     permissions:
       pull-requests: write
       contents: read

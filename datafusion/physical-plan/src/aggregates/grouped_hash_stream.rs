@@ -675,6 +675,7 @@ impl Stream for GroupedHashAggregateStream {
                             // `group_aggregate_batch` will _not_ have updated the memory reservation yet.
                             // The rest of the code will first try to reduce memory usage by
                             // already emitting results.
+                            let groups_before = self.group_values.len();
                             self.group_aggregate_batch(&batch)?;
 
                             assert!(!self.input_done);
@@ -711,7 +712,10 @@ impl Stream for GroupedHashAggregateStream {
                                 // Check if we should switch to skip aggregation mode
                                 // It's important that we do this before we early emit since we've
                                 // already updated the probe.
-                                self.update_skip_aggregation_probe(input_rows);
+                                let new_groups = self.group_values.len() - groups_before;
+                                self.update_skip_aggregation_probe(
+                                    input_rows, new_groups,
+                                );
                                 if let Some(new_state) =
                                     self.switch_to_skip_aggregation()?
                                 {
@@ -1391,12 +1395,12 @@ impl GroupedHashAggregateStream {
     /// Updates skip aggregation probe state.
     ///
     /// Notice: It should only be called in Partial aggregation
-    fn update_skip_aggregation_probe(&mut self, input_rows: usize) {
+    fn update_skip_aggregation_probe(&mut self, input_rows: usize, new_groups: usize) {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             // Skip aggregation probe is not supported if stream has any spills,
             // currently spilling is not supported for Partial aggregation
             assert!(self.spill_state.spills.is_empty());
-            probe.update_state(input_rows, self.group_values.len());
+            probe.update_state(input_rows, new_groups);
         }
     }
 
