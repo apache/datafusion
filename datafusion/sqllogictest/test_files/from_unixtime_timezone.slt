@@ -106,7 +106,7 @@ Timestamp(s) 2024-01-01T12:00:00
 query P
 SELECT from_unixtime(-8334601211038, 'America/New_York');
 ----
--262143-01-01T00:00:00-04:56
+-262143-01-01T04:56:02Z
 
 ## One second earlier is an error, not a panic
 query error DataFusion error: Execution error: Cannot convert \-8334601211039 to a timestamp in timezone "America/New_York" for function from_unixtime: the local date and time is outside the supported range
@@ -119,7 +119,7 @@ SET datafusion.execution.time_zone = 'America/New_York';
 query P
 SELECT from_unixtime(-8334601211038);
 ----
--262143-01-01T00:00:00-04:56
+-262143-01-01T04:56:02Z
 
 query error DataFusion error: Execution error: Cannot convert \-8334601211039 to a timestamp in timezone "America/New_York" for function from_unixtime: the local date and time is outside the supported range
 SELECT from_unixtime(-8334601211039);

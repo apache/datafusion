@@ -830,7 +830,7 @@ async fn create_single_parquet_file_default() {
     RequestCountingObjectStore()
     Total Requests: 2
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (ranges) path=parquet_table.parquet ranges=0-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=0-2990
     "
     );
 }
@@ -849,7 +849,7 @@ async fn create_single_parquet_file_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 2
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (ranges) path=parquet_table.parquet ranges=1994-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=1990-2990
     "
     );
 }
@@ -878,8 +878,8 @@ async fn create_single_parquet_file_too_small_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 4
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (ranges) path=parquet_table.parquet ranges=2494-2994
-    - GET  (ranges) path=parquet_table.parquet ranges=2264-2986
+    - GET  (ranges) path=parquet_table.parquet ranges=2490-2990
+    - GET  (ranges) path=parquet_table.parquet ranges=2264-2982
     - GET  (ranges) path=parquet_table.parquet ranges=2124-2264
     "
     );
@@ -910,7 +910,7 @@ async fn create_single_parquet_file_small_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 3
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (ranges) path=parquet_table.parquet ranges=2254-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=2250-2990
     - GET  (ranges) path=parquet_table.parquet ranges=2124-2264
     "
     );
@@ -934,7 +934,7 @@ async fn create_single_parquet_file_no_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 2
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (ranges) path=parquet_table.parquet ranges=0-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=0-2990
     "
     );
 }
