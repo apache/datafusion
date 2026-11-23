@@ -38,6 +38,7 @@ use datafusion_common::Result;
 use parquet::arrow::ArrowWriter;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
+use rstest::rstest;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -65,6 +66,8 @@ const INCLUDE_FALSE_BRANCH_UNION_SHAPES: bool = false;
 const DEFAULT_CASES: usize = 250;
 /// Cases of the long run.
 const EXTENDED_CASES: usize = 5000;
+// Keep in sync with the #[case] lists on both extended fuzz tests.
+const EXTENDED_PARTITIONS: usize = 4;
 /// Highest share of cases that may fail to plan on both sides. A higher share
 /// means the generator makes junk.
 const MAX_SKIP_RATIO: f64 = 0.30;
@@ -686,10 +689,22 @@ fn seed() -> u64 {
     env_usize("LEAF_PUSHDOWN_FUZZ_SEED", 0) as u64
 }
 
-async fn run_memory(cases: usize) {
+fn partition_cases(cases: usize, seed0: u64, partition: usize) -> (usize, u64) {
+    assert!(partition < EXTENDED_PARTITIONS);
+    let per_partition = cases / EXTENDED_PARTITIONS;
+    let remainder = cases % EXTENDED_PARTITIONS;
+    let offset = partition * per_partition + partition.min(remainder);
+    let count = per_partition + usize::from(partition < remainder);
+    (count, seed0 + offset as u64)
+}
+
+async fn run_memory(cases: usize, seed0: u64) {
+    if cases == 0 {
+        return;
+    }
     let on = memory_ctx(true);
     let off = memory_ctx(false);
-    run(&on, &off, "pushdown on", "pushdown off", cases, seed()).await;
+    run(&on, &off, "pushdown on", "pushdown off", cases, seed0).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -735,7 +750,10 @@ async fn parquet_ctx(dir: &TempDir, parquet_pushdown: bool) -> SessionContext {
     ctx
 }
 
-async fn run_parquet(cases: usize) {
+async fn run_parquet(cases: usize, seed0: u64) {
+    if cases == 0 {
+        return;
+    }
     let dir = TempDir::new().unwrap();
     let on = parquet_ctx(&dir, true).await;
     let off = parquet_ctx(&dir, false).await;
@@ -745,7 +763,7 @@ async fn run_parquet(cases: usize) {
         "parquet pushdown on",
         "parquet pushdown off",
         cases,
-        seed(),
+        seed0,
     )
     .await;
 }
@@ -756,18 +774,69 @@ async fn run_parquet(cases: usize) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn leaf_pushdown_fuzz() {
-    run_memory(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", DEFAULT_CASES)).await;
+    run_memory(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", DEFAULT_CASES), seed()).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn leaf_pushdown_parquet_fuzz() {
-    run_parquet(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", DEFAULT_CASES / 2)).await;
+    run_parquet(
+        env_usize("LEAF_PUSHDOWN_FUZZ_CASES", DEFAULT_CASES / 2),
+        seed(),
+    )
+    .await;
 }
 
+#[rstest]
+#[case::p0(0)]
+#[case::p1(1)]
+#[case::p2(2)]
+#[case::p3(3)]
 #[tokio::test(flavor = "multi_thread")]
-async fn leaf_pushdown_fuzz_extended() {
-    run_memory(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_CASES)).await;
-    run_parquet(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_CASES / 5)).await;
+async fn leaf_pushdown_fuzz_extended_memory(#[case] partition: usize) {
+    let (cases, seed0) = partition_cases(
+        env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_CASES),
+        seed(),
+        partition,
+    );
+    run_memory(cases, seed0).await;
+}
+
+#[rstest]
+#[case::p0(0)]
+#[case::p1(1)]
+#[case::p2(2)]
+#[case::p3(3)]
+#[tokio::test(flavor = "multi_thread")]
+async fn leaf_pushdown_fuzz_extended_parquet(#[case] partition: usize) {
+    let (cases, seed0) = partition_cases(
+        env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_CASES / 5),
+        seed(),
+        partition,
+    );
+    run_parquet(cases, seed0).await;
+}
+
+#[rstest]
+#[case(0, 42)]
+#[case(1, 42)]
+#[case(3, 42)]
+#[case(5, 42)]
+#[case(1000, 0)]
+#[case(5000, 0)]
+#[case(5001, 100)]
+fn extended_partitions_preserve_seed_range(#[case] cases: usize, #[case] seed0: u64) {
+    let partitions = (0..EXTENDED_PARTITIONS)
+        .map(|partition| partition_cases(cases, seed0, partition))
+        .collect::<Vec<_>>();
+    let seeds = partitions
+        .iter()
+        .flat_map(|&(count, start)| start..start + count as u64)
+        .collect::<Vec<_>>();
+    assert_eq!(seeds, (seed0..seed0 + cases as u64).collect::<Vec<_>>());
+
+    let min = partitions.iter().map(|&(count, _)| count).min().unwrap();
+    let max = partitions.iter().map(|&(count, _)| count).max().unwrap();
+    assert!(max - min <= 1);
 }
 
 /// Two Parquet files of one table, one of which stores a column with a type

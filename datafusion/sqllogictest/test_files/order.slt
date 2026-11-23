@@ -1926,6 +1926,43 @@ physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/
 statement ok
 drop table table_with_ordered_pk;
 
+# A PRIMARY KEY must stay on its own column when the scan drops columns
+# before it, otherwise the sort on (d, a) is wrongly removed
+statement ok
+COPY (VALUES (0, 3, 0, 10, 1), (0, 1, 0, 11, 1), (0, 2, 0, 12, 1), (0, 9, 0, 13, 2), (0, 5, 0, 14, 2))
+TO 'test_files/scratch/order/pk_dropped_columns.csv'
+STORED AS CSV
+OPTIONS ('format.has_header' 'false');
+
+statement ok
+CREATE EXTERNAL TABLE pk_dropped_columns (a0 INT, a INT, b INT, c INT, d INT, PRIMARY KEY (c))
+STORED AS CSV
+WITH ORDER (d ASC)
+OPTIONS ('format.has_header' 'false')
+LOCATION 'test_files/scratch/order/pk_dropped_columns.csv';
+
+query IIII
+SELECT a, b, c, d FROM pk_dropped_columns ORDER BY d, a;
+----
+1 0 11 1
+2 0 12 1
+3 0 10 1
+5 0 14 2
+9 0 13 2
+
+query TT
+EXPLAIN SELECT a, b, c, d FROM pk_dropped_columns ORDER BY d, a;
+----
+logical_plan
+01)Sort: pk_dropped_columns.d ASC NULLS LAST, pk_dropped_columns.a ASC NULLS LAST
+02)--TableScan: pk_dropped_columns projection=[a, b, c, d]
+physical_plan
+01)SortExec: expr=[d@3 ASC NULLS LAST, a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/pk_dropped_columns.csv]]}, projection=[a, b, c, d], output_ordering=[d@3 ASC NULLS LAST], constraints=[PrimaryKey([3])], file_type=csv, has_header=false
+
+statement ok
+drop table pk_dropped_columns;
+
 statement ok
 set datafusion.execution.target_partitions = 1;
 
