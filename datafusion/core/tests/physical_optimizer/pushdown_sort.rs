@@ -28,11 +28,11 @@ use datafusion_physical_plan::{ExecutionPlan, collect};
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    OptimizationTest, TestScan, coalesce_partitions_exec, inexact_memory_exec,
-    parquet_exec, parquet_exec_with_sort, projection_exec, projection_exec_with_alias,
-    repartition_exec, schema, simple_projection_exec, sort_exec, sort_exec_with_fetch,
-    sort_exec_with_fetch_and_preserve_partitioning, sort_expr, sort_expr_named,
-    test_scan_with_ordering,
+    OptimizationTest, TestScan, coalesce_partitions_exec, filter_exec,
+    inexact_memory_exec, parquet_exec, parquet_exec_with_sort, projection_exec,
+    projection_exec_with_alias, repartition_exec, schema, simple_projection_exec,
+    sort_exec, sort_exec_with_fetch, sort_exec_with_fetch_and_preserve_partitioning,
+    sort_expr, sort_expr_named, test_scan_with_ordering,
 };
 
 #[test]
@@ -1202,6 +1202,174 @@ fn test_sort_pushdown_exact_preserves_fetch_with_source_support() {
       output:
         Ok:
           - TestScan: requested_ordering=[a@0 ASC], fetch=10
+    "
+    );
+}
+
+// Verify that PushdownSort pushes TopK sort requirements through FilterExec to the scan.
+#[test]
+fn test_sort_pushdown_through_filter_exec() {
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let source = Arc::new(TestScan::new(schema.clone(), vec![]));
+    let predicate = expressions::binary(
+        expressions::col("b", &schema).unwrap(),
+        datafusion_expr::Operator::Gt,
+        expressions::lit(0i64),
+        &schema,
+    )
+    .unwrap();
+    let filter = filter_exec(predicate, source);
+    let ordering = LexOrdering::new(vec![a]).unwrap();
+    let plan = sort_exec_with_fetch(ordering, Some(10), filter);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
+        -   FilterExec: b@1 > 0
+        -     TestScan
+      output:
+        Ok:
+          - SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
+          -   FilterExec: b@1 > 0
+          -     TestScan: requested_ordering=[a@0 ASC]
+    "
+    );
+}
+
+// Verify that PushdownSort remaps column indices when pushing through FilterExec with projection.
+#[test]
+fn test_sort_pushdown_through_filter_exec_with_projection() {
+    use datafusion_physical_plan::filter::FilterExecBuilder;
+
+    let schema = schema();
+    let source = Arc::new(TestScan::new(schema.clone(), vec![]));
+    let predicate = expressions::binary(
+        expressions::col("a", &schema).unwrap(),
+        datafusion_expr::Operator::Gt,
+        expressions::lit(0i64),
+        &schema,
+    )
+    .unwrap();
+    // Simulates `SELECT b FROM t WHERE a > 0 ORDER BY b LIMIT 10`:
+    // Child reads [a@0, b@1, ...], FilterExec projects only `b@1` -> filter output has `b@0`
+    let filter = FilterExecBuilder::new(predicate, source)
+        .apply_projection(Some(vec![1]))
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let output_schema = filter.schema();
+    let b_output = sort_expr("b", &output_schema);
+    let ordering = LexOrdering::new(vec![b_output]).unwrap();
+    let plan = sort_exec_with_fetch(ordering, Some(10), Arc::new(filter));
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=10), expr=[b@0 ASC], preserve_partitioning=[false]
+        -   FilterExec: a@0 > 0, projection=[b@1]
+        -     TestScan
+      output:
+        Ok:
+          - SortExec: TopK(fetch=10), expr=[b@0 ASC], preserve_partitioning=[false]
+          -   FilterExec: a@0 > 0, projection=[b@1]
+          -     TestScan: requested_ordering=[b@1 ASC]
+    "
+    );
+}
+
+// Ungrouped MAX(a) pushes [a DESC NULLS LAST] down to the scan.
+#[test]
+fn test_sort_pushdown_ungrouped_max() {
+    use datafusion_functions_aggregate::min_max::max_udaf;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_plan::aggregates::{
+        AggregateExec, AggregateMode, PhysicalGroupBy,
+    };
+
+    let schema = schema();
+    let source = Arc::new(TestScan::new(schema.clone(), vec![]));
+    let col_a = expressions::col("a", &schema).unwrap();
+    let max_expr = AggregateExprBuilder::new(max_udaf(), vec![col_a])
+        .schema(Arc::clone(&schema))
+        .alias("max_a")
+        .build()
+        .unwrap();
+
+    let plan = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            vec![Arc::new(max_expr)],
+            vec![None],
+            source,
+            schema,
+        )
+        .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - AggregateExec: mode=Partial, gby=[], aggr=[max_a]
+        -   TestScan
+      output:
+        Ok:
+          - AggregateExec: mode=Partial, gby=[], aggr=[max_a]
+          -   TestScan: requested_ordering=[a@0 DESC NULLS LAST]
+    "
+    );
+}
+
+// Ungrouped MIN(a) pushes [a ASC NULLS LAST] down to the scan.
+#[test]
+fn test_sort_pushdown_ungrouped_min() {
+    use datafusion_functions_aggregate::min_max::min_udaf;
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_plan::aggregates::{
+        AggregateExec, AggregateMode, PhysicalGroupBy,
+    };
+
+    let schema = schema();
+    let source = Arc::new(TestScan::new(schema.clone(), vec![]));
+    let col_a = expressions::col("a", &schema).unwrap();
+    let min_expr = AggregateExprBuilder::new(min_udaf(), vec![col_a])
+        .schema(Arc::clone(&schema))
+        .alias("min_a")
+        .build()
+        .unwrap();
+
+    let plan = Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            vec![Arc::new(min_expr)],
+            vec![None],
+            source,
+            schema,
+        )
+        .unwrap(),
+    );
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - AggregateExec: mode=Partial, gby=[], aggr=[min_a]
+        -   TestScan
+      output:
+        Ok:
+          - AggregateExec: mode=Partial, gby=[], aggr=[min_a]
+          -   TestScan: requested_ordering=[a@0 ASC NULLS LAST]
     "
     );
 }
