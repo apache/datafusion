@@ -57,7 +57,7 @@ fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
 ///
 /// parquet-rs before 53.1.0 left out `null_count` when it was zero
 /// (<https://github.com/apache/arrow-rs/pull/6490>), so for those writers a
-/// missing count is zero. For any other writer, or an unparseable `created_by`,
+/// missing count is zero. For any other writer, or an unparsable `created_by`,
 /// it is unknown.
 pub(crate) fn missing_null_counts_are_zero(file_metadata: &FileMetaData) -> bool {
     let Some((writer, version)) = file_metadata
