@@ -71,11 +71,9 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
 
         // Push what can already descend, then split the projections that are
         // stuck above a node that will not take a whole projection. The split
-        // needs no cleanup pass of its own: the outer projection it leaves
-        // either keeps every expression a plain column, and is then no narrower
-        // than the widened child, or it narrows and holds a computed one. Every
-        // node `split_host_child` allows declines both, the outer projection is
-        // not removable because it renames, and nothing else moved.
+        // runs no cleanup pass: an outer projection it leaves narrowing on top
+        // of a `CoalescePartitionsExec` is pushed below it by this rule's second
+        // run in the physical optimizer.
         let plan = plan.transform_down(remove_unnecessary_projections).data()?;
         plan.transform_down(|plan| {
             Ok(match try_split_leaf_projection(&plan)? {

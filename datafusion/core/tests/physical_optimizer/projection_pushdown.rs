@@ -2041,6 +2041,16 @@ async fn split_declines_hash_repartition() -> Result<()> {
     Ok(())
 }
 
+fn parquet_scan(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
+    let config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        Arc::new(ParquetSource::new(Arc::clone(schema))),
+    )
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .build();
+    DataSourceExec::from_data_source(config)
+}
+
 fn limit_split_scan() -> Result<(SchemaRef, Arc<dyn ExecutionPlan>)> {
     let schema: SchemaRef = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, true),
@@ -2050,13 +2060,7 @@ fn limit_split_scan() -> Result<(SchemaRef, Arc<dyn ExecutionPlan>)> {
             true,
         ),
     ]));
-    let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
-        Arc::new(ParquetSource::new(Arc::clone(&schema))),
-    )
-    .with_file(PartitionedFile::new("x".to_string(), 100))
-    .build();
-    Ok((schema, DataSourceExec::from_data_source(config)))
+    Ok((Arc::clone(&schema), parquet_scan(&schema)))
 }
 
 fn limit_split_exprs(schema: &SchemaRef) -> Result<Vec<ProjectionExpr>> {
@@ -2367,22 +2371,14 @@ async fn split_below_a_filter_narrows_on_the_second_run() -> Result<()> {
         ),
         Field::new("k", DataType::Int64, true),
     ]));
-    let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
-        Arc::new(ParquetSource::new(Arc::clone(&schema))),
-    )
-    .with_file(PartitionedFile::new("x".to_string(), 100))
-    .build();
     let predicate = binary(
         col("id", &schema)?,
         Operator::Gt,
         Arc::new(Literal::new(ScalarValue::Int64(Some(0)))),
         &schema,
     )?;
-    let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
-        predicate,
-        DataSourceExec::from_data_source(config),
-    )?);
+    let filter: Arc<dyn ExecutionPlan> =
+        Arc::new(FilterExec::try_new(predicate, parquet_scan(&schema))?);
     let limit: Arc<dyn ExecutionPlan> =
         Arc::new(GlobalLimitExec::new(filter, 1, Some(3)));
     let projection: Arc<dyn ExecutionPlan> =
@@ -2474,12 +2470,6 @@ async fn split_declines_when_the_child_refuses_the_projection() -> Result<()> {
 async fn split_descends_through_global_limit_with_a_marker() -> Result<()> {
     let schema: SchemaRef =
         Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
-    let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
-        Arc::new(ParquetSource::new(Arc::clone(&schema))),
-    )
-    .with_file(PartitionedFile::new("x".to_string(), 100))
-    .build();
     let marker: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::new(
         "file_row_index",
         datafusion_functions::core::file_row_index(),
@@ -2502,11 +2492,8 @@ async fn split_descends_through_global_limit_with_a_marker() -> Result<()> {
             alias: "w".to_string(),
         },
     ];
-    let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(
-        DataSourceExec::from_data_source(config),
-        1,
-        Some(3),
-    ));
+    let limit: Arc<dyn ExecutionPlan> =
+        Arc::new(GlobalLimitExec::new(parquet_scan(&schema), 1, Some(3)));
     let projection: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(exprs, limit)?);
 

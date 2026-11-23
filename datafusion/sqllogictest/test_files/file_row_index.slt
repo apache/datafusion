@@ -315,10 +315,10 @@ SELECT file_row_index() + 1, column1 FROM parquet_table ORDER BY column1
 # harness rejects as leftover configuration.
 
 # A leaf expression must also reach the scan when the source pushes an
-# `OFFSET` down. Every query below errors out without that.
+# `OFFSET` down. Every value query below errors out without that.
 
-# Every `OFFSET` below sets a skip that differs from the fetch, and the two
-# controls set no fetch at all: swapped numbers would show.
+# Every `OFFSET` below sets a skip that differs from the fetch, so swapped
+# numbers would show.
 
 # The marker is BARE here, and alone in its projection.
 query I
