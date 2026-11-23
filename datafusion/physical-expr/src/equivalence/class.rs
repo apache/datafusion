@@ -812,6 +812,8 @@ impl EquivalenceGroup {
             IndexMap::<_, EquivalenceClass>::with_capacity(mapping.len());
         let mut augmented = None;
         for (source, targets) in mapping.iter() {
+            // Each target evaluates a volatile source again, so the targets are
+            // not equal to each other or to anything in the input.
             if is_volatile(source) {
                 continue;
             }
