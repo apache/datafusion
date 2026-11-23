@@ -32,7 +32,7 @@ use datafusion::common::{
     DFSchema, ScalarValue, not_impl_err, plan_err, substrait_datafusion_err,
     substrait_err,
 };
-use datafusion::logical_expr::{Case, Expr, ExprSchemable};
+use datafusion::logical_expr::{Case, Cast, Expr, ExprSchemable, TryCast};
 use prost::Message;
 use std::sync::Arc;
 use substrait::proto;
@@ -609,7 +609,9 @@ pub(crate) fn name_struct_literals_like_first_struct_expr<'a>(
     // the names come from the first expression that isn't a literal and contains a struct
     let Some(named_type) = exprs
         .iter()
-        .filter(|e| !has_literal_value(e) && !matches!(***e, Expr::Lambda(_)))
+        .filter(|e| {
+            !has_literal_value(e, input_schema) && !matches!(***e, Expr::Lambda(_))
+        })
         .filter_map(|e| e.get_type(input_schema).ok())
         .find(contains_struct)
     else {
@@ -617,16 +619,24 @@ pub(crate) fn name_struct_literals_like_first_struct_expr<'a>(
     };
 
     for expr in exprs.iter_mut() {
-        rename_literal_fields(expr, &named_type);
+        rename_literal_fields(expr, &named_type, input_schema);
     }
 }
 
 /// If `expr` is a struct-typed literal, possibly aliased, gives it the field names of
 /// `named_type` when the two have the same shape. A `CASE` whose results are all
-/// literals counts as a literal: each result is renamed. Anything else is left unchanged.
-pub(crate) fn rename_literal_fields(expr: &mut Expr, named_type: &DataType) {
+/// literals counts as a literal: each result is renamed. So does a cast to a struct type
+/// from a value without one (see [`has_literal_value`]): its target type is renamed.
+/// Anything else is left unchanged.
+pub(crate) fn rename_literal_fields(
+    expr: &mut Expr,
+    named_type: &DataType,
+    input_schema: &DFSchema,
+) {
     match expr {
-        Expr::Alias(alias) => rename_literal_fields(&mut alias.expr, named_type),
+        Expr::Alias(alias) => {
+            rename_literal_fields(&mut alias.expr, named_type, input_schema)
+        }
         Expr::Literal(value, _) => {
             let value_type = value.data_type();
             if !contains_struct(&value_type) {
@@ -640,12 +650,24 @@ pub(crate) fn rename_literal_fields(expr: &mut Expr, named_type: &DataType) {
                 *value = renamed;
             }
         }
-        Expr::Case(case) if case_results(case).all(has_literal_value) => {
+        Expr::Case(case)
+            if case_results(case)
+                .all(|result| has_literal_value(result, input_schema)) =>
+        {
             for (_, then) in case.when_then_expr.iter_mut() {
-                rename_literal_fields(then, named_type);
+                rename_literal_fields(then, named_type, input_schema);
             }
             if let Some(else_expr) = case.else_expr.as_mut() {
-                rename_literal_fields(else_expr, named_type);
+                rename_literal_fields(else_expr, named_type, input_schema);
+            }
+        }
+        Expr::Cast(Cast { expr: input, field })
+        | Expr::TryCast(TryCast { expr: input, field })
+            if casts_to_struct_from_non_struct(input, field, input_schema) =>
+        {
+            if let Some(renamed_type) = with_field_names_of(field.data_type(), named_type)
+            {
+                *field = Arc::new(field.as_ref().clone().with_data_type(renamed_type));
             }
         }
         _ => {}
@@ -654,19 +676,43 @@ pub(crate) fn rename_literal_fields(expr: &mut Expr, named_type: &DataType) {
 
 /// Returns true if the value of `expr` comes only from literals: `expr` is a literal, an
 /// alias of one, or a `CASE` whose results (not its conditions) all are.
-pub(crate) fn has_literal_value(expr: &Expr) -> bool {
+///
+/// A cast to a struct type from a value without one, such as `CAST(NULL AS STRUCT<…>)`,
+/// counts too: like a literal's type, a cast's target type comes from Substrait, so its
+/// field names are generated.
+pub(crate) fn has_literal_value(expr: &Expr, input_schema: &DFSchema) -> bool {
     match expr {
-        Expr::Alias(alias) => has_literal_value(&alias.expr),
+        Expr::Alias(alias) => has_literal_value(&alias.expr, input_schema),
         Expr::Literal(..) => true,
-        Expr::Case(case) => case_results(case).all(has_literal_value),
+        Expr::Case(case) => {
+            case_results(case).all(|result| has_literal_value(result, input_schema))
+        }
+        Expr::Cast(Cast { expr: input, field })
+        | Expr::TryCast(TryCast { expr: input, field }) => {
+            casts_to_struct_from_non_struct(input, field, input_schema)
+        }
         _ => false,
     }
+}
+
+/// Returns true if casting `input` to `field`'s type creates struct fields that `input`
+/// doesn't have, as in `CAST(NULL AS STRUCT<…>)`. Renaming them can't change the result.
+/// A cast from a struct is left out: it matches the fields by name.
+fn casts_to_struct_from_non_struct(
+    input: &Expr,
+    field: &FieldRef,
+    input_schema: &DFSchema,
+) -> bool {
+    contains_struct(field.data_type())
+        && input
+            .get_type(input_schema)
+            .is_ok_and(|input_type| !contains_struct(&input_type))
 }
 
 /// Returns true if `expr` is a struct literal: its value comes only from literals (see
 /// [`has_literal_value`]) and its type contains a struct.
 pub(crate) fn has_struct_literal_value(expr: &Expr, input_schema: &DFSchema) -> bool {
-    has_literal_value(expr)
+    has_literal_value(expr, input_schema)
         && expr
             .get_type(input_schema)
             .is_ok_and(|data_type| contains_struct(&data_type))

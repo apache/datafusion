@@ -2937,6 +2937,42 @@ async fn roundtrip_struct_literal_in_map_values() -> Result<()> {
     .await
 }
 
+// union planning casts the `VALUES` column, typed `Null`, to the struct type of `st`
+#[tokio::test]
+async fn roundtrip_struct_cast_union_with_values_null_second_input() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT st FROM struct_rows UNION ALL SELECT * FROM (VALUES (NULL)) AS t(st)",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_struct_cast_union_with_values_null_first_input() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT * FROM (VALUES (NULL)) AS t(st) UNION ALL SELECT st FROM struct_rows",
+    )
+    .await
+}
+
+// the struct is a map key, as in a NULL padding a `MAP<STRUCT<...>, BOOLEAN>` column
+#[tokio::test]
+async fn roundtrip_struct_cast_union_with_values_null_map_key() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT map([st], [true]) FROM struct_rows WHERE st IS NOT NULL \
+         UNION ALL SELECT * FROM (VALUES (NULL)) AS t(m)",
+    )
+    .await
+}
+
+// coalesce is simplified to a CASE, whose ELSE branch casts the `Null` column to the struct type
+#[tokio::test]
+async fn roundtrip_struct_cast_in_coalesce() -> Result<()> {
+    assert_struct_literal_roundtrips(
+        "SELECT coalesce(st, r) FROM struct_rows CROSS JOIN (VALUES (NULL)) AS t(r)",
+    )
+    .await
+}
+
 // Sibling lambda parameter names may repeat, but nested captures must still
 // resolve against their own enclosing scopes during optimization and execution.
 #[tokio::test]
