@@ -95,6 +95,18 @@ impl LazyUsingColumns {
     }
 }
 
+/// The clauses of a SELECT that are planned over its FROM clause
+struct SelectBody {
+    projection: Vec<SelectItem>,
+    selection: Option<SQLExpr>,
+    group_by: GroupByExpr,
+    having: Option<SQLExpr>,
+    qualify: Option<SQLExpr>,
+    named_window: Vec<NamedWindowDefinition>,
+    distinct: Option<Distinct>,
+    distribute_by: Vec<SQLExpr>,
+}
+
 fn flatten_expr_groups(expr_groups: Vec<Vec<Expr>>) -> Vec<Expr> {
     expr_groups.into_iter().flatten().collect()
 }
@@ -103,8 +115,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logic plan from an SQL select
     pub(super) fn select_to_plan(
         &self,
-        mut select: Select,
-        mut query_order_by: Option<OrderBy>,
+        select: Select,
+        query_order_by: Option<OrderBy>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // Check for unsupported syntax first
@@ -128,6 +140,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // Process `from` clause
         let plan = self.plan_from_tables(select.from, planner_context)?;
+        let body = SelectBody {
+            projection: select.projection,
+            selection: select.selection,
+            group_by: select.group_by,
+            having: select.having,
+            qualify: select.qualify,
+            named_window: select.named_window,
+            distinct: select.distinct,
+            distribute_by: select.distribute_by,
+        };
+        self.select_body_to_plan(
+            plan,
+            body,
+            query_order_by,
+            set_expr_left_schema,
+            planner_context,
+        )
+    }
+
+    /// Plans `select` with `plan` in place of its FROM clause
+    fn select_body_to_plan(
+        &self,
+        plan: LogicalPlan,
+        mut select: SelectBody,
+        mut query_order_by: Option<OrderBy>,
+        set_expr_left_schema: Option<DFSchemaRef>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
         let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
 
         // Process `where` clause
