@@ -625,10 +625,12 @@ also run on pushes to release branches (<code class="docutils literal notranslat
 <section id="fuzzing-unit-tests">
 <h3>Fuzzing unit tests<a class="headerlink" href="#fuzzing-unit-tests" title="Link to this heading">#</a></h3>
 <p>For fuzzing unit tests, such as tests for a single operator or an internal utility:</p>
+<p>The <a class="reference external" href="https://github.com/apache/datafusion/blob/main/test-utils/src/fuzz.rs"><code class="docutils literal notranslate"><span class="pre">FuzzTest</span></code> trait</a> simplifies fuzz tests; use it when it makes the test easier to implement.</p>
 <ul class="simple">
-<li><p>If the test is small (easy to set up and takes a few seconds), keep it as a unit test.</p></li>
-<li><p>If the test is large (requires a fuzzing driver and takes more than 10 seconds), it should implement the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/test-utils/src/fuzz.rs"><code class="docutils literal notranslate"><span class="pre">FuzzTest</span></code> trait</a> and run through the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/fuzz/tests/fuzz.rs">central fuzz-test entry point</a>. See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/fuzz/tests/suites/spill_pool.rs">spill-pool fuzzer</a> for a reference implementation.</p></li>
+<li><p>Keep tests inline as unit tests when they are simple (such as running a query with an option enabled and disabled) or exercise private utilities.</p></li>
+<li><p>Use <code class="docutils literal notranslate"><span class="pre">FuzzTest</span></code> when testing public APIs involves generating data, random plans or expressions, and coordinating multiple rounds.</p></li>
 </ul>
+<p>Run <code class="docutils literal notranslate"><span class="pre">FuzzTest</span></code> implementations through the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/fuzz/tests/fuzz.rs">central fuzz-test entry point</a>. See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/fuzz/tests/suites/spill_pool.rs">spill-pool fuzzer</a> for a reference implementation.</p>
 </section>
 <section id="sql-fuzz-testing">
 <h3>SQL fuzz testing<a class="headerlink" href="#sql-fuzz-testing" title="Link to this heading">#</a></h3>
