@@ -21,7 +21,7 @@
 //! and map keys and values) are never read as strings: they keep going through
 //! the validating cast instead. The view coercions still apply at every level.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, TimeUnit};
