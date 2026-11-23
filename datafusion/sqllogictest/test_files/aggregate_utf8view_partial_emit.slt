@@ -5,9 +5,9 @@
 # Reproducer from https://github.com/apache/datafusion/issues/27323
 #
 # GROUP BY k, s on a file sorted by k, where s is Utf8View. The partial
-# aggregate emits a small batch every time k changes. Those batches used to
-# drag along the strings of earlier batches, and the query ran out of memory
-# in the order-preserving repartition even though the result is 7000 rows.
+# aggregate emits a small batch every time k changes. Each batch must hold
+# only its own strings, or the order-preserving repartition runs out of
+# memory under the limits below.
 
 statement ok
 SET datafusion.execution.target_partitions = 8
@@ -46,7 +46,7 @@ physical_plan
 05)--------AggregateExec: mode=Partial, gby=[k@0 as k, s@1 as s], aggr=[count(Int64(1))], group_clustering_mode=Partial([0])
 06)----------DataSourceExec: file_groups={8 groups: <slt:ignore>
 
-# Both limits failed with ResourcesExhausted before the fix
+# Well above what 7000 result rows need
 statement ok
 SET datafusion.runtime.memory_limit = '50M'
 
@@ -72,5 +72,7 @@ DROP TABLE t
 statement ok
 SET datafusion.execution.target_partitions = 4
 
+# Setting a runtime option rebuilds the session state from the existing one,
+# which turns this option off because the default catalog already exists.
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema

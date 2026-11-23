@@ -535,8 +535,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         } else {
             // If it is `in_progress`, take the `0 ~ offset` part out of it
             debug_assert!(last_take_len <= self.in_progress.len());
-            let taken_last_buffer = self.in_progress[0..last_take_len].to_vec();
-            self.in_progress.drain(0..last_take_len);
+            let taken_last_buffer: Vec<u8> =
+                self.in_progress.drain(0..last_take_len).collect();
             Buffer::from_vec(taken_last_buffer)
         };
 
