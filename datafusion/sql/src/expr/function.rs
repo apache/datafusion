@@ -30,8 +30,8 @@ use sqlparser::ast::{
 
 /// Suggest a valid function based on an invalid input function name
 ///
-/// Returns `None` if no valid matches are found. This happens when there are no
-/// functions registered with the context.
+/// Returns `None` if no valid matches are found, either because there are no
+/// functions registered with the context or because no candidate is close enough.
 pub fn suggest_valid_function(
     input_function_name: &str,
     is_window_func: bool,
@@ -51,16 +51,42 @@ pub fn suggest_valid_function(
     find_closest_match(valid_funcs, input_function_name)
 }
 
-/// Find the closest matching string to the target string in the candidates list, using edit distance(case insensitive)
-/// Input `candidates` must not be empty otherwise an error is returned.
+/// Find the closest matching string to the target string in the candidates list,
+/// using edit distance (case insensitive).
+/// Returns `None` if `candidates` is empty or no candidate is close enough.
 fn find_closest_match(candidates: Vec<String>, target: &str) -> Option<String> {
     let target = target.to_lowercase();
-    candidates.into_iter().min_by_key(|candidate| {
-        datafusion_common::utils::datafusion_strsim::levenshtein(
-            &candidate.to_lowercase(),
-            &target,
-        )
-    })
+    let target_len = target.chars().count();
+    let mut cache = Vec::new();
+    let mut best_match: Option<(usize, usize, String, String)> = None;
+    for candidate in candidates {
+        let candidate_lower = candidate.to_lowercase();
+        let distance =
+            datafusion_common::utils::datafusion_strsim::levenshtein_with_buffer(
+                &candidate_lower,
+                &target,
+                &mut cache,
+            );
+        let max_len = target_len.max(candidate_lower.chars().count());
+        // Require strictly fewer than half of the longer name to be edited so
+        // unrelated names at 50%+ distance (e.g. `year` -> `mean`) are not suggested.
+        if max_len == 0 || distance * 2 >= max_len {
+            continue;
+        }
+        let should_replace = best_match.as_ref().is_none_or(
+            |(best_distance, best_max_len, best_lower, _)| {
+                distance < *best_distance
+                    || (distance == *best_distance
+                        && (max_len > *best_max_len
+                            || (max_len == *best_max_len
+                                && candidate_lower < *best_lower)))
+            },
+        );
+        if should_replace {
+            best_match = Some((distance, max_len, candidate_lower, candidate));
+        }
+    }
+    best_match.map(|(_, _, _, candidate)| candidate)
 }
 
 /// Arguments for a function call extracted from the SQL AST
@@ -957,17 +983,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         // Could not find the relevant function, so return an error
+        let has_functions = if is_function_window {
+            !self.context_provider.udaf_names().is_empty()
+                || !self.context_provider.udwf_names().is_empty()
+        } else {
+            !self.context_provider.udf_names().is_empty()
+                || !self
+                    .context_provider
+                    .higher_order_function_names()
+                    .is_empty()
+                || !self.context_provider.udaf_names().is_empty()
+        };
+        if !has_functions {
+            return internal_err!("No functions registered with this context.");
+        }
+        let span = Span::try_from_sqlparser_span(sql_parser_span);
+        let mut diagnostic =
+            Diagnostic::new_error(format!("Invalid function '{name}'"), span);
         if let Some(suggested_func_name) =
             suggest_valid_function(&name, is_function_window, self.context_provider)
         {
-            let span = Span::try_from_sqlparser_span(sql_parser_span);
-            let mut diagnostic =
-                Diagnostic::new_error(format!("Invalid function '{name}'"), span);
             diagnostic
                 .add_note(format!("Possible function '{suggested_func_name}'"), None);
             plan_err!("Invalid function '{name}'.\nDid you mean '{suggested_func_name}'?"; diagnostic=diagnostic)
         } else {
-            internal_err!("No functions registered with this context.")
+            plan_err!("Invalid function '{name}'."; diagnostic=diagnostic)
         }
     }
 
@@ -1241,5 +1281,58 @@ fn all_unique(params: &[sqlparser::ast::LambdaFunctionParameter]) -> bool {
                 .map(|p| crate::utils::normalize_ident(p.name.clone()))
                 .all(|p| set.insert(p))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_closest_match;
+
+    #[test]
+    fn test_find_closest_match_threshold_and_determinism() {
+        // Unrelated short functions at distance 3/4 are rejected; `to_date` (3/7) wins regardless of order
+        let candidates = vec![
+            "tanh".to_string(),
+            "atan".to_string(),
+            "rand".to_string(),
+            "abs".to_string(),
+            "map".to_string(),
+            "to_date".to_string(),
+        ];
+        assert_eq!(
+            find_closest_match(candidates.clone(), "date"),
+            Some("to_date".to_string())
+        );
+        let reversed: Vec<String> = candidates.into_iter().rev().collect();
+        assert_eq!(
+            find_closest_match(reversed, "date"),
+            Some("to_date".to_string())
+        );
+
+        // No candidate within threshold (including exact 50% edits like `year` -> `mean`) -> None
+        assert_eq!(
+            find_closest_match(
+                vec!["list_zip".to_string(), "arrays_zip".to_string()],
+                "zzzzzzzzzz"
+            ),
+            None
+        );
+        assert_eq!(
+            find_closest_match(vec!["mean".to_string(), "corr".to_string()], "year"),
+            None
+        );
+
+        // Deterministic lexicographical tie-break when distance and max_len are equal
+        // (`date_add` vs `date_bin` / `datepart`: both distance 3, max_len 8)
+        let tied = vec!["datepart".to_string(), "date_bin".to_string()];
+        let tied_rev = vec!["date_bin".to_string(), "datepart".to_string()];
+        assert_eq!(
+            find_closest_match(tied, "date_add"),
+            Some("date_bin".to_string())
+        );
+        assert_eq!(
+            find_closest_match(tied_rev, "date_add"),
+            Some("date_bin".to_string())
+        );
     }
 }

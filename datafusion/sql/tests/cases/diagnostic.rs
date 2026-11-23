@@ -299,11 +299,22 @@ fn test_ambiguous_column_suggestion() -> Result<()> {
 
 #[test]
 fn test_invalid_function() -> Result<()> {
+    let query = "SELECT /*whole*/conca/*whole*/()";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_snapshot!(diag.message, @"Invalid function 'conca'");
+    assert_snapshot!(diag.notes[0].message, @"Possible function 'concat'");
+    assert_eq!(diag.span, Some(spans["whole"]));
+    Ok(())
+}
+
+#[test]
+fn test_invalid_function_no_suggestion() -> Result<()> {
     let query = "SELECT /*whole*/concat_not_exist/*whole*/()";
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_snapshot!(diag.message, @"Invalid function 'concat_not_exist'");
-    assert_snapshot!(diag.notes[0].message, @"Possible function 'concat'");
+    assert!(diag.notes.is_empty());
     assert_eq!(diag.span, Some(spans["whole"]));
     Ok(())
 }
