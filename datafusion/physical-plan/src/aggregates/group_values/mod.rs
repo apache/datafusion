@@ -37,7 +37,7 @@ pub(crate) use metrics::{
 };
 
 /// Group id that [`GroupValues::lookup`] writes for a row whose key is not
-/// stored.
+/// stored. It is never a valid group id, because group ids are dense from 0.
 pub const MISSING_GROUP: usize = usize::MAX;
 
 /// Stores the group values during hash aggregation.
