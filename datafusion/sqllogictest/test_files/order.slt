@@ -2486,3 +2486,103 @@ DROP TABLE probe_constant_u;
 
 statement ok
 DROP TABLE probe_constant_v;
+
+# The projection evaluates random() again, so `r` is not ordered by the
+# input's ORDER BY random() and the outer sort must stay.
+query TT
+EXPLAIN SELECT r, v FROM (
+  SELECT random() AS r, v FROM (
+    SELECT value AS v FROM generate_series(1, 10) ORDER BY random() LIMIT 5
+  )
+) ORDER BY r;
+----
+logical_plan
+01)Sort: r ASC NULLS LAST
+02)--Projection: random() AS r, v
+03)----Sort: random() ASC NULLS LAST, fetch=5
+04)------Projection: generate_series().value AS v
+05)--------TableScan: generate_series() projection=[value]
+physical_plan
+01)SortPreservingMergeExec: [r@0 ASC NULLS LAST]
+02)--SortExec: expr=[r@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[random() as r, v@0 as v]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------SortExec: TopK(fetch=5), expr=[random() ASC NULLS LAST], preserve_partitioning=[false]
+06)----------ProjectionExec: expr=[value@0 as v]
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=8192]
+
+statement ok
+CREATE TABLE volatile_eq_t (a DOUBLE, b DOUBLE) AS VALUES (1.0, 2.0), (2.0, 1.0);
+
+query TT
+EXPLAIN SELECT a, b FROM (
+  SELECT a, b FROM volatile_eq_t WHERE a = floor(random() * 3) AND b = floor(random() * 3)
+  UNION ALL
+  SELECT a, b FROM volatile_eq_t WHERE a = floor(random() * 3) AND b = floor(random() * 3)
+) ORDER BY a, b;
+----
+logical_plan
+01)Sort: a ASC NULLS LAST, b ASC NULLS LAST
+02)--Union
+03)----Filter: volatile_eq_t.a = floor(random() * Float64(3)) AND volatile_eq_t.b = floor(random() * Float64(3))
+04)------TableScan: volatile_eq_t projection=[a, b]
+05)----Filter: volatile_eq_t.a = floor(random() * Float64(3)) AND volatile_eq_t.b = floor(random() * Float64(3))
+06)------TableScan: volatile_eq_t projection=[a, b]
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
+02)--UnionExec
+03)----SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
+04)------FilterExec: a@0 = floor(random() * 3) AND b@1 = floor(random() * 3)
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
+07)------FilterExec: a@0 = floor(random() * 3) AND b@1 = floor(random() * 3)
+08)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT a, r FROM (
+  SELECT a, floor(random() * 3) AS r FROM volatile_eq_t WHERE a = floor(random() * 3)
+  UNION ALL
+  SELECT a, floor(random() * 3) AS r FROM volatile_eq_t WHERE a = floor(random() * 3)
+) ORDER BY a, r;
+----
+logical_plan
+01)Sort: a ASC NULLS LAST, r ASC NULLS LAST
+02)--Union
+03)----Projection: volatile_eq_t.a, floor(random() * Float64(3)) AS r
+04)------Filter: volatile_eq_t.a = floor(random() * Float64(3))
+05)--------TableScan: volatile_eq_t projection=[a]
+06)----Projection: volatile_eq_t.a, floor(random() * Float64(3)) AS r
+07)------Filter: volatile_eq_t.a = floor(random() * Float64(3))
+08)--------TableScan: volatile_eq_t projection=[a]
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST, r@1 ASC NULLS LAST]
+02)--UnionExec
+03)----SortExec: expr=[a@0 ASC NULLS LAST, r@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------ProjectionExec: expr=[a@0 as a, floor(random() * 3) as r]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------FilterExec: a@0 = floor(random() * 3)
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)----SortExec: expr=[a@0 ASC NULLS LAST, r@1 ASC NULLS LAST], preserve_partitioning=[true]
+09)------ProjectionExec: expr=[a@0 as a, floor(random() * 3) as r]
+10)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)----------FilterExec: a@0 = floor(random() * 3)
+12)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT a FROM (
+  SELECT a FROM volatile_eq_t WHERE floor(random() * 3) = 1
+) ORDER BY floor(random() * 3);
+----
+logical_plan
+01)Sort: floor(random() * Float64(3)) AS floor(random() * Int64(3)) ASC NULLS LAST
+02)--Filter: floor(random() * Float64(3)) = Float64(1)
+03)----TableScan: volatile_eq_t projection=[a]
+physical_plan
+01)SortExec: expr=[floor(random() * 3) ASC NULLS LAST], preserve_partitioning=[false]
+02)--FilterExec: floor(random() * 3) = 1
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE volatile_eq_t;
+
+

@@ -35,6 +35,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{Constraint, Constraints, HashMap, HashSet, Result, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 
 use indexmap::IndexSet;
 use itertools::{Either, Itertools};
@@ -1445,6 +1446,9 @@ impl EquivalenceProperties {
     fn normalize_mapping(&self, mapping: &ProjectionMapping) -> ProjectionMapping {
         mapping
             .iter()
+            // A volatile source is evaluated again by the projection, so it
+            // does not carry any ordering from the input.
+            .filter(|(source, _)| !is_volatile(source))
             .map(|(source, target)| {
                 let normal_source = self.eq_group.normalize_expr(Arc::clone(source));
                 (normal_source, target.clone())

@@ -390,6 +390,11 @@ impl EquivalenceGroup {
 
     /// Adds `expr` as a constant expression to this equivalence group.
     pub fn add_constant(&mut self, const_expr: ConstExpr) {
+        // Evaluating a volatile expression again can produce a different value,
+        // so it cannot be treated as a constant.
+        if is_volatile(&const_expr.expr) {
+            return;
+        }
         // If the expression is already in an equivalence class, we should
         // adjust the constant-ness of the class if necessary:
         if let Some(idx) = self.map.get(&const_expr.expr) {
@@ -460,6 +465,11 @@ impl EquivalenceGroup {
         left: Arc<dyn PhysicalExpr>,
         right: Arc<dyn PhysicalExpr>,
     ) -> bool {
+        // Each evaluation of a volatile expression is independent, so it cannot
+        // share an equivalence class with another expression.
+        if is_volatile(&left) || is_volatile(&right) {
+            return false;
+        }
         let first_class = self.map.get(&left).copied();
         let second_class = self.map.get(&right).copied();
         match (first_class, second_class) {
