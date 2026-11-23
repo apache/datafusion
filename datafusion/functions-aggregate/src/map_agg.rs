@@ -1065,4 +1065,47 @@ mod tests {
         assert_eq!(acc.evaluate()?, acc.state()?[0]);
         Ok(())
     }
+
+    #[test]
+    fn map_agg_compacts_dictionary_payloads() -> Result<()> {
+        use arrow::array::{DictionaryArray, StringArray};
+        use arrow::datatypes::Int32Type;
+
+        for n in [10, 10_000] {
+            let values = StringArray::from_iter_values(
+                (0..n).map(|i| format!("unused_value_{i:05}")),
+            );
+            let dictionary: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from_iter_values(0..n as i32),
+                Arc::new(values),
+            )?);
+            // Retain only the last row so compaction must remap its key and
+            // drop the rest of the dictionary.
+            let value = dictionary.slice(n - 1, 1);
+            let keys = Arc::new(Int32Array::from(vec![42])) as ArrayRef;
+
+            let mut accumulator = MapAggAccumulator::try_new(
+                DataType::Int32,
+                dictionary.data_type().clone(),
+            )?;
+            accumulator.update_batch(&[keys, Arc::clone(&value)])?;
+
+            let size = accumulator.size();
+            assert!(
+                size < 2_000,
+                "dictionary compaction retained unused values: \
+                 {size} bytes for {n} entries"
+            );
+
+            let ScalarValue::Map(map) = accumulator.evaluate()? else {
+                panic!("expected map scalar");
+            };
+            assert_eq!(
+                ScalarValue::try_from_array(map.values(), 0)?,
+                ScalarValue::try_from_array(&value, 0)?
+            );
+        }
+
+        Ok(())
+    }
 }
