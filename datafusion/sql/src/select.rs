@@ -45,9 +45,9 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, Ident, NamedWindowExpr, OrderBy, Query,
-    SelectItemQualifiedWildcardKind, VisitMut, VisitorMut, WildcardAdditionalOptions,
-    WindowSpec, WindowType,
+    Distinct, Expr as SQLExpr, GroupByExpr, Ident, NamedWindowExpr, OrderBy, OrderByExpr,
+    OrderByKind, Query, SelectItemQualifiedWildcardKind, VisitMut, VisitorMut,
+    WildcardAdditionalOptions, WindowSpec, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -157,6 +157,33 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             set_expr_left_schema,
             planner_context,
         )
+    }
+
+    /// Plans `SELECT projection GROUP BY group_by ORDER BY order_by` with `plan`
+    /// in place of the FROM clause
+    pub(super) fn select_parts_to_plan(
+        &self,
+        plan: LogicalPlan,
+        projection: Vec<SelectItem>,
+        group_by: Vec<SQLExpr>,
+        order_by: Vec<OrderByExpr>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
+        let select = SelectBody {
+            projection,
+            selection: None,
+            group_by: GroupByExpr::Expressions(group_by, vec![]),
+            having: None,
+            qualify: None,
+            named_window: vec![],
+            distinct: None,
+            distribute_by: vec![],
+        };
+        let order_by = (!order_by.is_empty()).then_some(OrderBy {
+            kind: OrderByKind::Expressions(order_by),
+            interpolate: None,
+        });
+        self.select_body_to_plan(plan, select, order_by, None, planner_context)
     }
 
     /// Plans `select` with `plan` in place of its FROM clause

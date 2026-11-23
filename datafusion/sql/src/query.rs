@@ -7,16 +7,15 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{Constraints, DFSchema, Result, not_impl_err};
-use datafusion_expr::expr::{Sort, WildcardOptions};
+use datafusion_expr::expr::Sort;
 
-use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, ExprWithAliasAndOrderBy, LimitClause, ObjectName, Offset,
-    OffsetRows, OrderBy, OrderByExpr, OrderByKind, PipeOperator, Query, SelectInto,
-    SetExpr, SetOperator, SetQuantifier, TableAlias, Value,
+    Expr as SQLExpr, ExprWithAlias, ExprWithAliasAndOrderBy, LimitClause, ObjectName,
+    Offset, OffsetRows, OrderBy, OrderByExpr, OrderByKind, PipeOperator, Query,
+    SelectInto, SelectItem, SetExpr, SetOperator, SetQuantifier, TableAlias, Value,
 };
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -119,16 +118,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             PipeOperator::Where { expr } => {
                 self.plan_selection(Some(expr), plan, planner_context)
             }
-            PipeOperator::OrderBy { exprs } => {
-                let sort_exprs = self.order_by_to_sort_expr(
-                    exprs,
-                    plan.schema(),
-                    planner_context,
-                    true,
-                    None,
-                )?;
-                self.order_by(plan, sort_exprs)
-            }
+            PipeOperator::OrderBy { exprs } => self.select_parts_to_plan(
+                plan,
+                vec![SelectItem::Wildcard(Default::default())],
+                vec![],
+                exprs,
+                planner_context,
+            ),
             PipeOperator::Limit { expr, offset } => self.limit(
                 plan,
                 Some(LimitClause::LimitOffset {
@@ -142,20 +138,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 planner_context,
             ),
             PipeOperator::Select { exprs } => {
-                let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
-                let select_exprs =
-                    self.prepare_select_exprs(&plan, exprs, empty_from, planner_context)?;
-                self.project(plan, select_exprs, None)
+                self.select_parts_to_plan(plan, exprs, vec![], vec![], planner_context)
             }
             PipeOperator::Extend { exprs } => {
-                let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
-                let extend_exprs =
-                    self.prepare_select_exprs(&plan, exprs, empty_from, planner_context)?;
-                let all_exprs =
-                    std::iter::once(SelectExpr::Wildcard(WildcardOptions::default()))
-                        .chain(extend_exprs)
+                let projection =
+                    std::iter::once(SelectItem::Wildcard(Default::default()))
+                        .chain(exprs)
                         .collect();
-                self.project(plan, all_exprs, None)
+                self.select_parts_to_plan(
+                    plan,
+                    projection,
+                    vec![],
+                    vec![],
+                    planner_context,
+                )
             }
             PipeOperator::As { alias } => self.apply_table_alias(
                 plan,
@@ -312,7 +308,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
     }
 
-    /// Handle AGGREGATE pipe operator
+    /// Plans `|> AGGREGATE a GROUP BY g` as `SELECT g, a GROUP BY g`, ordered
+    /// by the items that have an ordering suffix, grouping items first
     fn pipe_operator_aggregate(
         &self,
         plan: LogicalPlan,
@@ -320,35 +317,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         group_by_expr: Vec<ExprWithAliasAndOrderBy>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let plan_schema = plan.schema();
-        let process_expr =
-            |expr_with_alias_and_order_by: ExprWithAliasAndOrderBy,
-             planner_context: &mut PlannerContext| {
-                let expr_with_alias = expr_with_alias_and_order_by.expr;
-                let sql_expr = expr_with_alias.expr;
-                let alias = expr_with_alias.alias;
-
-                let df_expr = self.sql_to_expr(sql_expr, plan_schema, planner_context)?;
-
-                match alias {
-                    Some(alias_ident) => df_expr.alias_if_changed(alias_ident.value),
-                    None => Ok(df_expr),
-                }
-            };
-
-        let aggr_exprs: Vec<Expr> = full_table_exprs
+        let group_by = group_by_expr
+            .iter()
+            .map(|item| item.expr.expr.clone())
+            .collect();
+        let mut projection = vec![];
+        let mut order_by = vec![];
+        for (index, item) in group_by_expr
             .into_iter()
-            .map(|e| process_expr(e, planner_context))
-            .collect::<Result<Vec<_>>>()?;
-
-        let group_by_exprs: Vec<Expr> = group_by_expr
-            .into_iter()
-            .map(|e| process_expr(e, planner_context))
-            .collect::<Result<Vec<_>>>()?;
-
-        LogicalPlanBuilder::from(plan)
-            .aggregate(group_by_exprs, aggr_exprs)?
-            .build()
+            .chain(full_table_exprs)
+            .enumerate()
+        {
+            let ExprWithAliasAndOrderBy {
+                expr: ExprWithAlias { expr, alias },
+                order_by: options,
+            } = item;
+            if options.sort.is_some() || options.nulls_first.is_some() {
+                order_by.push(OrderByExpr {
+                    expr: SQLExpr::value(Value::Number((index + 1).to_string(), false)),
+                    options,
+                    with_fill: None,
+                });
+            }
+            projection.push(match alias {
+                Some(alias) => SelectItem::ExprWithAlias { expr, alias },
+                None => SelectItem::UnnamedExpr(expr),
+            });
+        }
+        self.select_parts_to_plan(plan, projection, group_by, order_by, planner_context)
     }
 
     /// Wrap the logical plan in a `SelectInto`
