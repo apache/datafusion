@@ -1192,6 +1192,10 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         self.probe::<false>(cols, groups)
     }
 
+    fn supports_lookup(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         let group_values_size = self.group_values.allocated_size()
             + self
@@ -2665,6 +2669,7 @@ mod tests {
                 .intern(&batch(vec![1, 2, 3], vec!["x", "y", "z"]), &mut groups)?;
             assert_eq!(groups, vec![0, 1, 2]);
             let probe = batch(vec![3, 9], vec!["z", "z"]);
+            assert!(group_values.supports_lookup());
             group_values.lookup(&probe, &mut groups)?;
             assert_eq!(groups, vec![2, MISSING_GROUP]);
             assert_eq!(group_values.len(), 3);

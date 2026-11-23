@@ -89,6 +89,10 @@ impl GroupValues for GroupValuesBoolean {
         self.probe::<false>(cols, groups)
     }
 
+    fn supports_lookup(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         size_of::<Self>()
     }
@@ -195,6 +199,7 @@ mod tests {
     #[test]
     fn lookup_finds_stored_groups_only() -> Result<()> {
         let mut group_values = GroupValuesBoolean::new();
+        assert!(group_values.supports_lookup());
         let mut groups = vec![];
         let probe: ArrayRef =
             Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)]));

@@ -182,6 +182,10 @@ where
         self.probe::<false>(cols, groups)
     }
 
+    fn supports_lookup(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         size_of::<Self>() + self.map.allocation_size() + self.values.allocated_size()
     }
@@ -435,6 +439,7 @@ mod tests {
         assert_eq!(null_group, 1);
 
         let probe: ArrayRef = Arc::new(Int32Array::from(vec![Some(2), None, Some(5)]));
+        assert!(gv.supports_lookup());
         gv.lookup(std::slice::from_ref(&probe), &mut groups)?;
         assert_eq!(groups, vec![2, 1, MISSING_GROUP]);
         assert_eq!(gv.len(), 3);

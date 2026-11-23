@@ -191,6 +191,10 @@ impl GroupValues for GroupValuesRows {
         self.probe::<false>(cols, groups)
     }
 
+    fn supports_lookup(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         let group_values_size = self
             .group_values
@@ -565,6 +569,7 @@ mod tests {
             Some(vec![Some(9)]),
             None,
         ])) as ArrayRef;
+        assert!(group_values.supports_lookup());
         group_values.lookup(&[probe], &mut groups)?;
         assert_eq!(groups, vec![2, MISSING_GROUP, 1]);
         assert_eq!(group_values.len(), 3);

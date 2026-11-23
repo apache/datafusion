@@ -94,9 +94,15 @@ pub trait GroupValues: Send {
     /// A row whose key is not stored gets [`MISSING_GROUP`]. The stored keys,
     /// their group ids and [`Self::len`] are unchanged.
     ///
-    /// The default returns a not implemented error.
+    /// The default returns a not implemented error. Check
+    /// [`Self::supports_lookup`] before calling.
     fn lookup(&mut self, _cols: &[ArrayRef], _groups: &mut Vec<usize>) -> Result<()> {
         not_impl_err!("GroupValues::lookup is not implemented")
+    }
+
+    /// Returns `true` if [`Self::lookup`] is implemented.
+    fn supports_lookup(&self) -> bool {
+        false
     }
 
     /// Returns the number of bytes of memory used by this [`GroupValues`].

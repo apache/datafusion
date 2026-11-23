@@ -72,6 +72,10 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
         Ok(())
     }
 
+    fn supports_lookup(&self) -> bool {
+        true
+    }
+
     fn size(&self) -> usize {
         self.map.size() + size_of::<Self>()
     }
@@ -214,6 +218,7 @@ mod tests {
             Some("not stored"),
             None,
         ]));
+        assert!(group_values.supports_lookup());
         group_values.lookup(&[probe], &mut groups).unwrap();
         assert_eq!(groups, vec![3, MISSING_GROUP, MISSING_GROUP]);
         assert_eq!(group_values.len(), 10);
