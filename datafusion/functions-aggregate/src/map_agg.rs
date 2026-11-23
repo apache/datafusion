@@ -51,6 +51,7 @@ use arrow::compute::{SortOptions, cast, concat, take};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use arrow::row::{RowConverter, SortField};
 
+use crate::array_agg::compact_payload;
 use datafusion_common::cast::as_map_array;
 use datafusion_common::utils::{SingleRowListArrayBuilder, take_function_args};
 use datafusion_common::{
@@ -65,7 +66,6 @@ use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-
 make_udaf_expr_and_func!(
     MapAgg,
     map_agg,
@@ -585,15 +585,7 @@ fn map_row_to_arrays(map: &MapArray, row: usize) -> [ArrayRef; 2] {
 }
 
 fn compact_array(array: ArrayRef) -> Result<ArrayRef> {
-    // Compact a whole column, including nested view buffers, rather than
-    // allocating one scalar per value or retaining the input batch's buffers.
-    let scalar = SingleRowListArrayBuilder::new(array)
-        .build_list_scalar()
-        .compacted();
-    let ScalarValue::List(list) = scalar else {
-        return internal_err!("expected a list scalar");
-    };
-    Ok(Arc::clone(list.values()))
+    compact_payload(array)
 }
 
 fn concat_column(
