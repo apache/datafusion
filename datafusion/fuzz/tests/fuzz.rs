@@ -4,6 +4,8 @@
 
 //! Central registration for DataFusion's fuzzing unit tests.
 //!
+//! See [`FuzzTest`] for how to implement a fuzzing unit test and how the framework works.
+//!
 //! # Running the tests
 //!
 //! Run all fuzz tests with:
