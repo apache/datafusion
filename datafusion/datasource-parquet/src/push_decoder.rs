@@ -42,6 +42,7 @@ use parquet::arrow::push_decoder::{
     ParquetPushDecoder, ParquetPushDecoderBuilder, RowGroupSelection,
 };
 use parquet::file::metadata::ParquetMetaData;
+use tracing::Instrument;
 
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_execution::memory_pool::MemoryReservation;
@@ -532,9 +533,14 @@ impl PushDecoderStreamState {
                 Ok(DecodeResult::NeedsData(ranges)) => {
                     // I/O, not compute.
                     timer.stop();
+                    let span = tracing::debug_span!(
+                        "Fetch column chunk data",
+                        ranges = ranges.len()
+                    );
                     let data = self
                         .reader
                         .get_byte_ranges(ranges.clone())
+                        .instrument(span)
                         .await
                         .map_err(DataFusionError::from);
                     timer.restart();

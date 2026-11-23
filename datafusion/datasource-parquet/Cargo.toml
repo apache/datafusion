@@ -43,6 +43,7 @@ object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
