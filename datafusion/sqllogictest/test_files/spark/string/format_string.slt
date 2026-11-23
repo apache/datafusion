@@ -141,7 +141,7 @@ Scientific: 1.234500E+03
 query T
 SELECT format_string('Compact: %g', 1234.5);
 ----
-Compact: 1234.5
+Compact: 1234.50
 
 query T
 SELECT format_string('Compact: %g', CAST(123456789.1 AS DOUBLE));
@@ -152,12 +152,33 @@ Compact: 1.23457e+08
 query T
 SELECT format_string('Compact: %G', 1234.5);
 ----
-Compact: 1234.5
+Compact: 1234.50
 
 query T
 SELECT format_string('Compact: %G', CAST(123456789.1 AS DOUBLE));
 ----
 Compact: 1.23457E+08
+
+## Compact float keeps trailing zeros
+query T
+SELECT format_string('%g', CAST(500 AS DOUBLE));
+----
+500.000
+
+query T
+SELECT format_string('%g', CAST(1234.5 AS DOUBLE));
+----
+1234.50
+
+query T
+SELECT format_string('%G', CAST(0.0001 AS DOUBLE));
+----
+0.000100000
+
+query T
+SELECT format_string('%.3g', CAST(1234.5 AS DOUBLE));
+----
+1.23e+03
 
 ## Float with width and precision
 query T
@@ -1551,7 +1572,7 @@ Scientific: 1.234500e+03
 query T
 SELECT format_string('Compact: %g', arrow_cast(1234.5, 'Float32'));
 ----
-Compact: 1234.5
+Compact: 1234.50
 
 query T
 SELECT format_string('String: %s', arrow_cast(3.14159, 'Float32'));
@@ -1599,12 +1620,12 @@ Scientific: 1.234500E+03
 query T
 SELECT format_string('Compact: %g', arrow_cast(1234.5, 'Decimal128(10, 2)'));
 ----
-Compact: 1234.5
+Compact: 1234.50
 
 query T
 SELECT format_string('Compact: %G', arrow_cast(1234.5, 'Decimal128(10, 2)'));
 ----
-Compact: 1234.5
+Compact: 1234.50
 
 query T
 SELECT format_string('String: %s', arrow_cast(123.456, 'Decimal128(10, 3)'));
@@ -1630,7 +1651,7 @@ Scientific: 1.234500e+03
 query T
 SELECT format_string('Compact: %g', arrow_cast(1234.5, 'Decimal256(20, 2)'));
 ----
-Compact: 1234.5
+Compact: 1234.50
 
 query T
 SELECT format_string('String: %s', arrow_cast(123.456, 'Decimal256(20, 3)'));
