@@ -325,7 +325,7 @@ FROM (
   LIMIT 3
 ) s;
 ----
-{b: 5, a: 5}
+{b: 5, a: 10}
 
 statement ok
 set datafusion.execution.target_partitions = 4

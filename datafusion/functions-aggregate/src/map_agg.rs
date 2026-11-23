@@ -47,7 +47,7 @@ use arrow::array::{
     Array, ArrayRef, AsArray, MapArray, StructArray, UInt64Array, new_empty_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow::compute::{SortOptions, concat, take};
+use arrow::compute::{SortOptions, cast, concat, take};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use arrow::row::{RowConverter, SortField};
 
@@ -222,7 +222,7 @@ impl AggregateUDFImpl for MapAgg {
     }
 
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
-        // Not Supported because order matters for first-wins semantics for duplicate keys
+        // Not Supported because order matters for aggregate first-wins semantics for duplicate keys
         datafusion_expr::ReversedUDAF::NotSupported
     }
 
@@ -270,8 +270,9 @@ impl Accumulator for MapAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         assert_eq_or_internal_err!(values.len(), 2, "map_agg expects (key, value)");
 
-        let keys = &values[0];
-        let vals = &values[1];
+        let keys = cast(&values[0], &self.key_type)?;
+        let vals = cast(&values[1], &self.value_type)?;
+
         assert_eq_or_internal_err!(keys.len(), vals.len(), "key/value length mismatch");
         if keys.logical_null_count() != 0 {
             return exec_err!("map key cannot be null");
@@ -280,7 +281,7 @@ impl Accumulator for MapAggAccumulator {
         for row in 0..keys.len() {
             if self
                 .seen
-                .insert(ScalarValue::try_from_array(keys, row)?.compacted())
+                .insert(ScalarValue::try_from_array(&keys, row)?.compacted())
             {
                 indices.push(row as u64);
             }
@@ -459,7 +460,9 @@ impl Accumulator for OrderSensitiveMapAggAccumulator {
             2 + self.ordering_dtypes.len(),
             "map_agg column count mismatch"
         );
-        let keys = &values[0];
+        let keys = cast(&values[0], &self.key_type)?;
+        let vals = cast(values[1].as_ref(), &self.value_type)?;
+
         for array in &values[1..] {
             assert_eq_or_internal_err!(
                 keys.len(),
@@ -471,12 +474,14 @@ impl Accumulator for OrderSensitiveMapAggAccumulator {
             return exec_err!("map key cannot be null");
         }
         if !keys.is_empty() {
-            self.batches.push(
-                values
-                    .iter()
-                    .map(|array| compact_array(Arc::clone(array)))
-                    .collect::<Result<_>>()?,
-            );
+            let mut batch = Vec::with_capacity(values.len());
+
+            batch.push(compact_array(keys)?);
+            batch.push(compact_array(vals)?);
+            for array in &values[2..] {
+                batch.push(compact_array(Arc::clone(array))?);
+            }
+            self.batches.push(batch);
         }
         Ok(())
     }
