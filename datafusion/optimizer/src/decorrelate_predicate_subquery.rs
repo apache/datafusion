@@ -1322,32 +1322,7 @@ fn build_join_with_count_bug(
         .map(Expr::from)
         .collect();
 
-    let indicator_col = Expr::Column(Column::new(Some(alias), UN_MATCHED_ROW_INDICATOR));
-
-    let having_arm = pull_up_having_expr
-        .as_ref()
-        .map(|f| f.clone().is_not_true());
-
     let mut expr_rewrite = TypeCoercionRewriter::new(joined.schema());
-
-    // The subquery's HAVING clause, evaluated against an unmatched row's
-    // default aggregate values (e.g. count(*) defaults to 0, sum(x) to
-    // NULL), is usually `true`, but not once a second filter is combined
-    // into it, so it cannot be assumed.
-    let unmatched_having_default = match pull_up_having_expr {
-        Some(f) => f
-            .transform_up(|e| {
-                if let Expr::Column(Column { name, .. }) = &e
-                    && let Some(default_value) = expr_map.get(name)
-                {
-                    return Ok(Transformed::yes(default_value.clone()));
-                }
-                Ok(Transformed::no(e))
-            })
-            .data()
-            .and_then(|simplified| simplified.rewrite(&mut expr_rewrite).data())?,
-        None => lit(true),
-    };
 
     // EXISTS is true by default (the groupless aggregate always
     // produces a row), unless one of two cases holds:
@@ -1355,10 +1330,33 @@ fn build_join_with_count_bug(
     //     predicate failed,
     // (2) an unmatched outer row's own default aggregate values fail
     //     that same HAVING clause.
-    let exists_expr = match having_arm {
-        Some(when_expr) => {
+    // Both only apply when the subquery has a HAVING clause.
+    let exists_expr = match pull_up_having_expr {
+        Some(f) => {
+            let indicator_col =
+                Expr::Column(Column::new(Some(alias), UN_MATCHED_ROW_INDICATOR));
+
+            // `is_not_true` consumes its input and `f` is still needed below.
+            let having_arm = f.clone().is_not_true();
+
+            // The HAVING clause, evaluated against an unmatched row's
+            // default aggregate values (e.g. count(*) defaults to 0, sum(x)
+            // to NULL), is usually `true`, but not once a second filter is
+            // combined into it, so it cannot be assumed.
+            let unmatched_having_default = f
+                .transform_up(|e| {
+                    if let Expr::Column(Column { name, .. }) = &e
+                        && let Some(default_value) = expr_map.get(name)
+                    {
+                        return Ok(Transformed::yes(default_value.clone()));
+                    }
+                    Ok(Transformed::no(e))
+                })
+                .data()
+                .and_then(|simplified| simplified.rewrite(&mut expr_rewrite).data())?;
+
             when(indicator_col.is_null(), unmatched_having_default.is_true())
-                .when(when_expr, lit(false))
+                .when(having_arm, lit(false))
                 .otherwise(lit(true))?
                 .rewrite(&mut expr_rewrite)
                 .data()?

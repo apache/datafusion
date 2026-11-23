@@ -122,7 +122,6 @@ fn build_set_comparison_subquery(
         SetQuantifier::Any => (Expr::IsTrue, true),
         SetQuantifier::All => (Expr::IsFalse, false),
     };
-    // The last use of the subquery, so move it instead of cloning.
     let found_exists = exists_subquery(
         Arc::unwrap_or_clone(plan),
         spans,
