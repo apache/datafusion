@@ -1157,7 +1157,7 @@ impl EquivalenceProperties {
     ) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
-                if !constraint.is_valid_across_nulls(&self.schema) {
+                if !constraint.implies_unique_sort_prefix(&self.schema) {
                     return false;
                 }
                 let normalized_size = normal_exprs.len();
@@ -1186,7 +1186,7 @@ impl EquivalenceProperties {
     fn satisfied_by_constraints(&self, normal_reqs: &[PhysicalSortRequirement]) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
-                if !constraint.is_valid_across_nulls(&self.schema) {
+                if !constraint.implies_unique_sort_prefix(&self.schema) {
                     return false;
                 }
                 let normalized_size = normal_reqs.len();
