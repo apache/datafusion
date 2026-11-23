@@ -1107,73 +1107,50 @@ fn piecewise_merge_join_existence_wire_layout() -> Result<()> {
 
 /// An embedded projection is the only operator state not derived by `try_new`, so it
 /// travels on the wire, with the same three states as on `NestedLoopJoinExecNode`:
-/// absent, empty (`[u32::MAX]`, as `count(*)` embeds), and a column list. The list is
-/// asserted on the wire as well, since a round trip alone cannot see an encoding
-/// mistake that the decoder mirrors.
+/// absent, empty (`[u32::MAX]`, as `count(*)` embeds), and a column list. The encoding
+/// does not depend on the join type. The list is asserted on the wire as well, since a
+/// round trip alone cannot see an encoding mistake that the decoder mirrors.
 #[test]
 fn roundtrip_piecewise_merge_join_projection() -> Result<()> {
     let schemas = piecewise_schemas();
-
-    let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let proto_converter = DefaultPhysicalProtoConverter {};
 
     // Over `[pad0, pad1, a] ++ [b, pad2]`: both keys; a reorder across the sides; nothing.
-    for (projection, wire, names) in [
-        (vec![2, 3], vec![2, 3], vec!["a", "b"]),
-        (vec![4, 0], vec![4, 0], vec!["pad2", "pad0"]),
-        (vec![], vec![u32::MAX], vec![]),
+    for (projection, wire) in [
+        (vec![2, 3], vec![2, 3]),
+        (vec![4, 0], vec![4, 0]),
+        (vec![], vec![u32::MAX]),
     ] {
-        for join_type in [
-            JoinType::Inner,
-            JoinType::Left,
-            JoinType::Right,
+        let join = PiecewiseMergeJoinExec::try_new(
+            Arc::new(EmptyExec::new(Arc::clone(&schemas.0))),
+            Arc::new(EmptyExec::new(Arc::clone(&schemas.1))),
+            (
+                Arc::new(Column::new("a", 2)) as _,
+                Arc::new(Column::new("b", 0)) as _,
+            ),
+            Operator::Lt,
             JoinType::Full,
-        ] {
-            let join = PiecewiseMergeJoinExec::try_new(
-                Arc::new(EmptyExec::new(Arc::clone(&schemas.0))),
-                Arc::new(EmptyExec::new(Arc::clone(&schemas.1))),
-                (
-                    Arc::new(Column::new("a", 2)) as _,
-                    Arc::new(Column::new("b", 0)) as _,
-                ),
-                Operator::Lt,
-                join_type,
-                7,
-            )?
-            .with_projection(Some(projection.clone()))?;
-            let join: Arc<dyn ExecutionPlan> = Arc::new(join);
+            7,
+        )?
+        .with_projection(Some(projection))?;
+        let join: Arc<dyn ExecutionPlan> = Arc::new(join);
 
-            let bytes = physical_plan_to_bytes_with_proto_converter(
-                Arc::clone(&join),
-                &codec,
-                &proto_converter,
-            )?;
-            let node = protobuf::PhysicalPlanNode::decode(bytes.as_ref()).expect(
-                "a plan encoded by try_to_proto must decode as a PhysicalPlanNode",
-            );
-            let Some(PhysicalPlanType::PiecewiseMergeJoin(node)) =
-                node.physical_plan_type
-            else {
-                panic!("expected a PiecewiseMergeJoin node");
-            };
-            assert_eq!(node.projection, wire, "{join_type}");
+        let bytes = physical_plan_to_bytes_with_proto_converter(
+            Arc::clone(&join),
+            &codec,
+            &proto_converter,
+        )?;
+        let node = protobuf::PhysicalPlanNode::decode(bytes.as_ref())
+            .expect("a plan encoded by try_to_proto must decode as a PhysicalPlanNode");
+        let Some(PhysicalPlanType::PiecewiseMergeJoin(node)) = node.physical_plan_type
+        else {
+            panic!("expected a PiecewiseMergeJoin node");
+        };
+        assert_eq!(node.projection, wire);
 
-            let result = roundtrip_test_and_return(join, &ctx, &codec, &proto_converter)?;
-            let result = result.downcast_ref::<PiecewiseMergeJoinExec>().unwrap();
-            assert_eq!(
-                result.projection().map(|p| p.to_vec()),
-                Some(projection.clone()),
-                "{join_type}"
-            );
-            let fields: Vec<_> = result
-                .schema()
-                .fields()
-                .iter()
-                .map(|f| f.name().clone())
-                .collect();
-            assert_eq!(fields, names, "{join_type}");
-        }
+        // Compares the `Debug` output, which includes the projection and the schema.
+        roundtrip_test(join)?;
     }
     Ok(())
 }
