@@ -631,13 +631,13 @@ impl EquivalenceGroup {
     ///
     /// If `equivalents` is given and `expr` still cannot be projected, this
     /// projects another member of the class of `expr` in that group. `tried`
-    /// holds the result of that step for each expression, for one top-level
-    /// call.
+    /// holds the result of that step for each class, keyed by its index in
+    /// `equivalents`, for one top-level call.
     fn project_expr_indirect(
         aug_mapping: &AugmentedMapping,
         expr: &Arc<dyn PhysicalExpr>,
         equivalents: Option<&Self>,
-        tried: &mut HashMap<Arc<dyn PhysicalExpr>, Option<Arc<dyn PhysicalExpr>>>,
+        tried: &mut HashMap<usize, Option<Arc<dyn PhysicalExpr>>>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
         // These leaves do not read columns from the projected input schema.
         if expr.is::<Literal>() || expr.is::<ScalarSubqueryExpr>() {
@@ -688,21 +688,21 @@ impl EquivalenceGroup {
         // Members of a class are equal on every row, so a projectable member
         // stands in for `expr`.
         let group = equivalents?;
-        if let Some(known) = tried.get(expr) {
+        let &idx = group.map.get(expr)?;
+        if let Some(known) = tried.get(&idx) {
             return known.clone();
         }
-        // Until `expr` has a result, `None` stops cycles such as `x = f(y)`,
-        // `y = g(x)`. The stored result then serves later uses of `expr`, such
-        // as the second `x` in `x * x`.
-        tried.insert(Arc::clone(expr), None);
-        let projected = group.get_equivalence_class(expr).and_then(|cls| {
-            cls.iter()
-                .filter(|member| *member != expr)
-                .find_map(|member| {
-                    Self::project_expr_indirect(aug_mapping, member, equivalents, tried)
-                })
-        });
-        tried.insert(Arc::clone(expr), projected.clone());
+        // Until the class has a result, `None` stops cycles such as `x = f(y)`,
+        // `y = g(x)`. The stored result then serves every later member of the
+        // class, such as the second `x` in `x * x`.
+        tried.insert(idx, None);
+        let projected = group.classes[idx]
+            .iter()
+            .filter(|member| *member != expr)
+            .find_map(|member| {
+                Self::project_expr_indirect(aug_mapping, member, equivalents, tried)
+            });
+        tried.insert(idx, projected.clone());
         projected
     }
 
