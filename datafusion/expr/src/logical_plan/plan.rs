@@ -1232,7 +1232,7 @@ impl LogicalPlan {
                 self.assert_no_expressions(expr)?;
                 let (body, continuation) = self.only_two_inputs(inputs)?;
                 Ok(LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-                    cte.with_new_inputs(Arc::new(body), Arc::new(continuation)),
+                    cte.with_new_inputs(Arc::new(body), Arc::new(continuation))?,
                 )))
             }
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => {

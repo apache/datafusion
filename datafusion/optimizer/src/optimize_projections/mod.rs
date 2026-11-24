@@ -528,8 +528,7 @@ fn optimize_materialized_cte(
     config: &dyn OptimizerConfig,
     indices: RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
-    let (id, name) = (cte.id(), cte.name().to_string());
-    let (body, continuation) = cte.into_inputs();
+    let (id, name, body, continuation) = cte.into_parts();
     // The output is the output of the continuation, so the continuation
     // needs what the parent needs.
     let continuation =

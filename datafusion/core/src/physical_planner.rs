@@ -274,9 +274,8 @@ fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>>
             let LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) = node else {
                 return Ok(Transformed::no(node));
             };
-            let (old_id, name) = (cte.id(), cte.name().to_string());
             let new_id = MaterializedCteId::next();
-            let (body, continuation) = cte.into_inputs();
+            let (old_id, name, body, continuation) = cte.into_parts();
             let continuation = Arc::unwrap_or_clone(continuation)
                 .transform_down_with_subqueries(|node| match node {
                     // A nested occurrence of the same CTE owns the scans below

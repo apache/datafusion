@@ -467,12 +467,12 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
             let r = f(Arc::make_mut(recursive_term))?;
             s || r
         }
-        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
-            let (cte, continuation) = cte.inputs_mut();
-            let b = f(Arc::make_mut(cte))?;
-            let c = f(Arc::make_mut(continuation))?;
-            b || c
-        }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => cte
+            .try_map_inputs_mut(|cte, continuation| {
+                let b = f(Arc::make_mut(cte))?;
+                let c = f(Arc::make_mut(continuation))?;
+                Ok(b || c)
+            })?,
         LogicalPlan::Statement(Statement::Prepare(p)) => f(Arc::make_mut(&mut p.input))?,
         LogicalPlan::Extension(Extension { node }) => {
             let inputs = node.inputs();

@@ -128,8 +128,7 @@ fn coerce_plan_and_subqueries(
             // of a `NULL` column of a `UNION`. Coerce the body first, and give
             // its new schema to the scans before the continuation is coerced.
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
-                let (id, name) = (cte.id(), cte.name().to_string());
-                let (body, continuation) = cte.into_inputs();
+                let (id, name, body, continuation) = cte.into_parts();
                 let body =
                     coerce_plan_and_subqueries(Arc::unwrap_or_clone(body), config)?;
                 let continuation = with_materialized_cte_scan_schema(

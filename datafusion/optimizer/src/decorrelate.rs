@@ -223,8 +223,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
                 // Only the continuation can hold correlated expressions. Rewrite
                 // it alone, so that the body shared by every scan keeps its schema.
-                let (id, name) = (cte.id(), cte.name().to_string());
-                let (body, continuation) = cte.into_inputs();
+                let (id, name, body, continuation) = cte.into_parts();
                 let continuation = Arc::unwrap_or_clone(continuation).rewrite(self)?;
                 Ok(Transformed::new(
                     LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
