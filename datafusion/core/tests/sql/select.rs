@@ -726,6 +726,8 @@ async fn test_make_array_constructor_field_metadata() -> Result<()> {
 
 #[tokio::test]
 async fn test_scalar_constructor_field_metadata() -> Result<()> {
+    use arrow::array::{Int64Array, StructArray};
+
     let ctx = SessionContext::new();
     let metadata = Metadata::new()
         .with("ARROW:extension:name", "example.id")
@@ -771,6 +773,86 @@ async fn test_scalar_constructor_field_metadata() -> Result<()> {
         assert_eq!(batches[0].column(0).data_type(), &expected, "{sql}");
         assert_eq!(batches[0].num_rows(), 1);
     }
+
+    // Bound parameters become `Expr::Literal` before `TypeCoercion` runs, so
+    // Struct literals whose child metadata differs exercise `coerce_scalar_function_argument`.
+    let struct_param = |val: i32, child_key: &str, meta: Metadata| {
+        let array = StructArray::new(
+            vec![
+                Field::new("v", DataType::Int32, true)
+                    .with_metadata(Metadata::new().with(child_key, "1")),
+            ]
+            .into(),
+            vec![Arc::new(Int32Array::from(vec![Some(val)]))],
+            None,
+        );
+        ScalarAndMetadata::new(ScalarValue::Struct(Arc::new(array)), Some(meta.into()))
+    };
+    let first_struct = struct_param(7, "a", metadata.clone());
+    let second_struct = struct_param(
+        8,
+        "b",
+        Metadata::new()
+            .with("ARROW:extension:name", "example.id")
+            .with("only_second", "2"),
+    );
+
+    let reconciled_df = ctx
+        .sql("SELECT make_array($1, $2) AS v")
+        .await?
+        .with_param_values(ParamValues::List(vec![
+            first_struct.clone(),
+            second_struct,
+        ]))?;
+    let reconciled_values = StructArray::new(
+        vec![
+            Field::new("v", DataType::Int32, true)
+                .with_metadata(Metadata::new().with("a", "1").with("b", "1")),
+        ]
+        .into(),
+        vec![Arc::new(Int32Array::from(vec![Some(7), Some(8)]))],
+        None,
+    );
+    let expected_reconciled = DataType::List(Arc::new(
+        Field::new_list_field(reconciled_values.data_type().clone(), true)
+            .with_metadata(metadata.with("only_second", "2")),
+    ));
+    assert_eq!(
+        reconciled_df.schema().field(0).data_type(),
+        &expected_reconciled
+    );
+    let batches = reconciled_df.collect().await?;
+    let list = batches[0].column(0).as_list::<i32>();
+    assert_eq!(list.data_type(), &expected_reconciled);
+    assert_eq!(list.values().as_ref(), &reconciled_values);
+    assert_eq!(list.value_offsets(), &[0, 2]);
+
+    let promoted_df = ctx
+        .sql("SELECT make_array($1, named_struct('v', CAST(8 AS BIGINT))) AS v")
+        .await?
+        .with_param_values(ParamValues::List(vec![first_struct]))?;
+    let promoted_values = StructArray::new(
+        vec![
+            Field::new("v", DataType::Int64, true)
+                .with_metadata(Metadata::new().with("a", "1")),
+        ]
+        .into(),
+        vec![Arc::new(Int64Array::from(vec![Some(7), Some(8)]))],
+        None,
+    );
+    let expected_promoted = DataType::List(Arc::new(
+        Field::new_list_field(promoted_values.data_type().clone(), true)
+            .with_metadata(Metadata::new().with("origin", "input")),
+    ));
+    assert_eq!(
+        promoted_df.schema().field(0).data_type(),
+        &expected_promoted
+    );
+    let batches = promoted_df.collect().await?;
+    let list = batches[0].column(0).as_list::<i32>();
+    assert_eq!(list.data_type(), &expected_promoted);
+    assert_eq!(list.values().as_ref(), &promoted_values);
+    assert_eq!(list.value_offsets(), &[0, 2]);
     Ok(())
 }
 
@@ -867,6 +949,7 @@ async fn test_make_array_constructor_field_metadata_conflict() -> Result<()> {
         })
         .collect::<Vec<_>>();
     ctx.register_batch("t", RecordBatch::new_empty(Arc::new(Schema::new(fields))))?;
+    let mut diagnostics = Vec::new();
     for expression in [
         "make_array(c0, c1)",
         "make_array(named_struct('v', c0), named_struct('v', c1))",
@@ -874,19 +957,61 @@ async fn test_make_array_constructor_field_metadata_conflict() -> Result<()> {
         "make_array(named_struct('v', named_struct('w', c0)), named_struct('v', named_struct('w', c1)))",
         "make_array(named_struct('v', c0, 'other', 0), named_struct('other', 0, 'v', c1))",
         "coalesce(named_struct('v', c0), named_struct('v', c1))",
+        "make_array(with_metadata(named_struct('v', with_metadata(1, 'a', '1')), 'ARROW:extension:name', 'example.first'), with_metadata(named_struct('v', with_metadata(1, 'b', '1')), 'ARROW:extension:name', 'example.second'))",
+        "make_array(named_struct('outer', with_metadata(named_struct('v', with_metadata(1, 'a', '1')), 'ARROW:extension:name', 'example.first')), named_struct('outer', with_metadata(named_struct('v', with_metadata(1, 'b', '1')), 'ARROW:extension:name', 'example.second')))",
     ] {
         let err = ctx
             .sql(&format!("SELECT {expression} FROM t"))
             .await
             .unwrap_err();
-        for expected in [
-            "Cannot merge field metadata",
-            "example.first",
-            "example.second",
-        ] {
-            assert!(err.to_string().contains(expected), "{expression}: {err}");
-        }
+        assert!(
+            matches!(err, DataFusionError::Plan(_)),
+            "{expression}: {err:?}"
+        );
+        // `verify_function_arguments` formats the inner coercion error with `Display`
+        // before appending signature candidates, so `--features backtrace` embeds an
+        // inner backtrace there and `strip_backtrace()` stops before `. No function matches`.
+        let stripped = err.strip_backtrace();
+        let diagnostic = match stripped.split_once(". No function matches") {
+            Some((prefix, suffix)) => {
+                assert!(
+                    suffix.contains("Candidate functions:"),
+                    "{expression}: {stripped}"
+                );
+                prefix
+            }
+            None => stripped.as_str(),
+        };
+        diagnostics.push(format!("{expression}\n=> {diagnostic}"));
     }
+    assert_snapshot!(
+        diagnostics.join("\n\n"),
+        @r"
+    make_array(c0, c1)
+    => Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'example.first' and 'example.second'
+
+    make_array(named_struct('v', c0), named_struct('v', c1))
+    => Error during planning: Execution error: Function 'make_array' user-defined coercion failed with: Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'example.first' and 'example.second'
+
+    make_array(named_struct('v', c0), NULL, named_struct('v', c1))
+    => Error during planning: Execution error: Function 'make_array' user-defined coercion failed with: Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'example.first' and 'example.second'
+
+    make_array(named_struct('v', named_struct('w', c0)), named_struct('v', named_struct('w', c1)))
+    => Error during planning: Execution error: Function 'make_array' user-defined coercion failed with: Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'example.first' and 'example.second'
+
+    make_array(named_struct('v', c0, 'other', 0), named_struct('other', 0, 'v', c1))
+    => Error during planning: Execution error: Function 'make_array' user-defined coercion failed with: Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'example.first' and 'example.second'
+
+    coalesce(named_struct('v', c0), named_struct('v', c1))
+    => Error during planning: Execution error: Function 'coalesce' user-defined coercion failed with: Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'example.first' and 'example.second'
+
+    make_array(with_metadata(named_struct('v', with_metadata(1, 'a', '1')), 'ARROW:extension:name', 'example.first'), with_metadata(named_struct('v', with_metadata(1, 'b', '1')), 'ARROW:extension:name', 'example.second'))
+    => Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'example.first' and 'example.second'
+
+    make_array(named_struct('outer', with_metadata(named_struct('v', with_metadata(1, 'a', '1')), 'ARROW:extension:name', 'example.first')), named_struct('outer', with_metadata(named_struct('v', with_metadata(1, 'b', '1')), 'ARROW:extension:name', 'example.second')))
+    => Error during planning: Execution error: Function 'make_array' user-defined coercion failed with: Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'example.first' and 'example.second'
+    ",
+    );
     Ok(())
 }
 

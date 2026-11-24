@@ -993,7 +993,7 @@ fn merge_struct_fields(structs: &[&Fields], common_fields: &Fields) -> Result<Fi
                 .iter()
                 .filter(|field| !field.data_type().is_null())
                 .map(|field| {
-                    if field.data_type() == &data_type {
+                    if same_storage_type(field.data_type(), &data_type) {
                         Cow::Borrowed(*field)
                     } else {
                         let mut field =
@@ -1036,8 +1036,7 @@ fn merge_struct_fields(structs: &[&Fields], common_fields: &Fields) -> Result<Fi
 /// [`comparison_coercion`], which prefers numeric types so that ordering and
 /// equality follow numeric semantics.
 pub fn type_union_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type.equals_datatype(rhs_type) && struct_field_names_match(lhs_type, rhs_type)
-    {
+    if same_storage_type(lhs_type, rhs_type) {
         return Some(lhs_type.clone());
     }
     binary_numeric_coercion(lhs_type, rhs_type)
@@ -1516,6 +1515,20 @@ where
     }
 }
 
+/// Return true if `lhs_type` and `rhs_type` have the same storage layout,
+/// ignoring nested field metadata while preserving nested nullability and
+/// struct field names.
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub fn same_storage_type(lhs_type: &DataType, rhs_type: &DataType) -> bool {
+    lhs_type.equals_datatype(rhs_type) && struct_field_names_match(lhs_type, rhs_type)
+}
+
 /// Return true if the field names of every nested struct agree.
 ///
 /// Guards the `equals_datatype` fast paths: `equals_datatype` ignores struct
@@ -1960,8 +1973,7 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Si
 }
 
 fn array_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type.equals_datatype(rhs_type) && struct_field_names_match(lhs_type, rhs_type)
-    {
+    if same_storage_type(lhs_type, rhs_type) {
         Some(lhs_type.to_owned())
     } else {
         None

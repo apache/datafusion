@@ -197,5 +197,69 @@ from arrays_values_without_nulls;
 [[21, 22, 23, 24, 25, 26, 27, 28, 29, 30]] [[21, 22, 23, 24, 25, 26, 27, 28, 29, 30], [6, 7]] [[21, 22, 23, 24, 25, 26, 27, 28, 29, 30], [50, 51, 52]]
 [[31, 32, 33, 34, 35, 26, 37, 38, 39, 40]] [[31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [8, 9]] [[31, 32, 33, 34, 35, 26, 37, 38, 39, 40], [50, 51, 52]]
 
+# Preserve Struct element extension metadata when only nested metadata differs,
+# while still stripping extension metadata when nested storage types promote.
+statement ok
+CREATE VIEW t AS SELECT
+  with_metadata(named_struct('v', with_metadata(1, 'a', '1')), 'ARROW:extension:name', 'example.pair') AS x,
+  with_metadata(named_struct('v', with_metadata(1, 'b', '1')), 'ARROW:extension:name', 'example.pair') AS y;
+
+query T
+SELECT arrow_typeof(make_array(x, x)) FROM t;
+----
+List(Struct("v": Int64, metadata: {"a": "1"}), metadata: {"ARROW:extension:name": "example.pair"})
+
+query T
+SELECT arrow_typeof(make_array(x, y)) FROM t;
+----
+List(Struct("v": Int64, metadata: {"a": "1", "b": "1"}), metadata: {"ARROW:extension:name": "example.pair"})
+
+query ?
+SELECT make_array(x, y) FROM t;
+----
+[{v: 1}, {v: 1}]
+
+query T?
+SELECT
+  arrow_typeof(make_array(named_struct('outer', x), named_struct('outer', y))),
+  make_array(named_struct('outer', x), named_struct('outer', y))
+FROM t;
+----
+List(Struct("outer": Struct("v": Int64, metadata: {"a": "1", "b": "1"}), metadata: {"ARROW:extension:name": "example.pair"})) [{outer: {v: 1}}, {outer: {v: 1}}]
+
+query T?
+SELECT
+  arrow_typeof(
+    make_array(
+      with_metadata(
+        named_struct('v', arrow_cast(1, 'Int32')),
+        'ARROW:extension:name', 'example.i32_pair',
+        'ARROW:extension:metadata', '{}',
+        'origin', 'x'
+      ),
+      named_struct('v', 2)
+    )
+  ),
+  make_array(
+    with_metadata(
+      named_struct('v', arrow_cast(1, 'Int32')),
+      'ARROW:extension:name', 'example.i32_pair',
+      'ARROW:extension:metadata', '{}',
+      'origin', 'x'
+    ),
+    named_struct('v', 2)
+  );
+----
+List(Struct("v": Int64), metadata: {"origin": "x"}) [{v: 1}, {v: 2}]
+
+statement error DataFusion error: Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'example.pair' and 'example.other'
+SELECT make_array(
+  x,
+  with_metadata(named_struct('v', with_metadata(2, 'b', '1')), 'ARROW:extension:name', 'example.other')
+) FROM t;
+
+statement ok
+DROP VIEW t;
+
 
 include ./cleanup.slt.part

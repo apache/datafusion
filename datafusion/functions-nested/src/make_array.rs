@@ -80,8 +80,15 @@ impl ScalarUDFImpl for MakeArray {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_field_from_args should be used instead")
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        let element_type = if arg_types.is_empty() {
+            Null
+        } else {
+            // At this point, all the type in array should be coerced to the same one.
+            arg_types[0].to_owned()
+        };
+
+        Ok(DataType::new_list(element_type, true))
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -268,6 +275,23 @@ mod tests {
     use super::*;
     use arrow::array::AsArray;
     use arrow::datatypes::{Fields, Metadata};
+
+    #[test]
+    fn make_array_udf_return_type_preserves_type_only_contract() -> Result<()> {
+        let udf = make_array_udf();
+        assert_eq!(udf.return_type(&[])?, DataType::new_list(Null, true));
+        assert_eq!(
+            udf.return_type(&[DataType::Int32, DataType::Int32])?,
+            DataType::new_list(DataType::Int32, true),
+        );
+        let struct_type =
+            DataType::Struct(Fields::from(vec![Field::new("v", DataType::Utf8, false)]));
+        assert_eq!(
+            udf.return_type(std::slice::from_ref(&struct_type))?,
+            DataType::new_list(struct_type, true),
+        );
+        Ok(())
+    }
 
     #[test]
     fn empty_array_array_with_field_preserves_field_and_offset() -> Result<()> {
