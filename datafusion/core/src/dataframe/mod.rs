@@ -2888,8 +2888,29 @@ impl DataFrame {
     where
         I: IntoIterator<Item = (&'a str, ArrayRef)>,
     {
-        SessionContext::new().read_columns(columns)
+        let batch = record_batch_from_columns(columns)?;
+        SessionContext::new().read_batch(batch)
     }
+}
+
+/// Build a [`RecordBatch`] from named arrays.
+///
+/// Each `(name, array)` pair becomes one column. A field is nullable only when
+/// its array may contain nulls (see [`Array::is_nullable`]).
+fn record_batch_from_columns<'a, I>(columns: I) -> Result<RecordBatch>
+where
+    I: IntoIterator<Item = (&'a str, ArrayRef)>,
+{
+    let (fields, arrays): (Vec<_>, Vec<_>) = columns
+        .into_iter()
+        .map(|(name, array)| {
+            (
+                Field::new(name, array.data_type().clone(), array.is_nullable()),
+                array,
+            )
+        })
+        .unzip();
+    Ok(RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)?)
 }
 
 /// Create a DataFrame from column names and values.
