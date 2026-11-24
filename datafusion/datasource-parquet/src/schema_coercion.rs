@@ -21,7 +21,7 @@
 //! and map keys and values) are never read as strings: they keep going through
 //! the validating cast instead. The view coercions still apply at every level.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, TimeUnit};
@@ -420,6 +420,61 @@ pub(crate) fn uniform_dict_schemas(schemas: Vec<Schema>) -> Vec<Schema> {
             Schema::new_with_metadata(fields, schema.metadata().clone())
         })
         .collect()
+}
+
+pub(crate) fn dictionary_reads_enabled(
+    enable_rle_to_dictionary: bool,
+    dictionary_read_max_distinct_values: Option<usize>,
+) -> bool {
+    enable_rle_to_dictionary || dictionary_read_max_distinct_values.is_some()
+}
+
+/// Read the listed top-level string/binary fields as `Dictionary(Int32, _)`.
+pub(crate) fn promote_dictionary_columns(
+    schema: &Schema,
+    dictionary_columns: &HashSet<String>,
+) -> Option<Schema> {
+    let fields = coerce_fields(schema.fields(), |_, field| {
+        if !dictionary_columns.contains(field.name()) {
+            return None;
+        }
+        let value_type = field.data_type();
+        matches!(
+            value_type,
+            DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary
+        )
+        .then(|| {
+            field_with_new_type(
+                field,
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(value_type.clone()),
+                ),
+            )
+        })
+    })?;
+    Some(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+/// Read top-level string/binary dictionaries named in `plain_columns` as their
+/// value type.
+pub(crate) fn demote_dictionary_columns(
+    schema: &Schema,
+    plain_columns: &HashSet<String>,
+) -> Option<Schema> {
+    let fields = coerce_fields(schema.fields(), |_, field| match field.data_type() {
+        DataType::Dictionary(_, value_type)
+            if plain_columns.contains(field.name())
+                && (value_type.is_string() || value_type.is_binary()) =>
+        {
+            Some(field_with_new_type(field, value_type.as_ref().clone()))
+        }
+        _ => None,
+    })?;
+    Some(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
 /// Coerces the file schema's Timestamps to the provided TimeUnit if the
@@ -2005,6 +2060,11 @@ mod tests {
 
         assert_eq!(result.field(0).data_type(), &DataType::Utf8);
         assert_eq!(result.field(1).data_type(), &DataType::Utf8);
+
+        let demoted =
+            demote_dictionary_columns(&table_schema, &HashSet::from(["dict_col".into()]))
+                .unwrap();
+        assert_eq!(demoted.field(0).data_type(), &DataType::Utf8);
     }
 
     fn dk(key: DataType) -> DataType {

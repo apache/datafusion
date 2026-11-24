@@ -190,8 +190,12 @@ Fuzz testing generates random inputs and configurations, then checks that a prop
 
 For fuzzing unit tests, such as tests for a single operator or an internal utility:
 
-- If the test is small (easy to set up and takes a few seconds), keep it as a unit test.
-- If the test is large (requires a fuzzing driver and takes more than 10 seconds), it should implement the [`FuzzTest` trait][fuzz framework] and run through the [central fuzz-test entry point]. See the [spill-pool fuzzer] for a reference implementation.
+The [`FuzzTest` trait][fuzz framework] simplifies fuzz tests; use it when it makes the test easier to implement.
+
+- Keep tests inline as unit tests when they are simple (such as running a query with an option enabled and disabled) or exercise private utilities.
+- Use `FuzzTest` when testing public APIs involves generating data, random plans or expressions, and coordinating multiple rounds.
+
+Run `FuzzTest` implementations through the [central fuzz-test entry point]. See the [spill-pool fuzzer] for a reference implementation.
 
 [fuzz framework]: https://github.com/apache/datafusion/blob/main/test-utils/src/fuzz.rs
 [central fuzz-test entry point]: https://github.com/apache/datafusion/blob/main/datafusion/fuzz/tests/fuzz.rs

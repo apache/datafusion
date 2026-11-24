@@ -1748,8 +1748,30 @@ select coalesce(1, y/x), coalesce(2, y/x) from t;
 query error
 SELECT y > 0 and 1 / y < 1, x > 0 and y > 0 and 1 / y < 1 / x from t;
 
-query error
+query BB
 SELECT y = 0 or 1 / y < 1, x = 0 or y = 0 or 1 / y < 1 / x from t;
+----
+false false
+true false
+true false
+true true
+true true
+
+statement ok
+DROP TABLE t;
+
+# The RHS fails on the whole batch (`1 / 0`), so it is retried on the
+# undecided rows, which include NULL LHS rows (`NULL OR false` is NULL).
+statement ok
+create table t(x int, y int) as values (0, 0), (NULL, 1), (NULL, 2), (1, 1);
+
+query B
+SELECT x = 0 OR 1 / y < 1 FROM t;
+----
+true
+NULL
+true
+false
 
 statement ok
 DROP TABLE t;

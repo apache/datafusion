@@ -51,7 +51,7 @@ async fn test_topk_io_dynamic_filter() {
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 489..1402)
+        Read Parquet footer (offsets 489..1396)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
     Request 4
@@ -71,7 +71,7 @@ async fn test_topk_io_no_dynamic_filter() {
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 489..1402)
+        Read Parquet footer (offsets 489..1396)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
     Request 4

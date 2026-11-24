@@ -429,7 +429,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string().lines().next().unwrap(),
-            "Arrow error: Cast error: Casting from Date32 to Float64 not supported"
+            "Arrow error: Invalid argument error: Casting from Date32 to Float64 not supported"
         );
     }
 

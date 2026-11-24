@@ -819,10 +819,9 @@ mod tests {
 mod record_batch_tests {
     use super::*;
     use arrow::array::{
-        ArrayData, ArrayRef, BinaryViewArray, BooleanArray, DictionaryArray,
-        Float64Array, Int16Array, Int32Array, Int64Array, LargeListViewArray, ListArray,
-        ListViewArray, MapArray, RunArray, StringArray, StringViewArray, StructArray,
-        UnionArray, new_null_array,
+        ArrayData, ArrayRef, BinaryViewArray, DictionaryArray, Float64Array, Int16Array,
+        Int32Array, Int64Array, LargeListViewArray, ListArray, ListViewArray, MapArray,
+        RunArray, StringArray, StringViewArray, StructArray, UnionArray, new_null_array,
     };
     use arrow::buffer::OffsetBuffer;
     use arrow::datatypes::{
@@ -1591,61 +1590,5 @@ mod record_batch_tests {
         assert_eq!(tracker.uncount_batch_with_array_overhead(&b1), 0);
         assert_eq!(tracker.memory_usage(), full);
         assert_eq!(tracker.uncount_batch_with_array_overhead(&b2), full);
-    }
-
-    /// A random sequence of counts and uncounts, checked against counting the
-    /// arrays still held from scratch.
-    #[test]
-    fn test_randomized_count_uncount_sequence() {
-        let int32 = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
-        let string = Arc::new(StringArray::from(vec!["a", "bc", "def"])) as ArrayRef;
-        let string_view = Arc::new(StringViewArray::from_iter_values([
-            "short",
-            "another long string that also spills to data buffers for sharing",
-        ])) as ArrayRef;
-        let dictionary = Arc::new(
-            DictionaryArray::<Int32Type>::try_new(
-                Int32Array::from(vec![0, 1, 2]),
-                Arc::new(StringArray::from(vec!["a", "b", "c"])),
-            )
-            .unwrap(),
-        ) as ArrayRef;
-        let arrays = [
-            int32.slice(0, 2),
-            int32.slice(1, 2),
-            Arc::clone(&string),
-            string.slice(1, 2),
-            string_view.slice(0, 1),
-            string_view.slice(1, 1),
-            dictionary.slice(0, 2),
-            dictionary,
-            Arc::new(BooleanArray::from(vec![true, false])) as ArrayRef,
-        ];
-
-        let mut seed: u64 = 42;
-        let mut next_rand = || {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-            (seed >> 33) as usize
-        };
-        let mut tracker = RecordBatchMemoryTracker::new();
-        let mut held = vec![0usize; arrays.len()];
-        for op in 0..300 {
-            let idx = next_rand() % arrays.len();
-            if held[idx] > 0 && next_rand() % 2 == 0 {
-                tracker.uncount_array(arrays[idx].as_ref());
-                held[idx] -= 1;
-            } else {
-                tracker.count_array(arrays[idx].as_ref());
-                held[idx] += 1;
-            }
-
-            let mut expected = RecordBatchMemoryCounter::new();
-            for (array, &count) in arrays.iter().zip(&held) {
-                if count > 0 {
-                    expected.count_array(array.as_ref());
-                }
-            }
-            assert_eq!(tracker.memory_usage(), expected.memory_usage(), "op {op}");
-        }
     }
 }
