@@ -6,6 +6,7 @@
 //! It will do in-memory sorting if it has enough memory budget
 //! but spills to disk if needed.
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -31,6 +32,8 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::IncrementalSortIterator;
+use crate::sorts::merge::SortPreservingMergeStream;
+use crate::sorts::stream::{PartitionedStream, RowCursorStream};
 use crate::sorts::streaming_merge::{
     SortedSpillFile, StreamingMergeBuilder, merges_in_row_format,
 };
@@ -609,19 +612,79 @@ impl ExternalSorter {
         // make spilling fail if another task consumes it or our share shrinks.
         self.merge_reservation.free();
 
-        let mut sorted_stream = self
-            .in_mem_sort_stream(
-                false,
-                // No coalescing on the spill path: it raises per-run peak memory.
-                false,
-            )
-            .await?;
-        // After `in_mem_sort_stream()` is constructed, all `in_mem_batches` is taken
-        // to construct a globally sorted stream.
+        let merges_runs = self.in_mem_batches.len() > 1
+            && self.reservation.size() >= self.sort_in_place_threshold_bytes;
+        if merges_runs && merges_in_row_format(&self.expr, &self.schema) {
+            // No coalescing on the spill path: it raises per-run peak memory.
+            let runs = self.sorted_runs(false).await?;
+            self.spill_runs(runs).await?;
+        } else {
+            let sorted_stream = self.in_mem_sort_stream(false, false).await?;
+            self.spill_sorted_stream(sorted_stream).await?;
+        }
+        // All `in_mem_batches` were taken to construct the sorted streams.
         assert_or_internal_err!(
             self.in_mem_batches.is_empty(),
-            "in_mem_batches should be empty after constructing sorted stream"
+            "in_mem_batches should be empty after spilling"
         );
+
+        // Reserve headroom for next sort/merge
+        self.reserve_memory_for_merge()?;
+
+        Ok(())
+    }
+
+    /// Merges sorted `runs` and spills the result to one file if the pool can
+    /// fit the keys of the first batch of every run at once, as the merge
+    /// converts them before writing anything. Otherwise merges and spills as
+    /// many runs as fit, in order, then the next ones as memory is released.
+    /// A run whose keys do not fit next to any other is spilled unmerged.
+    ///
+    /// Each group needs its own file and the final merge reads more of them,
+    /// so groups are only split where the pool denies memory.
+    async fn spill_runs(&mut self, runs: Vec<SendableRecordBatchStream>) -> Result<()> {
+        let mut runs = VecDeque::from(runs);
+        while !runs.is_empty() {
+            let reservation = self.merge_reservation.new_empty();
+            let mut cursors = RowCursorStream::try_new(
+                &self.schema,
+                &self.expr,
+                vec![],
+                reservation.new_empty(),
+            )?;
+            while let Some(run) = runs.pop_front() {
+                if let Some(run) = cursors.try_prime(run).await? {
+                    runs.push_front(run);
+                    break;
+                }
+            }
+            let sorted_stream = if cursors.partitions() > 0 {
+                SortPreservingMergeStream::new(
+                    Box::new(cursors),
+                    Arc::clone(&self.schema),
+                    self.metrics.baseline.intermediate(),
+                    self.batch_size,
+                    None,
+                    reservation,
+                    true,
+                )
+                .into_stream()
+            } else {
+                // Empty runs are dropped while priming
+                let Some(run) = runs.pop_front() else { break };
+                debug!("Spilling a sorted run without merging, as its keys do not fit");
+                run
+            };
+            self.spill_sorted_stream(sorted_stream).await?;
+        }
+        Ok(())
+    }
+
+    /// Writes the sorted batches of `sorted_stream` to a new spill file.
+    async fn spill_sorted_stream(
+        &mut self,
+        mut sorted_stream: SendableRecordBatchStream,
+    ) -> Result<()> {
         // 'global' here refers to all buffered batches when the memory limit is
         // reached. This variable will buffer the sorted batches after
         // sort-preserving merge and incrementally append to spill files.
@@ -661,16 +724,10 @@ impl ExternalSorter {
         self.spill_finish().await?;
 
         // Sanity check after spilling
-        let buffers_cleared_property =
-            self.in_mem_batches.is_empty() && globally_sorted_batches.is_empty();
         assert_or_internal_err!(
-            buffers_cleared_property,
-            "in_mem_batches and globally_sorted_batches should be cleared before"
+            globally_sorted_batches.is_empty(),
+            "globally_sorted_batches should be cleared before"
         );
-
-        // Reserve headroom for next sort/merge
-        self.reserve_memory_for_merge()?;
-
         Ok(())
     }
 
@@ -783,32 +840,9 @@ impl ExternalSorter {
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
-        // For single-column sorts, coalesce the buffered batches into fewer,
-        // larger runs to cut the merge fan-in (where the cheap per-key compare is
-        // dominated by per-stream cursor/merge overhead). Multi-column sorts are
-        // left as one run per batch: the row-format merge of many small runs
-        // beats sorting a few large runs with the lexicographic comparator.
-        let batches = std::mem::take(&mut self.in_mem_batches);
-        let runs = if coalesce_runs && self.expr.len() == 1 {
-            self.coalesce_in_mem_batches_into_runs(batches)?
-        } else {
-            batches
-        };
-
-        let concurrency = SortConcurrency::for_current_runtime(&self.sort_concurrency);
-        let streams = if let Some(concurrency) = concurrency {
-            // Time this task's setup and collection work, excluding waits for jobs.
-            timer.stop();
-            let streams = self
-                .prepare_sort_runs(runs, &concurrency)
-                .with_elapsed_compute(elapsed_compute.clone())
-                .await?;
-            timer.restart();
-            streams
-        } else {
-            // Outside a multithreaded runtime, sort each run when the merge polls it.
-            self.sort_run_streams(runs)?
-        };
+        timer.stop();
+        let streams = self.sorted_runs(coalesce_runs).await?;
+        timer.restart();
 
         StreamingMergeBuilder::new()
             .with_streams(streams)
@@ -823,6 +857,45 @@ impl ExternalSorter {
             .with_fetch(None)
             .with_reservation(self.merge_reservation.new_empty())
             .build()
+    }
+
+    /// Takes all of `in_mem_batches` and sorts them into one stream per run,
+    /// in input order, for a merge. See [`Self::in_mem_sort_stream`] for
+    /// `coalesce_runs`.
+    async fn sorted_runs(
+        &mut self,
+        coalesce_runs: bool,
+    ) -> Result<Vec<SendableRecordBatchStream>> {
+        self.in_mem_batches_counter = self.new_buffered_batches_counter();
+        let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+        let mut timer = elapsed_compute.timer();
+
+        // For single-column sorts, coalesce the buffered batches into fewer,
+        // larger runs to cut the merge fan-in (where the cheap per-key compare is
+        // dominated by per-stream cursor/merge overhead). Multi-column sorts are
+        // left as one run per batch: the row-format merge of many small runs
+        // beats sorting a few large runs with the lexicographic comparator.
+        let batches = std::mem::take(&mut self.in_mem_batches);
+        let runs = if coalesce_runs && self.expr.len() == 1 {
+            self.coalesce_in_mem_batches_into_runs(batches)?
+        } else {
+            batches
+        };
+
+        let concurrency = SortConcurrency::for_current_runtime(&self.sort_concurrency);
+        if let Some(concurrency) = concurrency {
+            // Time this task's setup and collection work, excluding waits for jobs.
+            timer.stop();
+            let streams = self
+                .prepare_sort_runs(runs, &concurrency)
+                .with_elapsed_compute(elapsed_compute.clone())
+                .await?;
+            timer.restart();
+            Ok(streams)
+        } else {
+            // Outside a multithreaded runtime, sort each run when the merge polls it.
+            self.sort_run_streams(runs)
+        }
     }
 
     /// Sort runs concurrently, returning their streams in input order.
