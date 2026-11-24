@@ -8469,6 +8469,30 @@ fn early_filtering_inputs()
     (left, right)
 }
 
+/// A filter whose intermediate columns are the named columns of the two inputs,
+/// in order. Each name belongs to one of the schemas.
+fn early_filter(
+    expression: PhysicalExprRef,
+    names: &[&str],
+    left_schema: &Schema,
+    right_schema: &Schema,
+) -> JoinFilter {
+    let (column_indices, fields): (Vec<_>, Vec<_>) = names
+        .iter()
+        .map(|&name| {
+            let (side, (index, field)) = match left_schema.column_with_name(name) {
+                Some(column) => (JoinSide::Left, column),
+                None => (
+                    JoinSide::Right,
+                    right_schema.column_with_name(name).unwrap(),
+                ),
+            };
+            (ColumnIndex { index, side }, field.clone())
+        })
+        .unzip();
+    JoinFilter::new(expression, column_indices, Arc::new(Schema::new(fields)))
+}
+
 /// The filter `c2 > c1 AND b1 % 2 = b2 % 2`, whose intermediate columns are in
 /// the order `c2, c1, b1, b2`, so that they alternate between the join sides.
 fn interleaved_early_filter(left_schema: &Schema, right_schema: &Schema) -> JoinFilter {
@@ -8492,31 +8516,12 @@ fn interleaved_early_filter(left_schema: &Schema, right_schema: &Schema) -> Join
             parity("b2", 3),
         )),
     ));
-    let column_indices = vec![
-        ColumnIndex {
-            index: 2,
-            side: JoinSide::Right,
-        },
-        ColumnIndex {
-            index: 2,
-            side: JoinSide::Left,
-        },
-        ColumnIndex {
-            index: 1,
-            side: JoinSide::Left,
-        },
-        ColumnIndex {
-            index: 1,
-            side: JoinSide::Right,
-        },
-    ];
-    let schema = Schema::new(vec![
-        right_schema.field_with_name("c2").unwrap().clone(),
-        left_schema.field_with_name("c1").unwrap().clone(),
-        left_schema.field_with_name("b1").unwrap().clone(),
-        right_schema.field_with_name("b2").unwrap().clone(),
-    ]);
-    JoinFilter::new(expression, column_indices, Arc::new(schema))
+    early_filter(
+        expression,
+        &["c2", "c1", "b1", "b2"],
+        left_schema,
+        right_schema,
+    )
 }
 
 /// The filter `a2 = a1 AND (c2 <> c1 OR b2 < b1)`, with its intermediate columns
@@ -8546,41 +8551,12 @@ fn high_pass_early_filter(left_schema: &Schema, right_schema: &Schema) -> JoinFi
             )),
         )),
     ));
-    let column_indices = vec![
-        ColumnIndex {
-            index: 1,
-            side: JoinSide::Right,
-        },
-        ColumnIndex {
-            index: 1,
-            side: JoinSide::Left,
-        },
-        ColumnIndex {
-            index: 2,
-            side: JoinSide::Right,
-        },
-        ColumnIndex {
-            index: 2,
-            side: JoinSide::Left,
-        },
-        ColumnIndex {
-            index: 0,
-            side: JoinSide::Right,
-        },
-        ColumnIndex {
-            index: 0,
-            side: JoinSide::Left,
-        },
-    ];
-    let schema = Schema::new(vec![
-        right_schema.field_with_name("b2").unwrap().clone(),
-        left_schema.field_with_name("b1").unwrap().clone(),
-        right_schema.field_with_name("c2").unwrap().clone(),
-        left_schema.field_with_name("c1").unwrap().clone(),
-        right_schema.field_with_name("a2").unwrap().clone(),
-        left_schema.field_with_name("a1").unwrap().clone(),
-    ]);
-    JoinFilter::new(expression, column_indices, Arc::new(schema))
+    early_filter(
+        expression,
+        &["b2", "b1", "c2", "c1", "a2", "a1"],
+        left_schema,
+        right_schema,
+    )
 }
 
 /// A filter that reads no columns and always evaluates to `value`.
@@ -8641,21 +8617,13 @@ async fn join_inner_early_filtering_matches_hash_join() -> Result<()> {
         (column_free_early_filter(true), true),
         (column_free_early_filter(false), false),
     ];
-    let memory_exec = |batches: &Vec<RecordBatch>, schema: &SchemaRef| {
-        TestMemoryExec::try_new_exec(
-            std::slice::from_ref(batches),
-            Arc::clone(schema),
-            None,
-        )
-    };
-
     for (filter, keeps_pairs) in filters {
         for batch_size in [1, 7, 300, 8192] {
             let (stream, expected) = join_get_stream_and_get_expected(
-                memory_exec(&left_batches, &left_schema)?,
-                memory_exec(&right_batches, &right_schema)?,
-                memory_exec(&left_batches, &left_schema)?,
-                memory_exec(&right_batches, &right_schema)?,
+                build_table_from_batches(left_batches.clone()),
+                build_table_from_batches(right_batches.clone()),
+                build_table_from_batches(left_batches.clone()),
+                build_table_from_batches(right_batches.clone()),
                 on.clone(),
                 Inner,
                 Some(filter.clone()),

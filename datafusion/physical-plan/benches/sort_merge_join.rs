@@ -78,22 +78,6 @@ fn build_sorted_batches_with_size(
     batches
 }
 
-/// Like [`build_sorted_batches`], but with only the `key` and `data` columns of
-/// [`narrow_schema`].
-fn build_narrow_sorted_batches(num_rows: usize, key_mod: usize) -> Vec<RecordBatch> {
-    let s = schema();
-    let narrow = narrow_schema();
-    build_sorted_batches(num_rows, key_mod, &s)
-        .into_iter()
-        .map(|b| {
-            b.project(&[0, 1])
-                .unwrap()
-                .with_schema(Arc::clone(&narrow))
-                .unwrap()
-        })
-        .collect()
-}
-
 fn make_exec(
     batches: &[RecordBatch],
     schema: &SchemaRef,
@@ -106,14 +90,6 @@ fn schema() -> SchemaRef {
         Field::new("key", DataType::Int64, false),
         Field::new("data", DataType::Int64, false),
         Field::new("payload", DataType::Utf8, false),
-    ]))
-}
-
-/// The `key` and `data` columns of [`schema`].
-fn narrow_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("key", DataType::Int64, false),
-        Field::new("data", DataType::Int64, false),
     ]))
 }
 
@@ -325,9 +301,15 @@ fn bench_smj(c: &mut Criterion) {
                 })
             },
         );
-        let narrow = narrow_schema();
-        let left_batches = build_narrow_sorted_batches(n, key_mod);
-        let right_batches = build_narrow_sorted_batches(n, key_mod);
+        let key_and_data = |batches: &[RecordBatch]| -> Vec<RecordBatch> {
+            batches
+                .iter()
+                .map(|b| b.project(&[0, 1]).unwrap())
+                .collect()
+        };
+        let left_batches = key_and_data(&left_batches);
+        let right_batches = key_and_data(&right_batches);
+        let narrow = left_batches[0].schema();
         group.bench_function(
             BenchmarkId::new("inner_1to10_high_pass_filtered_narrow", n),
             |b| {
