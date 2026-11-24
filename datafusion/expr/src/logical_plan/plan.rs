@@ -3341,6 +3341,7 @@ impl PartialEq for TableScan {
             && self.projected_schema == other.projected_schema
             && self.filters == other.filters
             && self.fetch == other.fetch
+            && self.skip == other.skip
     }
 }
 
@@ -3360,18 +3361,22 @@ impl PartialOrd for TableScan {
             pub filters: &'a Vec<Expr>,
             /// Optional number of rows to read
             pub fetch: &'a Option<usize>,
+            /// Optional number of rows to skip
+            pub skip: &'a Option<usize>,
         }
         let comparable_self = ComparableTableScan {
             table_name: &self.table_name,
             projection: &self.projection,
             filters: &self.filters,
             fetch: &self.fetch,
+            skip: &self.skip,
         };
         let comparable_other = ComparableTableScan {
             table_name: &other.table_name,
             projection: &other.projection,
             filters: &other.filters,
             fetch: &other.fetch,
+            skip: &other.skip,
         };
         comparable_self
             .partial_cmp(&comparable_other)
@@ -3387,6 +3392,7 @@ impl Hash for TableScan {
         self.projected_schema.hash(state);
         self.filters.hash(state);
         self.fetch.hash(state);
+        self.skip.hash(state);
     }
 }
 
@@ -7867,6 +7873,27 @@ mod tests {
             };
             assert_eq!(LogicalPlan::TableScan(scan).skip()?, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn table_scan_skip_in_eq_ord_and_hash() -> Result<()> {
+        fn hash_of(scan: &TableScan) -> u64 {
+            let mut hasher = DefaultHasher::new();
+            scan.hash(&mut hasher);
+            hasher.finish()
+        }
+        let no_skip = employee_scan()?;
+        let skip = TableScan {
+            skip: Some(3),
+            ..employee_scan()?
+        };
+
+        assert_ne!(no_skip, skip);
+        assert_eq!(no_skip.partial_cmp(&skip), Some(Ordering::Less));
+        assert_ne!(hash_of(&no_skip), hash_of(&skip));
+        assert_eq!(skip, skip.clone());
+        assert_eq!(hash_of(&skip), hash_of(&skip.clone()));
         Ok(())
     }
 
