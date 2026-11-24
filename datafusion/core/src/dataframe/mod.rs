@@ -2975,7 +2975,7 @@ where
 ///
 /// A column is nullable only when its values may contain nulls: `"a" => [1, 2]`
 /// gives a non-nullable column, `"b" => [Some(1), None]` a nullable one. See
-/// [`SessionContext::read_columns`] for the exact rule.
+/// [`DataFrame::from_columns`] for the exact rule.
 ///
 /// # Example
 ///
@@ -3025,7 +3025,7 @@ macro_rules! dataframe {
             )+
         ];
 
-        $crate::prelude::SessionContext::new().read_columns(columns)
+        $crate::prelude::DataFrame::from_columns(columns)
     }};
 }
 
