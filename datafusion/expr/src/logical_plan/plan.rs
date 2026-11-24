@@ -3265,6 +3265,31 @@ impl PartialOrd for Window {
 }
 
 /// Produces rows from a table provider by reference or from the context
+///
+/// # Row order
+///
+/// A `TableScan` combines several operators in one node. It produces rows in
+/// this order:
+///
+/// ```text
+/// source rows -> filters -> skip -> fetch -> projection
+/// ```
+///
+/// The filters step means the filters that the source applies exactly (see
+/// [`TableProviderFilterPushDown::Exact`]). The skip and the fetch apply to
+/// the rows that pass these filters.
+///
+/// This order goes in one direction only:
+///
+/// * `Limit(Filter(scan))` can fold into one scan with filters and a fetch.
+/// * `Filter(scan)` cannot move into the scan when the scan has a skip or a
+///   fetch. Inside the scan, the filter runs before the skip and the fetch,
+///   so the scan keeps different rows.
+///
+/// Use [`TableScan::try_with_filters`] to add filters to a scan. It refuses
+/// a scan with a skip or a fetch.
+///
+/// [`TableProviderFilterPushDown::Exact`]: crate::TableProviderFilterPushDown::Exact
 #[derive(Clone)]
 pub struct TableScan {
     /// The name of the table
@@ -3277,9 +3302,11 @@ pub struct TableScan {
     pub projected_schema: DFSchemaRef,
     /// Optional expressions to be used as filters by the table provider
     pub filters: Vec<Expr>,
-    /// Optional number of rows to read
+    /// Optional number of rows to read. The fetch applies after the filters
+    /// and the skip. See [Row order](TableScan#row-order).
     pub fetch: Option<usize>,
-    /// Optional number of rows to skip
+    /// Optional number of rows to skip. The skip applies after the filters
+    /// and before the fetch. See [Row order](TableScan#row-order).
     pub skip: Option<usize>,
     /// Statistics the planner would like the provider to answer for this
     /// scan, typically attached by a custom optimizer rule from the
@@ -3379,6 +3406,23 @@ impl TableScan {
             .with_filters(filters)
             .with_fetch(fetch)
             .build()
+    }
+
+    /// Returns this scan with its filters replaced by `filters`.
+    ///
+    /// Returns `Err(self)` unchanged when the scan has a nonzero skip or any
+    /// fetch, because the filters apply before both. See
+    /// [Row order](TableScan#row-order).
+    #[expect(clippy::result_large_err)]
+    pub fn try_with_filters(
+        mut self,
+        filters: Vec<Expr>,
+    ) -> std::result::Result<Self, Self> {
+        if self.fetch.is_some() || self.skip.is_some_and(|n| n > 0) {
+            return Err(self);
+        }
+        self.filters = filters;
+        Ok(self)
     }
 }
 
@@ -7822,6 +7866,34 @@ mod tests {
                 ..employee_scan()?
             };
             assert_eq!(LogicalPlan::TableScan(scan).skip()?, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn table_scan_try_with_filters() -> Result<()> {
+        let filters = vec![col("id").gt(lit(1))];
+
+        let scan = employee_scan()?.try_with_filters(filters.clone()).unwrap();
+        assert_eq!(scan.filters, filters);
+
+        // A zero skip removes no rows, so the filters can move in.
+        let scan = TableScan {
+            skip: Some(0),
+            ..employee_scan()?
+        };
+        let scan = scan.try_with_filters(filters.clone()).unwrap();
+        assert_eq!(scan.filters, filters);
+
+        for (skip, fetch) in [(Some(3), None), (None, Some(5)), (None, Some(0))] {
+            let scan = TableScan {
+                fetch,
+                skip,
+                ..employee_scan()?
+            };
+            let scan = scan.try_with_filters(filters.clone()).unwrap_err();
+            assert!(scan.filters.is_empty());
+            assert_eq!((scan.skip, scan.fetch), (skip, fetch));
         }
         Ok(())
     }
