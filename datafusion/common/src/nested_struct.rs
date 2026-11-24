@@ -331,12 +331,13 @@ fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
         cast_options,
     )?;
 
-    let result = GenericListArray::<O>::new(
+    let result = GenericListArray::<O>::try_new(
         Arc::clone(target_inner_field),
         source_list.offsets().clone(),
         cast_values,
         source_list.nulls().cloned(),
-    );
+    )?;
+
     Ok(Arc::new(result))
 }
 
