@@ -222,7 +222,7 @@ pub(crate) enum StringCharLen {
 // Neither this nor the scans it calls are inlined: inlining the scans here
 // makes every call save registers, which costs the ASCII paths about 5%,
 // and inlining this into the per-row loops costs more than the call.
-#[inline(never)]
+#[inline]
 fn left_right_byte_length(string: &str, n: i64) -> usize {
     let abs = n.unsigned_abs().min(usize::MAX as u64) as usize;
     let bytes = string.as_bytes();
