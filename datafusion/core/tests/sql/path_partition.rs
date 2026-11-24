@@ -816,3 +816,75 @@ impl ObjectStore for MirroringObjectStore {
         unimplemented!()
     }
 }
+
+/// A filter on a partition column that is put on an optimized plan must still
+/// prune partitions after a second optimization, even when the optimized plan
+/// has a pure extraction projection directly above the scan.
+#[tokio::test]
+async fn partition_filter_on_optimized_plan_prunes_files() -> Result<()> {
+    use datafusion::dataframe::DataFrame;
+    use datafusion::physical_plan::{collect, displayable};
+    use datafusion_common::assert_batches_eq;
+    use datafusion_expr::{LogicalPlanBuilder, col, lit};
+
+    let tmp_dir = tempfile::TempDir::new()?;
+    let location = format!("{}/", tmp_dir.path().display());
+    let ctx = SessionContext::new();
+    ctx.sql(&format!(
+        "COPY (SELECT * FROM (VALUES \
+           ('2025-01-01', named_struct('a', 1, 'b', 'x')), \
+           ('2025-01-02', named_struct('a', 2, 'b', 'y')), \
+           ('2025-01-03', named_struct('a', 3, 'b', 'z'))) AS t(day, s)) \
+         TO '{location}' STORED AS PARQUET PARTITIONED BY (day)"
+    ))
+    .await?
+    .collect()
+    .await?;
+    ctx.sql(&format!(
+        "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION '{location}' \
+         PARTITIONED BY (day)"
+    ))
+    .await?;
+
+    // The filter on a struct field keeps a pure extraction projection in the
+    // optimized plan.
+    let optimized = ctx
+        .sql("SELECT s['a'] AS a, day FROM t WHERE s['b'] <> 'q'")
+        .await?
+        .into_optimized_plan()?;
+    let filtered = LogicalPlanBuilder::from(optimized)
+        .filter(col("day").eq(lit("2025-01-03")))?
+        .build()?;
+    let df = DataFrame::new(ctx.state(), filtered);
+
+    let logical = df.clone().into_optimized_plan()?;
+    assert_snapshot!(logical.display_indent(), @r#"
+    Projection: __datafusion_extracted_2 AS a, t.day
+      Filter: __datafusion_extracted_1 != Utf8("q")
+        Projection: get_field(t.s, Utf8("b")) AS __datafusion_extracted_1, t.day, get_field(t.s, Utf8("a")) AS __datafusion_extracted_2
+          TableScan: t projection=[s, day], full_filters=[t.day = Dictionary(UInt16, Utf8("2025-01-03"))], partial_filters=[get_field(t.s, Utf8("b")) != Utf8("q")]
+    "#);
+
+    let physical = df.create_physical_plan().await?;
+    let physical_text = displayable(physical.as_ref()).indent(false).to_string();
+    assert!(
+        physical_text.contains("file_groups={1 group: [[")
+            && physical_text.contains("day=2025-01-03")
+            && !physical_text.contains("day=2025-01-01")
+            && !physical_text.contains("day=2025-01-02"),
+        "the scan must read only the matching partition:\n{physical_text}"
+    );
+
+    let batches = collect(physical, ctx.task_ctx()).await?;
+    assert_batches_eq!(
+        [
+            "+---+------------+",
+            "| a | day        |",
+            "+---+------------+",
+            "| 3 | 2025-01-03 |",
+            "+---+------------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
