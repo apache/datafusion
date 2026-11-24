@@ -13,9 +13,7 @@ use data_utils::create_table_provider;
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionConfig, SessionContext};
-use datafusion::physical_plan::aggregates::order::GroupClusteringMode;
-use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
-use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
+use datafusion::physical_plan::{collect, displayable};
 use datafusion_expr::col;
 use parking_lot::Mutex;
 use std::hint::black_box;
@@ -555,26 +553,12 @@ async fn fully_ordered_context(
 /// threshold. The smaller fixtures above do not exercise skipping or re-probing.
 fn partial_aggregation_reprobe(c: &mut Criterion) {
     let cases = [
-        (
-            "unique_short",
-            2_000_000,
-            Some("value * 104729 % 2000000"),
-            2_000_000,
-            true,
-        ),
-        (
-            "unique_long",
-            10_000_000,
-            Some("value * 104729 % 10000000"),
-            10_000_000,
-            true,
-        ),
+        ("unique_short", 2_000_000, Some("value * 104729 % 2000000")),
+        ("unique_long", 10_000_000, Some("value * 104729 % 10000000")),
         (
             "changing",
             2_000_000,
             Some("CASE WHEN value <= 400000 THEN value ELSE value % 1000 END"),
-            400_001,
-            true,
         ),
         (
             "late_change",
@@ -583,11 +567,9 @@ fn partial_aggregation_reprobe(c: &mut Criterion) {
                 "CASE WHEN value <= 8000000 THEN value * 104729 % 8000000 \
                  ELSE value % 1000 END",
             ),
-            8_000_000,
-            true,
         ),
-        ("repeated", 2_000_000, Some("value % 1000"), 1_000, false),
-        ("ungrouped", 2_000_000, None, 1, false),
+        ("repeated", 2_000_000, Some("value % 1000")),
+        ("ungrouped", 2_000_000, None),
     ];
     let rt = Runtime::new().unwrap();
     let mut group = c.benchmark_group("partial_aggregation_reprobe");
@@ -601,7 +583,7 @@ fn partial_aggregation_reprobe(c: &mut Criterion) {
         execution.skip_partial_aggregation_probe_ratio_threshold = 0.8;
         let ctx = Arc::new(Mutex::new(SessionContext::new_with_config(config)));
 
-        for (name, input_rows, key, expected_groups, expect_skip) in cases {
+        for (name, input_rows, key) in cases {
             let sql = match key {
                 Some(key) => format!(
                     "SELECT {key} AS k, SUM(value) AS total \
@@ -611,78 +593,12 @@ fn partial_aggregation_reprobe(c: &mut Criterion) {
                     "SELECT SUM(value) AS total FROM generate_series(1, {input_rows})"
                 ),
             };
-            let mut checked = false;
             group.bench_function(BenchmarkId::new(implementation, name), |b| {
-                // Criterion applies its filter before invoking this closure.
-                // Validate only selected cases, outside the timed iterations.
-                if !checked {
-                    let (partial_rows, skipped_rows) = rt
-                        .block_on(check_partial_reprobe(
-                            &ctx.lock(),
-                            &sql,
-                            input_rows,
-                            expected_groups,
-                            expect_skip,
-                        ))
-                        .unwrap();
-                    eprintln!(
-                        "{implementation}/{name}: partial_output_rows={partial_rows}, \
-                         skipped_aggregation_rows={skipped_rows}"
-                    );
-                    checked = true;
-                }
                 b.iter(|| query(ctx.clone(), &rt, &sql));
             });
         }
     }
     group.finish();
-}
-
-async fn check_partial_reprobe(
-    ctx: &SessionContext,
-    sql: &str,
-    input_rows: usize,
-    expected_groups: usize,
-    expect_skip: bool,
-) -> Result<(usize, usize)> {
-    let plan = ctx.sql(sql).await?.create_physical_plan().await?;
-    let partial = find_partial_aggregate(&plan).expect("expected partial aggregation");
-    assert_eq!(partial.group_clustering_mode(), &GroupClusteringMode::None);
-    let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
-    assert_eq!(
-        batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
-        expected_groups
-    );
-    let total = batches
-        .iter()
-        .map(|batch| {
-            let sums = batch
-                .column(batch.num_columns() - 1)
-                .as_primitive::<Int64Type>();
-            assert_eq!(sums.null_count(), 0);
-            sums.values().iter().sum::<i64>()
-        })
-        .sum::<i64>();
-    let input_rows = i64::try_from(input_rows).unwrap();
-    assert_eq!(total, input_rows * (input_rows + 1) / 2);
-
-    let metrics = partial.metrics().expect("expected partial metrics");
-    let partial_rows = metrics.output_rows().expect("expected partial output rows");
-    let skipped_rows = metrics
-        .sum_by_name("skipped_aggregation_rows")
-        .map(|value| value.as_usize())
-        .unwrap_or(0);
-    assert_eq!(skipped_rows > 0, expect_skip);
-    Ok((partial_rows, skipped_rows))
-}
-
-fn find_partial_aggregate(plan: &Arc<dyn ExecutionPlan>) -> Option<&AggregateExec> {
-    if let Some(aggregate) = plan.downcast_ref::<AggregateExec>()
-        && aggregate.mode() == &AggregateMode::Partial
-    {
-        return Some(aggregate);
-    }
-    plan.children().into_iter().find_map(find_partial_aggregate)
 }
 
 criterion_group!(

@@ -13,7 +13,11 @@ const MAX_REPROBE_SKIP_MULTIPLIER: usize = 16;
 
 /// Tracks if the aggregate should skip partial aggregations
 ///
-/// Used by [`crate::aggregates::hash_stream::PartialHashAggregateStream`].
+/// After an ineffective probe, skip four times the larger of the row threshold
+/// and the triggering batch. Consecutive ineffective probes double this interval
+/// up to sixteen times; a useful decision resets the multiplier to four.
+/// Probe counters include groups recreated after early emission and remain
+/// cumulative until a skip interval ends.
 pub(super) struct SkipAggregationProbe {
     // ========================================================================
     // PROPERTIES:
@@ -33,18 +37,7 @@ pub(super) struct SkipAggregationProbe {
     // Fields changes during execution. Can be buffer, or state flags that
     // influence the execution in the parent aggregate stream
     // ========================================================================
-    /// Number of processed input rows (updated during probing)
-    input_rows: usize,
-    /// Number of groups created for `input_rows` (updated during probing).
-    /// A key that returns after an early emit is counted again, so this is the
-    /// number of rows the stream outputs for `input_rows`.
-    num_groups: usize,
-
-    /// Flag indicating further data aggregation may be skipped (decision made
-    /// when probing complete)
-    should_skip: bool,
-    /// Rows to bypass before starting a fresh probe window.
-    rows_until_reprobe: usize,
+    state: ProbeState,
     /// Multiplier for the next skip window; reset after a useful probe.
     skip_multiplier: usize,
 
@@ -60,6 +53,16 @@ pub(super) struct SkipAggregationProbe {
     skipped_aggregation_rows: metrics::Count,
 }
 
+enum ProbeState {
+    Probing {
+        input_rows: usize,
+        num_groups: usize,
+    },
+    Skipping {
+        rows_left: usize,
+    },
+}
+
 impl SkipAggregationProbe {
     pub(super) fn new(
         probe_rows_threshold: usize,
@@ -67,38 +70,38 @@ impl SkipAggregationProbe {
         skipped_aggregation_rows: metrics::Count,
     ) -> Self {
         Self {
-            input_rows: 0,
-            num_groups: 0,
             probe_rows_threshold,
             probe_ratio_threshold,
-            should_skip: false,
-            rows_until_reprobe: 0,
+            state: ProbeState::Probing {
+                input_rows: 0,
+                num_groups: 0,
+            },
             skip_multiplier: INITIAL_REPROBE_SKIP_MULTIPLIER,
             skipped_aggregation_rows,
         }
     }
 
-    /// Updates `SkipAggregationProbe` state:
-    /// - adds the input rows of a batch and the groups it created
-    /// - on `probe_rows_threshold` exceeded calculates
-    ///   aggregation ratio and sets `should_skip` flag
-    /// - if `should_skip` is set, waits for the skip window to finish
+    /// Adds a batch's input rows and newly created groups to the active probe.
     pub(super) fn update_state(&mut self, input_rows: usize, new_groups: usize) {
-        if self.should_skip {
+        let ProbeState::Probing {
+            input_rows: total_rows,
+            num_groups,
+        } = &mut self.state
+        else {
             return;
-        }
-        self.input_rows += input_rows;
-        self.num_groups += new_groups;
-        if self.input_rows > 0 && self.input_rows >= self.probe_rows_threshold {
-            self.should_skip = self.num_groups as f64 / self.input_rows as f64
-                > self.probe_ratio_threshold;
-            if self.should_skip {
+        };
+        *total_rows += input_rows;
+        *num_groups += new_groups;
+        if *total_rows > 0 && *total_rows >= self.probe_rows_threshold {
+            if *num_groups as f64 / *total_rows as f64 > self.probe_ratio_threshold {
                 // A long useful phase must not delay recovery after a later skip.
                 // Account for batches larger than the configured probe window.
-                self.rows_until_reprobe = self
-                    .probe_rows_threshold
-                    .max(input_rows)
-                    .saturating_mul(self.skip_multiplier);
+                self.state = ProbeState::Skipping {
+                    rows_left: self
+                        .probe_rows_threshold
+                        .max(input_rows)
+                        .saturating_mul(self.skip_multiplier),
+                };
                 self.skip_multiplier = self
                     .skip_multiplier
                     .saturating_mul(2)
@@ -110,7 +113,7 @@ impl SkipAggregationProbe {
     }
 
     pub(super) fn should_skip(&self) -> bool {
-        self.should_skip
+        matches!(self.state, ProbeState::Skipping { .. })
     }
 
     /// Record the number of rows that were output directly without aggregation
@@ -120,12 +123,15 @@ impl SkipAggregationProbe {
         if self.probe_ratio_threshold <= 0.0 {
             return;
         }
-        self.rows_until_reprobe =
-            self.rows_until_reprobe.saturating_sub(batch.num_rows());
-        if self.rows_until_reprobe == 0 {
-            self.input_rows = 0;
-            self.num_groups = 0;
-            self.should_skip = false;
+        let ProbeState::Skipping { rows_left } = &mut self.state else {
+            return;
+        };
+        *rows_left = rows_left.saturating_sub(batch.num_rows());
+        if *rows_left == 0 {
+            self.state = ProbeState::Probing {
+                input_rows: 0,
+                num_groups: 0,
+            };
         }
     }
 }

@@ -622,17 +622,17 @@ pub(super) enum AggregateHashTableState {
 /// Final aggregate evaluation consumes accumulator state, and partial terminal
 /// output should not repeatedly renumber group values with `EmitTo::First`.
 /// Materialize once and then slice to honor `batch_size` across output polls.
-pub(super) struct MaterializedAggregateOutput {
+pub(in crate::aggregates) struct MaterializedAggregateOutput {
     batch: RecordBatch,
     offset: usize,
 }
 
 impl MaterializedAggregateOutput {
-    pub(super) fn new(batch: RecordBatch) -> Self {
+    pub(in crate::aggregates) fn new(batch: RecordBatch) -> Self {
         Self { batch, offset: 0 }
     }
 
-    pub(super) fn next_batch(
+    pub(in crate::aggregates) fn next_batch(
         &mut self,
         batch_size: usize,
     ) -> Result<Option<RecordBatch>> {
@@ -647,11 +647,11 @@ impl MaterializedAggregateOutput {
         compact_dictionaries(batch).map(Some)
     }
 
-    pub(super) fn is_exhausted(&self) -> bool {
+    pub(in crate::aggregates) fn is_exhausted(&self) -> bool {
         self.offset >= self.batch.num_rows()
     }
 
-    pub(super) fn memory_size(&self) -> usize {
+    pub(in crate::aggregates) fn memory_size(&self) -> usize {
         self.batch.get_array_memory_size()
     }
 }

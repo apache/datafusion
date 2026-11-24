@@ -48,7 +48,7 @@ async fn test_parquet_bloom_filter_io_matching() {
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 213..678)
+        Read Parquet footer (offsets 213..676)
     Request 3
         Read OffsetIndex for columns 'a', 'b' (rg 0) (offsets 192..213)
     Request 4
@@ -75,7 +75,7 @@ async fn test_parquet_bloom_filter_io_pruned() {
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 213..678)
+        Read Parquet footer (offsets 213..676)
     Request 3
         Read OffsetIndex for columns 'a', 'b' (rg 0) (offsets 192..213)
     Request 4

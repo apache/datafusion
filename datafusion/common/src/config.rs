@@ -1153,9 +1153,6 @@ config_namespace! {
 
         /// Number of input rows partial aggregation partition should process, before
         /// aggregation ratio check and trying to switch to skipping aggregation mode.
-        /// Skipping initially lasts four times the larger of this threshold and the
-        /// triggering batch's row count. Consecutive unsuccessful probes increase
-        /// the multiplier to eight and then sixteen. A useful probe resets it to four.
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
 
         /// Should DataFusion use row number estimates at the input to decide
