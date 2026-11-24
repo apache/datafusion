@@ -606,10 +606,8 @@ mod tests {
         // combined output exceeds i32::MAX by one byte, which cannot be represented
         // in an Arrow Utf8 array.
         let strings: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), Some("a")]));
-        let counts: ArrayRef = Arc::new(Int64Array::from(vec![
-            Some(1_i64 << 30),
-            Some((1_i64 << 30) + 1),
-        ]));
+        let counts: ArrayRef =
+            Arc::new(Int64Array::from(vec![Some(1_i64 << 30), Some(1_i64 << 30)]));
 
         let err = super::repeat(&strings, &counts)
             .unwrap_err()
@@ -619,7 +617,7 @@ mod tests {
             format!(
                 "Execution error: string size overflow on repeat, max size is {}, but got {}",
                 i32::MAX,
-                (1usize << 30) + (1usize << 30) + 1
+                1usize << 31
             )
         );
     }
