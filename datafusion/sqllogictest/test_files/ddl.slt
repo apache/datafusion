@@ -849,6 +849,15 @@ CREATE TABLE foo AS SELECT 1 WITH NO DATA;
 statement error DataFusion error: Error during planning: Exclude constraints are not currently supported
 CREATE TABLE foo (x int, EXCLUDE USING gist (x WITH =));
 
+statement error DataFusion error: This feature is not implemented: Typed tables not supported
+CREATE TABLE foo OF public.row_type;
+
+statement error DataFusion error: Error during planning: ON CONFLICT on constraints is not supported
+CREATE TABLE foo (x int, UNIQUE (x) ON CONFLICT IGNORE);
+
+statement error DataFusion error: Error during planning: ON CONFLICT on constraints is not supported
+CREATE TABLE foo (x int, PRIMARY KEY (x) ON CONFLICT REPLACE);
+
 query error DataFusion error: Schema error: No field named a\.
 EXPLAIN CREATE TABLE t(a int) AS VALUES (a + a);
 

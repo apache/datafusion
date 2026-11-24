@@ -108,6 +108,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     include: _include,
                     index_options: _index_options,
                     nulls_distinct: _nulls_distinct,
+                    on_conflict,
                 }) => constraints.push(TableConstraint::Unique(UniqueConstraint {
                     name: name.clone(),
                     index_name: None,
@@ -128,6 +129,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     index_options: vec![],
                     characteristics: *characteristics,
                     nulls_distinct: NullsDistinctOption::None,
+                    on_conflict: *on_conflict,
                 })),
                 ast::ColumnOption::PrimaryKey(PrimaryKeyConstraint {
                     characteristics,
@@ -137,6 +139,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     columns: _columns,
                     include: _include,
                     index_options: _index_options,
+                    on_conflict,
                 }) => {
                     constraints.push(TableConstraint::PrimaryKey(PrimaryKeyConstraint {
                         name: name.clone(),
@@ -156,6 +159,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                         include: vec![],
                         index_options: vec![],
                         characteristics: *characteristics,
+                        on_conflict: *on_conflict,
                     }))
                 }
                 ast::ColumnOption::ForeignKey(ForeignKeyConstraint {
@@ -186,11 +190,13 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     expr,
                     no_inherit: _no_inherit,
                     enforced: _enforced,
+                    on_conflict,
                 }) => constraints.push(TableConstraint::Check(CheckConstraint {
                     name: name.clone(),
                     expr: expr.clone(),
                     no_inherit: false,
                     enforced: None,
+                    on_conflict: *on_conflict,
                 })),
                 ast::ColumnOption::Default(_)
                 | ast::ColumnOption::Null
@@ -350,6 +356,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 require_user,
                 partition_of,
                 for_values,
+                of_type,
                 snapshot,
                 with_storage_lifecycle_policy,
                 diststyle,
@@ -519,6 +526,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 if for_values.is_some() {
                     return not_impl_err!("PARTITION OF .. FOR VALUES .. not supported");
+                }
+                if of_type.is_some() {
+                    return not_impl_err!("Typed tables not supported");
                 }
                 if snapshot {
                     return not_impl_err!("Snapshot tables not supported");
@@ -2015,7 +2025,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     index_options: _,
                     characteristics: _,
                     nulls_distinct: _,
+                    on_conflict,
                 }) => {
+                    if on_conflict.is_some() {
+                        return _plan_err!("ON CONFLICT on constraints is not supported");
+                    }
                     let constraint_name = match &name {
                         Some(name) => &format!("unique constraint with name '{name}'"),
                         None => "unique constraint",
@@ -2036,7 +2050,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     include: _,
                     index_options: _,
                     characteristics: _,
+                    on_conflict,
                 }) => {
+                    if on_conflict.is_some() {
+                        return _plan_err!("ON CONFLICT on constraints is not supported");
+                    }
                     // Get primary key indices in the schema
                     let indices = self.get_constraint_column_indices(
                         df_schema,
