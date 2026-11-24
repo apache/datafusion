@@ -183,7 +183,7 @@ unicode-width = "0.2"
 ignored = ["datafusion-doc", "datafusion-macros", "dashmap"]
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-nix = { version = "0.31.3", features = ["fs"] }
+nix = { version = "0.32.0", features = ["fs"] }
 
 [[test]]
 name = "extended_tests"
