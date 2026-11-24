@@ -549,5 +549,38 @@ async fn fully_ordered_context(
     Ok(Arc::new(Mutex::new(ctx)))
 }
 
-criterion_group!(benches, criterion_benchmark, fully_ordered);
+/// `first_value` over a struct with a string field, grouped by an unordered
+/// key so that the final stage merges every group's state. A `Utf8View` field
+/// once made this merge quadratic in the number of groups (#27390); the
+/// `Utf8` case is the control.
+fn first_last_nested_view(c: &mut Criterion) {
+    const GROUPS: usize = 16_000;
+    let rt = Runtime::new().unwrap();
+    let ctx = Arc::new(Mutex::new(SessionContext::new()));
+    let mut group = c.benchmark_group("first_last_nested_view");
+    group.sample_size(10);
+    for (name, value) in [
+        ("struct_utf8", "'a string over 12 bytes'"),
+        (
+            "struct_utf8view",
+            "arrow_cast('a string over 12 bytes', 'Utf8View')",
+        ),
+    ] {
+        let sql = format!(
+            "SELECT count(c) FROM ( \
+               SELECT first_value(struct({value})) AS c \
+               FROM generate_series(1, {GROUPS}) GROUP BY value::text \
+             )"
+        );
+        group.bench_function(name, |b| b.iter(|| query(ctx.clone(), &rt, &sql)));
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    criterion_benchmark,
+    fully_ordered,
+    first_last_nested_view
+);
 criterion_main!(benches);
