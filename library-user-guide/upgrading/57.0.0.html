@@ -507,6 +507,21 @@ partition after its last occurrence.</p>
 <p>Callers that relied on duplicate rejection must additionally reject adjacent
 points that compare equal under those sort options.</p>
 </section>
+<section id="new-field-dictionary-read-max-distinct-values-added-to-parquetoptions">
+<span id="new-field-dictionary_read_max_distinct_values-added-to-parquetoptions"></span><h3>New field <code class="docutils literal notranslate"><span class="pre">dictionary_read_max_distinct_values</span></code> added to <code class="docutils literal notranslate"><span class="pre">ParquetOptions</span></code><a class="headerlink" href="#new-field-dictionary-read-max-distinct-values-added-to-parquetoptions" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ParquetOptions</span></code> gained <code class="docutils literal notranslate"><span class="pre">dictionary_read_max_distinct_values:</span> <span class="pre">Option&lt;usize&gt;</span></code>.
+<code class="docutils literal notranslate"><span class="pre">Some(cap)</span></code> enables dictionary inference and promotes eligible top-level string
+and binary columns only when every data page is dictionary encoded and
+the per-file sum of row-group cardinality upper bounds is at most <code class="docutils literal notranslate"><span class="pre">cap</span></code>. Missing
+NDVs use the non-null row count when available and otherwise use the row count.
+The cap takes precedence over <code class="docutils literal notranslate"><span class="pre">enable_rle_to_dictionary</span></code>. It does not demote a
+dictionary type declared by a file’s embedded Arrow schema; a field that is
+dictionary in one file and plain in another is still merged as plain.</p>
+<p>Large row-group dictionaries can be slower because each output batch can retain
+the whole dictionary. Benchmark representative data before setting a high cap.</p>
+<p>Exhaustive Rust and generated protobuf <code class="docutils literal notranslate"><span class="pre">ParquetOptions</span></code> literals must add this
+field as <code class="docutils literal notranslate"><span class="pre">None</span></code> or use <code class="docutils literal notranslate"><span class="pre">..Default::default()</span></code>. The wire format is compatible.</p>
+</section>
 <section id="substrait-consumers-use-explicit-scope-context">
 <h3>Substrait consumers use explicit scope context<a class="headerlink" href="#substrait-consumers-use-explicit-scope-context" title="Link to this heading">#</a></h3>
 <p>Add a final <code class="docutils literal notranslate"><span class="pre">&amp;SubstraitConsumerContext</span></code> argument to custom relation and expression
@@ -684,6 +699,7 @@ that does not remap the scans now fails with an error that names the rule.</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-57-0-0">DataFusion 57.0.0</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#range-partitioning-accepts-equal-split-points">Range partitioning accepts equal split points</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#new-field-dictionary-read-max-distinct-values-added-to-parquetoptions">New field <code class="docutils literal notranslate"><span class="pre">dictionary_read_max_distinct_values</span></code> added to <code class="docutils literal notranslate"><span class="pre">ParquetOptions</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#substrait-consumers-use-explicit-scope-context">Substrait consumers use explicit scope context</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-results-of-set-monotonic-aggregate-udfs">NULL results of set-monotonic aggregate UDFs</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupclusteringmode-full-no-longer-implies-sorted-input"><code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> no longer implies sorted input</a></li>
