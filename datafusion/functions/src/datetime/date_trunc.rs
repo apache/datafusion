@@ -2,10 +2,11 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use std::collections::HashMap;
 use std::num::NonZeroI64;
 use std::ops::{Add, Sub};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use crate::datetime::common::parse_tz;
 use arrow::array::temporal_conversions::{
@@ -41,7 +42,7 @@ use datafusion_macros::user_doc;
 
 use chrono::{
     DateTime, Datelike, Duration, LocalResult, Months, NaiveDate, NaiveDateTime, Offset,
-    TimeDelta, Timelike, Weekday,
+    TimeDelta, TimeZone, Timelike, Weekday,
 };
 
 fn parse_granularity(value: &str) -> Result<DatePart> {
@@ -552,10 +553,17 @@ impl ScalarUDFImpl for DateTruncFunc {
             // A timezone transition can reverse the order of timestamps
             // truncated in local time, but not of those truncated on the
             // epoch value.
-            Timestamp(_, Some(tz)) => {
-                match (constant_granularity(precision), parse_tz(Some(&tz))) {
+            Timestamp(_, Some(tz_name)) => {
+                match (constant_granularity(precision), parse_tz(Some(&tz_name))) {
                     (Some(granularity), Ok(tz)) => {
                         truncates_in_input_unit(granularity, tz.as_ref())
+                            || tz.is_some_and(|tz| {
+                                local_truncation_preserves_order(
+                                    &tz_name,
+                                    tz,
+                                    granularity,
+                                )
+                            })
                     }
                     _ => false,
                 }
@@ -1262,6 +1270,121 @@ fn truncates_in_input_unit(granularity: DatePart, tz: Option<&Tz>) -> bool {
         || (tz.is_none() && granularity.is_fine_granularity_utc())
 }
 
+/// Whether truncating to `granularity` in the local time of `tz` never reverses
+/// two instants. Computed once per timezone name.
+fn local_truncation_preserves_order(
+    tz_name: &str,
+    tz: Tz,
+    granularity: DatePart,
+) -> bool {
+    static CACHE: LazyLock<Mutex<HashMap<String, LocalTruncationOrder>>> =
+        LazyLock::new(Default::default);
+    let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+    let order = match cache.get(tz_name) {
+        Some(order) => *order,
+        None => {
+            let order = LocalTruncationOrder::new(tz);
+            cache.insert(tz_name.to_owned(), order);
+            order
+        }
+    };
+    order.preserves(granularity)
+}
+
+/// Granularities coarser than minute whose local-time truncation keeps the order
+/// in one zone. Day and longer buckets outlast any offset change, so only the
+/// instants around each transition can go backwards; `hour` needs no transitions.
+#[derive(Clone, Copy)]
+struct LocalTruncationOrder {
+    hour: bool,
+    day: bool,
+    week: bool,
+    month: bool,
+    quarter: bool,
+    year: bool,
+}
+
+impl LocalTruncationOrder {
+    fn new(tz: Tz) -> Self {
+        let Some(transitions) = utc_offset_transitions(&tz) else {
+            return Self::from_fn(|_| false);
+        };
+        Self::from_fn(|granularity| match granularity {
+            DatePart::Hour => transitions.is_empty(),
+            _ => transitions.iter().all(|&transition| {
+                let at = transition * NANOS_PER_SECOND;
+                matches!(
+                    (
+                        date_trunc_coarse(granularity, at - 1, Some(tz)),
+                        date_trunc_coarse(granularity, at, Some(tz)),
+                    ),
+                    (Ok(before), Ok(after)) if before <= after
+                )
+            }),
+        })
+    }
+
+    fn from_fn(preserves: impl Fn(DatePart) -> bool) -> Self {
+        Self {
+            hour: preserves(DatePart::Hour),
+            day: preserves(DatePart::Day),
+            week: preserves(DatePart::Week),
+            month: preserves(DatePart::Month),
+            quarter: preserves(DatePart::Quarter),
+            year: preserves(DatePart::Year),
+        }
+    }
+
+    fn preserves(&self, granularity: DatePart) -> bool {
+        match granularity {
+            DatePart::Hour => self.hour,
+            DatePart::Day => self.day,
+            DatePart::Week => self.week,
+            DatePart::Month => self.month,
+            DatePart::Quarter => self.quarter,
+            DatePart::Year => self.year,
+            _ => false,
+        }
+    }
+}
+
+/// 1800-01-01 and 2200-01-01 in epoch seconds; chrono-tz has no transitions
+/// outside this window.
+const TRANSITION_SCAN_START: i64 = -5_364_662_400;
+const TRANSITION_SCAN_END: i64 = 7_258_118_400;
+const SECONDS_PER_DAY: i64 = 86_400;
+
+/// The epoch seconds at which the UTC offset of `tz` changes. Daily steps catch
+/// every transition, since tz database transitions are days apart.
+fn utc_offset_transitions(tz: &Tz) -> Option<Vec<i64>> {
+    let offset_at = |seconds: i64| {
+        let utc = DateTime::from_timestamp(seconds, 0)?.naive_utc();
+        Some(tz.offset_from_utc_datetime(&utc).fix().local_minus_utc())
+    };
+    let mut transitions = vec![];
+    let mut day = TRANSITION_SCAN_START;
+    let mut offset = offset_at(day)?;
+    while day < TRANSITION_SCAN_END {
+        let next_day = day + SECONDS_PER_DAY;
+        let next_offset = offset_at(next_day)?;
+        if next_offset != offset {
+            let (mut before, mut after) = (day, next_day);
+            while after - before > 1 {
+                let middle = before + (after - before) / 2;
+                if offset_at(middle)? == offset {
+                    before = middle;
+                } else {
+                    after = middle;
+                }
+            }
+            transitions.push(after);
+        }
+        offset = next_offset;
+        day = next_day;
+    }
+    Some(transitions)
+}
+
 /// The length of `granularity` in `tu`, or `None` when `granularity` is no
 /// coarser than `tu`, so a value in `tu` is already truncated to it.
 fn fine_granularity_unit(tu: TimeUnit, granularity: DatePart) -> Option<NonZeroI64> {
@@ -1361,11 +1484,13 @@ mod tests {
     use std::sync::Arc;
 
     use crate::datetime::date_trunc::{
-        DateTruncFunc, NANOS_PER_MICROSECOND, date_trunc_coarse, general_date_trunc,
+        DateTruncFunc, NANOS_PER_MICROSECOND, SECONDS_PER_DAY, TRANSITION_SCAN_END,
+        TRANSITION_SCAN_START, date_trunc_coarse, general_date_trunc,
         general_date_trunc_array_fine_granularity, parse_granularity,
     };
 
     use arrow::array::cast::as_primitive_array;
+    use arrow::array::timezone::Tz;
     use arrow::array::types::{
         ArrowTimestampType, TimestampMicrosecondType, TimestampMillisecondType,
         TimestampNanosecondType, TimestampSecondType,
@@ -1383,6 +1508,8 @@ mod tests {
     use datafusion_expr::interval_arithmetic::Interval;
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+
+    use chrono::{DateTime, Offset, TimeZone};
 
     #[test]
     fn output_ordering_respects_timestamp_timezone() {
@@ -1433,12 +1560,15 @@ mod tests {
         };
         let ordered = SortProperties::Ordered(SortOptions::default());
         let function = DateTruncFunc::new();
-        let output_ordering = |precision: ExprProperties, unit| {
-            let data_type = DataType::Timestamp(unit, Some("America/Goose_Bay".into()));
+        let output_ordering_in = |tz: &str, precision: ExprProperties, unit| {
+            let data_type = DataType::Timestamp(unit, Some(tz.into()));
             let timestamp = ExprProperties::new_unknown()
                 .with_order(ordered)
                 .with_range(Interval::make_unbounded(&data_type).unwrap());
             function.output_ordering(&[precision, timestamp]).unwrap()
+        };
+        let output_ordering = |precision: ExprProperties, unit| {
+            output_ordering_in("America/Goose_Bay", precision, unit)
         };
 
         for unit in [
@@ -1454,12 +1584,47 @@ mod tests {
                     "{granularity} {unit:?}"
                 );
             }
-            for granularity in ["hour", "day", "week", "month", "quarter", "year"] {
+            // Goose_Bay fell back from 00:01 to 23:01 the previous day.
+            for granularity in ["hour", "day"] {
                 assert_eq!(
                     output_ordering(constant(ScalarValue::from(granularity)), unit),
                     SortProperties::Unordered,
                     "{granularity} {unit:?}"
                 );
+            }
+            // New York changes its offset at 02:00, away from midnight.
+            for granularity in ["day", "week", "month", "quarter", "year"] {
+                assert_eq!(
+                    output_ordering_in(
+                        "America/New_York",
+                        constant(ScalarValue::from(granularity)),
+                        unit
+                    ),
+                    ordered,
+                    "{granularity} {unit:?}"
+                );
+            }
+            assert_eq!(
+                output_ordering_in(
+                    "America/New_York",
+                    constant(ScalarValue::from("hour")),
+                    unit
+                ),
+                SortProperties::Unordered,
+                "{unit:?}"
+            );
+            for tz in ["UTC", "+05:30"] {
+                for granularity in ["hour", "day", "year"] {
+                    assert_eq!(
+                        output_ordering_in(
+                            tz,
+                            constant(ScalarValue::from(granularity)),
+                            unit
+                        ),
+                        ordered,
+                        "{tz} {granularity} {unit:?}"
+                    );
+                }
             }
         }
 
@@ -1490,6 +1655,32 @@ mod tests {
             ),
             SortProperties::Unordered
         );
+    }
+
+    #[test]
+    fn timezone_offsets_are_constant_outside_transition_scan_window() {
+        const HALF_YEAR: i64 = 183 * SECONDS_PER_DAY;
+        let offset_at = |tz: &Tz, seconds: i64| {
+            let utc = DateTime::from_timestamp(seconds, 0).unwrap().naive_utc();
+            tz.offset_from_utc_datetime(&utc).fix().local_minus_utc()
+        };
+        for zone in chrono_tz::TZ_VARIANTS {
+            let tz: Tz = zone.name().parse().unwrap();
+            for step in 1..=2_000 {
+                assert_eq!(
+                    offset_at(&tz, TRANSITION_SCAN_START - step * HALF_YEAR),
+                    offset_at(&tz, TRANSITION_SCAN_START),
+                    "{}",
+                    zone.name()
+                );
+                assert_eq!(
+                    offset_at(&tz, TRANSITION_SCAN_END + step * HALF_YEAR),
+                    offset_at(&tz, TRANSITION_SCAN_END),
+                    "{}",
+                    zone.name()
+                );
+            }
+        }
     }
 
     #[test]
