@@ -7760,7 +7760,7 @@ async fn test_copy_to_preserves_order() -> Result<()> {
       DataSinkExec: sink=CsvSink(file_groups=[])
         SortExec: expr=[column1@0 DESC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[1]
-      ProjectionExec: expr=[CAST(column1@0 AS UInt64) as count]
+      ProjectionExec: expr=[column1@0 as count]
         DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );

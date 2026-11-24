@@ -950,14 +950,15 @@ fn build_join(
         }
     }
 
-    let sub_query_alias = LogicalPlanBuilder::from(new_plan)
-        .alias(alias.to_string())?
-        .build()?;
     let join_filter_opt = build_join_filter(
         pull_up.join_filters,
         pull_up.correlated_subquery_cols_map.values().flatten(),
+        new_plan.schema(),
         alias,
     )?;
+    let sub_query_alias = LogicalPlanBuilder::from(new_plan)
+        .alias(alias.to_string())?
+        .build()?;
 
     if let Some(expr_map) = count_bug_compensation
         && !expr_map.is_empty()

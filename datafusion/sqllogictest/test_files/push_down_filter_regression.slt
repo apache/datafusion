@@ -4,6 +4,40 @@
 
 # Test push down filter
 
+# Regression test for https://github.com/apache/datafusion/issues/26545
+# Pushing the filter below COUNT(*) would return one row containing zero.
+query I
+SELECT c FROM (
+  SELECT 'all' AS k, COUNT(*) AS c FROM (VALUES (1)) AS t(a)
+) AS s WHERE k = 'none';
+----
+
+# The empty grouping set in ROLLUP also produces a grand total on empty input.
+query II
+SELECT a, c FROM (
+  SELECT a, 'all' AS k, COUNT(*) AS c FROM (VALUES (1)) AS t(a)
+  GROUP BY ROLLUP(a)
+) AS s WHERE k = 'none';
+----
+
+# A HAVING predicate without column references must not filter the
+# aggregate's input either.
+query I
+SELECT COUNT(*) FROM (VALUES (1)) AS t(a)
+HAVING (SELECT max(b) FROM (VALUES (5)) AS u(b)) > 100;
+----
+
+# The filter reaches each UNION ALL branch; the 'one' branch must not
+# leave a row with a count of zero.
+query I
+SELECT c FROM (
+  SELECT 'one' AS k, COUNT(*) AS c FROM (VALUES (1), (2)) AS t(a) WHERE a = 1
+  UNION ALL
+  SELECT 'all' AS k, COUNT(*) AS c FROM (VALUES (1), (2)) AS t(a)
+) AS s WHERE k = 'all';
+----
+2
+
 # Regression test for https://github.com/apache/datafusion/issues/17188
 query I
 COPY (select i as k, i as v from generate_series(1, 10000000) as t(i))
@@ -1019,3 +1053,37 @@ drop table window_ab;
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
+
+# Regression test for https://github.com/apache/datafusion/issues/27287
+# A scan's exact filter `complex_expr = literal` puts `complex_expr` and the
+# literal in one equivalence class. Normalization must not rewrite the literal
+# inside `complex_expr` itself. Otherwise an aggregate that relies on the
+# constant group key fails `SanityCheckPlan`.
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES ('x', 'y'), ('x', 'z'), ('w', 'y')) AS v(a, b)
+) TO 'test_files/scratch/push_down_filter_regression/case_key_pushdown.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE case_key_pushdown (a VARCHAR, b VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_regression/case_key_pushdown.parquet';
+
+query TI
+SELECT CASE WHEN a = 'x' AND b = 'y' THEN b WHEN a = 'x' THEN 'z' END AS e, count(*)
+FROM case_key_pushdown
+GROUP BY e
+HAVING e = 'y';
+----
+y 1
+
+statement ok
+drop table case_key_pushdown;
+
+statement ok
+reset datafusion.execution.parquet.pushdown_filters;

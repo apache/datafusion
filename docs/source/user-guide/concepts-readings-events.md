@@ -219,7 +219,10 @@ regular virtual event where community members share what they are building with 
 
 # 🌎 Community Events
 
-- **2026-11-12** [San Francisco Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/25665) - [RSVP](https://luma.com/k04h0om1)
+See the [Apache DataFusion Luma calendar](https://luma.com/datafusion) for upcoming events.
+
+- **2027-03-18** [London Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/27385) - [RSVP](https://luma.com/rub2nj6m)
+- **2026-11-10** [San Francisco Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/25665) - [RSVP](https://luma.com/k04h0om1), [Slides](https://docs.google.com/presentation/d/1ZPqxBBhGj9RVQjpXTSoGmsNstaWB2iDbEuP-mVA9OMM), [Recording](https://www.youtube.com/playlist?list=PLXu9CuRHfyg0)
 - **2026-09-30** [London Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/24512) - [RSVP](https://luma.com/r12f1t5o)
 - **2026-09-03** [Boston Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/21541) - [RSVP](https://luma.com/yexgqifv)
 - **2026-08-13** [San Francisco Apache DataFusion Meetup](https://github.com/apache/datafusion/discussions/24013) - [RSVP](https://luma.com/gk3s2vib)

@@ -267,6 +267,54 @@ UNION ALL
 2 0 0
 4 0 0
 
+# Test UNION ALL, INTERSECT and EXCEPT with duplicate aliases on the right side.
+# Aliases outside the first SELECT are discarded, so they don't need to be unique.
+query II rowsort
+SELECT 0 AS a, 0 AS b UNION ALL SELECT 1 AS x, 2 AS x
+----
+0 0
+1 2
+
+query II rowsort
+SELECT 0 AS a, 0 AS b UNION ALL SELECT id AS x, id AS x FROM t1 WHERE id = 1
+----
+0 0
+1 1
+
+# count(*) is planned as count(1) AS "count(*)", so repeating it repeats the alias.
+query II rowsort
+SELECT 0 AS a, 0 AS b UNION ALL SELECT count(*), count(*) FROM t1
+----
+0 0
+3 3
+
+query II
+SELECT 1 AS a, 2 AS b INTERSECT SELECT 1 AS x, 2 AS x
+----
+1 2
+
+query II
+SELECT 1 AS a, 2 AS b EXCEPT SELECT 3 AS x, 4 AS x
+----
+1 2
+
+# The right side takes the first SELECT's names.
+query TT
+EXPLAIN SELECT 0 AS a, 0 AS b UNION ALL SELECT 1 AS x, 2 AS x
+----
+logical_plan
+01)Union
+02)--Projection: Int64(0) AS a, Int64(0) AS b
+03)----EmptyRelation: rows=1
+04)--Projection: Int64(1) AS a, Int64(2) AS b
+05)----EmptyRelation: rows=1
+physical_plan
+01)UnionExec
+02)--ProjectionExec: expr=[0 as a, 0 as b]
+03)----PlaceholderRowExec
+04)--ProjectionExec: expr=[1 as a, 2 as b]
+05)----PlaceholderRowExec
+
 # Plan is unnested
 query TT
 EXPLAIN SELECT name FROM t1 UNION ALL (SELECT name from t2 UNION ALL SELECT name || '_new' from t2)
@@ -1154,6 +1202,114 @@ FROM (VALUES (3::INT)) AS x(a) CROSS JOIN (VALUES (4::INT)) AS y(a);
 ----
 1 2
 3 4
+
+# test for https://github.com/apache/datafusion/issues/26625
+statement ok
+CREATE TABLE t_26625(a INT) AS VALUES (2), (1);
+
+query II
+SELECT a AS x, a AS y FROM t_26625
+UNION ALL
+SELECT a AS x, a AS y FROM t_26625
+ORDER BY x, y;
+----
+1 1
+1 1
+2 2
+2 2
+
+# The arm without x = y is folded last, after the arms that have it.
+query II
+SELECT a AS x, a AS y FROM t_26625
+UNION ALL
+SELECT a AS x, a AS y FROM t_26625
+UNION ALL
+SELECT a AS x, (a % 2)::INT AS y FROM t_26625
+ORDER BY x, y;
+----
+1 1
+1 1
+1 1
+2 0
+2 2
+2 2
+
+# Arms with different aliases and casts still preserve equivalence
+query II
+SELECT a AS x, a AS y FROM t_26625
+UNION ALL
+SELECT a::BIGINT AS p, a::BIGINT AS q FROM t_26625
+ORDER BY x, y;
+----
+1 1
+1 1
+2 2
+2 2
+
+# `y % 5 = z + 5` holds in the first arm only: the second arm has y = z,
+# which does not make `y % 5` equal to `z + 5`.
+statement ok
+CREATE TABLE t_26625_l(a INT, b INT, c INT) AS VALUES
+  (0, 5, -5), (1, 6, -4), (2, 7, -3), (3, 13, -2), (4, 9, -1);
+
+statement ok
+CREATE TABLE t_26625_r(d INT) AS VALUES (1), (2), (3), (4), (5), (6);
+
+query III
+SELECT y % 5 AS k, y, z FROM (
+  (SELECT b AS y, c AS z FROM t_26625_l
+   WHERE a = c + 5 AND a = b % 5 ORDER BY z LIMIT 100)
+  UNION ALL
+  (SELECT d AS y, d AS z FROM t_26625_r ORDER BY z LIMIT 100)
+) ORDER BY k, z;
+----
+0 5 -5
+0 5 5
+1 6 -4
+1 1 1
+1 6 6
+2 7 -3
+2 2 2
+3 13 -2
+3 3 3
+4 9 -1
+4 4 4
+
+statement ok
+DROP TABLE t_26625_l;
+
+statement ok
+DROP TABLE t_26625_r;
+
+statement ok
+DROP TABLE t_26625;
+
+# issue 27418
+query TT
+EXPLAIN SELECT x, y FROM (
+  SELECT floor(random() * 3) AS x, floor(random() * 3) AS y FROM generate_series(1, 10)
+  UNION ALL
+  SELECT floor(random() * 3) AS x, floor(random() * 3) AS y FROM generate_series(1, 10)
+) ORDER BY x, y;
+----
+logical_plan
+01)Sort: x ASC NULLS LAST, y ASC NULLS LAST
+02)--Union
+03)----Projection: floor(random() * Float64(3)) AS x, floor(random() * Float64(3)) AS y
+04)------TableScan: generate_series() projection=[]
+05)----Projection: floor(random() * Float64(3)) AS x, floor(random() * Float64(3)) AS y
+06)------TableScan: generate_series() projection=[]
+physical_plan
+01)SortPreservingMergeExec: [x@0 ASC NULLS LAST, y@1 ASC NULLS LAST]
+02)--UnionExec
+03)----SortExec: expr=[x@0 ASC NULLS LAST, y@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------ProjectionExec: expr=[floor(random() * 3) as x, floor(random() * 3) as y]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=2]
+07)----SortExec: expr=[x@0 ASC NULLS LAST, y@1 ASC NULLS LAST], preserve_partitioning=[true]
+08)------ProjectionExec: expr=[floor(random() * 3) as x, floor(random() * 3) as y]
+09)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=2]
 
 # Config reset
 statement ok

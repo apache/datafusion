@@ -420,6 +420,61 @@ statement ok
 DROP TABLE mixed_files;
 
 ##########
+# Fixed-size lists clip like lists: a table declaring a narrower element
+# struct reads only the leaves it declares.
+##########
+
+statement ok
+COPY (
+  SELECT id, CAST(f AS STRUCT<x INT, pad VARCHAR>[2]) AS f
+  FROM (VALUES
+    (1, [named_struct('x', 10, 'pad', 'p1'), named_struct('x', 11, 'pad', 'p2')]),
+    (2, [named_struct('x', 20, 'pad', 'p3'), named_struct('x', 21, 'pad', 'p4')]),
+    (3, NULL)
+  ) AS t(id, f)
+) TO 'test_files/scratch/parquet_nested_schema_pruning/fixed_size.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE fixed_size_narrow (
+  id INT,
+  f STRUCT<x INT>[2]
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/fixed_size.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE fixed_size_full (
+  id INT,
+  f STRUCT<x INT, pad VARCHAR>[2]
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_nested_schema_pruning/fixed_size.parquet';
+
+query I?
+SELECT id, f FROM fixed_size_narrow ORDER BY id;
+----
+1 [{x: 10}, {x: 11}]
+2 [{x: 20}, {x: 21}]
+3 NULL
+
+query TT
+explain analyze select f from fixed_size_narrow;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=83.0 B<slt:ignore>]
+
+query TT
+explain analyze select f from fixed_size_full;
+----
+Plan with Metrics DataSourceExec: <slt:ignore>metrics=[output_rows=3, <slt:ignore>bytes_scanned=174.0 B<slt:ignore>]
+
+statement ok
+DROP TABLE fixed_size_narrow;
+
+statement ok
+DROP TABLE fixed_size_full;
+
+##########
 # A predicate on a primitive column with filter pushdown enabled, while the
 # projected nested column is clipped: the clip and the row filter have to
 # coexist on the same scan.

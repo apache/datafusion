@@ -13789,9 +13789,6 @@ impl serde::Serialize for LogicalExprNode {
                 logical_expr_node::ExprType::InList(v) => {
                     struct_ser.serialize_field("inList", v)?;
                 }
-                logical_expr_node::ExprType::Wildcard(v) => {
-                    struct_ser.serialize_field("wildcard", v)?;
-                }
                 logical_expr_node::ExprType::TryCast(v) => {
                     struct_ser.serialize_field("tryCast", v)?;
                 }
@@ -13888,7 +13885,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             "negative",
             "in_list",
             "inList",
-            "wildcard",
             "try_cast",
             "tryCast",
             "window_expr",
@@ -13942,7 +13938,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
             Cast,
             Negative,
             InList,
-            Wildcard,
             TryCast,
             WindowExpr,
             AggregateUdfExpr,
@@ -13998,7 +13993,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                             "cast" => Ok(GeneratedField::Cast),
                             "negative" => Ok(GeneratedField::Negative),
                             "inList" | "in_list" => Ok(GeneratedField::InList),
-                            "wildcard" => Ok(GeneratedField::Wildcard),
                             "tryCast" | "try_cast" => Ok(GeneratedField::TryCast),
                             "windowExpr" | "window_expr" => Ok(GeneratedField::WindowExpr),
                             "aggregateUdfExpr" | "aggregate_udf_expr" => Ok(GeneratedField::AggregateUdfExpr),
@@ -14125,13 +14119,6 @@ impl<'de> serde::Deserialize<'de> for LogicalExprNode {
                                 return Err(serde::de::Error::duplicate_field("inList"));
                             }
                             expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::InList)
-;
-                        }
-                        GeneratedField::Wildcard => {
-                            if expr_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("wildcard"));
-                            }
-                            expr_type__ = map_.next_value::<::std::option::Option<_>>()?.map(logical_expr_node::ExprType::Wildcard)
 ;
                         }
                         GeneratedField::TryCast => {
@@ -27182,6 +27169,9 @@ impl serde::Serialize for SimilarToNode {
         if !self.escape_char.is_empty() {
             len += 1;
         }
+        if self.case_insensitive {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.SimilarToNode", len)?;
         if self.negated {
             struct_ser.serialize_field("negated", &self.negated)?;
@@ -27194,6 +27184,9 @@ impl serde::Serialize for SimilarToNode {
         }
         if !self.escape_char.is_empty() {
             struct_ser.serialize_field("escapeChar", &self.escape_char)?;
+        }
+        if self.case_insensitive {
+            struct_ser.serialize_field("caseInsensitive", &self.case_insensitive)?;
         }
         struct_ser.end()
     }
@@ -27210,6 +27203,8 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
             "pattern",
             "escape_char",
             "escapeChar",
+            "case_insensitive",
+            "caseInsensitive",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -27218,6 +27213,7 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
             Expr,
             Pattern,
             EscapeChar,
+            CaseInsensitive,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -27243,6 +27239,7 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
                             "expr" => Ok(GeneratedField::Expr),
                             "pattern" => Ok(GeneratedField::Pattern),
                             "escapeChar" | "escape_char" => Ok(GeneratedField::EscapeChar),
+                            "caseInsensitive" | "case_insensitive" => Ok(GeneratedField::CaseInsensitive),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -27266,6 +27263,7 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
                 let mut expr__ = None;
                 let mut pattern__ = None;
                 let mut escape_char__ = None;
+                let mut case_insensitive__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Negated => {
@@ -27292,6 +27290,12 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
                             }
                             escape_char__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::CaseInsensitive => {
+                            if case_insensitive__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("caseInsensitive"));
+                            }
+                            case_insensitive__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(SimilarToNode {
@@ -27299,6 +27303,7 @@ impl<'de> serde::Deserialize<'de> for SimilarToNode {
                     expr: expr__,
                     pattern: pattern__,
                     escape_char: escape_char__.unwrap_or_default(),
+                    case_insensitive: case_insensitive__.unwrap_or_default(),
                 })
             }
         }
@@ -30443,97 +30448,6 @@ impl<'de> serde::Deserialize<'de> for WhenThen {
             }
         }
         deserializer.deserialize_struct("datafusion.WhenThen", FIELDS, GeneratedVisitor)
-    }
-}
-impl serde::Serialize for Wildcard {
-    #[allow(deprecated)]
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut len = 0;
-        if self.qualifier.is_some() {
-            len += 1;
-        }
-        let mut struct_ser = serializer.serialize_struct("datafusion.Wildcard", len)?;
-        if let Some(v) = self.qualifier.as_ref() {
-            struct_ser.serialize_field("qualifier", v)?;
-        }
-        struct_ser.end()
-    }
-}
-impl<'de> serde::Deserialize<'de> for Wildcard {
-    #[allow(deprecated)]
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        const FIELDS: &[&str] = &[
-            "qualifier",
-        ];
-
-        #[allow(clippy::enum_variant_names)]
-        enum GeneratedField {
-            Qualifier,
-        }
-        impl<'de> serde::Deserialize<'de> for GeneratedField {
-            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                struct GeneratedVisitor;
-
-                impl serde::de::Visitor<'_> for GeneratedVisitor {
-                    type Value = GeneratedField;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                        write!(formatter, "expected one of: {:?}", &FIELDS)
-                    }
-
-                    #[allow(unused_variables)]
-                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
-                    where
-                        E: serde::de::Error,
-                    {
-                        match value {
-                            "qualifier" => Ok(GeneratedField::Qualifier),
-                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
-                        }
-                    }
-                }
-                deserializer.deserialize_identifier(GeneratedVisitor)
-            }
-        }
-        struct GeneratedVisitor;
-        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
-            type Value = Wildcard;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("struct datafusion.Wildcard")
-            }
-
-            fn visit_map<V>(self, mut map_: V) -> std::result::Result<Wildcard, V::Error>
-                where
-                    V: serde::de::MapAccess<'de>,
-            {
-                let mut qualifier__ = None;
-                while let Some(k) = map_.next_key()? {
-                    match k {
-                        GeneratedField::Qualifier => {
-                            if qualifier__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("qualifier"));
-                            }
-                            qualifier__ = map_.next_value()?;
-                        }
-                    }
-                }
-                Ok(Wildcard {
-                    qualifier: qualifier__,
-                })
-            }
-        }
-        deserializer.deserialize_struct("datafusion.Wildcard", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for WindowAggExecNode {

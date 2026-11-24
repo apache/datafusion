@@ -7,7 +7,13 @@ use arrow::compute::{BatchCoalescer, filter_record_batch, prep_null_mask_filter}
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{Result, assert_or_internal_err};
 
-/// Concatenate multiple [`RecordBatch`]es and apply a limit
+/// Concatenate multiple [`RecordBatch`]es and apply a limit.
+///
+/// The limit is a hard cap on the total number of output rows across all batches.
+///
+/// For example, with a limit of 5, pushing batches of 3 and 4 rows coalesces all 3 rows
+/// from the first batch and only the first 2 from the second. The second push
+/// returns [`PushBatchStatus::LimitReached`] to indicate that the limit has been reached.
 ///
 /// See [`BatchCoalescer`] for more details on how this works.
 #[derive(Debug)]

@@ -132,8 +132,6 @@ pub fn to_substrait_rex(
         Expr::InSubquery(expr) => producer.handle_in_subquery(expr, schema),
         Expr::SetComparison(expr) => producer.handle_set_comparison(expr, schema),
         Expr::ScalarSubquery(expr) => producer.handle_scalar_subquery(expr, schema),
-        #[expect(deprecated)]
-        Expr::Wildcard { .. } => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::GroupingSet(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::Placeholder(expr) => producer.handle_placeholder(expr, schema),
         Expr::OuterReferenceColumn(field, col) => {
