@@ -113,7 +113,7 @@ fn build_set_comparison_subquery(
         ..
     } = subquery;
     let null_exists = exists_subquery(
-        plan.as_ref().clone(),
+        Arc::clone(&plan),
         spans.clone(),
         Expr::IsNull(Box::new(comparison.clone())),
     )?;
@@ -122,11 +122,7 @@ fn build_set_comparison_subquery(
         SetQuantifier::Any => (Expr::IsTrue, true),
         SetQuantifier::All => (Expr::IsFalse, false),
     };
-    let found_exists = exists_subquery(
-        Arc::unwrap_or_clone(plan),
-        spans,
-        filter(Box::new(comparison)),
-    )?;
+    let found_exists = exists_subquery(plan, spans, filter(Box::new(comparison)))?;
 
     let result_expr = Expr::Case(expr::Case {
         expr: None,
@@ -143,7 +139,7 @@ fn build_set_comparison_subquery(
     Ok(result_expr)
 }
 
-fn exists_subquery(plan: LogicalPlan, spans: Spans, filter: Expr) -> Result<Expr> {
+fn exists_subquery(plan: Arc<LogicalPlan>, spans: Spans, filter: Expr) -> Result<Expr> {
     let plan = LogicalPlanBuilder::from(plan).filter(filter)?.build()?;
     let outer_ref_columns = plan.all_out_ref_exprs();
     Ok(Expr::Exists(Exists {
