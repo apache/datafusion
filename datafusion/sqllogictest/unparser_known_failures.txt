@@ -94,6 +94,7 @@ limit.slt
 map.slt
 math.slt
 metadata.slt
+named_struct_dialects.slt
 min_max/fixed_size_list.slt
 negative_zero.slt
 nested_loop_join_existence.slt
