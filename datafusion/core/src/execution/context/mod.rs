@@ -45,9 +45,8 @@ use crate::{
 // backwards compatibility
 pub use crate::execution::session_state::SessionState;
 
-use arrow::array::ArrayRef;
-use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::{Schema, SchemaRef};
 use datafusion_catalog::MemoryCatalogProvider;
 use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::{
@@ -1872,7 +1871,6 @@ impl SessionContext {
             .build()?,
         ))
     }
-
     /// Create a [`DataFrame`] for reading a [`Vec[`RecordBatch`]`]
     pub fn read_batches(
         &self,
@@ -1896,66 +1894,6 @@ impl SessionContext {
             .build()?,
         ))
     }
-
-    /// Create a [`DataFrame`] from named Arrow arrays.
-    ///
-    /// Each `(name, array)` pair becomes one column. A field is nullable only
-    /// when its array may contain nulls (see [`Array::is_nullable`]).
-    ///
-    /// Returns an error if `columns` is empty or the arrays have different
-    /// lengths.
-    ///
-    /// See also the [`dataframe!`] macro for building a `DataFrame` from
-    /// literal values.
-    ///
-    /// [`Array::is_nullable`]: arrow::array::Array::is_nullable
-    /// [`dataframe!`]: macro@crate::dataframe
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use arrow::array::{ArrayRef, Int32Array, StringArray};
-    /// use datafusion::prelude::*;
-    /// # use datafusion::error::Result;
-    /// # use datafusion_common::assert_batches_sorted_eq;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<()> {
-    /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-    /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
-    /// let ctx = SessionContext::new();
-    /// let df = ctx.read_columns([("id", id), ("name", name)])?;
-    /// let expected = vec![
-    ///     "+----+------+",
-    ///     "| id | name |",
-    ///     "+----+------+",
-    ///     "| 1  | foo  |",
-    ///     "| 2  | bar  |",
-    ///     "| 3  | baz  |",
-    ///     "+----+------+",
-    /// ];
-    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn read_columns<'a, I>(&self, columns: I) -> Result<DataFrame>
-    where
-        I: IntoIterator<Item = (&'a str, ArrayRef)>,
-    {
-        let (fields, arrays): (Vec<_>, Vec<_>) = columns
-            .into_iter()
-            .map(|(name, array)| {
-                (
-                    Field::new(name, array.data_type().clone(), array.is_nullable()),
-                    array,
-                )
-            })
-            .unzip();
-        let schema = Arc::new(Schema::new(fields));
-        let batch = RecordBatch::try_new(schema, arrays)?;
-        self.read_batch(batch)
-    }
-
     /// Registers a [`ListingTable`] that can assemble multiple files
     /// from locations in an [`ObjectStore`] instance into a single
     /// table.
