@@ -3678,6 +3678,56 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn grouped_aggregate_reports_distinct_array_agg_submetric() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group", DataType::Int32, false),
+            Field::new("value", DataType::UInt32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
+                Arc::new(UInt32Array::from(vec![3, 3, 4, 4])),
+            ],
+        )?;
+        let input = Arc::new(TestMemoryExec::try_new(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )?);
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            col("group", &schema)?,
+            "group".to_string(),
+        )]);
+        let aggregate_expr = Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .distinct()
+                .alias("distinct_values")
+                .build()?,
+        );
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by,
+            vec![aggregate_expr],
+            vec![None],
+            input,
+            schema,
+        )?;
+
+        collect(aggregate_exec.execute(0, Arc::new(TaskContext::default()))?).await?;
+
+        let metrics = aggregate_exec.metrics().unwrap();
+        let distinct_time = metrics
+            .iter()
+            .find(|metric| metric.value().name() == "agg_expr_0_internal_distinct_time")
+            .expect("internal distinct time metric");
+        assert!(distinct_time.value().as_usize() > 0);
+
+        Ok(())
+    }
+
     fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
         let session_config = SessionConfig::new().with_batch_size(batch_size);
         let runtime = RuntimeEnvBuilder::new()
@@ -3690,28 +3740,25 @@ mod tests {
         Arc::new(task_ctx)
     }
 
-    fn new_migrated_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
+    fn new_hash_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::new(FairSpillPool::new(max_memory)))
             .build_arc()
             .unwrap();
         Arc::new(
             TaskContext::default()
-                .with_session_config(migrated_hash_session_config(batch_size))
+                .with_session_config(hash_session_config(batch_size))
                 .with_runtime(runtime),
         )
     }
 
-    fn migrated_hash_session_config(batch_size: usize) -> SessionConfig {
-        SessionConfig::new()
-            .with_batch_size(batch_size)
-            .set_bool("datafusion.execution.enable_migration_aggregate", true)
+    fn hash_session_config(batch_size: usize) -> SessionConfig {
+        SessionConfig::new().with_batch_size(batch_size)
     }
 
-    fn new_migrated_hash_ctx(batch_size: usize) -> Arc<TaskContext> {
+    fn new_hash_ctx(batch_size: usize) -> Arc<TaskContext> {
         Arc::new(
-            TaskContext::default()
-                .with_session_config(migrated_hash_session_config(batch_size)),
+            TaskContext::default().with_session_config(hash_session_config(batch_size)),
         )
     }
 
@@ -3728,12 +3775,12 @@ mod tests {
     /// Bytes `aggregate`'s stream for partition 0 reserves when it is created,
     /// before any input is polled.
     fn initial_reservation(aggregate: &AggregateExec) -> Result<usize> {
-        let task_ctx = new_migrated_hash_ctx(1);
+        let task_ctx = new_hash_ctx(1);
         let _stream = aggregate.execute_typed(0, &task_ctx)?;
         Ok(task_ctx.memory_pool().reserved())
     }
 
-    fn new_finite_memory_migrated_hash_ctx(
+    fn new_finite_memory_hash_ctx(
         batch_size: usize,
         max_memory: usize,
     ) -> Result<Arc<TaskContext>> {
@@ -3744,129 +3791,8 @@ mod tests {
         Ok(Arc::new(
             TaskContext::default()
                 .with_runtime(runtime)
-                .with_session_config(migrated_hash_session_config(batch_size)),
+                .with_session_config(hash_session_config(batch_size)),
         ))
-    }
-
-    #[rstest::rstest]
-    #[case::single(AggregateMode::Single)]
-    #[case::final_stage(AggregateMode::Final)]
-    #[tokio::test]
-    async fn legacy_aggregate_spill_merge_leaves_memory_for_replay(
-        #[case] mode: AggregateMode,
-    ) -> Result<()> {
-        use arrow::array::ListArray;
-        use arrow::buffer::OffsetBuffer;
-
-        const KEYS: usize = 64;
-        const VALUES_PER_KEY: i64 = 64;
-        // Leave only a small amount above 8 KiB for the empty aggregate state.
-        const MEMORY_LIMIT: usize = 8_384;
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Int64, false),
-            Field::new("value", DataType::Int64, false),
-        ]));
-        let group_by =
-            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".into())]);
-        let aggregates = vec![Arc::new(
-            AggregateExprBuilder::new(array_agg_udaf(), vec![col("value", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("values")
-                .build()?,
-        )];
-        let input_schema = if mode == AggregateMode::Single {
-            Arc::clone(&schema)
-        } else {
-            Arc::new(create_schema(
-                &schema,
-                &group_by,
-                &aggregates,
-                AggregateMode::Partial,
-            )?)
-        };
-        let mut batches = vec![];
-        // Each group grows across many one-row replay batches before it can be
-        // emitted. A merge that fills the allowance starves this state growth.
-        for value in 1..=VALUES_PER_KEY {
-            for key in (0..KEYS as i64).rev() {
-                let values: ArrayRef = Arc::new(Int64Array::from(vec![value]));
-                let values = if mode == AggregateMode::Single {
-                    values
-                } else {
-                    let DataType::List(field) = input_schema.field(1).data_type() else {
-                        unreachable!("ARRAY_AGG state must be a list")
-                    };
-                    Arc::new(ListArray::new(
-                        Arc::clone(field),
-                        OffsetBuffer::from_lengths([1]),
-                        values,
-                        None,
-                    )) as ArrayRef
-                };
-                batches.push(RecordBatch::try_new(
-                    Arc::clone(&input_schema),
-                    vec![Arc::new(Int64Array::from(vec![key])), values],
-                )?);
-            }
-        }
-        let input = TestMemoryExec::try_new_exec(&[batches], input_schema, None)?;
-        let aggregate = AggregateExec::try_new(
-            mode,
-            group_by,
-            aggregates,
-            vec![None],
-            input,
-            schema,
-        )?;
-        let pool = Arc::new(PeakRecordingPool::new(Arc::new(FairSpillPool::new(
-            MEMORY_LIMIT,
-        ))));
-        let context = Arc::new(
-            TaskContext::default()
-                .with_session_config(
-                    SessionConfig::new().with_batch_size(1).set_bool(
-                        "datafusion.execution.enable_migration_aggregate",
-                        false,
-                    ),
-                )
-                .with_runtime(
-                    RuntimeEnvBuilder::new()
-                        .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
-                        .build_arc()?,
-                ),
-        );
-        let stream = aggregate.execute_typed(0, &context)?;
-        assert!(matches!(stream, StreamType::GroupedHash(_)));
-        let output = collect(stream.into()).await?;
-        let mut seen = HashSet::new();
-        for batch in output {
-            assert!(
-                batch
-                    .columns()
-                    .iter()
-                    .all(|column| column.null_count() == 0)
-            );
-            let keys = batch.column(0).as_primitive::<Int64Type>();
-            let values = batch.column(1).as_list::<i32>();
-            for row in 0..batch.num_rows() {
-                let key = keys.value(row);
-                assert!((0..KEYS as i64).contains(&key));
-                assert!(seen.insert(key), "duplicate group");
-                let values = values.value(row);
-                assert_eq!(values.null_count(), 0);
-                let mut values = values.as_primitive::<Int64Type>().values().to_vec();
-                values.sort_unstable();
-                assert_eq!(values, (1..=VALUES_PER_KEY).collect::<Vec<_>>());
-            }
-        }
-        assert_eq!(seen.len(), KEYS);
-        assert!(aggregate.metrics().unwrap().spill_count().unwrap() > 1);
-        assert!(pool.peak_reserved() <= MEMORY_LIMIT);
-        assert_eq!(pool.reserved(), 0);
-        let progress = context.runtime_env().disk_manager.spilling_progress();
-        assert_eq!(progress.current_bytes, 0);
-        assert_eq!(progress.active_files_count, 0);
-        Ok(())
     }
 
     // This high-cardinality memory test would create quadratic collision scratch
@@ -3878,7 +3804,7 @@ mod tests {
     #[case::ordered_final(AggregateMode::Final, true)]
     #[case::ordered_single(AggregateMode::Single, true)]
     #[tokio::test]
-    async fn migrated_aggregate_spill_merge_leaves_memory_for_replay(
+    async fn aggregate_spill_merge_leaves_memory_for_replay(
         #[case] mode: AggregateMode,
         #[case] ordered: bool,
         #[values(false, true)] with_peer: bool,
@@ -3989,7 +3915,7 @@ mod tests {
         });
         let context = Arc::new(
             TaskContext::default()
-                .with_session_config(migrated_hash_session_config(BATCH_SIZE))
+                .with_session_config(hash_session_config(BATCH_SIZE))
                 .with_runtime(
                     RuntimeEnvBuilder::new()
                         .with_memory_pool(memory_pool)
@@ -4056,7 +3982,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migrated_aggregate_spill_merge_allows_indivisible_rows() -> Result<()> {
+    async fn aggregate_spill_merge_allows_indivisible_rows() -> Result<()> {
         use arrow::array::StringArray;
         use datafusion_execution::memory_pool::GreedyMemoryPool;
 
@@ -4101,7 +4027,7 @@ mod tests {
         ))));
         let context = Arc::new(
             TaskContext::default()
-                .with_session_config(migrated_hash_session_config(1))
+                .with_session_config(hash_session_config(1))
                 .with_runtime(
                     RuntimeEnvBuilder::new()
                         .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
@@ -4710,9 +4636,6 @@ mod tests {
                 0 => {
                     assert!(matches!(stream, StreamType::AggregateStream(_)));
                 }
-                1 => {
-                    assert!(matches!(stream, StreamType::GroupedHash(_)));
-                }
                 2 => {
                     assert!(matches!(stream, StreamType::SingleHash(_)));
                 }
@@ -4940,7 +4863,7 @@ mod tests {
         let aggregate =
             constructor_allocating_grouped_aggregate(mode, ordered, STATE_BYTES)?;
 
-        let too_small = new_finite_memory_migrated_hash_ctx(8, STATE_BYTES / 2)?;
+        let too_small = new_finite_memory_hash_ctx(8, STATE_BYTES / 2)?;
         let err = aggregate
             .execute_typed(0, &too_small)
             .err()
@@ -4950,7 +4873,7 @@ mod tests {
             "Wrong error type: {err}",
         );
 
-        let fits = new_finite_memory_migrated_hash_ctx(8, 4 * STATE_BYTES)?;
+        let fits = new_finite_memory_hash_ctx(8, 4 * STATE_BYTES)?;
         let stream = aggregate.execute_typed(0, &fits)?;
         match (mode, ordered, &stream) {
             (AggregateMode::Partial, false, StreamType::PartialHash(_))
@@ -5052,25 +4975,12 @@ mod tests {
             Arc::clone(&schema),
         )?);
         let task_ctx = Arc::new(
-            TaskContext::default().with_session_config(
-                SessionConfig::new()
-                    .with_batch_size(2)
-                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
-            ),
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(2)),
         );
 
         let partial_stream = partial_aggregate.execute_typed(0, &task_ctx)?;
         assert!(matches!(partial_stream, StreamType::PartialHash(_)));
-
-        let fallback_task_ctx = Arc::new(
-            TaskContext::default().with_session_config(
-                SessionConfig::new()
-                    .with_batch_size(2)
-                    .set_bool("datafusion.execution.enable_migration_aggregate", false),
-            ),
-        );
-        let stream = partial_aggregate.execute_typed(0, &fallback_task_ctx)?;
-        assert!(matches!(stream, StreamType::GroupedHash(_)));
 
         let stream: SendableRecordBatchStream = partial_stream.into();
         let batches = collect(stream).await?;
@@ -5095,9 +5005,6 @@ mod tests {
 
         let final_stream = final_aggregate.execute_typed(0, &task_ctx)?;
         assert!(matches!(final_stream, StreamType::FinalHash(_)));
-
-        let stream = final_aggregate.execute_typed(0, &fallback_task_ctx)?;
-        assert!(matches!(stream, StreamType::GroupedHash(_)));
 
         let stream: SendableRecordBatchStream = final_stream.into();
         let batches = collect(stream).await?;
@@ -5145,17 +5052,12 @@ mod tests {
             input,
             Arc::clone(&schema),
         )?);
-        let task_ctx = Arc::new(
-            TaskContext::default().with_session_config(
-                SessionConfig::new()
-                    .with_batch_size(2)
-                    .set_bool("datafusion.execution.enable_migration_aggregate", true)
-                    .set(
-                        "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-                        &ScalarValue::Float64(Some(2.0)),
-                    ),
+        let task_ctx = Arc::new(TaskContext::default().with_session_config(
+            SessionConfig::new().with_batch_size(2).set(
+                "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                &ScalarValue::Float64(Some(2.0)),
             ),
-        );
+        ));
 
         let stream = aggregate.execute_typed(0, &task_ctx)?;
         assert!(matches!(stream, StreamType::PartialHash(_)));
@@ -5220,7 +5122,7 @@ mod tests {
             input,
             Arc::clone(&schema),
         )?);
-        let task_ctx = new_migrated_hash_ctx(BATCH_SIZE);
+        let task_ctx = new_hash_ctx(BATCH_SIZE);
 
         let stream = aggregate.execute_typed(0, &task_ctx)?;
         assert!(matches!(stream, StreamType::SingleHash(_)));
@@ -5250,7 +5152,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn limited_distinct_aggregate_uses_migrated_hash_streams() -> Result<()> {
+    async fn limited_distinct_aggregate_uses_hash_streams() -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, false)]));
         let input_batches = vec![
@@ -5265,12 +5167,8 @@ mod tests {
         ];
         let group_by =
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
-        let task_ctx = Arc::new(
-            TaskContext::default().with_session_config(
-                SessionConfig::new()
-                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
-            ),
-        );
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(SessionConfig::new()));
 
         let partial_input = TestMemoryExec::try_new_exec(
             std::slice::from_ref(&input_batches),
@@ -5400,12 +5298,11 @@ mod tests {
         )
     }
 
-    /// For single aggregation, ensures `SingleHashAggregateStream` is used when
-    /// enabled by migration config.
+    /// Unclustered single-stage aggregation uses [`SingleHashAggregateStream`].
     #[tokio::test]
     async fn single_aggregate_planning() -> Result<()> {
         let single = single_test_aggregate()?;
-        let task_ctx = new_migrated_hash_ctx(2);
+        let task_ctx = new_hash_ctx(2);
 
         let stream = single.execute_typed(0, &task_ctx)?;
         assert!(matches!(stream, StreamType::SingleHash(_)));
@@ -5439,7 +5336,7 @@ mod tests {
     #[tokio::test]
     async fn single_aggregate_with_memory_limit_planning() -> Result<()> {
         let single = single_test_aggregate()?;
-        let task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
+        let task_ctx = new_finite_memory_hash_ctx(2, 1024 * 1024)?;
 
         let stream = single.execute_typed(0, &task_ctx)?;
         assert!(matches!(stream, StreamType::SingleHash(_)));
@@ -5713,7 +5610,7 @@ mod tests {
             &GroupClusteringMode::Partial(vec![0])
         );
 
-        let task_ctx = new_migrated_hash_ctx(2);
+        let task_ctx = new_hash_ctx(2);
         let stream = aggregate.execute_typed(0, &task_ctx)?;
         assert!(matches!(stream, StreamType::ClusteredSingleAggregate(_)));
         let stream: SendableRecordBatchStream = stream.into();
@@ -5729,7 +5626,7 @@ mod tests {
 +----------+-----------+----------------+
 ");
 
-        let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
+        let finite_memory_task_ctx = new_finite_memory_hash_ctx(2, 1024 * 1024)?;
         let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
         assert!(matches!(stream, StreamType::ClusteredSingleAggregate(_)));
 
@@ -5785,7 +5682,7 @@ mod tests {
                 partial_reduce.properties().output_ordering()
             );
 
-            let stream = partial_reduce.execute_typed(0, &new_migrated_hash_ctx(1024))?;
+            let stream = partial_reduce.execute_typed(0, &new_hash_ctx(1024))?;
             assert!(matches!(stream, StreamType::PartialReduceHash(_)));
         }
 
@@ -5837,8 +5734,7 @@ mod tests {
                 Arc::new(input),
                 Arc::clone(&schema),
             )?;
-            let output =
-                collect(aggregate.execute(0, new_migrated_hash_ctx(1024))?).await?;
+            let output = collect(aggregate.execute(0, new_hash_ctx(1024))?).await?;
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&output), @r"
             +---+----+------------+
@@ -5910,8 +5806,7 @@ mod tests {
                 Arc::new(input),
                 Arc::clone(&schema),
             )?;
-            let output =
-                collect(aggregate.execute(0, new_migrated_hash_ctx(1024))?).await?;
+            let output = collect(aggregate.execute(0, new_hash_ctx(1024))?).await?;
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&output), @r"
             +---+---+------------+
@@ -5978,7 +5873,7 @@ mod tests {
             );
             assert_eq!(aggregate.cache().emission_type, EmissionType::Final);
 
-            let stream = aggregate.execute_typed(0, &new_migrated_hash_ctx(1024))?;
+            let stream = aggregate.execute_typed(0, &new_hash_ctx(1024))?;
             assert!(matches!(stream, StreamType::SingleHash(_)));
             let output = collect(stream.into()).await?;
             allow_duplicates! {
@@ -6145,17 +6040,12 @@ mod tests {
         )
     }
 
-    /// For partial-reduce aggregation, ensures `PartialReduceHashAggregateStream`
-    /// is used when enabled by migration config.
+    /// Partial-reduce aggregation uses [`PartialReduceHashAggregateStream`].
     #[tokio::test]
     async fn partial_reduce_aggregate_planning() -> Result<()> {
         let partial_reduce = partial_reduce_test_aggregate()?;
-        let task_ctx = Arc::new(
-            TaskContext::default().with_session_config(
-                SessionConfig::new()
-                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
-            ),
-        );
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(SessionConfig::new()));
 
         let stream = partial_reduce.execute_typed(0, &task_ctx)?;
         assert!(matches!(stream, StreamType::PartialReduceHash(_)));
@@ -6189,7 +6079,7 @@ mod tests {
         let batch_size = 100;
         let task_ctx = Arc::new(
             TaskContext::default()
-                .with_session_config(migrated_hash_session_config(batch_size))
+                .with_session_config(hash_session_config(batch_size))
                 .with_runtime(runtime),
         );
 
@@ -6311,7 +6201,7 @@ mod tests {
         let batch_size = 2;
         let task_ctx = Arc::new(
             TaskContext::default()
-                .with_session_config(migrated_hash_session_config(batch_size))
+                .with_session_config(hash_session_config(batch_size))
                 .with_runtime(runtime),
         );
 
@@ -6421,7 +6311,7 @@ mod tests {
         );
         assert!(aggregate.cache().output_ordering().is_none());
 
-        let task_ctx = new_migrated_hash_ctx(1024);
+        let task_ctx = new_hash_ctx(1024);
         let stream = aggregate.execute_typed(0, &task_ctx)?;
         assert!(matches!(stream, StreamType::ClusteredSingleAggregate(_)));
         let mut stream: SendableRecordBatchStream = stream.into();
@@ -6493,7 +6383,7 @@ mod tests {
                 .alias("SUM(value)")
                 .build()?,
         );
-        let task_ctx = new_migrated_hash_ctx(1024);
+        let task_ctx = new_hash_ctx(1024);
 
         let single_partitioned = AggregateExec::try_new(
             AggregateMode::SinglePartitioned,
@@ -6667,7 +6557,7 @@ mod tests {
             GroupClusteringMode::Partial(_)
         ));
 
-        let task_ctx = new_migrated_hash_ctx(2);
+        let task_ctx = new_hash_ctx(2);
         let stream = aggregate.execute_typed(0, &task_ctx)?;
         assert!(matches!(stream, StreamType::ClusteredPartialAggregate(_)));
 
@@ -6686,7 +6576,7 @@ mod tests {
 ");
 
         // Clustered partial aggregation supports finite memory.
-        let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
+        let finite_memory_task_ctx = new_finite_memory_hash_ctx(2, 1024 * 1024)?;
         let stream = aggregate.execute_typed(0, &finite_memory_task_ctx)?;
         assert!(matches!(stream, StreamType::ClusteredPartialAggregate(_)));
 
@@ -6749,7 +6639,7 @@ mod tests {
             &GroupClusteringMode::Full
         );
 
-        let task_ctx = new_migrated_hash_ctx(2);
+        let task_ctx = new_hash_ctx(2);
         let stream = final_aggregate.execute_typed(0, &task_ctx)?;
         assert!(matches!(stream, StreamType::ClusteredFinalAggregate(_)));
 
@@ -6767,7 +6657,7 @@ mod tests {
 ");
 
         // Clustered final aggregation supports finite memory.
-        let finite_memory_task_ctx = new_finite_memory_migrated_hash_ctx(2, 1024 * 1024)?;
+        let finite_memory_task_ctx = new_finite_memory_hash_ctx(2, 1024 * 1024)?;
         let stream = final_aggregate.execute_typed(0, &finite_memory_task_ctx)?;
         assert!(matches!(stream, StreamType::ClusteredFinalAggregate(_)));
 
@@ -7524,183 +7414,6 @@ mod tests {
         Ok(())
     }
 
-    // Migrated to PartialHashAggregateStream coverage below;
-    // kept here for the legacy GroupedHashAggregateStream implementation.
-    #[tokio::test]
-    async fn test_skip_aggregation_after_first_batch() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Int32, true),
-            Field::new("val", DataType::Int32, true),
-        ]));
-
-        let group_by =
-            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
-
-        let aggr_expr = vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias(String::from("COUNT(val)"))
-                .build()
-                .map(Arc::new)?,
-        ];
-
-        let input_data = vec![
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![1, 2, 3])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![2, 3, 4])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-        ];
-
-        let input =
-            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            group_by,
-            aggr_expr,
-            vec![None],
-            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
-            schema,
-        )?);
-
-        let mut session_config = SessionConfig::default();
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            &ScalarValue::Int64(Some(2)),
-        );
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &ScalarValue::Float64(Some(0.1)),
-        );
-
-        let ctx = Arc::new(TaskContext::default().with_session_config(session_config));
-        let stream: SendableRecordBatchStream = Box::pin(
-            GroupedHashAggregateStream::new(aggregate_exec.as_ref(), &ctx, 0)?,
-        );
-        let output = collect(stream).await?;
-
-        allow_duplicates! {
-            assert_snapshot!(batches_to_string(&output), @r"
-            +-----+-------------------+
-            | key | COUNT(val)[count] |
-            +-----+-------------------+
-            | 1   | 1                 |
-            | 2   | 1                 |
-            | 3   | 1                 |
-            | 2   | 1                 |
-            | 3   | 1                 |
-            | 4   | 1                 |
-            +-----+-------------------+
-            ");
-        }
-
-        Ok(())
-    }
-
-    // Migrated to PartialHashAggregateStream coverage below;
-    // kept here for the legacy GroupedHashAggregateStream implementation.
-    #[tokio::test]
-    async fn test_skip_aggregation_after_threshold() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Int32, true),
-            Field::new("val", DataType::Int32, true),
-        ]));
-
-        let group_by =
-            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".to_string())]);
-
-        let aggr_expr = vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("val", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias(String::from("COUNT(val)"))
-                .build()
-                .map(Arc::new)?,
-        ];
-
-        let input_data = vec![
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![1, 2, 3])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![2, 3, 4])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(vec![2, 3, 4])),
-                    Arc::new(Int32Array::from(vec![0, 0, 0])),
-                ],
-            )
-            .unwrap(),
-        ];
-
-        let input =
-            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::Partial,
-            group_by,
-            aggr_expr,
-            vec![None],
-            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
-            schema,
-        )?);
-
-        let mut session_config = SessionConfig::default();
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            &ScalarValue::Int64(Some(5)),
-        );
-        session_config = session_config.set(
-            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
-            &ScalarValue::Float64(Some(0.1)),
-        );
-
-        let ctx = Arc::new(TaskContext::default().with_session_config(session_config));
-        let stream: SendableRecordBatchStream = Box::pin(
-            GroupedHashAggregateStream::new(aggregate_exec.as_ref(), &ctx, 0)?,
-        );
-        let output = collect(stream).await?;
-
-        allow_duplicates! {
-            assert_snapshot!(batches_to_string(&output), @r"
-            +-----+-------------------+
-            | key | COUNT(val)[count] |
-            +-----+-------------------+
-            | 1   | 1                 |
-            | 2   | 2                 |
-            | 3   | 2                 |
-            | 4   | 1                 |
-            | 2   | 1                 |
-            | 3   | 1                 |
-            | 4   | 1                 |
-            +-----+-------------------+
-            ");
-        }
-
-        Ok(())
-    }
-
     #[tokio::test]
     async fn test_partial_hash_stream_skip_aggregation_after_first_batch() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -7750,7 +7463,6 @@ mod tests {
         )?);
 
         let session_config = SessionConfig::default()
-            .set_bool("datafusion.execution.enable_migration_aggregate", true)
             .set(
                 "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
                 &ScalarValue::Int64(Some(2)),
@@ -8087,7 +7799,6 @@ mod tests {
         )?);
 
         let session_config = SessionConfig::default()
-            .set_bool("datafusion.execution.enable_migration_aggregate", true)
             .set(
                 "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
                 &ScalarValue::Int64(Some(5)),
@@ -9522,9 +9233,9 @@ mod tests {
             Arc::clone(&schema),
         )?);
 
-        // The merge input and replay aggregate now share one allowance. Keep
+        // The merge input and replay aggregate share one allowance. Keep
         // enough space for both while the additional groups still force spilling.
-        let task_ctx = new_migrated_spill_ctx(1, 1024);
+        let task_ctx = new_hash_spill_ctx(1, 1024);
         let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await?;
         assert_eq!(task_ctx.memory_pool().reserved(), 0);
         assert_spill_count_metric(true, Arc::clone(&aggr));

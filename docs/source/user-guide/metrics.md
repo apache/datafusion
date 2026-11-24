@@ -65,7 +65,6 @@ metrics below, and a timer per aggregate expression and execution phase.
 | spill_count                | Number of spill files written when the aggregation exceeds its memory budget.                                                         |
 | spilled_bytes              | Total number of bytes written to spill files.                                                                                         |
 | spilled_rows               | Total number of rows written to spill files.                                                                                          |
-| peak_mem_used              | Peak tracked memory held by the grouped aggregation, in bytes; recorded by the fallback grouped hash path only.                       |
 
 These operator-level metrics are recorded by the grouped aggregation paths
 only: an `AggregateExec` without a `GROUP BY` reports just `BaselineMetrics`
@@ -135,11 +134,9 @@ emission, including during spilling. The grouped TopK aggregate path records
 only the per-aggregate `arguments` timer, because it maintains values directly
 rather than using accumulators.
 
-Where an aggregate has a `FILTER` clause, its evaluation is included in
-`aggregate_arguments_time`. Per-aggregate `arguments` timers include the filter
-when it is evaluated per aggregate. The legacy grouped hash path evaluates
-filters collectively, so its per-aggregate `arguments` timers cover argument
-expressions only; their sum need not equal `aggregate_arguments_time`.
+When an aggregate has a `FILTER` clause, its evaluation is included in that
+aggregate's `arguments` timer. Grouped aggregation also includes this work in
+`aggregate_arguments_time`.
 
 Aggregate implementations can also expose optional internal submetrics. These
 use the `agg_expr_{index}_internal_{subphase}_time` naming and `aggregate`

@@ -1012,7 +1012,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_grouped_distinct_installs_metrics_for_conversion_and_update() -> Result<()>
+    fn grouped_distinct_adapter_installs_metrics_for_conversion_and_update() -> Result<()>
     {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",
@@ -1048,7 +1048,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_grouped_distinct_merge_records_metric_once() -> Result<()> {
+    fn grouped_distinct_adapter_merge_records_metric_once() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "value",
             DataType::UInt32,
