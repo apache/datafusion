@@ -7434,7 +7434,7 @@ async fn test_insert_into_casting_support() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_dataframe_read_columns() -> Result<()> {
+async fn test_dataframe_from_columns() -> Result<()> {
     let bools: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
     let i8s: ArrayRef = Arc::new(Int8Array::from(vec![-1, 0, 1]));
     let i16s: ArrayRef = Arc::new(Int16Array::from(vec![-1, 0, 1]));
@@ -7473,11 +7473,10 @@ async fn test_dataframe_read_columns() -> Result<()> {
         ("str", strings),
     ];
 
-    let ctx = SessionContext::new();
     // any `IntoIterator<Item = (&str, ArrayRef)>` is accepted
-    let df1 = ctx.read_columns(columns.clone())?;
-    let df2 = ctx.read_columns(columns.to_vec())?;
-    let df3 = ctx.read_columns(columns.into_iter())?;
+    let df1 = DataFrame::from_columns(columns.clone())?;
+    let df2 = DataFrame::from_columns(columns.to_vec())?;
+    let df3 = DataFrame::from_columns(columns.into_iter())?;
 
     let expected_types = [
         ("bool", DataType::Boolean),
@@ -7525,22 +7524,20 @@ async fn test_dataframe_read_columns() -> Result<()> {
 }
 
 #[test]
-fn test_dataframe_read_columns_invalid_input() {
-    let ctx = SessionContext::new();
-
+fn test_dataframe_from_columns_invalid_input() {
     // no columns
-    assert!(ctx.read_columns(vec![]).is_err());
-    assert!(ctx.read_columns([]).is_err());
+    assert!(DataFrame::from_columns(vec![]).is_err());
+    assert!(DataFrame::from_columns([]).is_err());
 
     // columns of different lengths
     let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
     let b: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
-    let err = ctx.read_columns([("a", a), ("b", b)]).unwrap_err();
+    let err = DataFrame::from_columns([("a", a), ("b", b)]).unwrap_err();
     assert_contains!(err.to_string(), "must have the same length");
 }
 
 #[tokio::test]
-async fn test_dataframe_read_columns_nullability_follows_arrays() -> Result<()> {
+async fn test_dataframe_from_columns_nullability_follows_arrays() -> Result<()> {
     let no_nulls: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
     let with_nulls: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
     // `null_count()` is 0 because the nulls live in the dictionary values, but
@@ -7551,8 +7548,7 @@ async fn test_dataframe_read_columns_nullability_follows_arrays() -> Result<()> 
     let dict: ArrayRef = Arc::new(DictionaryArray::new(keys, Arc::new(values)));
     assert_eq!(dict.null_count(), 0);
 
-    let ctx = SessionContext::new();
-    let df = ctx.read_columns([("a", no_nulls), ("b", with_nulls), ("d", dict)])?;
+    let df = DataFrame::from_columns([("a", no_nulls), ("b", with_nulls), ("d", dict)])?;
 
     let schema = df.schema();
     assert!(!schema.field_with_unqualified_name("a")?.is_nullable());
@@ -7572,7 +7568,7 @@ async fn test_dataframe_read_columns_nullability_follows_arrays() -> Result<()> 
 }
 
 #[tokio::test]
-async fn test_dataframe_read_columns_uses_session() -> Result<()> {
+async fn test_dataframe_from_arrays_uses_session() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(1);
     let ctx = SessionContext::new_with_config(config);
     ctx.register_udf(create_udf(
@@ -7588,7 +7584,7 @@ async fn test_dataframe_read_columns_uses_session() -> Result<()> {
     ));
 
     let x: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-    let df = ctx.read_columns([("x", x)])?;
+    let df = ctx.read_empty()?.from_arrays([("x", x)])?;
 
     // The DataFrame is bound to `ctx`, not to a fresh default session ...
     let task_ctx = df.task_ctx();
@@ -7611,27 +7607,6 @@ async fn test_dataframe_read_columns_uses_session() -> Result<()> {
     "
     );
 
-    Ok(())
-}
-
-#[tokio::test]
-#[expect(
-    deprecated,
-    reason = "`DataFrame::from_columns` is a deprecated wrapper"
-)]
-async fn test_dataframe_from_columns_deprecated() -> Result<()> {
-    let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-    let name: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), None, Some("c")]));
-    let df = DataFrame::from_columns([("id", id), ("name", name)])?;
-    assert_eq!(df.schema().fields().len(), 2);
-    // nullability follows the arrays, as for `read_columns`
-    assert!(!df.schema().field_with_unqualified_name("id")?.is_nullable());
-    assert!(
-        df.schema()
-            .field_with_unqualified_name("name")?
-            .is_nullable()
-    );
-    assert_eq!(df.count().await?, 3);
     Ok(())
 }
 
