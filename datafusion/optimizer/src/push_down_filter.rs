@@ -1313,7 +1313,7 @@ impl OptimizerRule for PushDownFilter {
 
                 result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
             }
-            LogicalPlan::TableScan(mut scan) => {
+            LogicalPlan::TableScan(scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
                 // Filters containing scalar subqueries cannot be pushed to
                 // providers because the subquery result is not available
@@ -1380,9 +1380,20 @@ impl OptimizerRule for PushDownFilter {
                         predicates_changed || reorder_changed,
                         TreeNodeRecursion::Continue,
                     ));
-                } else {
-                    scan.filters = new_scan_filters;
                 }
+                let scan = match scan.try_with_filters(new_scan_filters) {
+                    Ok(scan) => scan,
+                    // The fetch and skip guard above returns before this point
+                    // today. This arm keeps the plan correct if that guard moves.
+                    Err(scan) => {
+                        filter.input = Arc::new(LogicalPlan::TableScan(scan));
+                        return Ok(Transformed::new(
+                            LogicalPlan::Filter(filter),
+                            predicates_changed || reorder_changed,
+                            TreeNodeRecursion::Continue,
+                        ));
+                    }
+                };
 
                 // Compose predicates to be of `Unsupported` or `Inexact` pushdown type,
                 // and also include volatile and subquery-containing filters
