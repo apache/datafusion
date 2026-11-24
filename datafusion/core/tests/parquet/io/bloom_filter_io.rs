@@ -99,7 +99,7 @@ async fn test_parquet_bloom_filter_io_interleaved_multi_row_group() {
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 403..996)
+        Read Parquet footer (offsets 403..992)
     Request 3
         Read OffsetIndex for columns 'a', 'b' (rg 0, 1) (offsets 360..403)
     Request 4
