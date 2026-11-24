@@ -1581,9 +1581,11 @@ fn push_down_into_table_scan(
         .cloned()
         .collect();
 
+    // Nothing changes when no predicate leaves the filter and the scan already
+    // records every accepted predicate.
     if supported_filters
         .iter()
-        .all(|res| res == &TableProviderFilterPushDown::Inexact)
+        .all(|res| res != &TableProviderFilterPushDown::Exact)
         && scan.filters == new_scan_filters
     {
         return Ok(Transformed::new(
@@ -3559,6 +3561,81 @@ mod tests {
             plan,
             @"TableScan: test, full_filters=[a = Int64(1)]"
         )
+    }
+
+    /// Answers per predicate by the literal it compares with: `1` is exact,
+    /// `2` is inexact, and any other value is unsupported.
+    #[derive(Debug)]
+    struct PerPredicatePushDownProvider;
+
+    impl TableSource for PerPredicatePushDownProvider {
+        fn schema(&self) -> SchemaRef {
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+            ]))
+        }
+
+        fn table_type(&self) -> TableType {
+            TableType::Base
+        }
+
+        fn supports_filters_pushdown(
+            &self,
+            filters: &[&Expr],
+        ) -> Result<Vec<TableProviderFilterPushDown>> {
+            Ok(filters
+                .iter()
+                .map(|f| match f {
+                    Expr::BinaryExpr(BinaryExpr { right, .. })
+                        if **right == lit(1i64) =>
+                    {
+                        TableProviderFilterPushDown::Exact
+                    }
+                    Expr::BinaryExpr(BinaryExpr { right, .. })
+                        if **right == lit(2i64) =>
+                    {
+                        TableProviderFilterPushDown::Inexact
+                    }
+                    _ => TableProviderFilterPushDown::Unsupported,
+                })
+                .collect())
+        }
+    }
+
+    /// A second rewrite of a filter over a scan that records an inexact
+    /// predicate and rejects another one changes nothing.
+    #[test]
+    fn direct_scan_pushdown_with_inexact_and_unsupported_is_a_fixed_point() -> Result<()>
+    {
+        let plan = || -> Result<LogicalPlan> {
+            let source = PerPredicatePushDownProvider;
+            LogicalPlanBuilder::from(LogicalPlan::TableScan(TableScan {
+                table_name: "test".into(),
+                filters: vec![],
+                projected_schema: Arc::new(DFSchema::try_from(source.schema())?),
+                projection: None,
+                source: Arc::new(source),
+                fetch: None,
+                skip: None,
+                statistics_requests: Box::default(),
+            }))
+            .filter(col("a").gt(lit(2i64)).and(col("b").is_not_null()))?
+            .build()
+        };
+        assert_optimized_plan_equal!(plan()?, @"
+        Filter: a > Int64(2) AND b IS NOT NULL
+          TableScan: test, partial_filters=[a > Int64(2)]
+        ")?;
+
+        let rule = PushDownFilter::new();
+        let config = OptimizerContext::new();
+        let once = rule.rewrite(plan()?, &config)?;
+        assert!(once.transformed);
+        let twice = rule.rewrite(once.data.clone(), &config)?;
+        assert!(!twice.transformed);
+        assert_eq!(twice.data, once.data);
+        Ok(())
     }
 
     #[test]
