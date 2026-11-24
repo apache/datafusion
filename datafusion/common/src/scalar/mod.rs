@@ -67,6 +67,7 @@ use arrow::array::{
     downcast_array, downcast_run_array, make_comparator, new_empty_array, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
+use arrow::compute::SortOptions;
 use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
 use arrow::compute::kernels::numeric::{
     add, add_wrapping, div, mul, mul_wrapping, rem, sub, sub_wrapping,
@@ -527,7 +528,18 @@ fn nested_eq<T: Array + PartialEq>(a: &Arc<T>, b: &Arc<T>) -> bool {
     Arc::ptr_eq(a, b)
         || (a.len() == b.len()
             && a.data_type() == b.data_type()
-            && a.as_ref() == b.as_ref())
+            && (a.as_ref() == b.as_ref() || logical_eq(a.as_ref(), b.as_ref())))
+}
+
+/// Logical equality for nested arrays, as sorting sees them.
+///
+/// Unlike structural `Array` equality, this cannot distinguish encodings of
+/// the same value: a list with a null dictionary key and one with a key
+/// referencing a null value are both `[NULL]` (#26689).
+fn logical_eq(a: &dyn Array, b: &dyn Array) -> bool {
+    make_comparator(a, b, SortOptions::new(false, true))
+        .map(|cmp| (0..a.len()).all(|i| cmp(i, i).is_eq()))
+        .unwrap_or(false)
 }
 
 // manual implementation of `PartialEq`
@@ -884,29 +896,27 @@ fn partial_cmp_list(arr1: &dyn Array, arr2: &dyn Array) -> Option<Ordering> {
     let arr1_trimmed = arr1.slice(0, min_length);
     let arr2_trimmed = arr2.slice(0, min_length);
 
-    let lt_res = arrow::compute::kernels::cmp::lt(&arr1_trimmed, &arr2_trimmed).ok()?;
-    let eq_res = arrow::compute::kernels::cmp::eq(&arr1_trimmed, &arr2_trimmed).ok()?;
+    // In Postgres, NULL values in lists are always considered to be greater
+    // than non-NULL values:
+    //
+    // $ SELECT ARRAY[NULL]::integer[] > ARRAY[1]
+    // true
+    //
+    // Ascending order with nulls last replicates that, and `make_comparator`
+    // applies it to nested types the `lt`/`eq` kernels reject. It also cannot
+    // distinguish encodings of the same value: a null dictionary key and a
+    // key referencing a null value are both NULL (#26689).
+    let cmp = make_comparator(
+        arr1_trimmed.as_ref(),
+        arr2_trimmed.as_ref(),
+        SortOptions::new(false, false),
+    )
+    .ok()?;
 
-    for j in 0..lt_res.len() {
-        // In Postgres, NULL values in lists are always considered to be greater than non-NULL values:
-        //
-        // $ SELECT ARRAY[NULL]::integer[] > ARRAY[1]
-        // true
-        //
-        // These next two if statements are introduced for replicating Postgres behavior, as
-        // arrow::compute does not account for this.
-        if arr1_trimmed.is_null(j) && !arr2_trimmed.is_null(j) {
-            return Some(Ordering::Greater);
-        }
-        if !arr1_trimmed.is_null(j) && arr2_trimmed.is_null(j) {
-            return Some(Ordering::Less);
-        }
-
-        if lt_res.is_valid(j) && lt_res.value(j) {
-            return Some(Ordering::Less);
-        }
-        if eq_res.is_valid(j) && !eq_res.value(j) {
-            return Some(Ordering::Greater);
+    for j in 0..min_length {
+        let ord = cmp(j, j);
+        if ord != Ordering::Equal {
+            return Some(ord);
         }
     }
 
@@ -12074,5 +12084,27 @@ mod tests {
             ScalarValue::Int32(Some(0)).normalize(),
             ScalarValue::Int32(Some(0))
         );
+    }
+
+    #[test]
+    fn nested_dictionary_null_encodings_are_one_value() -> Result<()> {
+        // A null dictionary key and a key referencing a null value are both
+        // `[NULL]`: equality and ordering must not distinguish the encodings
+        // (#26689).
+        let children: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![None, Some(0)]),
+            Arc::new(Int32Array::from(vec![None])),
+        )?);
+        let keys: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new("item", children.data_type().clone(), true)),
+            OffsetBuffer::from_lengths([1, 1]),
+            children,
+            None,
+        ));
+        let r0 = ScalarValue::try_from_array(&keys, 0)?;
+        let r1 = ScalarValue::try_from_array(&keys, 1)?;
+        assert!(r0 == r1, "encodings differ: {r0:?} vs {r1:?}");
+        assert_eq!(r0.partial_cmp(&r1), Some(Ordering::Equal));
+        Ok(())
     }
 }

@@ -11,7 +11,7 @@ use std::time::Duration;
 use arrow::array::{ArrayRef, AsArray, Int32Array, Int64Array, ListArray, StructArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::concat_batches;
-use arrow::datatypes::{DataType, Field, Int32Type, Int64Type, SchemaRef};
+use arrow::datatypes::{DataType, Field, Int32Type, Int64Type, SchemaRef, UInt64Type};
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
@@ -328,5 +328,110 @@ async fn nested_range_desc_nulls_last_emits_before_eof() -> Result<()> {
         )
         .await?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn dictionary_null_encodings_share_groups_and_rank() -> Result<()> {
+    use arrow::array::{DictionaryArray, Int8Array};
+    use arrow::datatypes::Int8Type;
+    use datafusion::functions_window::rank::{dense_rank_udwf, rank_udwf};
+    use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_physical_plan::windows::BoundedWindowAggExec;
+
+    // The two rows both hold `[NULL]`: one via a null dictionary key, one via
+    // a key referencing a null dictionary value (#26689).
+    let children: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::try_new(
+        Int8Array::from(vec![None, Some(0)]),
+        Arc::new(Int32Array::from(vec![None])),
+    )?);
+    let key: ArrayRef = Arc::new(ListArray::new(
+        Arc::new(Field::new("item", children.data_type().clone(), true)),
+        OffsetBuffer::from_lengths([1, 1]),
+        children,
+        None,
+    ));
+    let tie: ArrayRef = Arc::new(Int32Array::from(vec![0, 0]));
+    let value: ArrayRef = Arc::new(Int32Array::from(vec![1, 1]));
+    let batch =
+        RecordBatch::try_from_iter([("key", key), ("tie", tie), ("value", value)])?;
+
+    // One row per input batch, so group and rank state crosses batches.
+    let schema = batch.schema();
+    let batches = (0..batch.num_rows())
+        .map(|row| batch.slice(row, 1))
+        .collect();
+    let source = MemorySourceConfig::try_new(&[batches], Arc::clone(&schema), None)?
+        .try_with_sort_information(vec![nested_ordering(&schema)?])?;
+    let input: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(source);
+
+    // GROUPS BETWEEN CURRENT ROW AND CURRENT ROW counts both rows per group.
+    let count_expr = create_window_expr(
+        &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+        "count".to_string(),
+        &[col("value", &schema)?],
+        &[],
+        input.output_ordering().unwrap(),
+        Arc::new(WindowFrame::new_bounds(
+            WindowFrameUnits::Groups,
+            WindowFrameBound::CurrentRow,
+            WindowFrameBound::CurrentRow,
+        )),
+        Arc::clone(&schema),
+        false,
+        false,
+        None,
+    )?;
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
+        vec![count_expr],
+        Arc::clone(&input),
+        InputOrderMode::Sorted,
+        false,
+    )?);
+    let output = collect(Arc::clone(&plan), SessionContext::new().task_ctx()).await?;
+    let output = concat_batches(&plan.schema(), &output)?;
+    let counts = output
+        .column(batch.num_columns())
+        .as_primitive::<Int64Type>();
+    assert_eq!(counts.iter().collect::<Vec<_>>(), vec![Some(2), Some(2)]);
+
+    // rank() and dense_rank() treat the two rows as peers.
+    let make_rank = |udwf, name: &str| {
+        create_window_expr(
+            &WindowFunctionDefinition::WindowUDF(udwf),
+            name.to_string(),
+            &[],
+            &[],
+            input.output_ordering().unwrap(),
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Range,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )
+    };
+    let rank_expr = make_rank(rank_udwf(), "rank")?;
+    let dense_expr = make_rank(dense_rank_udwf(), "dense_rank")?;
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
+        vec![rank_expr, dense_expr],
+        Arc::clone(&input),
+        InputOrderMode::Sorted,
+        false,
+    )?);
+    let output = collect(Arc::clone(&plan), SessionContext::new().task_ctx()).await?;
+    let output = concat_batches(&plan.schema(), &output)?;
+    let ranks = output
+        .column(batch.num_columns())
+        .as_primitive::<UInt64Type>();
+    assert_eq!(ranks.iter().collect::<Vec<_>>(), vec![Some(1), Some(1)]);
+    let dense = output
+        .column(batch.num_columns() + 1)
+        .as_primitive::<UInt64Type>();
+    assert_eq!(dense.iter().collect::<Vec<_>>(), vec![Some(1), Some(1)]);
+
     Ok(())
 }
