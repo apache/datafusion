@@ -457,13 +457,15 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         let take_whole_last_buffer =
             self.should_take_whole_buffer(last_remaining_buffer_index, last_take_len);
 
-        // Remaining views all point into `in_progress` past the bytes drained from it
-        let offset_shift = if !take_whole_last_buffer
-            && last_remaining_buffer_index == self.completed.len()
-        {
-            last_take_len
+        // How far the remaining views move once the taken buffers are gone
+        let (shifts, offset_shift) = if take_whole_last_buffer {
+            (last_remaining_buffer_index + 1, 0)
+        } else if last_remaining_buffer_index == self.completed.len() {
+            // The take drains the start of `in_progress`, and every remaining
+            // view points into `in_progress` past the drained bytes
+            (last_remaining_buffer_index, last_take_len)
         } else {
-            0
+            (last_remaining_buffer_index, 0)
         };
 
         // Take related buffers
@@ -476,17 +478,12 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             )
         };
 
-        // Shift `buffer index`s finally
-        let shifts = if take_whole_last_buffer {
-            last_remaining_buffer_index + 1
-        } else {
-            last_remaining_buffer_index
-        };
-
         self.views.iter_mut().for_each(|view| {
             if (*view as u32) > 12 {
                 let mut byte_view = ByteView::from(*view);
+                debug_assert!(byte_view.buffer_index as usize >= shifts);
                 byte_view.buffer_index -= shifts as u32;
+                debug_assert!(byte_view.offset as usize >= offset_shift);
                 byte_view.offset -= offset_shift as u32;
                 *view = byte_view.as_u128();
             }

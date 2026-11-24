@@ -7,21 +7,25 @@
 # GROUP BY k, s on a file sorted by k, where s is Utf8View. The partial
 # aggregate emits a small batch every time k changes. Each batch must hold
 # only its own strings, or the order-preserving repartition runs out of
-# memory under the limits below.
+# memory under the limit below.
 
 statement ok
 SET datafusion.execution.target_partitions = 8
 
+# Split even a small file into 8 scan partitions, as in the original report
+statement ok
+SET datafusion.optimizer.repartition_file_min_size = 1024
+
 query I
 COPY (
   SELECT value % 1000 AS k, repeat('x', 100) || (value % 7)::varchar AS s, value AS v
-  FROM generate_series(1, 500000)
+  FROM generate_series(1, 200000)
   ORDER BY k
 )
 TO 'test_files/scratch/aggregate_utf8view_partial_emit/data.parquet'
 STORED AS PARQUET;
 ----
-500000
+200000
 
 statement ok
 CREATE EXTERNAL TABLE t
@@ -48,14 +52,6 @@ physical_plan
 
 # Well above what 7000 result rows need
 statement ok
-SET datafusion.runtime.memory_limit = '50M'
-
-query I
-SELECT count(*) FROM (SELECT k, s, count(*) FROM t GROUP BY k, s ORDER BY k)
-----
-7000
-
-statement ok
 SET datafusion.runtime.memory_limit = '20M'
 
 query I
@@ -71,6 +67,9 @@ DROP TABLE t
 
 statement ok
 SET datafusion.execution.target_partitions = 4
+
+statement ok
+RESET datafusion.optimizer.repartition_file_min_size
 
 # Setting a runtime option rebuilds the session state from the existing one,
 # which turns this option off because the default catalog already exists.
