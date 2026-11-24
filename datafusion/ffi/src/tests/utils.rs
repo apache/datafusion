@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::path::{Path, PathBuf};
 
@@ -112,6 +99,31 @@ pub fn get_byte_metrics_exec() -> Result<crate::execution_plan::FFI_ExecutionPla
     };
 
     let plan = create_exec();
+
+    // Leak the library to keep it loaded for the duration of the test
+    #[expect(clippy::mem_forget)]
+    std::mem::forget(lib);
+
+    Ok(plan)
+}
+
+/// Load [`crate::execution_plan::FFI_ExecutionPlan`] from
+/// `datafusion_ffi_test_create_exec_with_requirements`.
+pub fn get_requirements_exec(
+    hard_ordering: bool,
+) -> Result<crate::execution_plan::FFI_ExecutionPlan> {
+    let lib_path = find_library()?;
+    let lib = unsafe {
+        libloading::Library::new(&lib_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+    let create_exec: libloading::Symbol<
+        extern "C" fn(bool) -> crate::execution_plan::FFI_ExecutionPlan,
+    > = unsafe {
+        lib.get(b"datafusion_ffi_test_create_exec_with_requirements")
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+    let plan = create_exec(hard_ordering);
 
     // Leak the library to keep it loaded for the duration of the test
     #[expect(clippy::mem_forget)]

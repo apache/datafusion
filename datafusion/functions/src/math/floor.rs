@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -169,7 +156,11 @@ impl ScalarUDFImpl for FloorFunc {
         let is_scalar = matches!(arg, ColumnarValue::Scalar(_));
 
         // Array path (also handles decimal scalars converted to size-1 arrays)
-        let value = arg.to_array(args.number_rows)?;
+        let value = if is_scalar {
+            arg.to_array(1)?
+        } else {
+            arg.to_array(args.number_rows)?
+        };
 
         let result: ArrayRef = match value.data_type() {
             DataType::Float64 => Arc::new(
@@ -838,5 +829,34 @@ mod tests {
             matches!(result, PreimageResult::None),
             "Expected None (not an Err) when the argument's type can't be resolved"
         );
+    }
+
+    #[test]
+    fn test_floor_decimal_scalar_zero_rows() {
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::ReturnFieldArgs;
+
+        let udf = FloorFunc::new();
+        let arg = ScalarValue::Decimal32(Some(150), 9, 2);
+        let arg_fields = vec![Arc::new(Field::new("a", arg.data_type(), true))];
+        let return_field = udf
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &[Some(&arg)],
+            })
+            .unwrap();
+        let result = udf
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Scalar(arg)],
+                arg_fields,
+                number_rows: 0,
+                return_field,
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+        let ColumnarValue::Scalar(result) = result else {
+            panic!("expected a scalar result, got {result:?}");
+        };
+        assert_eq!(result, ScalarValue::Decimal32(Some(1), 8, 0));
     }
 }

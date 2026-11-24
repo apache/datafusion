@@ -1,29 +1,16 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array, PrimitiveArray},
     buffer::BooleanBuffer,
     compute,
     datatypes::{
-        DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-        FieldRef, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-        Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-        Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+        DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type,
+        Decimal256Type, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int8Type,
+        Int16Type, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
+        Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
         UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
@@ -193,6 +180,13 @@ fn get_count_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
         DataType::UInt8 | DataType::Int8 | DataType::UInt16 | DataType::Int16 => {
             get_small_int_accumulator(data_type).unwrap()
         }
+
+        DataType::Decimal32(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+            Decimal32Type,
+        >::new(data_type)),
+        DataType::Decimal64(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+            Decimal64Type,
+        >::new(data_type)),
         DataType::Decimal128(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
             Decimal128Type,
         >::new(data_type)),
@@ -293,6 +287,11 @@ impl AggregateUDFImpl for Count {
         Ok(DataType::Int64)
     }
 
+    fn return_field(&self, _arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, false)))
+    }
+
+    // Keep the deprecated method consistent with `return_field` until it is removed
     fn is_nullable(&self) -> bool {
         false
     }
@@ -414,7 +413,8 @@ impl AggregateUDFImpl for Count {
             // Only column references can be resolved from statistics;
             // expressions like casts or literals are not supported.
             let col_expr = expr.downcast_ref::<expressions::Column>()?;
-            if let Precision::Exact(dc) = col_stats[col_expr.index()].distinct_count {
+            if let Precision::Exact(dc) = col_stats.get(col_expr.index())?.distinct_count
+            {
                 let dc = i64::try_from(dc).ok()?;
                 return Some(ScalarValue::Int64(Some(dc)));
             }
@@ -427,7 +427,7 @@ impl AggregateUDFImpl for Count {
 
         // TODO optimize with exprs other than Column
         if let Some(col_expr) = expr.downcast_ref::<expressions::Column>() {
-            if let Precision::Exact(val) = col_stats[col_expr.index()].null_count {
+            if let Precision::Exact(val) = col_stats.get(col_expr.index())?.null_count {
                 let count = i64::try_from(num_rows - val).ok()?;
                 return Some(ScalarValue::Int64(Some(count)));
             }
@@ -1203,5 +1203,27 @@ mod tests {
         // Expect distinct {1,2,3} → count = 3
         assert_eq!(merged.evaluate()?, ScalarValue::Int64(Some(3)));
         Ok(())
+    }
+
+    /// `value_from_stats` is public and cannot return an error, so a column
+    /// without statistics gives `None` instead of a panic, as in `sum`.
+    #[test]
+    fn count_value_from_stats_out_of_bounds_column_returns_none() {
+        let statistics = datafusion_common::Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![datafusion_common::ColumnStatistics::default()],
+        };
+        let return_type = DataType::Int64;
+        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("b", 1))];
+        for is_distinct in [false, true] {
+            let statistics_args = StatisticsArgs {
+                statistics: &statistics,
+                return_type: &return_type,
+                is_distinct,
+                exprs: &exprs,
+            };
+            assert_eq!(Count::new().value_from_stats(&statistics_args), None);
+        }
     }
 }

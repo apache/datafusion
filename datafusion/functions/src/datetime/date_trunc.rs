@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::num::NonZeroI64;
 use std::ops::{Add, Sub};
@@ -560,10 +547,21 @@ impl ScalarUDFImpl for DateTruncFunc {
         let precision = &input[0];
         let date_value = &input[1];
 
-        let order_safe_input = matches!(
-            date_value.range.data_type(),
-            Timestamp(_, None) | Time32(_) | Time64(_)
-        );
+        let order_safe_input = match date_value.range.data_type() {
+            Timestamp(_, None) | Time32(_) | Time64(_) => true,
+            // A timezone transition can reverse the order of timestamps
+            // truncated in local time, but not of those truncated on the
+            // epoch value.
+            Timestamp(_, Some(tz)) => {
+                match (constant_granularity(precision), parse_tz(Some(&tz))) {
+                    (Some(granularity), Ok(tz)) => {
+                        truncates_in_input_unit(granularity, tz.as_ref())
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
 
         if precision.sort_properties == SortProperties::Singleton && order_safe_input {
             Ok(date_value.sort_properties)
@@ -572,7 +570,11 @@ impl ScalarUDFImpl for DateTruncFunc {
         }
     }
 
-    fn supports_range_key_locality_analysis(&self, argument_types: &[DataType]) -> bool {
+    fn supports_range_key_locality_analysis(
+        &self,
+        argument_types: &[DataType],
+        _literal_arguments: &[Option<&ScalarValue>],
+    ) -> bool {
         // Across an America/Goose_Bay transition, ascending epoch seconds
         // 562129259 < 562129260 truncate to 562129200 > 562125600.
         // Keep the audited domain to timezone-less timestamp columns.
@@ -717,6 +719,16 @@ where
     T: Datelike,
 {
     1 + 3 * ((date.month() - 1) / 3)
+}
+
+/// The granularity `precision` always evaluates to, if that is known.
+fn constant_granularity(precision: &ExprProperties) -> Option<DatePart> {
+    let range = &precision.range;
+    if range.lower() != range.upper() {
+        return None;
+    }
+    let granularity = range.lower().try_as_str().flatten()?;
+    parse_granularity(granularity).ok()
 }
 
 /// Returns true if `tz` explicitly names UTC (`"UTC"` or `"+00:00"`)
@@ -1242,6 +1254,9 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
 /// Both datafusion and arrow are ignoring historical timezone's non-minute granularity
 /// bias (e.g., Asia/Kathmandu before 1919 is UTC+05:41:16).
 /// In UTC, "hour" and "day" have uniform durations and can be truncated with simple arithmetic
+///
+/// Rounding down never reorders values, whatever the timezone, which
+/// [`DateTruncFunc::output_ordering`] relies on.
 fn truncates_in_input_unit(granularity: DatePart, tz: Option<&Tz>) -> bool {
     granularity.is_fine_granularity()
         || (tz.is_none() && granularity.is_fine_granularity_utc())
@@ -1410,22 +1425,101 @@ mod tests {
     }
 
     #[test]
+    fn output_ordering_with_timezone_depends_on_granularity() {
+        let constant = |value: ScalarValue| {
+            ExprProperties::new_unknown()
+                .with_order(SortProperties::Singleton)
+                .with_range(Interval::try_new(value.clone(), value).unwrap())
+        };
+        let ordered = SortProperties::Ordered(SortOptions::default());
+        let function = DateTruncFunc::new();
+        let output_ordering = |precision: ExprProperties, unit| {
+            let data_type = DataType::Timestamp(unit, Some("America/Goose_Bay".into()));
+            let timestamp = ExprProperties::new_unknown()
+                .with_order(ordered)
+                .with_range(Interval::make_unbounded(&data_type).unwrap());
+            function.output_ordering(&[precision, timestamp]).unwrap()
+        };
+
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            for granularity in ["microsecond", "millisecond", "second", "minute"] {
+                assert_eq!(
+                    output_ordering(constant(ScalarValue::from(granularity)), unit),
+                    ordered,
+                    "{granularity} {unit:?}"
+                );
+            }
+            for granularity in ["hour", "day", "week", "month", "quarter", "year"] {
+                assert_eq!(
+                    output_ordering(constant(ScalarValue::from(granularity)), unit),
+                    SortProperties::Unordered,
+                    "{granularity} {unit:?}"
+                );
+            }
+        }
+
+        for precision in [
+            ScalarValue::Utf8(Some("MINUTE".into())),
+            ScalarValue::Utf8View(Some("minute".into())),
+            ScalarValue::LargeUtf8(Some("minute".into())),
+        ] {
+            assert_eq!(
+                output_ordering(constant(precision), TimeUnit::Nanosecond),
+                ordered
+            );
+        }
+
+        // A constant whose value is not known, such as a column that holds a
+        // single value, may name any granularity.
+        let unknown_constant = ExprProperties::new_unknown()
+            .with_order(SortProperties::Singleton)
+            .with_range(Interval::make_unbounded(&DataType::Utf8).unwrap());
+        assert_eq!(
+            output_ordering(unknown_constant, TimeUnit::Nanosecond),
+            SortProperties::Unordered
+        );
+        assert_eq!(
+            output_ordering(
+                constant(ScalarValue::from("not a granularity")),
+                TimeUnit::Nanosecond
+            ),
+            SortProperties::Unordered
+        );
+    }
+
+    #[test]
     fn range_key_locality_analysis_requires_timezone_less_timestamp() {
         let date_trunc = DateTruncFunc::new();
 
-        assert!(date_trunc.supports_range_key_locality_analysis(&[
-            DataType::Utf8,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-        ]));
-        assert!(!date_trunc.supports_range_key_locality_analysis(&[
-            DataType::Utf8,
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-        ]));
-        assert!(!date_trunc.supports_range_key_locality_analysis(&[
-            DataType::Int64,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-        ]));
-        assert!(!date_trunc.supports_range_key_locality_analysis(&[DataType::Utf8]));
+        assert!(date_trunc.supports_range_key_locality_analysis(
+            &[
+                DataType::Utf8,
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ],
+            &[None, None],
+        ));
+        assert!(!date_trunc.supports_range_key_locality_analysis(
+            &[
+                DataType::Utf8,
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            ],
+            &[None, None],
+        ));
+        assert!(!date_trunc.supports_range_key_locality_analysis(
+            &[
+                DataType::Int64,
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ],
+            &[None, None],
+        ));
+        assert!(
+            !date_trunc.supports_range_key_locality_analysis(&[DataType::Utf8], &[None])
+        );
     }
 
     fn invoke_date_trunc(

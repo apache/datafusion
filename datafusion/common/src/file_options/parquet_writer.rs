@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Options related to how parquet files should be written
 
@@ -239,6 +226,7 @@ impl ParquetOptions {
             pushdown_filters: _,
             reorder_filters: _,
             force_filter_selections: _, // not used for writer props
+            enable_exact_reverse_scan: _, // not used for writer props
             allow_single_file_parallelism: _,
             maximum_parallel_row_group_writers: _,
             maximum_buffered_record_batches_per_stream: _,
@@ -404,6 +392,7 @@ mod tests {
             pushdown_filters: defaults.pushdown_filters,
             reorder_filters: defaults.reorder_filters,
             force_filter_selections: defaults.force_filter_selections,
+            enable_exact_reverse_scan: defaults.enable_exact_reverse_scan,
             allow_single_file_parallelism: defaults.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: defaults
                 .maximum_parallel_row_group_writers,
@@ -535,6 +524,8 @@ mod tests {
                 pushdown_filters: global_options_defaults.pushdown_filters,
                 reorder_filters: global_options_defaults.reorder_filters,
                 force_filter_selections: global_options_defaults.force_filter_selections,
+                enable_exact_reverse_scan: global_options_defaults
+                    .enable_exact_reverse_scan,
                 allow_single_file_parallelism: global_options_defaults
                     .allow_single_file_parallelism,
                 maximum_parallel_row_group_writers: global_options_defaults

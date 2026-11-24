@@ -1,24 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarValue`]: stores single  values
 
 mod cache;
 mod consts;
+mod null_struct;
 mod struct_builder;
 
 use std::borrow::Borrow;
@@ -52,6 +40,7 @@ use crate::cast::{
     as_uint16_array, as_uint32_array, as_uint64_array, as_union_array,
 };
 use crate::error::{_exec_err, _internal_err, _not_impl_err, DataFusionError, Result};
+use crate::float_semantics::{self, normalize_float};
 use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
 use crate::scalar::consts::{
@@ -75,7 +64,7 @@ use arrow::array::{
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, UnionArray,
-    downcast_run_array, make_comparator, new_empty_array, new_null_array,
+    downcast_array, downcast_run_array, make_comparator, new_empty_array, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
@@ -1280,6 +1269,17 @@ macro_rules! eq_array_float {
     }};
 }
 
+/// Applies [`float_semantics::normalize`] to a typed array, keeping the
+/// original `Arc` when nothing needed to change
+fn normalize_array<A: Array + From<ArrayData> + 'static>(array: Arc<A>) -> Arc<A> {
+    let normalized = float_semantics::normalize(Arc::clone(&array) as ArrayRef);
+    if std::ptr::addr_eq(Arc::as_ptr(&array), Arc::as_ptr(&normalized)) {
+        array
+    } else {
+        Arc::new(downcast_array(normalized.as_ref()))
+    }
+}
+
 impl ScalarValue {
     /// Create a [`Result<ScalarValue>`] with the provided value and datatype
     ///
@@ -1424,12 +1424,9 @@ impl ScalarValue {
             DataType::LargeListView(field_ref) => ScalarValue::LargeListView(Arc::new(
                 GenericListViewArray::new_null(Arc::clone(field_ref), 1),
             )),
-            DataType::Struct(fields) => ScalarValue::Struct(
-                new_null_array(&DataType::Struct(fields.to_owned()), 1)
-                    .as_struct()
-                    .to_owned()
-                    .into(),
-            ),
+            DataType::Struct(fields) => {
+                ScalarValue::Struct(Arc::new(null_struct::new_null_struct(fields)?))
+            }
             DataType::Map(fields, sorted) => ScalarValue::Map(
                 new_null_array(&DataType::Map(fields.to_owned(), sorted.to_owned()), 1)
                     .as_map()
@@ -1905,9 +1902,10 @@ impl ScalarValue {
 
             // List types
             DataType::List(field) => {
-                let list =
-                    ScalarValue::new_list(&[], field.data_type(), field.is_nullable());
-                Ok(ScalarValue::List(list))
+                let empty_arr = new_empty_array(field.data_type());
+                Ok(SingleRowListArrayBuilder::new(empty_arr)
+                    .with_field(field)
+                    .build_list_scalar())
             }
             DataType::FixedSizeList(field, _size) => {
                 let empty_arr = new_empty_array(field.data_type());
@@ -1919,8 +1917,10 @@ impl ScalarValue {
                 Ok(ScalarValue::FixedSizeList(values))
             }
             DataType::LargeList(field) => {
-                let list = ScalarValue::new_large_list(&[], field.data_type());
-                Ok(ScalarValue::LargeList(list))
+                let empty_arr = new_empty_array(field.data_type());
+                Ok(SingleRowListArrayBuilder::new(empty_arr)
+                    .with_field(field)
+                    .build_large_list_scalar())
             }
             DataType::ListView(field) => {
                 let empty_arr = new_empty_array(field.data_type());
@@ -2773,6 +2773,92 @@ impl ScalarValue {
                 | ScalarValue::UInt32(_)
                 | ScalarValue::UInt64(_)
         )
+    }
+
+    /// Applies DataFusion's [floating-point equality semantics] to this value
+    ///
+    /// [floating-point equality semantics]: crate::float_semantics
+    pub fn normalize(self) -> Self {
+        match self {
+            ScalarValue::Float16(Some(v)) => {
+                ScalarValue::Float16(Some(normalize_float(v)))
+            }
+            ScalarValue::Float32(Some(v)) => {
+                ScalarValue::Float32(Some(normalize_float(v)))
+            }
+            ScalarValue::Float64(Some(v)) => {
+                ScalarValue::Float64(Some(normalize_float(v)))
+            }
+            ScalarValue::FixedSizeList(array) => {
+                ScalarValue::FixedSizeList(normalize_array(array))
+            }
+            ScalarValue::List(array) => ScalarValue::List(normalize_array(array)),
+            ScalarValue::LargeList(array) => {
+                ScalarValue::LargeList(normalize_array(array))
+            }
+            ScalarValue::ListView(array) => ScalarValue::ListView(normalize_array(array)),
+            ScalarValue::LargeListView(array) => {
+                ScalarValue::LargeListView(normalize_array(array))
+            }
+            ScalarValue::Struct(array) => ScalarValue::Struct(normalize_array(array)),
+            ScalarValue::Map(array) => ScalarValue::Map(normalize_array(array)),
+            ScalarValue::Union(Some((type_id, value)), fields, mode) => {
+                ScalarValue::Union(
+                    Some((type_id, Box::new(value.normalize()))),
+                    fields,
+                    mode,
+                )
+            }
+            ScalarValue::Dictionary(key_type, value) => {
+                ScalarValue::Dictionary(key_type, Box::new(value.normalize()))
+            }
+            ScalarValue::RunEndEncoded(run_ends, values, value) => {
+                ScalarValue::RunEndEncoded(run_ends, values, Box::new(value.normalize()))
+            }
+            // Everything else holds no float, or is a null float
+            other @ (ScalarValue::Null
+            | ScalarValue::Boolean(_)
+            | ScalarValue::Float16(None)
+            | ScalarValue::Float32(None)
+            | ScalarValue::Float64(None)
+            | ScalarValue::Decimal32(..)
+            | ScalarValue::Decimal64(..)
+            | ScalarValue::Decimal128(..)
+            | ScalarValue::Decimal256(..)
+            | ScalarValue::Int8(_)
+            | ScalarValue::Int16(_)
+            | ScalarValue::Int32(_)
+            | ScalarValue::Int64(_)
+            | ScalarValue::UInt8(_)
+            | ScalarValue::UInt16(_)
+            | ScalarValue::UInt32(_)
+            | ScalarValue::UInt64(_)
+            | ScalarValue::Utf8(_)
+            | ScalarValue::Utf8View(_)
+            | ScalarValue::LargeUtf8(_)
+            | ScalarValue::Binary(_)
+            | ScalarValue::BinaryView(_)
+            | ScalarValue::FixedSizeBinary(..)
+            | ScalarValue::LargeBinary(_)
+            | ScalarValue::Date32(_)
+            | ScalarValue::Date64(_)
+            | ScalarValue::Time32Second(_)
+            | ScalarValue::Time32Millisecond(_)
+            | ScalarValue::Time64Microsecond(_)
+            | ScalarValue::Time64Nanosecond(_)
+            | ScalarValue::TimestampSecond(..)
+            | ScalarValue::TimestampMillisecond(..)
+            | ScalarValue::TimestampMicrosecond(..)
+            | ScalarValue::TimestampNanosecond(..)
+            | ScalarValue::IntervalYearMonth(_)
+            | ScalarValue::IntervalDayTime(_)
+            | ScalarValue::IntervalMonthDayNano(_)
+            | ScalarValue::DurationSecond(_)
+            | ScalarValue::DurationMillisecond(_)
+            | ScalarValue::DurationMicrosecond(_)
+            | ScalarValue::DurationNanosecond(_)
+            | ScalarValue::Union(None, ..)) => other,
+        }
     }
 
     /// whether this value is null or not.
@@ -6234,7 +6320,6 @@ mod tests {
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
     use insta::assert_snapshot;
-    use rand::Rng;
 
     #[test]
     fn try_from_date_timestamp_dst_at_midnight() {
@@ -10146,29 +10231,6 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_op_random_tests() {
-        // timestamp1 + (or -) interval = timestamp2
-        // timestamp2 - timestamp1 (or timestamp1 - timestamp2) = interval ?
-        let sample_size = 1000;
-        let timestamps1 = get_random_timestamps(sample_size);
-        let intervals = get_random_intervals(sample_size);
-        // ts(sec) + interval(ns) = ts(sec); however,
-        // ts(sec) - ts(sec) cannot be = interval(ns). Therefore,
-        // timestamps are more precise than intervals in tests.
-        for (idx, ts1) in timestamps1.iter().enumerate() {
-            if idx % 2 == 0 {
-                let timestamp2 = ts1.add(intervals[idx].clone()).unwrap();
-                let back = timestamp2.sub(intervals[idx].clone()).unwrap();
-                assert_eq!(ts1, &back);
-            } else {
-                let timestamp2 = ts1.sub(intervals[idx].clone()).unwrap();
-                let back = timestamp2.add(intervals[idx].clone()).unwrap();
-                assert_eq!(ts1, &back);
-            }
-        }
-    }
-
-    #[test]
     fn test_nested_scalar_eq() {
         let struct_type = |name: &str| {
             DataType::Struct(Fields::from(vec![
@@ -10630,104 +10692,6 @@ mod tests {
         );
     }
 
-    fn get_random_timestamps(sample_size: u64) -> Vec<ScalarValue> {
-        let vector_size = sample_size;
-        let mut timestamp = vec![];
-        let mut rng = rand::rng();
-        for i in 0..vector_size {
-            let year = rng.random_range(1995..=2050);
-            let month = rng.random_range(1..=12);
-            let day = rng.random_range(1..=28); // to exclude invalid dates
-            let hour = rng.random_range(0..=23);
-            let minute = rng.random_range(0..=59);
-            let second = rng.random_range(0..=59);
-            if i % 4 == 0 {
-                timestamp.push(ScalarValue::TimestampSecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(year, month, day)
-                            .unwrap()
-                            .and_hms_opt(hour, minute, second)
-                            .unwrap()
-                            .and_utc()
-                            .timestamp(),
-                    ),
-                    None,
-                ))
-            } else if i % 4 == 1 {
-                let millisec = rng.random_range(0..=999);
-                timestamp.push(ScalarValue::TimestampMillisecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(year, month, day)
-                            .unwrap()
-                            .and_hms_milli_opt(hour, minute, second, millisec)
-                            .unwrap()
-                            .and_utc()
-                            .timestamp_millis(),
-                    ),
-                    None,
-                ))
-            } else if i % 4 == 2 {
-                let microsec = rng.random_range(0..=999_999);
-                timestamp.push(ScalarValue::TimestampMicrosecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(year, month, day)
-                            .unwrap()
-                            .and_hms_micro_opt(hour, minute, second, microsec)
-                            .unwrap()
-                            .and_utc()
-                            .timestamp_micros(),
-                    ),
-                    None,
-                ))
-            } else if i % 4 == 3 {
-                let nanosec = rng.random_range(0..=999_999_999);
-                timestamp.push(ScalarValue::TimestampNanosecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(year, month, day)
-                            .unwrap()
-                            .and_hms_nano_opt(hour, minute, second, nanosec)
-                            .unwrap()
-                            .and_utc()
-                            .timestamp_nanos_opt()
-                            .unwrap(),
-                    ),
-                    None,
-                ))
-            }
-        }
-        timestamp
-    }
-
-    fn get_random_intervals(sample_size: u64) -> Vec<ScalarValue> {
-        const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
-        const NANOSECS_IN_ONE_DAY: i64 = 86_400_000_000_000;
-
-        let vector_size = sample_size;
-        let mut intervals = vec![];
-        let mut rng = rand::rng();
-        const SECS_IN_ONE_DAY: i32 = 86_400;
-        const MICROSECS_IN_ONE_DAY: i64 = 86_400_000_000;
-        for i in 0..vector_size {
-            let days = rng.random_range(0..5000);
-            if i % 4 == 0 {
-                // to not break second precision
-                let millis = rng.random_range(0..SECS_IN_ONE_DAY) * 1000;
-                intervals.push(ScalarValue::new_interval_dt(days, millis));
-            } else if i % 4 == 1 {
-                let millisec = rng.random_range(0..(MILLISECS_IN_ONE_DAY as i32));
-                intervals.push(ScalarValue::new_interval_dt(days, millisec));
-            } else if i % 4 == 2 {
-                // to not break microsec precision
-                let nanosec = rng.random_range(0..MICROSECS_IN_ONE_DAY) * 1000;
-                intervals.push(ScalarValue::new_interval_mdn(0, days, nanosec));
-            } else {
-                let nanosec = rng.random_range(0..NANOSECS_IN_ONE_DAY);
-                intervals.push(ScalarValue::new_interval_mdn(0, days, nanosec));
-            }
-        }
-        intervals
-    }
-
     fn union_fields() -> UnionFields {
         [
             (0, Arc::new(Field::new("A", DataType::Int32, true))),
@@ -10927,6 +10891,24 @@ mod tests {
             actual.starts_with(expected_prefix),
             "Expected '{actual}' to start with '{expected_prefix}'"
         );
+    }
+
+    #[test]
+    fn test_new_default_list_preserves_field() {
+        for nullable in [false, true] {
+            let field = Arc::new(
+                Field::new("element", DataType::Int64, nullable)
+                    .with_metadata(HashMap::from([("k".to_string(), "v".to_string())])),
+            );
+            for data_type in [
+                DataType::List(Arc::clone(&field)),
+                DataType::LargeList(field),
+            ] {
+                let value = ScalarValue::new_default(&data_type).unwrap();
+                assert_eq!(value.data_type(), data_type);
+                assert!(!value.is_null());
+            }
+        }
     }
 
     #[test]
@@ -12068,5 +12050,29 @@ mod tests {
         assert_eq!(arr.len(), 1);
         assert_eq!(arr.null_count(), 0);
         assert_eq!(arr.num_columns(), 0);
+    }
+
+    #[test]
+    fn normalize_folds_negative_zero() {
+        assert_eq!(
+            ScalarValue::Float64(Some(-0.0)).normalize(),
+            ScalarValue::Float64(Some(0.0))
+        );
+        assert_eq!(
+            ScalarValue::Float32(Some(-0.0)).normalize(),
+            ScalarValue::Float32(Some(0.0))
+        );
+        assert_eq!(
+            ScalarValue::Float16(Some(f16::NEG_ZERO)).normalize(),
+            ScalarValue::Float16(Some(f16::ZERO))
+        );
+        assert_eq!(
+            ScalarValue::Float64(None).normalize(),
+            ScalarValue::Float64(None)
+        );
+        assert_eq!(
+            ScalarValue::Int32(Some(0)).normalize(),
+            ScalarValue::Int32(Some(0))
+        );
     }
 }

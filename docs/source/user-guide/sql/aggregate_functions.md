@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 <!---
@@ -481,7 +468,7 @@ An alternate syntax is also supported:
 
 #### Aliases
 
-- quantile_cont
+- quantile\_cont
 
 ### `quantile_cont`
 
@@ -563,8 +550,8 @@ var(expression)
 
 #### Aliases
 
-- var_sample
-- var_samp
+- var\_sample
+- var\_samp
 
 ### `var_pop`
 
@@ -580,7 +567,7 @@ var_pop(expression)
 
 #### Aliases
 
-- var_population
+- var\_population
 
 ### `var_population`
 
@@ -906,7 +893,7 @@ SELECT regr_r2(user_signups, day) AS r_squared FROM weekly_performance;
 
 ### `regr_slope`
 
-Returns the slope of the linear regression line for non-null pairs in aggregate columns. Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k\*X + b) using minimal RSS fitting.
+Returns the slope of the linear regression line for non-null pairs in aggregate columns. Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k*X + b) using minimal RSS fitting.
 
 ```sql
 regr_slope(expression_y, expression_x)
@@ -1069,7 +1056,7 @@ stddev(expression)
 
 #### Aliases
 
-- stddev_samp
+- stddev\_samp
 
 ### `stddev_pop`
 

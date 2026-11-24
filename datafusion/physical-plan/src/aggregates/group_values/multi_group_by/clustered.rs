@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::mem;
 
@@ -181,6 +168,12 @@ impl GroupValues for GroupValuesClustered {
         true
     }
 
+    fn shrink_to_fit(&mut self) {
+        // Scratch for one `intern` call.
+        self.new_groups.clear();
+        self.new_groups.shrink_to_fit();
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         self.columns = GroupValuesColumn::<true>::build_group_columns(&self.schema)
             .expect("schema validated by GroupValuesClustered::try_new");
@@ -195,23 +188,29 @@ mod tests {
 
     use arrow::array::UInt32Array;
     use arrow::array::{
-        Array, AsArray, BooleanArray, Decimal32Array, Decimal64Array, Decimal128Array,
-        Decimal256Array, FixedSizeBinaryArray, Int32Array, Int64Array,
-        IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+        Array, AsArray, BooleanArray, FixedSizeBinaryArray, Int32Array, Int64Array,
         StringArray,
     };
     use arrow::buffer::{Buffer, NullBuffer};
-    use arrow::compute::{cast, take};
-    use arrow::datatypes::{
-        Field, IntervalDayTime, IntervalMonthDayNano, IntervalUnit, i256,
-    };
+    use arrow::datatypes::Field;
     use datafusion_expr::GroupSelection;
+
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::array::{
+        Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+        IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    };
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::compute::{cast, take};
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, IntervalUnit, i256};
 
     use super::*;
 
     // The values repeat in seven-row runs, with four keys per value of the
     // first column. Construct logical types directly where casting would
     // rescale decimals or cannot represent all interval components.
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn clustered_key_array(
         key_type: &DataType,
         rows: usize,
@@ -345,15 +344,21 @@ mod tests {
         })
     }
 
-    // Compare with the existing hash implementation, changing actual input
-    // boundaries and removing completed groups between batches. This checks the
-    // semantic contract rather than duplicating the adjacent-run algorithm.
+    // Compare with the existing hash implementation across input boundaries and
+    // emits, without duplicating the adjacent-run algorithm. The reference hashes
+    // while the clustered implementation does not, so forced collisions make the
+    // reference quadratic without testing collision handling in this implementation.
+    #[cfg(not(feature = "force_hash_collisions"))]
     #[rstest::rstest]
     #[case::sorted(false)]
     #[case::unsorted(true)]
     fn clustered_keys_match_hash_grouping_across_batches_and_emits(
         #[case] unsorted: bool,
+        // Keep these values in sync with KEY_TYPE_SHARD_COUNT below.
+        #[values(0, 1, 2, 3)] shard: usize,
     ) -> Result<()> {
+        const KEY_TYPE_SHARD_COUNT: usize = 4;
+
         let mut key_types = vec![
             DataType::Boolean,
             DataType::Int8,
@@ -401,37 +406,44 @@ mod tests {
                 key_types.push(DataType::Timestamp(unit, timezone.map(Into::into)));
             }
         }
-        for key_type in key_types {
+        for key_type in key_types
+            .into_iter()
+            .skip(shard)
+            .step_by(KEY_TYPE_SHARD_COUNT)
+        {
             for nullable in [false, true] {
-                let rows = 1025;
-                let first: ArrayRef =
-                    Arc::new(Int32Array::from_iter((0..rows).map(|row| {
-                        let group = (row / 7) as i32;
-                        let key = group / 4;
-                        // Swap neighboring key values while keeping each run contiguous.
-                        (!nullable || group >= 4).then_some(if unsorted {
-                            key ^ 1
-                        } else {
-                            key
-                        })
-                    })));
-                let second = clustered_key_array(&key_type, rows, nullable)?;
-                for descending in [false, true] {
-                    let mut input = vec![Arc::clone(&first), Arc::clone(&second)];
-                    if descending {
-                        let reverse =
-                            UInt32Array::from_iter_values((0..rows as u32).rev());
-                        input = input
-                            .iter()
-                            .map(|array| take(array, &reverse, None))
-                            .collect::<std::result::Result<_, _>>()?;
-                    }
-                    let schema = Arc::new(Schema::new(vec![
-                        Field::new("a", DataType::Int32, nullable),
-                        Field::new("b", key_type.clone(), nullable),
-                    ]));
-                    assert!(GroupValuesClustered::supports_schema(&schema), "{key_type}");
-                    for batch_size in [1, 2, 7, 8, 63, 1024] {
+                for batch_size in [1, 2, 7, 8, 63, 1024] {
+                    let rows = 129.max(batch_size + 1);
+                    let first: ArrayRef =
+                        Arc::new(Int32Array::from_iter((0..rows).map(|row| {
+                            let group = (row / 7) as i32;
+                            let key = group / 4;
+                            // Swap neighboring key values while keeping each run contiguous.
+                            (!nullable || group >= 4).then_some(if unsorted {
+                                key ^ 1
+                            } else {
+                                key
+                            })
+                        })));
+                    let second = clustered_key_array(&key_type, rows, nullable)?;
+                    for descending in [false, true] {
+                        let mut input = vec![Arc::clone(&first), Arc::clone(&second)];
+                        if descending {
+                            let reverse =
+                                UInt32Array::from_iter_values((0..rows as u32).rev());
+                            input = input
+                                .iter()
+                                .map(|array| take(array, &reverse, None))
+                                .collect::<std::result::Result<_, _>>()?;
+                        }
+                        let schema = Arc::new(Schema::new(vec![
+                            Field::new("a", DataType::Int32, nullable),
+                            Field::new("b", key_type.clone(), nullable),
+                        ]));
+                        assert!(
+                            GroupValuesClustered::supports_schema(&schema),
+                            "{key_type}"
+                        );
                         for emit_limit in [0, 1, 17, usize::MAX] {
                             let mut clustered =
                                 GroupValuesClustered::try_new(Arc::clone(&schema))?;

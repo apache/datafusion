@@ -1,30 +1,17 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Execution functions
 
 use crate::cli_context::CliSessionContext;
 use crate::helper::split_from_semicolon;
-use crate::print_format::PrintFormat;
+use crate::print_format::{PrintFormat, TableOptions};
 use crate::{
     command::{Command, OutputFormat},
     helper::CliHelper,
     object_storage::{get_object_store, stdin::StdinUtils},
-    print_options::{MaxRows, PrintOptions},
+    print_options::{MaxRows, PrintOptions, TargetWidth},
 };
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
@@ -32,11 +19,11 @@ use datafusion::config::{ConfigFileType, Dialect};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::memory_pool::MemoryConsumer;
-use datafusion::logical_expr::{DdlStatement, LogicalPlan};
+use datafusion::logical_expr::{DdlStatement, ExplainFormat, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::spill::get_record_batch_memory_size;
 use datafusion::physical_plan::{ExecutionPlanProperties, execute_stream};
-use datafusion::sql::parser::{DFParser, Statement};
+use datafusion::sql::parser::{DFParserBuilder, Statement};
 use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use futures::StreamExt;
@@ -133,6 +120,12 @@ pub async fn exec_from_repl(
     rl.load_history(".history").ok();
 
     loop {
+        // Parser options can change through any input, including `\i` files,
+        // so sync the validator before every read.
+        rl.helper_mut()
+            .unwrap()
+            .set_parser_options(&ctx.task_ctx().session_config().options().sql_parser);
+
         match rl.readline("> ") {
             Ok(line) if line.starts_with('\\') => {
                 rl.add_history_entry(line.trim_end())?;
@@ -180,13 +173,8 @@ pub async fn exec_from_repl(
                         },
                         _ = signal::ctrl_c() => {
                             println!("^C");
-                            continue
                         },
                     }
-                    // dialect might have changed
-                    rl.helper_mut().unwrap().set_dialect(
-                        &ctx.task_ctx().session_config().options().sql_parser.dialect,
-                    );
                 }
             }
             Err(ReadlineError::Interrupted) => {
@@ -222,7 +210,11 @@ pub(super) async fn exec_and_print(
         )
     })?;
 
-    let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
+    let statements = DFParserBuilder::new(sql.as_str())
+        .with_dialect(dialect.as_ref())
+        .with_recursion_limit(options.sql_parser.recursion_limit.get())
+        .build()?
+        .parse_statements()?;
     for statement in statements {
         StatementExecutor::new(statement)
             .execute(ctx, print_options)
@@ -258,6 +250,30 @@ impl StatementExecutor {
         let (df, adjusted) = self
             .create_and_execute_logical_plan(ctx, print_options)
             .await?;
+        let (print_options, table_options) = adjusted.into_options();
+        let df = if table_options.explain_format == Some(ExplainFormat::Tree)
+            && print_options.format == PrintFormat::Table
+        {
+            let (mut state, plan) = df.into_parts();
+            let render_width = match (table_options.width, print_options.target_width) {
+                (Some(width), _) => {
+                    // The renderer emits whole 29-column boxes, rounding its limit up.
+                    Some((usize::from(width) / 29 * 29).max(1))
+                }
+                (None, TargetWidth::Unlimited) => Some(0),
+                _ => None,
+            };
+            if let Some(width) = render_width {
+                state
+                    .config_mut()
+                    .options_mut()
+                    .explain
+                    .tree_maximum_render_width = width;
+            }
+            datafusion::dataframe::DataFrame::new(state, plan)
+        } else {
+            df
+        };
         let physical_plan = df.create_physical_plan().await?;
         let task_ctx = ctx.task_ctx();
         let options = task_ctx.session_config().options();
@@ -277,17 +293,23 @@ impl StatementExecutor {
             // However, memory safety is not guaranteed.
             let stream = execute_stream(physical_plan, task_ctx.clone())?;
             print_options
-                .print_stream(stream, now, &options.format)
+                .print_stream_with_width(
+                    stream,
+                    now,
+                    &options.format,
+                    table_options.width,
+                )
                 .await?;
         } else {
-            // Bounded stream; collected results size is limited by the maxrows option
+            // Non-table formats write every row, so only limit collection when the
+            // selected output format applies the maxrows option.
             let schema = physical_plan.schema();
             let mut stream = execute_stream(physical_plan, task_ctx.clone())?;
             let mut results = vec![];
             let mut row_count = 0_usize;
-            let max_rows = match print_options.maxrows {
-                MaxRows::Unlimited => usize::MAX,
-                MaxRows::Limited(n) => n,
+            let max_rows = match (print_options.format, print_options.maxrows) {
+                (PrintFormat::Table, MaxRows::Limited(n)) => n,
+                _ => usize::MAX,
             };
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
@@ -301,12 +323,13 @@ impl StatementExecutor {
                 }
                 row_count += curr_num_rows;
             }
-            adjusted.into_inner().print_batches(
+            print_options.print_batches_with_options(
                 schema,
                 &results,
                 now,
                 row_count,
                 &options.format,
+                table_options,
             )?;
             reservation.free();
         }
@@ -350,11 +373,17 @@ impl StatementExecutor {
 #[derive(Debug)]
 struct AdjustedPrintOptions {
     inner: PrintOptions,
+    width: Option<u16>,
+    explain_format: Option<ExplainFormat>,
 }
 
 impl AdjustedPrintOptions {
     fn new(inner: PrintOptions) -> Self {
-        Self { inner }
+        Self {
+            width: inner.target_width.resolve(),
+            inner,
+            explain_format: None,
+        }
     }
     /// Adjust print options based on any statement specific requirements
     fn with_statement(mut self, statement: &Statement) -> Self {
@@ -369,26 +398,34 @@ impl AdjustedPrintOptions {
 
     /// Adjust print options based on any plan specific requirements
     fn with_plan(mut self, plan: &LogicalPlan) -> Self {
+        self.explain_format = match plan {
+            LogicalPlan::Explain(explain) => Some(explain.explain_format.clone()),
+            LogicalPlan::Analyze(analyze) => Some(analyze.format.clone()),
+            _ => None,
+        };
         // For plans like `Explain` ignore `MaxRows` option and always display
         // all rows
         if matches!(
             plan,
-            LogicalPlan::Explain(_)
-                | LogicalPlan::DescribeTable(_)
-                | LogicalPlan::Analyze(_)
+            LogicalPlan::Explain(_) | LogicalPlan::Show(_) | LogicalPlan::Analyze(_)
         ) {
             self.inner.maxrows = MaxRows::Unlimited;
         }
         self
     }
 
-    /// Finalize and return the inner `PrintOptions`
-    fn into_inner(mut self) -> PrintOptions {
+    /// Finalize the print options and table layout.
+    fn into_options(mut self) -> (PrintOptions, TableOptions) {
         if self.inner.format == PrintFormat::Automatic {
             self.inner.format = PrintFormat::Table;
         }
 
-        self.inner
+        let table_options = TableOptions {
+            maxrows: self.inner.maxrows,
+            width: self.width,
+            explain_format: self.explain_format,
+        };
+        (self.inner, table_options)
     }
 }
 
@@ -519,6 +556,7 @@ mod tests {
     use super::*;
 
     use datafusion::common::plan_err;
+    use datafusion::sql::parser::DFParser;
 
     use datafusion::prelude::SessionContext;
     use datafusion_common::assert_contains;

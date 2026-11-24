@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`PushDownFilter`] applies filters as early as possible
 //!
@@ -71,7 +58,8 @@ use crate::extract_leaf_expressions::is_pure_extraction_projection;
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::{reorder_predicates, simplify_predicates};
 use crate::utils::{
-    ColumnReference, has_all_column_refs, is_restrict_null_predicate, schema_columns,
+    ColumnReference, aggregate_emits_on_empty_input, has_all_column_refs,
+    is_restrict_null_predicate, schema_columns,
 };
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_expr::ExpressionPlacement;
@@ -291,12 +279,9 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::HigherOrderFunction(_)
         | Expr::Lambda(_)
         | Expr::LambdaVariable(_) => Ok(false),
-        // TODO: remove the next line after `Expr::Wildcard` is removed
-        #[expect(deprecated)]
-        Expr::AggregateFunction(_)
-        | Expr::WindowFunction(_)
-        | Expr::Wildcard { .. }
-        | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
+        Expr::AggregateFunction(_) | Expr::WindowFunction(_) | Expr::GroupingSet(_) => {
+            internal_err!("Unsupported predicate type")
+        }
     })?)
 }
 
@@ -1125,13 +1110,20 @@ impl OptimizerRule for PushDownFilter {
                     .cloned()
                     .collect();
                 let group_expr_columns = expr_columns(&non_volatile_group_exprs);
+                let emits_on_empty = aggregate_emits_on_empty_input(&agg.group_expr);
 
                 // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
                 // After push, we need to replace `a+b` with Column(a)+Column(b)
                 // So we need create a replace_map, add {`a+b` --> Expr(Column(a)+Column(b))}
+                //
+                // Keyed by the output column, the same key `group_expr_columns`
+                // is built from, so a predicate admitted below cannot miss its
+                // replacement. See `replace_cols_by_column` for why the flat
+                // name is not enough.
                 let mut replace_map = HashMap::with_capacity(agg.group_expr.len());
                 for expr in &agg.group_expr {
-                    replace_map.insert(expr.schema_name().to_string(), unalias(expr));
+                    let (relation, name) = expr.qualified_name();
+                    replace_map.insert(Column::new(relation, name), unalias(expr));
                 }
 
                 let predicates = split_conjunction_owned(filter.predicate);
@@ -1139,8 +1131,12 @@ impl OptimizerRule for PushDownFilter {
                 let mut push_predicates = vec![];
                 for expr in predicates {
                     let cols = expr.column_refs();
-                    if cols.iter().all(|c| group_expr_columns.contains(c)) {
-                        push_predicates.push(replace_cols_by_name(expr, &replace_map)?);
+                    // A grand total emits a row even when the predicate empties its input.
+                    if !expr.is_volatile()
+                        && !emits_on_empty
+                        && cols.iter().all(|c| group_expr_columns.contains(c))
+                    {
+                        push_predicates.push(replace_cols_by_column(expr, &replace_map)?);
                     } else {
                         keep_predicates.push(expr);
                     }
@@ -1317,7 +1313,7 @@ impl OptimizerRule for PushDownFilter {
 
                 result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
             }
-            LogicalPlan::TableScan(mut scan) => {
+            LogicalPlan::TableScan(scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
                 // Filters containing scalar subqueries cannot be pushed to
                 // providers because the subquery result is not available
@@ -1384,9 +1380,20 @@ impl OptimizerRule for PushDownFilter {
                         predicates_changed || reorder_changed,
                         TreeNodeRecursion::Continue,
                     ));
-                } else {
-                    scan.filters = new_scan_filters;
                 }
+                let scan = match scan.try_with_filters(new_scan_filters) {
+                    Ok(scan) => scan,
+                    // The fetch and skip guard above returns before this point
+                    // today. This arm keeps the plan correct if that guard moves.
+                    Err(scan) => {
+                        filter.input = Arc::new(LogicalPlan::TableScan(scan));
+                        return Ok(Transformed::new(
+                            LogicalPlan::Filter(filter),
+                            predicates_changed || reorder_changed,
+                            TreeNodeRecursion::Continue,
+                        ));
+                    }
+                };
 
                 // Compose predicates to be of `Unsupported` or `Inexact` pushdown type,
                 // and also include volatile and subquery-containing filters
@@ -1557,12 +1564,17 @@ fn rewrite_projection(
     // into a filter causes optimizer instability — ExtractLeafExpressions will
     // undo the push-down, creating an infinite loop that runs until the
     // iteration limit is hit).
-    let (non_pushable_map, pushable_map) = projection
+    //
+    // Keyed by the output column rather than its flat name, for the reason
+    // given on `replace_cols_by_column`. `EliminateGroupByConstant` can leave a
+    // projection that outputs both `t.a` and `CAST(t.a AS ...)` under that one
+    // name.
+    let (non_pushable_map, pushable_map): (HashMap<_, _>, HashMap<_, _>) = projection
         .schema
         .iter()
         .zip(projection.expr.iter())
         .map(|((qualifier, field), expr)| {
-            (qualified_name(qualifier, field.name()), unalias(expr))
+            (Column::new(qualifier.cloned(), field.name()), unalias(expr))
         })
         .partition(|(_, value)| {
             value.is_volatile()
@@ -1572,7 +1584,7 @@ fn rewrite_projection(
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
     for expr in predicates {
-        if contain(&expr, &non_pushable_map) {
+        if contains_column(&expr, &non_pushable_map) {
             keep_predicates.push(expr);
         } else {
             push_predicates.push(expr);
@@ -1583,7 +1595,7 @@ fn rewrite_projection(
         // re-write all filters based on this projection
         // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
         projection.input = Arc::new(LogicalPlan::Filter(Filter::new(
-            replace_cols_by_name(expr, &pushable_map)?,
+            replace_cols_by_column(expr, &pushable_map)?,
             projection.input,
         )));
 
@@ -1643,6 +1655,28 @@ pub fn replace_cols_by_name(
     .data()
 }
 
+/// Replaces column references by the expression the node below computes for
+/// that column.
+///
+/// Keyed by [`Column`] rather than by its flat name, because a qualified column
+/// `t.a` and an unqualified field named `t.a` are different columns that share a
+/// flat name, and a node can output both.
+fn replace_cols_by_column(
+    e: Expr,
+    replace_map: &HashMap<Column, impl AsRef<Expr>>,
+) -> Result<Expr> {
+    e.transform_up(|expr| {
+        if let Expr::Column(c) = &expr
+            && let Some(new_expr) = replace_map.get(c)
+        {
+            Ok(Transformed::yes(new_expr.as_ref().clone()))
+        } else {
+            Ok(Transformed::no(expr))
+        }
+    })
+    .data()
+}
+
 /// Unalias expression reference.
 fn unalias(expr: &Expr) -> &Expr {
     if let Expr::Alias(alias) = expr {
@@ -1653,11 +1687,9 @@ fn unalias(expr: &Expr) -> &Expr {
 }
 
 /// check whether the expression uses the columns in `check_map`.
-fn contain<T>(e: &Expr, check_map: &HashMap<String, T>) -> bool {
-    e.exists(|expr| {
-        Ok(matches!(expr, Expr::Column(c) if check_map.contains_key(&c.flat_name())))
-    })
-    .unwrap()
+fn contains_column<T>(e: &Expr, check_map: &HashMap<Column, T>) -> bool {
+    e.exists(|expr| Ok(matches!(expr, Expr::Column(c) if check_map.contains_key(c))))
+        .unwrap()
 }
 
 fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
@@ -4899,7 +4931,7 @@ mod tests {
             .aggregate(vec![col("user")], vec![count(lit(1))])?
             .project(vec![
                 leaf_udf_expr(col("user")).is_not_null().alias("has_name"),
-                col("COUNT(Int32(1))"),
+                col("count(Int32(1))"),
             ])?
             .build()?;
 
@@ -4960,6 +4992,27 @@ mod tests {
             @r"
         Filter: test.a > Int64(10)
           TableScan: test, fetch=10
+        "
+        )
+    }
+
+    #[test]
+    fn filter_not_pushed_down_through_table_scan_with_skip() -> Result<()> {
+        let LogicalPlan::TableScan(scan) = test_table_scan()? else {
+            unreachable!()
+        };
+        let scan_with_skip = LogicalPlan::TableScan(TableScan {
+            skip: Some(3),
+            ..scan
+        });
+        let plan = LogicalPlanBuilder::from(scan_with_skip)
+            .filter(col("a").gt(lit(10i64)))?
+            .build()?;
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a > Int64(10)
+          TableScan: test, skip=3
         "
         )
     }

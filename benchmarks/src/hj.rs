@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
 use clap::Args;
@@ -518,6 +505,54 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         probe_size: "240K_multi_key_count",
         isolate_partitioned_join: true,
     },
+    // Q26: Partitioned join on dense integer keys
+    // Build Side: orders of the first 40K customers (~270K rows, ~27K distinct
+    // dense keys, ~10 rows per key) | Probe Side: orders (15M rows), ~2.7% hit
+    // rate. The probe keys are not sorted, so statistics prune nothing.
+    HashJoinQuery {
+        sql: r###"SELECT count(*)
+        FROM (SELECT o_custkey as k FROM orders WHERE o_custkey <= 40000) b
+        JOIN (SELECT o_custkey as k FROM orders) p ON b.k = p.k"###,
+        density: 1.0,
+        prob_hit: 0.027,
+        build_size: "270K_dense_keys",
+        probe_size: "15M",
+        isolate_partitioned_join: true,
+    },
+    // Q27: Q26 with sparse integer keys: a similar build size and hit rate,
+    // with keys 37 apart.
+    HashJoinQuery {
+        sql: r###"SELECT count(*)
+        FROM (SELECT o_custkey as k FROM orders WHERE o_custkey % 37 = 0) b
+        JOIN (SELECT o_custkey as k FROM orders) p ON b.k = p.k"###,
+        density: 0.027,
+        prob_hit: 0.027,
+        build_size: "270K_sparse_keys",
+        probe_size: "15M",
+        isolate_partitioned_join: true,
+    },
+    // Q28: one hot key among unique keys.
+    // Build ~6M rows, where line 1 of each order (1.5M rows) shares one key
+    // and every other line has a key of its own, so the keys have fewer than
+    // two rows each on average. Probe 100K rows, 100 of them with the hot key:
+    // the partition that holds it matches each with its 1.5M rows.
+    HashJoinQuery {
+        sql: r###"SELECT count(*)
+        FROM (
+          SELECT CASE WHEN l_linenumber = 1 THEN 0 ELSE l_orderkey * 8 + l_linenumber END as k
+          FROM lineitem
+          WHERE l_orderkey % 10 = 0
+        ) l
+        JOIN (
+          SELECT CASE WHEN s_suppkey <= 100 THEN 0 ELSE s_suppkey * 80 + 2 END as k
+          FROM supplier
+        ) s ON l.k = s.k"###,
+        density: 0.01,
+        prob_hit: 0.2,
+        build_size: "6M_(1.5M_one_key)",
+        probe_size: "100K_count",
+        isolate_partitioned_join: true,
+    },
 ];
 
 impl RunOpt {
@@ -545,7 +580,7 @@ impl RunOpt {
         let ctx = SessionContext::new_with_config_rt(config, rt);
 
         if let Some(path) = &self.path {
-            for table in &["lineitem", "supplier", "nation", "customer"] {
+            for table in &["lineitem", "orders", "supplier", "nation", "customer"] {
                 let table_path = path.join(table);
                 if !table_path.exists() {
                     return exec_err!(

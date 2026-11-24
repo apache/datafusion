@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 statement ok
 CREATE TABLE test (c1 VARCHAR,c2 VARCHAR,c3 INT) as values
@@ -135,6 +122,70 @@ LIMIT 10;
 
 statement ok
 RESET datafusion.execution.enable_migration_aggregate;
+
+# a = b holds before the aggregate, but not after it: the (a) grouping set
+# outputs b as NULL.
+#   (a, b) set: (1, 1), (2, 2)
+#   (a) set:    (1, NULL), (2, NULL)
+# So the sort must keep both a and b. Queries from PostgreSQL's groupingsets.sql.
+query TT
+EXPLAIN SELECT a, b FROM (VALUES (1, 1), (2, 2)) AS t (a, b) WHERE a = b
+GROUP BY GROUPING SETS ((a, b), (a)) ORDER BY a, b NULLS FIRST;
+----
+logical_plan
+01)Sort: t.a ASC NULLS LAST, t.b ASC NULLS FIRST
+02)--Projection: t.a, t.b
+03)----Aggregate: groupBy=[[GROUPING SETS ((t.a, t.b), (t.a))]], aggr=[[]]
+04)------SubqueryAlias: t
+05)--------Projection: column1 AS a, column2 AS b
+06)----------Filter: column2 = column1
+07)------------Values: (Int64(1), Int64(1)), (Int64(2), Int64(2))
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[a@0 as a, b@1 as b]
+03)----AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b, __grouping_id@2 as __grouping_id], aggr=[]
+04)------AggregateExec: mode=Partial, gby=[(a@0 as a, b@1 as b), (a@0 as a, NULL as b)], aggr=[]
+05)--------ProjectionExec: expr=[column1@0 as a, column2@1 as b]
+06)----------FilterExec: column2@1 = column1@0
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT a, b FROM (VALUES (1, 1), (2, 2)) AS t (a, b) WHERE a = b
+GROUP BY GROUPING SETS ((a, b), (a)) ORDER BY a, b NULLS FIRST;
+----
+1 NULL
+1 1
+2 NULL
+2 2
+
+query III
+SELECT a, b, row_number() OVER (ORDER BY a, b NULLS FIRST)
+FROM (VALUES (1, 1), (2, 2)) AS t (a, b) WHERE a = b
+GROUP BY GROUPING SETS ((a, b), (a)) ORDER BY a, b NULLS FIRST;
+----
+1 NULL 1
+1 1 2
+2 NULL 3
+2 2 4
+
+# Same for b = 1: the (a) set outputs (1, NULL), (2, NULL), so b stays in the sort.
+query II
+SELECT a, b FROM (VALUES (1, 1), (2, 1)) AS t (a, b) WHERE b = 1
+GROUP BY GROUPING SETS ((a, b), (a)) ORDER BY a, b NULLS FIRST;
+----
+1 NULL
+1 1
+2 NULL
+2 1
+
+# https://github.com/apache/datafusion/issues/16965: a constant, sorted input
+# must still produce one row per grouping set.
+query T rowsort
+SELECT id FROM (SELECT 'id' AS id UNION ALL SELECT 'id' AS id ORDER BY id)
+GROUP BY GROUPING SETS ((id), ());
+----
+NULL
+id
 
 statement ok
 SET datafusion.execution.target_partitions = 4;

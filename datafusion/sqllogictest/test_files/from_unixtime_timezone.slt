@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ##########
 ## from_unixtime timezone tests
@@ -119,7 +106,7 @@ Timestamp(s) 2024-01-01T12:00:00
 query P
 SELECT from_unixtime(-8334601211038, 'America/New_York');
 ----
--262143-01-01T00:00:00-04:56
+-262143-01-01T04:56:02Z
 
 ## One second earlier is an error, not a panic
 query error DataFusion error: Execution error: Cannot convert \-8334601211039 to a timestamp in timezone "America/New_York" for function from_unixtime: the local date and time is outside the supported range
@@ -132,7 +119,7 @@ SET datafusion.execution.time_zone = 'America/New_York';
 query P
 SELECT from_unixtime(-8334601211038);
 ----
--262143-01-01T00:00:00-04:56
+-262143-01-01T04:56:02Z
 
 query error DataFusion error: Execution error: Cannot convert \-8334601211039 to a timestamp in timezone "America/New_York" for function from_unixtime: the local date and time is outside the supported range
 SELECT from_unixtime(-8334601211039);

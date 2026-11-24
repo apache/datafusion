@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Utilities for casting scalar literals to different data types
 //!
@@ -997,6 +984,42 @@ fn try_cast_binary(
             Some(ScalarValue::FixedSizeBinary(*n, Some(v.clone())))
         }
         _ => None,
+    }
+}
+
+/// Returns true if casting `from` to the decimal type `into` keeps every value
+/// exactly, i.e. `into` has at least as many integer and fractional digits as
+/// `from`. `from` can be an integer, which has no fractional digits, or a
+/// decimal.
+///
+/// Returns false if `into` is not a decimal.
+pub fn is_lossless_decimal_cast(from: &DataType, into: &DataType) -> bool {
+    fn precision_and_scale(data_type: &DataType) -> Option<(i16, i16)> {
+        match data_type {
+            DataType::Int8 | DataType::UInt8 => Some((3, 0)),
+            DataType::Int16 | DataType::UInt16 => Some((5, 0)),
+            DataType::Int32 | DataType::UInt32 => Some((10, 0)),
+            DataType::Int64 => Some((19, 0)),
+            DataType::UInt64 => Some((20, 0)),
+            DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale)
+            | DataType::Decimal128(precision, scale)
+            | DataType::Decimal256(precision, scale) => {
+                Some((*precision as i16, *scale as i16))
+            }
+            _ => None,
+        }
+    }
+
+    if !into.is_decimal() {
+        return false;
+    }
+    match (precision_and_scale(from), precision_and_scale(into)) {
+        (Some((from_precision, from_scale)), Some((into_precision, into_scale))) => {
+            into_scale >= from_scale
+                && into_precision - into_scale >= from_precision - from_scale
+        }
+        _ => false,
     }
 }
 
@@ -3448,5 +3471,28 @@ mod tests {
             result, expected,
             "unexpected narrowing bucket for {source_unit:?} → {target_unit:?} {lit}"
         );
+    }
+
+    #[test]
+    fn test_is_lossless_decimal_cast() {
+        use DataType::*;
+        for (from, into, expected) in [
+            (Int32, Decimal128(10, 0), true),
+            (Int32, Decimal128(9, 0), false),
+            (UInt64, Decimal128(20, 0), true),
+            (Decimal128(15, 2), Decimal128(20, 4), true),
+            (Decimal128(15, 2), Decimal128(15, 3), false),
+            (Decimal128(15, 2), Decimal128(15, 1), false),
+            // `into` must be a decimal:
+            (Decimal128(19, 0), Int64, false),
+            (Int64, UInt64, false),
+            (Decimal128(15, 2), Float64, false),
+        ] {
+            assert_eq!(
+                is_lossless_decimal_cast(&from, &into),
+                expected,
+                "{from} -> {into}"
+            );
+        }
     }
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ArrowBytesViewMap`] and [`ArrowBytesViewSet`] for storing maps/sets of values from
 //! `StringViewArray`/`BinaryViewArray`.
@@ -344,7 +331,7 @@ where
 
                 self.map
                     .find(hash, |header| {
-                        if header.hash != hash {
+                        if header.hash != hash || header.view as u32 != len {
                             return false;
                         }
 
@@ -1090,6 +1077,21 @@ mod tests {
         test_map.insert(&input);
         test_map.insert(&input); // put it in twice
         let expected_output: ArrayRef = Arc::new(StringViewArray::from(input));
+        assert_eq!(&test_map.into_array(), &expected_output);
+    }
+
+    /// A long value whose hash collides with an inline value sharing its
+    /// 4-byte prefix must not read the inline bytes as a buffer reference.
+    #[cfg(feature = "force_hash_collisions")]
+    #[test]
+    fn test_long_value_colliding_with_inline_value() {
+        let mut test_map = TestMap::new();
+        test_map.insert(&[Some("bcdeXXXXYYYY")]);
+        test_map.insert(&[Some("bcdefghijklmnop1234567")]);
+        let expected_output: ArrayRef = Arc::new(StringViewArray::from(vec![
+            "bcdeXXXXYYYY",
+            "bcdefghijklmnop1234567",
+        ]));
         assert_eq!(&test_map.into_array(), &expected_output);
     }
 }

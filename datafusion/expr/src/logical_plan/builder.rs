@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module provides a builder for creating LogicalPlans
 
@@ -33,8 +20,8 @@ use crate::expr_rewriter::{
 use crate::logical_plan::{
     Aggregate, Analyze, AsOfJoin, AsOfMatch, Distinct, DistinctOn, EmptyRelation,
     Explain, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning,
-    PlanType, Prepare, Projection, Repartition, Sort, SubqueryAlias, TableScanBuilder,
-    Union, Unnest, Values, Window,
+    PlanType, Prepare, Projection, Repartition, Show, ShowKind, Sort, SubqueryAlias,
+    TableScanBuilder, Union, Unnest, Values, Window,
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
@@ -50,6 +37,7 @@ use crate::{
 };
 
 use super::dml::InsertOp;
+use crate::logical_plan::information_schema::ColumnsDetail;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
@@ -61,6 +49,7 @@ use datafusion_common::{
     get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
     plan_err,
 };
+use datafusion_expr_common::casts::is_lossless_decimal_cast;
 use datafusion_expr_common::type_coercion::binary::{
     type_union_coercion, type_union_resolution,
 };
@@ -142,40 +131,8 @@ fn recursive_type_can_be_coerced(from: &DataType, into: &DataType) -> bool {
         )
         | (DataType::Int64 | DataType::UInt64, DataType::Float64) => false,
         (from, into) if from.is_decimal() && into.is_floating() => false,
-        (from, into) if into.is_decimal() => {
-            if from.is_floating() {
-                return false;
-            }
-            let Some((into_precision, into_scale)) = decimal_precision_scale(into) else {
-                return false;
-            };
-            let from_precision_scale = match from {
-                DataType::Int8 | DataType::UInt8 => Some((3, 0)),
-                DataType::Int16 | DataType::UInt16 => Some((5, 0)),
-                DataType::Int32 | DataType::UInt32 => Some((10, 0)),
-                DataType::Int64 => Some((19, 0)),
-                DataType::UInt64 => Some((20, 0)),
-                _ => decimal_precision_scale(from),
-            };
-            let Some((from_precision, from_scale)) = from_precision_scale else {
-                return false;
-            };
-            into_scale >= from_scale
-                && into_precision - into_scale >= from_precision - from_scale
-        }
+        (from, into) if into.is_decimal() => is_lossless_decimal_cast(from, into),
         _ => true,
-    }
-}
-
-fn decimal_precision_scale(data_type: &DataType) -> Option<(i16, i16)> {
-    match data_type {
-        DataType::Decimal32(precision, scale)
-        | DataType::Decimal64(precision, scale)
-        | DataType::Decimal128(precision, scale)
-        | DataType::Decimal256(precision, scale) => {
-            Some((*precision as i16, *scale as i16))
-        }
-        _ => None,
     }
 }
 
@@ -262,6 +219,63 @@ impl LogicalPlanBuilder {
             produce_one_row,
             schema: DFSchemaRef::new(DFSchema::empty()),
         }))
+    }
+
+    /// Create a `DESCRIBE <query>` plan, where `schema` is the output schema of the query.
+    pub fn describe(schema: Arc<Schema>) -> Result<Self> {
+        Self::show(
+            ShowKind::Describe { schema },
+            crate::information_schema::columns_schema(ColumnsDetail::Describe),
+        )
+    }
+
+    /// Create a `SHOW TABLES` plan.
+    pub fn show_tables() -> Result<Self> {
+        Self::show(ShowKind::Tables, crate::information_schema::tables_schema())
+    }
+
+    /// Create a `DESCRIBE <table>` or `SHOW [FULL|EXTENDED] COLUMNS FROM <table>` plan.
+    pub fn show_columns(
+        table_ref: TableReference,
+        detail: ColumnsDetail,
+    ) -> Result<Self> {
+        Self::show(
+            ShowKind::Columns { table_ref, detail },
+            crate::information_schema::columns_schema(detail),
+        )
+    }
+
+    /// Create a `SHOW CREATE TABLE <table>` plan.
+    pub fn show_create_table(table_ref: TableReference) -> Result<Self> {
+        Self::show(
+            ShowKind::CreateTable { table_ref },
+            crate::information_schema::views_schema(),
+        )
+    }
+
+    /// Create a `SHOW <variable>` / `SHOW ALL` plan. `name` is `None` for
+    /// `SHOW ALL`.
+    pub fn show_variables(name: Option<String>, verbose: bool) -> Result<Self> {
+        Self::show(
+            ShowKind::Variables { name, verbose },
+            crate::information_schema::df_settings_schema(verbose),
+        )
+    }
+
+    /// Create a `SHOW FUNCTIONS [LIKE <pattern>]` plan.
+    pub fn show_functions(filter: Option<String>) -> Result<Self> {
+        Self::show(
+            ShowKind::Functions { filter },
+            crate::information_schema::show_functions_schema(),
+        )
+    }
+
+    /// Shared helper for the `SHOW`-class factory methods above.
+    fn show(kind: ShowKind, output_schema: Schema) -> Result<Self> {
+        Ok(Self::new(LogicalPlan::Show(Show {
+            kind,
+            output_schema: Arc::new(DFSchema::try_from(output_schema)?),
+        })))
     }
 
     /// Convert a regular plan into a recursive query.
@@ -384,7 +398,6 @@ impl LogicalPlanBuilder {
         let mut fields = ValuesFields::new();
         for j in 0..n_cols {
             let field_type = schema.field(j).data_type();
-            let field_nullable = schema.field(j).is_nullable();
             for row in values.iter() {
                 let value = &row[j];
                 let data_type = value.get_type(schema)?;
@@ -399,7 +412,13 @@ impl LogicalPlanBuilder {
                     );
                 }
             }
-            fields.push(field_type.to_owned(), field_nullable);
+            let field = schema.field(j);
+
+            fields.push_with_metadata(
+                field_type.clone(),
+                field.is_nullable(),
+                Some(FieldMetadata::new_from_field(field)),
+            );
         }
 
         Self::infer_inner(values, fields, schema)
@@ -712,8 +731,8 @@ impl LogicalPlanBuilder {
             .map(Self::new)
     }
 
-    /// Apply a projection, aliasing non-Column/non-Alias expressions to
-    /// match the field names from the provided schema.
+    /// Apply a projection, aliasing non-Column expressions to match the field
+    /// names from the provided schema. Existing aliases are renamed.
     pub fn project_with_validation_and_schema(
         self,
         expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
@@ -1390,7 +1409,7 @@ impl LogicalPlanBuilder {
             schema: DFSchemaRef::new(join_schema),
             null_equality,
             null_aware,
-            null_aware_value_keys: 1,
+            null_aware_value_keys: 0,
         })))
     }
 
@@ -1790,10 +1809,6 @@ impl ValuesFields {
         Self::default()
     }
 
-    pub fn push(&mut self, data_type: DataType, nullable: bool) {
-        self.push_with_metadata(data_type, nullable, None);
-    }
-
     pub fn push_with_metadata(
         &mut self,
         data_type: DataType,
@@ -2143,8 +2158,8 @@ pub fn validate_unique_names<'a>(
 
 /// Union two [`LogicalPlan`]s.
 ///
-/// Constructs the UNION plan, but does not perform type-coercion. Therefore the
-/// subtree expressions will not be properly typed until the optimizer pass.
+/// Infers common output types, but does not insert casts into the inputs.
+/// The analyzer must still resolve input expressions and insert any required casts.
 ///
 /// If a properly typed UNION plan is needed, refer to [`TypeCoercionRewriter::coerce_union`]
 /// or alternatively, merge the union input schema using [`coerce_union_schema`] and
@@ -2200,58 +2215,31 @@ fn project_with_validation(
     let mut normalizer = ColumnNormalizer::new(&plan);
     let columnizer = Columnizer::new(&plan);
     for (e, validate) in expr {
-        let e = e.into();
-        match e {
+        let mut push_validated = |e: Expr| -> Result<()> {
+            if validate {
+                projected_expr.push(columnizer.columnize(normalizer.normalize(e)?)?)
+            } else {
+                projected_expr.push(e)
+            }
+            Ok(())
+        };
+        match e.into() {
             SelectExpr::Wildcard(opt) => {
                 has_wildcard = true;
                 let expanded = expand_wildcard(plan.schema(), &plan, Some(&opt))?;
-
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                let expanded = if let Some(replace) = opt.replace {
-                    replace_columns(expanded, &replace)?
-                } else {
-                    expanded
-                };
-
-                for e in expanded {
-                    if validate {
-                        projected_expr
-                            .push(columnizer.columnize(normalizer.normalize(e)?)?)
-                    } else {
-                        projected_expr.push(e)
-                    }
-                }
+                apply_replace(expanded, opt.replace.as_ref())?
+                    .into_iter()
+                    .try_for_each(push_validated)?;
             }
             SelectExpr::QualifiedWildcard(table_ref, opt) => {
                 has_wildcard = true;
                 let expanded =
                     expand_qualified_wildcard(&table_ref, plan.schema(), Some(&opt))?;
-
-                // If there is a REPLACE statement, replace that column with the given
-                // replace expression. Column name remains the same.
-                let expanded = if let Some(replace) = opt.replace {
-                    replace_columns(expanded, &replace)?
-                } else {
-                    expanded
-                };
-
-                for e in expanded {
-                    if validate {
-                        projected_expr
-                            .push(columnizer.columnize(normalizer.normalize(e)?)?)
-                    } else {
-                        projected_expr.push(e)
-                    }
-                }
+                apply_replace(expanded, opt.replace.as_ref())?
+                    .into_iter()
+                    .try_for_each(push_validated)?;
             }
-            SelectExpr::Expression(e) => {
-                if validate {
-                    projected_expr.push(columnizer.columnize(normalizer.normalize(e)?)?)
-                } else {
-                    projected_expr.push(e)
-                }
-            }
+            SelectExpr::Expression(e) => push_validated(e)?,
         }
     }
 
@@ -2262,12 +2250,16 @@ fn project_with_validation(
         );
     }
 
-    // When inside a set expression, alias non-Column/non-Alias expressions
-    // to match the left side's field names, avoiding duplicate name errors.
+    // When inside a set expression, alias non-Column expressions to match the
+    // left side's field names, avoiding duplicate name errors. Existing aliases
+    // are renamed too, since they can still collide, e.g. `count(*)` is planned
+    // as `count(1) AS "count(*)"`.
     if let Some(schema) = &schema {
         for (expr, field) in projected_expr.iter_mut().zip(schema.fields()) {
-            if !matches!(expr, Expr::Column(_) | Expr::Alias(_)) {
-                *expr = std::mem::take(expr).alias(field.name());
+            match expr {
+                Expr::Column(_) => {}
+                Expr::Alias(alias) => alias.name.clone_from(field.name()),
+                _ => *expr = std::mem::take(expr).alias(field.name()),
             }
         }
     }
@@ -2277,6 +2269,18 @@ fn project_with_validation(
     // `columnizer` borrows `plan`, which moves into the projection below.
     drop(columnizer);
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
+}
+
+/// Applies a wildcard's REPLACE statement, if it has one, to the columns the
+/// wildcard expanded to.
+fn apply_replace(
+    expanded: Vec<Expr>,
+    replace: Option<&PlannedReplaceSelectItem>,
+) -> Result<Vec<Expr>> {
+    match replace {
+        Some(replace) => replace_columns(expanded, replace),
+        None => Ok(expanded),
+    }
 }
 
 /// If there is a REPLACE statement in the projected expression in the form of

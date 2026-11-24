@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarSubqueryToJoin`] rewriting scalar subquery filters to `JOIN`s
 
@@ -35,7 +22,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{Column, Result, ScalarValue, assert_or_internal_err, plan_err};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, not, when};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, when};
 
 /// Optimizer rule that rewrites scalar subquery filters to joins and places an
 /// additional projection on top of the filter to preserve the original schema.
@@ -358,15 +345,52 @@ fn build_join(
         .collected_count_expr_map
         .get(&decorrelated_subquery)
         .cloned();
-    let aliased_subquery = LogicalPlanBuilder::from(decorrelated_subquery)
-        .alias(subquery_alias.to_string())?
-        .build()?;
-
     let join_filter_opt = build_join_filter(
         pull_up.join_filters,
         pull_up.correlated_subquery_cols_map.values().flatten(),
+        decorrelated_subquery.schema(),
         subquery_alias,
     )?;
+
+    // A HAVING or outer-only filter recorded from above the aggregate cannot
+    // be rewritten into the join when the output column gets a compensation
+    // CASE below. Kept in the ON, a row the condition rejects looks unmatched
+    // and falls back to the empty-input default, which is the issue's wrong 0. Checked
+    // in the compensation CASE instead, the condition would have to be
+    // evaluated twice, against the defaults for an unmatched row and against
+    // the actual output for a matched one, and neither evaluation is right
+    // for the rows the other one covers. The gate looks at the output column
+    // alone because the map also holds aggregates that appear only in the
+    // HAVING, whose NULL defaults need no CASE; an output whose own default
+    // is NULL (the subquery projects `max`, say) keeps filtering in the ON as
+    // before, which is correct there because an unmatched row is NULL either
+    // way. Rather than guess, reject the query.
+    let output_name = subquery_plan.schema().field(0).name();
+    let output_needs_compensation = match collected_count_expr_map
+        .as_ref()
+        .and_then(|expr_map| expr_map.get(output_name))
+    {
+        Some(default_expr) => {
+            !evaluates_to_null(default_expr.clone(), default_expr.column_refs())?
+        }
+        None => false,
+    };
+    // A pulled up `HAVING` is only applied through the count bug compensation
+    // below, which skips the expressions that are NULL on empty input. Keep
+    // the subquery correlated rather than drop the `HAVING` for its output.
+    // <https://github.com/apache/datafusion/issues/26505>
+    if pull_up.pull_up_having_expr.is_some() && !output_needs_compensation {
+        return Ok(None);
+    }
+    if output_needs_compensation && !pull_up.having_like_join_filters.is_empty() {
+        return plan_err!(
+            "Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns, and this rewrite cannot evaluate it against both the group and the empty input without risking wrong results. Move the condition outside the subquery"
+        );
+    }
+
+    let aliased_subquery = LogicalPlanBuilder::from(decorrelated_subquery)
+        .alias(subquery_alias.to_string())?
+        .build()?;
 
     // When pull-up did not extract any usable join keys (a correlated subquery
     // whose predicate references only outer columns), fall back to `ON true`:
@@ -395,7 +419,7 @@ fn build_join(
         let having_arm = pull_up
             .pull_up_having_expr
             .as_ref()
-            .map(|f| (not(f.clone()), lit(ScalarValue::Null)));
+            .map(|f| (f.clone().is_not_true(), lit(ScalarValue::Null)));
         for (name, result) in expr_map {
             if evaluates_to_null(result.clone(), result.column_refs())? {
                 // Aggregates whose empty-input value is NULL (max/min/sum/…)

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`datafusion_expr::HigherOrderUDF`] definitions for array_transform function.
 
@@ -127,15 +114,12 @@ impl HigherOrderUDFImpl for ArrayTransform {
             return plan_err!("{} expects a value followed by a lambda", self.name());
         };
 
-        //TODO: should metadata be copied into the transformed array?
-
-        // lambda is the resulting field of executing the lambda body
-        // with the parameters returned in lambda_parameters
-        let field = Arc::new(Field::new(
-            Field::LIST_FIELD_DEFAULT_NAME,
-            lambda.data_type().clone(),
-            lambda.is_nullable(),
-        ));
+        let field = Arc::new(
+            lambda
+                .as_ref()
+                .clone()
+                .with_name(Field::LIST_FIELD_DEFAULT_NAME),
+        );
 
         let return_type = match list.data_type() {
             DataType::List(_) => DataType::List(field),

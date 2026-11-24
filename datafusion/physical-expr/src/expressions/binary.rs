@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod kernels;
 
@@ -48,7 +35,7 @@ use datafusion_expr::statistics::{
 };
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp};
-
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -57,13 +44,28 @@ use kernels::{
 };
 
 /// Binary expression
-#[derive(Debug, Clone, Eq)]
+#[derive(Clone, Eq)]
 pub struct BinaryExpr {
     left: Arc<dyn PhysicalExpr>,
     op: Operator,
     right: Arc<dyn PhysicalExpr>,
     /// Specifies whether an error is returned on overflow or not
     fail_on_overflow: bool,
+    /// Whether `right` is volatile, computed once in [`BinaryExpr::new`] for
+    /// `OR` so it is not walked for every batch. `None` for other operators.
+    right_volatility: Option<bool>,
+}
+
+// `right_volatility` is derived from the right child, so it is left out
+impl std::fmt::Debug for BinaryExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BinaryExpr")
+            .field("left", &self.left)
+            .field("op", &self.op)
+            .field("right", &self.right)
+            .field("fail_on_overflow", &self.fail_on_overflow)
+            .finish()
+    }
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
@@ -91,11 +93,13 @@ impl BinaryExpr {
         op: Operator,
         right: Arc<dyn PhysicalExpr>,
     ) -> Self {
+        let right_volatility = matches!(op, Operator::Or).then(|| is_volatile(&right));
         Self {
             left,
             op,
             right,
             fail_on_overflow: false,
+            right_volatility,
         }
     }
 
@@ -106,6 +110,16 @@ impl BinaryExpr {
             op: self.op,
             right: self.right,
             fail_on_overflow,
+            // Same right, so the volatility is unchanged
+            right_volatility: self.right_volatility,
+        }
+    }
+
+    /// Whether the right child (or anything under it) is volatile
+    fn right_is_volatile(&self) -> bool {
+        match self.right_volatility {
+            Some(v) => v,
+            None => is_volatile(&self.right),
         }
     }
 
@@ -569,69 +583,36 @@ impl PhysicalExpr for BinaryExpr {
         let lhs = self.left.evaluate(batch)?;
 
         // Check if we can apply short-circuit evaluation.
-        match check_short_circuit(&lhs, &self.op) {
-            ShortCircuitStrategy::None => {}
-            ShortCircuitStrategy::ReturnLeft => return Ok(lhs),
-            ShortCircuitStrategy::ReturnRight => {
-                let rhs = self.right.evaluate(batch)?;
-                return Ok(rhs);
-            }
-            ShortCircuitStrategy::PreSelection { mask, fill_value } => {
-                // `mask` selects the rows whose result depends on the RHS; the
-                // unselected rows are all `fill_value` (see `ShortCircuitStrategy`).
-                //
-                // Use `filter_record_batch` directly because `evaluate_selection`
-                // scatters the RHS back to the original batch length.
-                let selection_batch = filter_record_batch(batch, &mask)?;
-                let right_ret = self.right.evaluate(&selection_batch)?;
-
-                match &right_ret {
-                    ColumnarValue::Array(array) => {
-                        let boolean_array = array.as_boolean();
-                        // If the RHS is uniform on the selected rows, the whole
-                        // expression collapses and no scatter is needed.
-                        if boolean_array.null_count() == 0 {
-                            let rhs_value = if !boolean_array.has_false() {
-                                Some(true)
-                            } else if !boolean_array.has_true() {
-                                Some(false)
-                            } else {
-                                None
-                            };
-                            if let Some(rhs_value) = rhs_value {
-                                return Ok(uniform_pre_selection_result(
-                                    rhs_value, fill_value, lhs,
-                                ));
-                            }
-                        }
-
-                        return pre_selection_scatter(
-                            &mask,
-                            Some(boolean_array),
-                            fill_value,
-                        );
-                    }
-                    ColumnarValue::Scalar(scalar) => {
-                        if let ScalarValue::Boolean(v) = scalar {
-                            // A scalar RHS applies uniformly to all selected rows.
-                            if let Some(v) = v {
-                                return Ok(uniform_pre_selection_result(
-                                    *v, fill_value, lhs,
-                                ));
-                            } else {
-                                return pre_selection_scatter(&mask, None, fill_value);
-                            }
-                        } else {
-                            return internal_err!(
-                                "Expected boolean scalar value, found: {right_ret:?}"
-                            );
-                        }
-                    }
+        if self.op == Operator::Or {
+            match check_short_circuit_for_or(&lhs, self.right_is_volatile()) {
+                ShortCircuitStrategy::None => {}
+                ShortCircuitStrategy::ReturnLeft => return Ok(lhs),
+                ShortCircuitStrategy::ReturnRight => {
+                    let rhs = self.right.evaluate(batch)?;
+                    return Ok(rhs);
+                }
+                ShortCircuitStrategy::PreSelection { mask, fill_value } => {
+                    return self.evaluate_pre_selection(batch, lhs, &mask, fill_value);
                 }
             }
         }
 
-        let rhs = self.right.evaluate(batch)?;
+        let rhs = match self.right.evaluate(batch) {
+            Ok(rhs) => rhs,
+            // A deterministic RHS may fail on rows the LHS already decided
+            // (e.g. `x = 0 OR 1 / x > 1`), so retry on the undecided rows only.
+            Err(e) if self.op == Operator::Or => {
+                // Treating the RHS as volatile gives `PreSelection` exactly
+                // when some rows are decided and some are not.
+                return match check_short_circuit_for_or(&lhs, true) {
+                    ShortCircuitStrategy::PreSelection { mask, fill_value } => {
+                        self.evaluate_pre_selection(batch, lhs, &mask, fill_value)
+                    }
+                    _ => Err(e),
+                };
+            }
+            Err(e) => return Err(e),
+        };
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
 
@@ -983,6 +964,10 @@ impl PhysicalExpr for BinaryExpr {
         write_child(f, self.right.as_ref(), precedence)
     }
 
+    fn short_circuits(&self) -> bool {
+        matches!(self.op, Operator::And | Operator::Or)
+    }
+
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
@@ -995,6 +980,8 @@ impl PhysicalExpr for BinaryExpr {
             op,
             right,
             fail_on_overflow,
+            // Derived from right, not serialized
+            right_volatility: _,
         } = self;
 
         // Linearize a nested binary expression tree with the same operator and
@@ -1207,6 +1194,70 @@ impl BinaryExpr {
         }
     }
 
+    /// Evaluates the RHS of `OR` only on the rows selected by `mask` (the rows
+    /// whose result depends on the RHS); the other rows are `fill_value`.
+    fn evaluate_pre_selection(
+        &self,
+        batch: &RecordBatch,
+        lhs: ColumnarValue,
+        mask: &BooleanArray,
+        fill_value: bool,
+    ) -> Result<ColumnarValue> {
+        // Use `filter_record_batch` directly because `evaluate_selection`
+        // scatters the RHS back to the original batch length.
+        let selection_batch = filter_record_batch(batch, mask)?;
+        let right_ret = self.right.evaluate(&selection_batch)?;
+
+        match &right_ret {
+            ColumnarValue::Array(array) => {
+                let boolean_array = array.as_boolean();
+                // If the RHS is uniform on the selected rows, the whole
+                // expression collapses and no scatter is needed.
+                if boolean_array.null_count() == 0 {
+                    let rhs_value = if !boolean_array.has_false() {
+                        Some(true)
+                    } else if !boolean_array.has_true() {
+                        Some(false)
+                    } else {
+                        None
+                    };
+                    if let Some(rhs_value) = rhs_value {
+                        return Ok(uniform_pre_selection_result(
+                            rhs_value, fill_value, lhs,
+                        ));
+                    }
+                }
+
+                let scattered =
+                    pre_selection_scatter(mask, Some(boolean_array), fill_value)?;
+                // Selected rows may have a NULL LHS (`NULL OR x`), so combine
+                // with the LHS; unselected rows are `fill_value` on both sides.
+                if let ColumnarValue::Array(lhs) = &lhs
+                    && lhs.null_count() > 0
+                {
+                    let scattered = scattered.into_array(batch.num_rows())?;
+                    return Ok(ColumnarValue::Array(Arc::new(or_kleene(
+                        lhs.as_boolean(),
+                        scattered.as_boolean(),
+                    )?)));
+                }
+                Ok(scattered)
+            }
+            ColumnarValue::Scalar(scalar) => {
+                if let ScalarValue::Boolean(v) = scalar {
+                    // A scalar RHS applies uniformly to all selected rows.
+                    if let Some(v) = v {
+                        Ok(uniform_pre_selection_result(*v, fill_value, lhs))
+                    } else {
+                        pre_selection_scatter(mask, None, fill_value)
+                    }
+                } else {
+                    internal_err!("Expected boolean scalar value, found: {right_ret:?}")
+                }
+            }
+        }
+    }
+
     /// Evaluates nested `AND`s together to avoid repeated filtering (#25035).
     ///
     /// When at most [`PRE_SELECTION_THRESHOLD`] of original rows remain,
@@ -1258,7 +1309,7 @@ enum ShortCircuitStrategy {
     None,
     ReturnLeft,
     ReturnRight,
-    /// Evaluate the RHS where the LHS is `false`; fill other rows with `true`.
+    /// Evaluate the RHS where the LHS is not `true`; fill other rows with `true`.
     PreSelection {
         mask: BooleanArray,
         fill_value: bool,
@@ -1269,14 +1320,15 @@ enum ShortCircuitStrategy {
 const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 
 /// Returns the short-circuit strategy for `OR` with a Boolean LHS.
-/// All true returns the LHS; all false returns the RHS. Sparse false rows
-/// trigger pre-selection at [`PRE_SELECTION_THRESHOLD`].
+/// All true returns the LHS; all false returns the RHS. Otherwise the RHS is
+/// evaluated only on the rows that are not `true` when at most
+/// [`PRE_SELECTION_THRESHOLD`] of the rows need it, or when the RHS is volatile
+/// (it must never be evaluated on rows that don't need it).
 /// `AND` uses [`BinaryExpr::evaluate_conjunction`].
-fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrategy {
-    if *op != Operator::Or {
-        return ShortCircuitStrategy::None;
-    }
-
+fn check_short_circuit_for_or(
+    lhs: &ColumnarValue,
+    rhs_is_volatile: bool,
+) -> ShortCircuitStrategy {
     // Only Boolean values can short-circuit.
     if lhs.data_type() != DataType::Boolean {
         return ShortCircuitStrategy::None;
@@ -1286,31 +1338,31 @@ fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrate
         ColumnarValue::Array(array) => {
             // Check Boolean arrays directly.
             if let Ok(bool_array) = as_boolean_array(array) {
-                // NULLs still need the RHS.
-                if bool_array.null_count() > 0 {
-                    return ShortCircuitStrategy::None;
-                }
-
                 let len = bool_array.len();
                 if len == 0 {
                     return ShortCircuitStrategy::None;
                 }
 
-                let true_count = bool_array.values().count_set_bits();
-                if true_count == len {
+                // `false` and `NULL` rows need the RHS.
+                let undecided = len - bool_array.true_count();
+                if undecided == 0 {
                     return ShortCircuitStrategy::ReturnLeft;
                 }
 
-                if true_count == 0 {
-                    return ShortCircuitStrategy::ReturnRight;
+                if undecided == len {
+                    // With NULLs the LHS still matters (`NULL OR false` is NULL).
+                    return if bool_array.null_count() == 0 {
+                        ShortCircuitStrategy::ReturnRight
+                    } else {
+                        ShortCircuitStrategy::None
+                    };
                 }
 
-                let false_count = len - true_count;
-                if false_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
-                    // Only false rows need the RHS; the LHS has no NULLs here.
-                    let mask = BooleanArray::new(!bool_array.values(), None);
+                if rhs_is_volatile
+                    || undecided as f32 / len as f32 <= PRE_SELECTION_THRESHOLD
+                {
                     return ShortCircuitStrategy::PreSelection {
-                        mask,
+                        mask: not_true(bool_array),
                         fill_value: true,
                     };
                 }
@@ -1543,6 +1595,15 @@ fn not_false(array: &BooleanArray) -> BooleanArray {
     let values = match array.nulls() {
         Some(nulls) => array.values() | &!nulls.inner(),
         None => array.values().clone(),
+    };
+    BooleanArray::new(values, None)
+}
+
+/// A null-free mask of the rows of `array` that are `false` or `NULL`.
+fn not_true(array: &BooleanArray) -> BooleanArray {
+    let values = match array.nulls() {
+        Some(nulls) => !&(array.values() & nulls.inner()),
+        None => !array.values(),
     };
     BooleanArray::new(values, None)
 }
@@ -6176,6 +6237,7 @@ mod tests {
 
     #[test]
     fn test_check_short_circuit() {
+        // A non-volatile RHS (`false`), so only the LHS decides the strategy
         // Test with non-nullable arrays
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -6189,19 +6251,11 @@ mod tests {
         )
         .unwrap();
 
-        // `AND` uses `evaluate_conjunction` instead.
-        let left_expr = logical2physical(&logical_col("a").eq(expr_lit(2)), &schema);
-        let left_value = left_expr.evaluate(&batch).unwrap();
-        assert!(matches!(
-            check_short_circuit(&left_value, &Operator::And),
-            ShortCircuitStrategy::None
-        ));
-
         // op: OR left: all true
         let left_expr = logical2physical(&logical_col("a").gt(expr_lit(0)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
-            check_short_circuit(&left_value, &Operator::Or),
+            check_short_circuit_for_or(&left_value, false),
             ShortCircuitStrategy::ReturnLeft
         ));
 
@@ -6213,7 +6267,7 @@ mod tests {
             panic!("Expected ColumnarValue::Array");
         };
         let ShortCircuitStrategy::PreSelection { mask, fill_value } =
-            check_short_circuit(&left_value, &Operator::Or)
+            check_short_circuit_for_or(&left_value, false)
         else {
             panic!("Expected ShortCircuitStrategy::PreSelection");
         };
@@ -6233,7 +6287,7 @@ mod tests {
             logical2physical(&logical_col("a").gt(expr_lit(4)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
-            check_short_circuit(&left_value, &Operator::Or),
+            check_short_circuit_for_or(&left_value, false),
             ShortCircuitStrategy::None
         ));
 
@@ -6265,11 +6319,11 @@ mod tests {
         )
         .unwrap();
 
-        // Case: Mixed values with nulls - shouldn't short-circuit for OR
+        // Case: Mixed values with nulls, 60% not true: OR falls back to normal evaluation
         let mixed_nulls = logical2physical(&logical_col("c"), &schema_nullable);
         let mixed_nulls_value = mixed_nulls.evaluate(&batch_nullable).unwrap();
         assert!(matches!(
-            check_short_circuit(&mixed_nulls_value, &Operator::Or),
+            check_short_circuit_for_or(&mixed_nulls_value, false),
             ShortCircuitStrategy::None
         ));
 
@@ -6286,7 +6340,7 @@ mod tests {
 
         // All nulls shouldn't short-circuit for OR
         assert!(matches!(
-            check_short_circuit(&null_value, &Operator::Or),
+            check_short_circuit_for_or(&null_value, false),
             ShortCircuitStrategy::None
         ));
 
@@ -6294,21 +6348,21 @@ mod tests {
         // Scalar true
         let scalar_true = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
         assert!(matches!(
-            check_short_circuit(&scalar_true, &Operator::Or),
+            check_short_circuit_for_or(&scalar_true, false),
             ShortCircuitStrategy::ReturnLeft
         )); // Should short-circuit OR
 
         // Scalar false
         let scalar_false = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
         assert!(matches!(
-            check_short_circuit(&scalar_false, &Operator::Or),
+            check_short_circuit_for_or(&scalar_false, false),
             ShortCircuitStrategy::ReturnRight
         )); // Should return the RHS for OR
 
         // Scalar null
         let scalar_null = ColumnarValue::Scalar(ScalarValue::Boolean(None));
         assert!(matches!(
-            check_short_circuit(&scalar_null, &Operator::Or),
+            check_short_circuit_for_or(&scalar_null, false),
             ShortCircuitStrategy::None
         ));
     }
@@ -6485,10 +6539,25 @@ mod tests {
             Field::new("d", DataType::Boolean, true),
         ]));
 
-        // `c` is mostly true (2/10 false => 20% <= threshold) so OR pre-selects.
-        let c = BooleanArray::from(vec![
-            true, true, false, true, true, true, true, false, true, true,
-        ]);
+        // `c` is mostly true (2/10 not true => 20% <= threshold) so OR pre-selects.
+        let c_cases = vec![
+            BooleanArray::from(vec![
+                true, true, false, true, true, true, true, false, true, true,
+            ]),
+            // NULL LHS with a `false` RHS on row 0: `NULL OR false` is NULL.
+            BooleanArray::from(vec![
+                None,
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(true),
+            ]),
+        ];
 
         let d_cases = vec![
             // Mixed RHS with nulls exercises scatter and null copy.
@@ -6510,25 +6579,28 @@ mod tests {
             BooleanArray::from(vec![Some(false); 10]),
         ];
 
-        for d in d_cases {
-            let batch = RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(c.clone()) as ArrayRef,
-                    Arc::new(d.clone()) as ArrayRef,
-                ],
-            )
-            .unwrap();
+        for c in &c_cases {
+            for d in &d_cases {
+                let batch = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(c.clone()) as ArrayRef,
+                        Arc::new(d.clone()) as ArrayRef,
+                    ],
+                )
+                .unwrap();
 
-            let expr = logical2physical(&logical_col("c").or(logical_col("d")), &schema);
-            let result = expr.evaluate(&batch).unwrap().into_array(c.len()).unwrap();
+                let expr =
+                    logical2physical(&logical_col("c").or(logical_col("d")), &schema);
+                let result = expr.evaluate(&batch).unwrap().into_array(c.len()).unwrap();
 
-            let expected = or_kleene(&c, &d).unwrap();
-            assert_eq!(
-                expected,
-                *result.as_boolean(),
-                "OR pre-selection must match Kleene OR for d = {d:?}"
-            );
+                let expected = or_kleene(c, d).unwrap();
+                assert_eq!(
+                    expected,
+                    *result.as_boolean(),
+                    "OR pre-selection must match Kleene OR for c = {c:?}, d = {d:?}"
+                );
+            }
         }
     }
 
@@ -7363,5 +7435,579 @@ mod tests {
         let expected =
             BooleanArray::from_iter(vec![Some(true), Some(true), Some(true), Some(true)]);
         assert_eq!(eq_result.into_array(4).unwrap().as_boolean(), &expected);
+    }
+
+    /// Tests that the right side of `OR` is only evaluated on the rows
+    /// that need it, for every selectivity (not only those that hit the
+    /// [`PRE_SELECTION_THRESHOLD`] heuristics).
+    ///
+    /// The right side is a [`Probe`] that knows which rows it is allowed to see.
+    mod short_circuit {
+        use super::*;
+        use datafusion_common::exec_err;
+        use std::fmt::{Display, Formatter};
+        use std::hash::Hasher;
+        use std::ops::Range;
+        use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+        const N: usize = 1000;
+
+        /// Fraction of rows that need the right side. Covers the extremes and
+        /// values around the threshold, so changing [`PRE_SELECTION_THRESHOLD`]
+        /// won't make the tests irrelevant.
+        const SELECTIVITIES: &[f32] = &[
+            0.0,
+            0.01,
+            0.1,
+            0.25,
+            0.5,
+            0.75,
+            0.9,
+            0.99,
+            1.0,
+            PRE_SELECTION_THRESHOLD / 2.0,
+            PRE_SELECTION_THRESHOLD,
+            PRE_SELECTION_THRESHOLD * 2.0,
+            1.0 - PRE_SELECTION_THRESHOLD / 2.0,
+            1.0 - PRE_SELECTION_THRESHOLD,
+            1.0 - PRE_SELECTION_THRESHOLD * 2.0,
+        ];
+
+        // -------------------------------------------------------------------
+        // 1. volatile RHS: evaluated exactly once on each needed row
+        //    (the probe panics if it sees any other row)
+        // -------------------------------------------------------------------
+
+        #[test]
+        fn or_volatile_rhs_only_evaluated_on_needed_rows() {
+            let batch = batch();
+            for &s in SELECTIVITIES {
+                // `col_1 >= s OR probe`: only rows where col_1 < s need the probe
+                let probe = Probe::new(Mode::Volatile, 0.0..s);
+                let expr = or(col_1_gt_eq(s), Arc::clone(&probe) as _);
+
+                let result = evaluate(&expr, &batch).unwrap();
+
+                let expected: BooleanArray = col_1(&batch)
+                    .iter()
+                    .map(|v| match v {
+                        // the probe returns NULL for NULL, and NULL OR NULL is NULL
+                        None => None,
+                        Some(v) if v >= s => Some(true),
+                        Some(v) => probe_value(v),
+                    })
+                    .collect();
+                assert_eq!(result, expected, "selectivity={s}");
+                assert_eq!(
+                    probe.rows.load(Relaxed),
+                    needed_rows(&batch, 0.0..s),
+                    "selectivity={s}"
+                );
+            }
+        }
+
+        #[test]
+        fn nested_or_volatile_rhs_only_evaluated_on_needed_rows() {
+            let batch = batch();
+            for &s in SELECTIVITIES {
+                // `col_1 >= s OR (col_1 < s/2 OR probe)`:
+                // only rows where s/2 <= col_1 < s need the probe
+                let probe = Probe::new(Mode::Volatile, s / 2.0..s);
+                let expr = or(
+                    col_1_gt_eq(s),
+                    or(col_1_lt(s / 2.0), Arc::clone(&probe) as _),
+                );
+
+                let result = evaluate(&expr, &batch).unwrap();
+
+                let expected: BooleanArray = col_1(&batch)
+                    .iter()
+                    .map(|v| match v {
+                        // the probe returns NULL for NULL, and NULL OR NULL is NULL
+                        None => None,
+                        Some(v) if v >= s || v < s / 2.0 => Some(true),
+                        Some(v) => probe_value(v),
+                    })
+                    .collect();
+                assert_eq!(result, expected, "selectivity={s}");
+                assert_eq!(
+                    probe.rows.load(Relaxed),
+                    needed_rows(&batch, s / 2.0..s),
+                    "selectivity={s}"
+                );
+            }
+        }
+
+        #[test]
+        fn or_volatile_rhs_only_evaluated_on_needed_rows_with_null_lhs() {
+            // NULL rows count as needed: a NULL LHS does not decide the row
+            let batch = batch_with_nulls();
+            for &s in SELECTIVITIES {
+                for null_output in [None, Some(false)] {
+                    // `col_1 >= s OR probe`: rows where col_1 < s or col_1 is NULL
+                    // need the probe (`NULL OR true` is true)
+                    let probe =
+                        Probe::with_null_output(Mode::Volatile, 0.0..s, null_output);
+                    let expr = or(col_1_gt_eq(s), Arc::clone(&probe) as _);
+
+                    let result = evaluate(&expr, &batch).unwrap();
+
+                    let expected: BooleanArray = col_1(&batch)
+                        .iter()
+                        .map(|v| match v {
+                            // NULL OR NULL and NULL OR false are both NULL
+                            None => None,
+                            Some(v) if v >= s => Some(true),
+                            Some(v) => probe_value(v),
+                        })
+                        .collect();
+                    assert_eq!(
+                        result, expected,
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                    assert_eq!(
+                        probe.rows.load(Relaxed),
+                        needed_rows(&batch, 0.0..s),
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn nested_or_volatile_rhs_only_evaluated_on_needed_rows_with_null_lhs() {
+            // NULL rows count as needed: a NULL LHS does not decide the row
+            let batch = batch_with_nulls();
+            for &s in SELECTIVITIES {
+                for null_output in [None, Some(false)] {
+                    // `col_1 >= s OR (col_1 < s/2 OR probe)`: rows where
+                    // s/2 <= col_1 < s or col_1 is NULL need the probe
+                    let probe =
+                        Probe::with_null_output(Mode::Volatile, s / 2.0..s, null_output);
+                    let expr = or(
+                        col_1_gt_eq(s),
+                        or(col_1_lt(s / 2.0), Arc::clone(&probe) as _),
+                    );
+
+                    let result = evaluate(&expr, &batch).unwrap();
+
+                    let expected: BooleanArray = col_1(&batch)
+                        .iter()
+                        .map(|v| match v {
+                            // NULL OR NULL and NULL OR false are both NULL
+                            None => None,
+                            Some(v) if v >= s || v < s / 2.0 => Some(true),
+                            Some(v) => probe_value(v),
+                        })
+                        .collect();
+                    assert_eq!(
+                        result, expected,
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                    assert_eq!(
+                        probe.rows.load(Relaxed),
+                        needed_rows(&batch, s / 2.0..s),
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                }
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // 2. deterministic RHS that returns an error on unneeded rows:
+        //    the result is still correct
+        //    for example having `x == 0` OR `1 / x > 0.1`
+        // -------------------------------------------------------------------
+
+        #[test]
+        fn or_failing_rhs_returns_correct_result() {
+            let batch = batch();
+            for &s in SELECTIVITIES {
+                let probe = Probe::new(Mode::FailOnUnneeded, 0.0..s);
+                let expr = or(col_1_gt_eq(s), probe);
+
+                let result = evaluate(&expr, &batch)
+                    .unwrap_or_else(|e| panic!("selectivity={s}: {e}"));
+
+                let expected: BooleanArray = col_1(&batch)
+                    .iter()
+                    .map(|v| match v {
+                        // the probe returns NULL for NULL, and NULL OR NULL is NULL
+                        None => None,
+                        Some(v) if v >= s => Some(true),
+                        Some(v) => probe_value(v),
+                    })
+                    .collect();
+                assert_eq!(result, expected, "selectivity={s}");
+            }
+        }
+
+        #[test]
+        fn nested_or_failing_rhs_returns_correct_result() {
+            let batch = batch();
+            for &s in SELECTIVITIES {
+                let probe = Probe::new(Mode::FailOnUnneeded, s / 2.0..s);
+                let expr = or(col_1_gt_eq(s), or(col_1_lt(s / 2.0), probe));
+
+                let result = evaluate(&expr, &batch)
+                    .unwrap_or_else(|e| panic!("selectivity={s}: {e}"));
+
+                let expected: BooleanArray = col_1(&batch)
+                    .iter()
+                    .map(|v| match v {
+                        // the probe returns NULL for NULL, and NULL OR NULL is NULL
+                        None => None,
+                        Some(v) if v >= s || v < s / 2.0 => Some(true),
+                        Some(v) => probe_value(v),
+                    })
+                    .collect();
+                assert_eq!(result, expected, "selectivity={s}");
+            }
+        }
+
+        #[test]
+        fn or_failing_rhs_returns_correct_result_with_null_lhs() {
+            // NULL rows count as needed: a NULL LHS does not decide the row
+            let batch = batch_with_nulls();
+            for &s in SELECTIVITIES {
+                for null_output in [None, Some(false)] {
+                    let probe = Probe::with_null_output(
+                        Mode::FailOnUnneeded,
+                        0.0..s,
+                        null_output,
+                    );
+                    let expr = or(col_1_gt_eq(s), probe);
+
+                    let result = evaluate(&expr, &batch).unwrap_or_else(|e| {
+                        panic!("selectivity={s} null_output={null_output:?}: {e}")
+                    });
+
+                    let expected: BooleanArray = col_1(&batch)
+                        .iter()
+                        .map(|v| match v {
+                            // NULL OR NULL and NULL OR false are both NULL
+                            None => None,
+                            Some(v) if v >= s => Some(true),
+                            Some(v) => probe_value(v),
+                        })
+                        .collect();
+                    assert_eq!(
+                        result, expected,
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn nested_or_failing_rhs_returns_correct_result_with_null_lhs() {
+            // NULL rows count as needed: a NULL LHS does not decide the row
+            let batch = batch_with_nulls();
+            for &s in SELECTIVITIES {
+                for null_output in [None, Some(false)] {
+                    let probe = Probe::with_null_output(
+                        Mode::FailOnUnneeded,
+                        s / 2.0..s,
+                        null_output,
+                    );
+                    let expr = or(col_1_gt_eq(s), or(col_1_lt(s / 2.0), probe));
+
+                    let result = evaluate(&expr, &batch).unwrap_or_else(|e| {
+                        panic!("selectivity={s} null_output={null_output:?}: {e}")
+                    });
+
+                    let expected: BooleanArray = col_1(&batch)
+                        .iter()
+                        .map(|v| match v {
+                            // NULL OR NULL and NULL OR false are both NULL
+                            None => None,
+                            Some(v) if v >= s || v < s / 2.0 => Some(true),
+                            Some(v) => probe_value(v),
+                        })
+                        .collect();
+                    assert_eq!(
+                        result, expected,
+                        "selectivity={s} null_output={null_output:?}"
+                    );
+                }
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // 3. deterministic RHS that does not fail: evaluated at most once
+        //    test for the optimization - avoid evaluating more than once expression that are not needed
+        // -------------------------------------------------------------------
+
+        #[test]
+        fn or_infallible_rhs_evaluated_at_most_once() {
+            let batch = batch();
+            for &s in SELECTIVITIES {
+                let probe = Probe::new(Mode::Infallible, 0.0..s);
+                let expr = or(col_1_gt_eq(s), Arc::clone(&probe) as _);
+
+                evaluate(&expr, &batch).unwrap();
+
+                assert!(probe.calls.load(Relaxed) <= 1, "selectivity={s}");
+            }
+        }
+
+        #[test]
+        fn nested_or_infallible_rhs_evaluated_at_most_once() {
+            let batch = batch();
+            for &s in SELECTIVITIES {
+                let probe = Probe::new(Mode::Infallible, s / 2.0..s);
+                let expr = or(
+                    col_1_gt_eq(s),
+                    or(col_1_lt(s / 2.0), Arc::clone(&probe) as _),
+                );
+
+                evaluate(&expr, &batch).unwrap();
+
+                assert!(probe.calls.load(Relaxed) <= 1, "selectivity={s}");
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // 4. the LHS decides every row: the RHS is never called
+        // -------------------------------------------------------------------
+
+        #[test]
+        fn or_rhs_not_evaluated_when_lhs_all_true() {
+            let batch = batch();
+            let probe = Probe::new(Mode::Infallible, 0.0..0.0);
+            // col_1 >= 0 is true for every row
+            let expr = or(col_1_gt_eq(0.0), Arc::clone(&probe) as _);
+
+            evaluate(&expr, &batch).unwrap();
+
+            assert_eq!(probe.calls.load(Relaxed), 0);
+        }
+
+        #[test]
+        fn nested_or_rhs_not_evaluated_when_lhs_all_true() {
+            let batch = batch();
+            let probe = Probe::new(Mode::Infallible, 0.0..0.0);
+            // col_1 >= 0 is true for every row
+            let expr = or(col_1_gt_eq(0.0), or(col_1_lt(0.0), Arc::clone(&probe) as _));
+
+            evaluate(&expr, &batch).unwrap();
+
+            assert_eq!(probe.calls.load(Relaxed), 0);
+        }
+
+        // -------------------------------------------------------------------
+        // Helpers
+        // -------------------------------------------------------------------
+
+        fn schema() -> Schema {
+            Schema::new(vec![Field::new("col_1", DataType::Float32, true)])
+        }
+
+        /// `col_1`: `0/N .. (N-1)/N`, interleaved so the needed rows are not
+        /// contiguous.
+        fn batch() -> RecordBatch {
+            make_batch((0..N).map(|i| Some(col_1_value(i))))
+        }
+
+        /// Same as [`batch`], but every 7th row of `col_1` is NULL.
+        fn batch_with_nulls() -> RecordBatch {
+            make_batch((0..N).map(|i| (i % 7 != 0).then(|| col_1_value(i))))
+        }
+
+        fn col_1_value(i: usize) -> f32 {
+            ((i * 7919) % N) as f32 / N as f32
+        }
+
+        fn make_batch(values: impl Iterator<Item = Option<f32>>) -> RecordBatch {
+            RecordBatch::try_new(
+                Arc::new(schema()),
+                vec![Arc::new(Float32Array::from_iter(values))],
+            )
+            .unwrap()
+        }
+
+        fn evaluate(
+            expr: &Arc<dyn PhysicalExpr>,
+            batch: &RecordBatch,
+        ) -> Result<BooleanArray> {
+            let result = expr.evaluate(batch)?.into_array(batch.num_rows())?;
+            Ok(result.as_boolean().clone())
+        }
+
+        /// Rows a probe with `needed` must see: NULL or within `needed`
+        fn needed_rows(batch: &RecordBatch, needed: Range<f32>) -> usize {
+            col_1(batch)
+                .iter()
+                .filter(|v| v.is_none_or(|v| needed.contains(&v)))
+                .count()
+        }
+
+        fn col_1(batch: &RecordBatch) -> &Float32Array {
+            batch.column(0).as_primitive::<Float32Type>()
+        }
+
+        // Physical expressions under test
+
+        fn or(
+            l: Arc<dyn PhysicalExpr>,
+            r: Arc<dyn PhysicalExpr>,
+        ) -> Arc<dyn PhysicalExpr> {
+            Arc::new(BinaryExpr::new(l, Operator::Or, r))
+        }
+
+        fn col_1_lt(v: f32) -> Arc<dyn PhysicalExpr> {
+            Arc::new(BinaryExpr::new(
+                col("col_1", &schema()).unwrap(),
+                Operator::Lt,
+                lit(v),
+            ))
+        }
+
+        fn col_1_gt_eq(v: f32) -> Arc<dyn PhysicalExpr> {
+            Arc::new(BinaryExpr::new(
+                col("col_1", &schema()).unwrap(),
+                Operator::GtEq,
+                lit(v),
+            ))
+        }
+
+        /// Deterministic probe output for a non-NULL value
+        fn probe_value(v: f32) -> Option<bool> {
+            match (v * N as f32).round() as usize % 3 {
+                0 => Some(true),
+                1 => None,
+                _ => Some(false),
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // Probe
+        // -------------------------------------------------------------------
+
+        /// What the probe does when evaluated on a row it does not need
+        #[derive(Debug, Clone, Copy)]
+        enum Mode {
+            /// Panic: a volatile expression must never see unneeded rows
+            Volatile,
+            /// Return `Err`: the caller must retry on the needed rows only
+            FailOnUnneeded,
+            /// Compute normally
+            Infallible,
+        }
+
+        /// Test RHS that reads `col_1` and counts what it was evaluated on.
+        /// A row is unneeded if `col_1` is not NULL and outside `needed`.
+        #[derive(Debug)]
+        struct Probe {
+            input: Arc<dyn PhysicalExpr>,
+            mode: Mode,
+            needed: Range<f32>,
+            /// output for a NULL input
+            null_output: Option<bool>,
+            /// number of successful `evaluate` calls
+            calls: AtomicUsize,
+            /// total rows across successful `evaluate` calls
+            rows: AtomicUsize,
+        }
+
+        impl Probe {
+            fn new(mode: Mode, needed: Range<f32>) -> Arc<Self> {
+                Self::with_null_output(mode, needed, None)
+            }
+
+            fn with_null_output(
+                mode: Mode,
+                needed: Range<f32>,
+                null_output: Option<bool>,
+            ) -> Arc<Self> {
+                Arc::new(Self {
+                    input: col("col_1", &schema()).unwrap(),
+                    mode,
+                    needed,
+                    null_output,
+                    calls: AtomicUsize::new(0),
+                    rows: AtomicUsize::new(0),
+                })
+            }
+        }
+
+        impl PhysicalExpr for Probe {
+            fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+                Ok(DataType::Boolean)
+            }
+
+            fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+                Ok(true)
+            }
+
+            fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+                let input = self.input.evaluate(batch)?.into_array(batch.num_rows())?;
+                let input = input.as_primitive::<Float32Type>();
+                let unneeded = input
+                    .iter()
+                    .flatten()
+                    .filter(|v| !self.needed.contains(v))
+                    .count();
+                if unneeded > 0 {
+                    match self.mode {
+                        Mode::Volatile => {
+                            panic!("volatile probe evaluated on {unneeded} unneeded rows")
+                        }
+                        Mode::FailOnUnneeded => {
+                            return exec_err!(
+                                "probe evaluated on {unneeded} unneeded rows"
+                            );
+                        }
+                        Mode::Infallible => {}
+                    }
+                }
+                self.calls.fetch_add(1, Relaxed);
+                self.rows.fetch_add(batch.num_rows(), Relaxed);
+                let output: BooleanArray = input
+                    .iter()
+                    .map(|v| v.map_or(self.null_output, probe_value))
+                    .collect();
+                Ok(ColumnarValue::Array(Arc::new(output)))
+            }
+
+            fn is_volatile_node(&self) -> bool {
+                matches!(self.mode, Mode::Volatile)
+            }
+
+            fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+                vec![&self.input]
+            }
+
+            fn with_new_children(
+                self: Arc<Self>,
+                _children: Vec<Arc<dyn PhysicalExpr>>,
+            ) -> Result<Arc<dyn PhysicalExpr>> {
+                Ok(self)
+            }
+
+            fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{self}")
+            }
+        }
+
+        impl Display for Probe {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                write!(f, "probe({})", self.input)
+            }
+        }
+
+        impl PartialEq for Probe {
+            fn eq(&self, other: &Self) -> bool {
+                std::ptr::eq(self, other)
+            }
+        }
+
+        impl Eq for Probe {}
+
+        impl Hash for Probe {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                std::ptr::hash(self, state)
+            }
+        }
     }
 }

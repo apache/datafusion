@@ -1,24 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::{Between, Expr, Like, predicate_bounds};
 use crate::ValueOrLambda;
 use crate::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
+    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Case, Cast, InList,
     InSubquery, Lambda, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams, in_subquery_tuple_values,
 };
@@ -26,6 +13,7 @@ use crate::expr::{FieldMetadata, LambdaVariable};
 use crate::higher_order_function::HigherOrderReturnFieldArgs;
 use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
+use crate::type_coercion::other::get_coerce_type_for_case_expression;
 use crate::udf::ReturnFieldArgs;
 use crate::{
     LogicalPlan, Operator, Projection, Subquery, WindowFunctionDefinition, utils,
@@ -35,6 +23,7 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
     not_impl_err, plan_datafusion_err, plan_err,
@@ -46,6 +35,10 @@ use std::sync::Arc;
 /// Trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {
     /// Given a schema, return the type of the expr
+    ///
+    /// `CASE` expressions infer a common type from all `THEN` and `ELSE`
+    /// branches without inserting casts. Incompatible branches retain a
+    /// provisional type until analysis.
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType>;
 
     /// Given a schema, return the nullability of the expr
@@ -190,15 +183,17 @@ impl ExprSchemable for Expr {
             Expr::ScalarVariable(field, _) => Ok(field.data_type().clone()),
             Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
-                for (_, then_expr) in &case.when_then_expr {
-                    let then_type = then_expr.get_type(schema)?;
-                    if !then_type.is_null() {
-                        return Ok(then_type);
-                    }
-                }
-                case.else_expr
+                let then_types = case
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, expr)| expr.get_type(schema))
+                    .collect::<Result<Vec<_>>>()?;
+                let else_type = case
+                    .else_expr
                     .as_ref()
-                    .map_or(Ok(DataType::Null), |e| e.get_type(schema))
+                    .map(|expr| expr.get_type(schema))
+                    .transpose()?;
+                Ok(case_result_type(then_types, else_type))
             }
             Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
                 Ok(field.data_type().clone())
@@ -261,8 +256,6 @@ impl ExprSchemable for Expr {
                     Ok(DataType::Null)
                 }
             }
-            #[expect(deprecated)]
-            Expr::Wildcard { .. } => Ok(DataType::Null),
             Expr::GroupingSet(_) => {
                 // Grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
@@ -330,66 +323,13 @@ impl ExprSchemable for Expr {
             Expr::OuterReferenceColumn(field, _) => Ok(field.is_nullable()),
             Expr::Literal(value, _) => Ok(value.is_null()),
             Expr::Case(case) => {
-                let nullable_then = case.when_then_expr.iter().find_map(|(w, t)| {
-                    let is_nullable = match t.nullable(input_schema) {
-                        Err(e) => return Some(Err(e)),
-                        Ok(n) => n,
-                    };
-
-                    // Branches with a then expression that is not nullable do not impact the
-                    // nullability of the case expression.
-                    if !is_nullable {
-                        return None;
-                    }
-
-                    // For case-with-expression assume all 'then' expressions are reachable
-                    if case.expr.is_some() {
-                        return Some(Ok(()));
-                    }
-
-                    // For branches with a nullable 'then' expression, try to determine
-                    // if the 'then' expression is ever reachable in the situation where
-                    // it would evaluate to null.
-                    let bounds = match predicate_bounds::evaluate_bounds(
-                        w,
-                        Some(unwrap_certainly_null_expr(t)),
-                        input_schema,
-                    ) {
-                        Err(e) => return Some(Err(e)),
-                        Ok(b) => b,
-                    };
-
-                    let can_be_true =
-                        match bounds.contains_value(ScalarValue::Boolean(Some(true))) {
-                            Err(e) => return Some(Err(e)),
-                            Ok(b) => b,
-                        };
-
-                    if !can_be_true {
-                        // If the derived 'when' expression can never evaluate to true, the
-                        // 'then' expression is not reachable when it would evaluate to NULL.
-                        // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
-                        None
-                    } else {
-                        // The branch might be taken
-                        Some(Ok(()))
-                    }
-                });
-
-                if let Some(nullable_then) = nullable_then {
-                    // There is at least one reachable nullable 'then' expression, so the case
-                    // expression itself is nullable.
-                    // Use `Result::map` to propagate the error from `nullable_then` if there is one.
-                    nullable_then.map(|_| true)
-                } else if let Some(e) = &case.else_expr {
-                    // There are no reachable nullable 'then' expressions, so all we still need to
-                    // check is the 'else' expression's nullability.
-                    e.nullable(input_schema)
-                } else {
-                    // CASE produces NULL if there is no `else` expr
-                    // (aka when none of the `when_then_exprs` match)
-                    Ok(true)
-                }
+                case_nullable(case, input_schema, |i| match case.when_then_expr.get(i) {
+                    Some((_, then)) => then.nullable(input_schema),
+                    None => case
+                        .else_expr
+                        .as_ref()
+                        .map_or(Ok(true), |e| e.nullable(input_schema)),
+                })
             }
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarFunction(_)
@@ -441,8 +381,6 @@ impl ExprSchemable for Expr {
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }
-            #[expect(deprecated)]
-            Expr::Wildcard { .. } => Ok(false),
             Expr::GroupingSet(_) => {
                 // Grouping sets do not really have the concept of nullable and do not appear
                 // in projections
@@ -519,6 +457,8 @@ impl ExprSchemable for Expr {
     /// - **Aliases**: Merge underlying expr metadata with alias-specific metadata, preferring the alias metadata
     /// - **List unnesting**: Preserve the element field metadata
     /// - **Binary expressions**: field metadata is empty
+    /// - **CASE expressions**: Merges the metadata of the THEN and ELSE branches; the operand
+    ///   and WHEN conditions do not contribute
     /// - **Boolean expressions**: field metadata is empty
     /// - **Cast expressions**: Type-only casts pass through source metadata (stripping extension
     ///   type keys); casts with explicit target fields use target metadata exactly
@@ -542,7 +482,6 @@ impl ExprSchemable for Expr {
         schema: &dyn ExprSchema,
     ) -> Result<(Option<TableReference>, Arc<Field>)> {
         let (relation, schema_name) = self.qualified_name();
-        #[expect(deprecated)]
         let field = match self {
             Expr::Alias(Alias {
                 expr,
@@ -550,15 +489,13 @@ impl ExprSchemable for Expr {
                 metadata,
                 ..
             }) => {
-                let mut combined_metadata = expr.metadata(schema)?;
+                let field = expr.to_field(schema)?.1;
+                let mut combined_metadata = FieldMetadata::from(field.metadata());
                 if let Some(metadata) = metadata {
                     combined_metadata.extend(metadata.clone());
                 }
 
-                Ok(expr
-                    .to_field(schema)
-                    .map(|(_, f)| f)?
-                    .with_field_metadata(&combined_metadata))
+                Ok(field.with_field_metadata(&combined_metadata))
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(Arc::clone),
@@ -700,15 +637,38 @@ impl ExprSchemable for Expr {
                     ))),
                 }
             }
+            Expr::Case(case) => {
+                let fields = case
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, then)| then)
+                    .chain(case.else_expr.iter())
+                    .map(|expr| expr.to_field(schema).map(|(_, field)| field))
+                    .collect::<Result<Vec<_>>>()?;
+                let metadata =
+                    coerced_fields_metadata(fields.iter().map(|f| f.as_ref()))?;
+                // The type and nullability come from `fields`, as `get_type` and
+                // `nullable` compute them from the branches. Walking the branches again
+                // would multiply with the depth of nested CASE and function calls.
+                let (then_fields, else_field) =
+                    fields.split_at(case.when_then_expr.len());
+                let data_type = case_result_type(
+                    then_fields.iter().map(|f| f.data_type().clone()).collect(),
+                    else_field.first().map(|f| f.data_type().clone()),
+                );
+                Ok(Arc::new(metadata.add_to_field(Field::new(
+                    &schema_name,
+                    data_type,
+                    case_nullable(case, schema, |i| Ok(fields[i].is_nullable()))?,
+                ))))
+            }
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
             | Expr::Between(_)
-            | Expr::Case(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
             | Expr::SetComparison(_)
-            | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
             | Expr::Lambda(_)
@@ -724,11 +684,9 @@ impl ExprSchemable for Expr {
                     .map(|arg| match arg {
                         Expr::Lambda(Lambda { params: _, body }) => {
                             // use the name of the lambda instead of just the body to help with debugging
-                            Ok(ValueOrLambda::Lambda(Arc::new(Field::new(
-                                arg.qualified_name().1,
-                                body.get_type(schema)?,
-                                body.nullable(schema)?,
-                            ))))
+                            Ok(ValueOrLambda::Lambda(
+                                body.to_field(schema)?.1.renamed(&arg.qualified_name().1),
+                            ))
                         }
                         _ => Ok(ValueOrLambda::Value(arg.to_field(schema)?.1)),
                     })
@@ -827,6 +785,95 @@ fn verify_function_arguments<F: UDFCoercionExt>(
             )
         )
     })
+}
+
+/// The type of a CASE with the given THEN and ELSE types: their common type, without
+/// inserting casts.
+fn case_result_type(then_types: Vec<DataType>, else_type: Option<DataType>) -> DataType {
+    // If the branches have no common type, keep the old provisional
+    // type. The analyzer reports the error.
+    get_coerce_type_for_case_expression(&then_types, else_type.as_ref()).unwrap_or_else(
+        || {
+            then_types
+                .into_iter()
+                .find(|t| !t.is_null())
+                .or(else_type)
+                .unwrap_or(DataType::Null)
+        },
+    )
+}
+
+/// The nullability of `case`, given the nullability of each value branch:
+/// the THEN expressions in order, then the ELSE.
+fn case_nullable(
+    case: &Case,
+    input_schema: &dyn ExprSchema,
+    mut branch_nullable: impl FnMut(usize) -> Result<bool>,
+) -> Result<bool> {
+    let nullable_then = case
+        .when_then_expr
+        .iter()
+        .enumerate()
+        .find_map(|(i, (w, t))| {
+            let is_nullable = match branch_nullable(i) {
+                Err(e) => return Some(Err(e)),
+                Ok(n) => n,
+            };
+
+            // Branches with a then expression that is not nullable do not impact the
+            // nullability of the case expression.
+            if !is_nullable {
+                return None;
+            }
+
+            // For case-with-expression assume all 'then' expressions are reachable
+            if case.expr.is_some() {
+                return Some(Ok(()));
+            }
+
+            // For branches with a nullable 'then' expression, try to determine
+            // if the 'then' expression is ever reachable in the situation where
+            // it would evaluate to null.
+            let bounds = match predicate_bounds::evaluate_bounds(
+                w,
+                Some(unwrap_certainly_null_expr(t)),
+                input_schema,
+            ) {
+                Err(e) => return Some(Err(e)),
+                Ok(b) => b,
+            };
+
+            let can_be_true =
+                match bounds.contains_value(ScalarValue::Boolean(Some(true))) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(b) => b,
+                };
+
+            if !can_be_true {
+                // If the derived 'when' expression can never evaluate to true, the
+                // 'then' expression is not reachable when it would evaluate to NULL.
+                // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                None
+            } else {
+                // The branch might be taken
+                Some(Ok(()))
+            }
+        });
+
+    if let Some(nullable_then) = nullable_then {
+        // There is at least one reachable nullable 'then' expression, so the case
+        // expression itself is nullable.
+        // Use `Result::map` to propagate the error from `nullable_then` if there is one.
+        nullable_then.map(|_| true)
+    } else if case.else_expr.is_some() {
+        // There are no reachable nullable 'then' expressions, so all we still need to
+        // check is the 'else' expression's nullability.
+        branch_nullable(case.when_then_expr.len())
+    } else {
+        // CASE produces NULL if there is no `else` expr
+        // (aka when none of the `when_then_exprs` match)
+        Ok(true)
+    }
 }
 
 /// Returns the innermost [Expr] that is provably null if `expr` is null.
@@ -1300,6 +1347,62 @@ mod tests {
     }
 
     #[test]
+    fn test_nested_alias_resolves_child_field_once() -> Result<()> {
+        #[derive(Debug)]
+        struct CountingSchema {
+            field: FieldRef,
+            lookups: std::cell::Cell<usize>,
+        }
+
+        impl ExprSchema for CountingSchema {
+            fn nullable(&self, _col: &Column) -> Result<bool> {
+                Ok(self.field.is_nullable())
+            }
+
+            fn field_from_column(&self, _col: &Column) -> Result<&FieldRef> {
+                self.lookups.set(self.lookups.get() + 1);
+                Ok(&self.field)
+            }
+        }
+
+        let schema = CountingSchema {
+            field: Arc::new(Field::new("value", DataType::Int32, false).with_metadata(
+                HashMap::from([
+                    ("override".to_string(), "base".to_string()),
+                    ("keep".to_string(), "base".to_string()),
+                ]),
+            )),
+            lookups: std::cell::Cell::new(0),
+        };
+        let mut expr = col("value");
+        for index in 0..12 {
+            let metadata = Some(FieldMetadata::from(HashMap::from([(
+                "override".to_string(),
+                index.to_string(),
+            )])));
+            expr = if index == 11 {
+                expr.alias_qualified_with_metadata(
+                    Some("outer"),
+                    format!("alias_{index}"),
+                    metadata,
+                )
+            } else {
+                expr.alias_with_metadata(format!("alias_{index}"), metadata)
+            };
+        }
+
+        let (relation, field) = expr.to_field(&schema)?;
+        assert_eq!(schema.lookups.get(), 1);
+        assert_eq!(relation, Some(TableReference::bare("outer")));
+        assert_eq!(field.name(), "alias_11");
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(!field.is_nullable());
+        assert_eq!(field.metadata().get("override"), Some(&"11".to_string()));
+        assert_eq!(field.metadata().get("keep"), Some(&"base".to_string()));
+        Ok(())
+    }
+
+    #[test]
     fn test_expr_placeholder() {
         let schema = MockExprSchema::new();
 
@@ -1642,5 +1745,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn case_infers_all_result_types_without_casting() -> Result<()> {
+        use crate::expr::Case;
+        let schema = DFSchema::empty();
+        let nested = Expr::Case(Case::new(
+            None,
+            vec![(Box::new(lit(false)), Box::new(lit(1_i64)))],
+            Some(Box::new(lit(2.5))),
+        ));
+        for (then_values, else_value, expected) in [
+            (vec![lit(1_i64)], Some(lit(2.5)), DataType::Float64),
+            (vec![lit(1_i64), lit(2.5)], None, DataType::Float64),
+            (vec![lit(2.5), lit(1_i64)], None, DataType::Float64),
+            (vec![lit(2.5)], Some(lit(1_i64)), DataType::Float64),
+            (vec![lit(3_i64)], Some(nested), DataType::Float64),
+            (vec![lit(ScalarValue::Null)], None, DataType::Null),
+            // Incompatible raw types retain a provisional type for the analyzer.
+            (vec![lit(true)], Some(lit("a")), DataType::Boolean),
+        ] {
+            let when_then = then_values
+                .into_iter()
+                .map(|value| (Box::new(lit(true)), Box::new(value)))
+                .collect();
+            let expr = Expr::Case(Case::new(None, when_then, else_value.map(Box::new)));
+            assert_eq!(expr.get_type(&schema)?, expected);
+        }
+        Ok(())
     }
 }

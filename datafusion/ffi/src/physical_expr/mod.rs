@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 pub(crate) mod metrics;
 pub(crate) mod partitioning;
@@ -127,6 +114,10 @@ pub struct FFI_PhysicalExpr {
 
     // Hash trait
     pub hash: unsafe extern "C" fn(&Self) -> u64,
+
+    /// Structural equality with `other`. Returns `false` when `other` was
+    /// created by a different library.
+    pub eq: unsafe extern "C" fn(&Self, other: &Self) -> bool,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -408,6 +399,15 @@ unsafe extern "C" fn hash_fn_wrapper(expr: &FFI_PhysicalExpr) -> u64 {
     hasher.finish()
 }
 
+unsafe extern "C" fn eq_fn_wrapper(
+    expr: &FFI_PhysicalExpr,
+    other: &FFI_PhysicalExpr,
+) -> bool {
+    // `other.inner()` is only valid when this library created `other`.
+    (other.library_marker_id)() == crate::get_library_marker_id()
+        && expr.inner() == other.inner()
+}
+
 unsafe extern "C" fn release_fn_wrapper(expr: &mut FFI_PhysicalExpr) {
     unsafe {
         debug_assert!(!expr.private_data.is_null());
@@ -447,6 +447,7 @@ unsafe extern "C" fn clone_fn_wrapper(expr: &FFI_PhysicalExpr) -> FFI_PhysicalEx
             expression_id: expression_id_fn_wrapper,
             display: display_fn_wrapper,
             hash: hash_fn_wrapper,
+            eq: eq_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -491,6 +492,7 @@ impl From<Arc<dyn PhysicalExpr>> for FFI_PhysicalExpr {
             expression_id: expression_id_fn_wrapper,
             display: display_fn_wrapper,
             hash: hash_fn_wrapper,
+            eq: eq_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             version: super::version,
@@ -734,8 +736,7 @@ impl PhysicalExpr for ForeignPhysicalExpr {
 impl Eq for ForeignPhysicalExpr {}
 impl PartialEq for ForeignPhysicalExpr {
     fn eq(&self, other: &Self) -> bool {
-        // FFI_PhysicalExpr cannot be compared, so identity equality is the best we can do.
-        std::ptr::eq(self, other)
+        std::ptr::eq(self, other) || unsafe { (self.expr.eq)(&self.expr, &other.expr) }
     }
 }
 impl Hash for ForeignPhysicalExpr {
@@ -1007,7 +1008,7 @@ mod tests {
         let (_, foreign_1) = create_test_expr();
         let (_, foreign_2) = create_test_expr();
 
-        assert_ne!(&foreign_1, &foreign_2);
+        assert_eq!(&foreign_1, &foreign_2);
 
         let mut hasher = DefaultHasher::new();
         foreign_1.as_ref().hash(&mut hasher);

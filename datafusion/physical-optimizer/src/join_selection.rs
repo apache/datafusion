@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! The [`JoinSelection`] rule tries to modify a given plan so that it can
 //! accommodate infinite sources and utilize statistical information (if there
@@ -29,7 +16,7 @@ use datafusion_common::Statistics;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{JoinSide, JoinType, internal_err};
+use datafusion_common::{JoinSide, JoinType, internal_err, plan_err};
 use datafusion_expr_common::sort_properties::SortProperties;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::expressions::Column;
@@ -380,6 +367,11 @@ pub type PipelineFixerSubrule =
 /// An `Option` that contains the `Result` of the transformation. If the transformation is not applicable,
 /// it returns `None`. If applicable, it returns `Some(Ok(...))` with the modified pipeline state,
 /// or `Some(Err(...))` if an error occurs during the transformation.
+///
+/// # Errors
+/// Returns a planning error if both inputs are unbounded and emit incrementally,
+/// and the join is null-aware. The symmetric hash join used for these inputs
+/// does not support null-aware semantics.
 fn hash_join_convert_symmetric_subrule(
     input: Arc<dyn ExecutionPlan>,
     config_options: &ConfigOptions,
@@ -398,6 +390,12 @@ fn hash_join_convert_symmetric_subrule(
         );
         // Process only if both left and right sides are unbounded and incrementally emit.
         if left_unbounded && right_unbounded & left_incremental & right_incremental {
+            if hash_join.null_aware {
+                return plan_err!(
+                    "Cannot execute a null-aware join with two unbounded inputs: \
+                     SymmetricHashJoinExec does not support null-aware semantics."
+                );
+            }
             // Determine the partition mode based on configuration.
             let mode = if config_options.optimizer.repartition_joins {
                 StreamJoinPartitionMode::Partitioned

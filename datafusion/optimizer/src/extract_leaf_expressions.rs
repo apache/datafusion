@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Two-pass optimizer pipeline that pushes cheap expressions (like struct field
 //! access `user['status']`) closer to data sources, enabling early data reduction
@@ -1883,12 +1870,12 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Aggregate: groupBy=[[leaf_udf(test.user, Utf8("status"))]], aggr=[[COUNT(Int32(1))]]
+        Aggregate: groupBy=[[leaf_udf(test.user, Utf8("status"))]], aggr=[[count(Int32(1))]]
           TableScan: test projection=[user]
 
         ## After Extraction
-        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("status")), COUNT(Int32(1))
-          Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[COUNT(Int32(1))]]
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("status")), count(Int32(1))
+          Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[count(Int32(1))]]
             Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1, test.user
               TableScan: test projection=[user]
 
@@ -1896,8 +1883,8 @@ mod tests {
         (same as after extraction)
 
         ## Optimized
-        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("status")), COUNT(Int32(1))
-          Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[COUNT(Int32(1))]]
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("status")), count(Int32(1))
+          Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[count(Int32(1))]]
             Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_1
               TableScan: test projection=[user]
         "#)
@@ -1917,12 +1904,12 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Aggregate: groupBy=[[test.user]], aggr=[[COUNT(leaf_udf(test.user, Utf8("value")))]]
+        Aggregate: groupBy=[[test.user]], aggr=[[count(leaf_udf(test.user, Utf8("value")))]]
           TableScan: test projection=[user]
 
         ## After Extraction
-        Projection: test.user, COUNT(__datafusion_extracted_1) AS COUNT(leaf_udf(test.user,Utf8("value")))
-          Aggregate: groupBy=[[test.user]], aggr=[[COUNT(__datafusion_extracted_1)]]
+        Projection: test.user, count(__datafusion_extracted_1) AS count(leaf_udf(test.user,Utf8("value")))
+          Aggregate: groupBy=[[test.user]], aggr=[[count(__datafusion_extracted_1)]]
             Projection: leaf_udf(test.user, Utf8("value")) AS __datafusion_extracted_1, test.user
               TableScan: test projection=[user]
 
@@ -2136,11 +2123,11 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Aggregate: groupBy=[[test.user]], aggr=[[COUNT(leaf_udf(test.user, Utf8("value"))) AS cnt]]
+        Aggregate: groupBy=[[test.user]], aggr=[[count(leaf_udf(test.user, Utf8("value"))) AS cnt]]
           TableScan: test projection=[user]
 
         ## After Extraction
-        Aggregate: groupBy=[[test.user]], aggr=[[COUNT(__datafusion_extracted_1) AS cnt]]
+        Aggregate: groupBy=[[test.user]], aggr=[[count(__datafusion_extracted_1) AS cnt]]
           Projection: leaf_udf(test.user, Utf8("value")) AS __datafusion_extracted_1, test.user
             TableScan: test projection=[user]
 
@@ -2164,7 +2151,7 @@ mod tests {
 
         assert_stages!(plan, @"
         ## Original Plan
-        Aggregate: groupBy=[[test.a]], aggr=[[COUNT(test.b)]]
+        Aggregate: groupBy=[[test.a]], aggr=[[count(test.b)]]
           TableScan: test projection=[a, b]
 
         ## After Extraction
@@ -2385,13 +2372,13 @@ mod tests {
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Aggregate: groupBy=[[leaf_udf(test.user, Utf8("name"))]], aggr=[[COUNT(Int32(1))]]
+        Aggregate: groupBy=[[leaf_udf(test.user, Utf8("name"))]], aggr=[[count(Int32(1))]]
           Filter: leaf_udf(test.user, Utf8("status")) = Utf8("active")
             TableScan: test projection=[user]
 
         ## After Extraction
-        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name")), COUNT(Int32(1))
-          Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[COUNT(Int32(1))]]
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name")), count(Int32(1))
+          Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[count(Int32(1))]]
             Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.user
               Projection: test.user
                 Filter: __datafusion_extracted_2 = Utf8("active")
@@ -2399,16 +2386,16 @@ mod tests {
                     TableScan: test projection=[user]
 
         ## After Pushdown
-        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name")), COUNT(Int32(1))
-          Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[COUNT(Int32(1))]]
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name")), count(Int32(1))
+          Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[count(Int32(1))]]
             Projection: test.user, __datafusion_extracted_1
               Filter: __datafusion_extracted_2 = Utf8("active")
                 Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2, test.user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
                   TableScan: test projection=[user]
 
         ## Optimized
-        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name")), COUNT(Int32(1))
-          Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[COUNT(Int32(1))]]
+        Projection: __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name")), count(Int32(1))
+          Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[count(Int32(1))]]
             Projection: __datafusion_extracted_1
               Filter: __datafusion_extracted_2 = Utf8("active")
                 Projection: leaf_udf(test.user, Utf8("status")) AS __datafusion_extracted_2, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
@@ -2430,14 +2417,14 @@ mod tests {
                 leaf_udf(col("user"), "name")
                     .is_not_null()
                     .alias("has_name"),
-                col("COUNT(Int32(1))"),
+                col("count(Int32(1))"),
             ])?
             .build()?;
 
         assert_stages!(plan, @r#"
         ## Original Plan
-        Projection: leaf_udf(test.user, Utf8("name")) IS NOT NULL AS has_name, COUNT(Int32(1))
-          Aggregate: groupBy=[[test.user]], aggr=[[COUNT(Int32(1))]]
+        Projection: leaf_udf(test.user, Utf8("name")) IS NOT NULL AS has_name, count(Int32(1))
+          Aggregate: groupBy=[[test.user]], aggr=[[count(Int32(1))]]
             TableScan: test projection=[user]
 
         ## After Extraction
@@ -3775,8 +3762,8 @@ mod tests {
         let ctx = OptimizerContext::new();
         let optimized = Optimizer::new().optimize(plan, &ctx, |_, _| {})?;
         insta::assert_snapshot!(format!("{optimized}"), @r#"
-        Projection: __datafusion_extracted_1 AS leaf_udf(p.user,Utf8("a")), COUNT(Int32(1))
-          Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[COUNT(Int32(1))]]
+        Projection: __datafusion_extracted_1 AS leaf_udf(p.user,Utf8("a")), count(Int32(1))
+          Aggregate: groupBy=[[__datafusion_extracted_1]], aggr=[[count(Int32(1))]]
             Projection: p.__datafusion_extracted_1 AS __datafusion_extracted_1
               Inner Join: p.id = c.id
                 SubqueryAlias: p

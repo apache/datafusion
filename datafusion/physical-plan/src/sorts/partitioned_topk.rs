@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`PartitionedTopKExec`]: Top-K per partition operator
 //!
@@ -360,7 +347,13 @@ impl PartitionedTopKExec {
             }
         };
         let partition_exprs = sort_exprs[..partition_prefix_len].to_vec();
-        eq_properties.reorder(sort_exprs)?;
+
+        // Not `reorder`: that keeps a longer input ordering when `sort_exprs`
+        // is already satisfied, but rows that tie on `sort_exprs` leave the
+        // heap in any order, so only `sort_exprs` holds (#27459).
+        eq_properties.clear_groupings();
+        eq_properties.clear_orderings();
+        eq_properties.add_ordering(sort_exprs);
 
         if let Some(field) = ranking_field {
             // The ranking column is the last one, appended by
@@ -377,8 +370,7 @@ impl PartitionedTopKExec {
             );
             // Mirrors `add_new_ordering_expr_with_partition_by`: the ranking
             // value only ascends *within* a partition, so the ordering has to
-            // be prefixed by the partition keys. `reorder` above already
-            // established that prefix.
+            // be prefixed by the partition keys.
             eq_properties.add_ordering(partition_exprs.into_iter().chain([ranking_sort]));
         }
 

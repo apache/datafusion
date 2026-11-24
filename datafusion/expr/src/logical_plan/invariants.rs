@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::MaterializedCtePlan;
 use datafusion_common::{
@@ -106,8 +93,31 @@ fn assert_unique_field_names(plan: &LogicalPlan) -> Result<()> {
 /// Returns an error if the plan is not semantically valid.
 fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
     assert_subqueries_are_valid(plan)?;
+    assert_materialized_cte_scans_are_valid(plan)?;
 
     Ok(())
+}
+
+/// Returns an error if a scan of a materialized CTE does not have the names
+/// and types of the columns that it reads from the body of the CTE.
+///
+/// A scan whose CTE is not in `plan` is not checked, because `plan` can be a
+/// part of a larger plan.
+fn assert_materialized_cte_scans_are_valid(plan: &LogicalPlan) -> Result<()> {
+    plan.apply_with_subqueries(|node| {
+        if let LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) = node {
+            for scan in cte.scans()? {
+                scan.check_body_schema(cte.body().schema()).map_err(|e| {
+                    e.context(format!(
+                        "A scan of the materialized CTE {} does not match the CTE",
+                        cte.name()
+                    ))
+                })?;
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .map(|_| ())
 }
 
 /// Returns an error if the plan does not have the expected schema.

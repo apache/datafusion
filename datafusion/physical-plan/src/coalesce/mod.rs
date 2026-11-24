@@ -1,26 +1,19 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{Array, AsArray, BooleanArray, RecordBatch};
 use arrow::compute::{BatchCoalescer, filter_record_batch, prep_null_mask_filter};
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{Result, assert_or_internal_err};
 
-/// Concatenate multiple [`RecordBatch`]es and apply a limit
+/// Concatenate multiple [`RecordBatch`]es and apply a limit.
+///
+/// The limit is a hard cap on the total number of output rows across all batches.
+///
+/// For example, with a limit of 5, pushing batches of 3 and 4 rows coalesces all 3 rows
+/// from the first batch and only the first 2 from the second. The second push
+/// returns [`PushBatchStatus::LimitReached`] to indicate that the limit has been reached.
 ///
 /// See [`BatchCoalescer`] for more details on how this works.
 #[derive(Debug)]

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Statistics computation for physical plans.
 //!
@@ -23,12 +10,12 @@
 use crate::ExecutionPlan;
 use crate::displayable;
 use crate::operator_statistics::{
-    ExtendedStatistics, StatisticsRegistry, StatisticsResult,
+    ExtendedStatistics, StatisticsProvider, StatisticsRegistry, StatisticsResult,
 };
 use datafusion_common::extensions::Extensions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    Result, Statistics, assert_eq_or_internal_err, assert_or_internal_err,
+    Result, Statistics, assert_eq_or_internal_err, assert_or_internal_err, internal_err,
 };
 use log::debug;
 use parking_lot::Mutex;
@@ -471,7 +458,10 @@ impl StatisticsContext {
                     self.validate_child_requests(plan, &children, &requests)?;
                     let child_statistics =
                         self.resolve_children(plan, &children, &requests)?;
-                    (plan.statistics_from_inputs(&child_statistics, args)?, None)
+                    let statistics =
+                        plan.statistics_from_inputs(&child_statistics, args)?;
+                    validate_column_statistics(plan, &statistics, None)?;
+                    (statistics, None)
                 }
             };
         if let Some(owner) = retained_plan {
@@ -596,6 +586,7 @@ impl StatisticsContext {
                 provider.compute_statistics_with_args(plan, &child_extended, args)?
             {
                 let (statistics, extensions) = computed.into_parts();
+                validate_column_statistics(plan, &statistics, Some(provider.as_ref()))?;
                 let extensions = if extensions.is_empty() {
                     None
                 } else {
@@ -706,6 +697,29 @@ impl StatisticsContext {
             partition,
             extensions,
         );
+    }
+}
+
+/// Returns an error if the number of column statistics in `statistics` differs
+/// from the number of fields in `plan`'s schema.
+fn validate_column_statistics(
+    plan: &dyn ExecutionPlan,
+    statistics: &Statistics,
+    provider: Option<&dyn StatisticsProvider>,
+) -> Result<()> {
+    let column_statistics = statistics.column_statistics.len();
+    let fields = plan.schema().fields().len();
+    if column_statistics == fields {
+        return Ok(());
+    }
+    let name = plan.name();
+    match provider {
+        Some(provider) => internal_err!(
+            "Statistics provider {provider:?} returned {column_statistics} column statistics for {name}, expected {fields} (one per field of its schema)"
+        ),
+        None => internal_err!(
+            "{name} returned {column_statistics} column statistics, expected {fields} (one per field of its schema)"
+        ),
     }
 }
 

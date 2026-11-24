@@ -1,25 +1,12 @@
 #!/usr/bin/env python3
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 """
 Validate the job-level skip conditions in rust.yml.
 
-rust.yml skips jobs on two events. Each skip set below pairs a clause with
+rust.yml skips jobs by event and repository. Each skip set below pairs a clause with
 the jobs that carry it: a job's `if:` is exactly `!(clause)` for every set
 it belongs to, joined with ` && ` in the order of SKIP_POLICIES, and a job
 in no set carries no job-level `if:`. A new job therefore runs everywhere
@@ -55,7 +42,6 @@ POST_MERGE_SKIPPED_JOBS = frozenset(
         "depcheck",
         "examples-docs-check",
         "linux-cargo-check-datafusion",
-        "linux-cargo-check-datafusion-spark",
         "linux-datafusion-common-features",
         "linux-datafusion-proto-features",
         "linux-datafusion-substrait-features",
@@ -88,7 +74,6 @@ FORK_PR_SKIPPED_JOBS = frozenset(
         "linux-build-lib",
         "linux-cargo-check-datafusion",
         "linux-cargo-check-datafusion-functions",
-        "linux-cargo-check-datafusion-spark",
         "linux-datafusion-common-features",
         "linux-datafusion-ffi-features",
         "linux-datafusion-proto-features",
@@ -108,9 +93,13 @@ FORK_PR_SKIPPED_JOBS = frozenset(
     }
 )
 
+FORK_REPOSITORY = "github.repository != 'apache/datafusion'"
+FORK_REPO_SKIPPED_JOBS = frozenset({"macos-aarch64"})
+
 SKIP_POLICIES = (
     ("POST_MERGE_SKIPPED_JOBS", POST_MERGE_SKIPPED_JOBS, POST_MERGE_PUSH),
     ("FORK_PR_SKIPPED_JOBS", FORK_PR_SKIPPED_JOBS, FORK_PULL_REQUEST),
+    ("FORK_REPO_SKIPPED_JOBS", FORK_REPO_SKIPPED_JOBS, FORK_REPOSITORY),
 )
 
 
@@ -196,9 +185,7 @@ def check_skip_conditions(workflow, required_checks):
                     f"  - job `{job}` is not in {set_name} but needs "
                     f"{blocked}; GitHub would skip it with them"
                 )
-        # Only the merge queue gates a job that skips after the merge. A job
-        # that skips on a fork PR still runs on the fork, in the queue, and on
-        # main.
+        # Only the merge queue gates a job that skips after the merge.
         if required_checks and set_name == "POST_MERGE_SKIPPED_JOBS":
             for job in sorted(members & set(jobs)):
                 name = jobs[job].get("name", job)

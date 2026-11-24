@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -1676,22 +1663,25 @@ mod tests {
     fn bloom_filter_pruning_error_retains_row_group_without_match() {
         let schema =
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
-        let cast_expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
-            Arc::new(PhysicalColumn::new("c1", 0)),
-            DataType::FixedSizeBinary(4),
+        // c1 = CAST('abc' AS Int32): constant folding fails, so the
+        // simplifier keeps the cast, and the cast fails at evaluation.
+        let value: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+            Arc::new(Literal::new(ScalarValue::from("abc"))),
+            DataType::Int32,
             None,
         ));
-        let literal: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(
-            ScalarValue::FixedSizeBinary(4, Some(vec![0, 0, 0, 1])),
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::new(PhysicalColumn::new("c1", 0)),
+            Operator::Eq,
+            value,
         ));
-        let expr = Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal));
         let pruning_predicate = PruningPredicateBuilder::new()
             .with_file_schema(schema)
             .try_build(expr)
             .unwrap();
 
         // A nonempty map bypasses the no-filter path. Evaluating the predicate
-        // then fails because Arrow cannot cast Int32 statistics to FixedSizeBinary.
+        // then fails because 'abc' is not an Int32.
         let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
         sbbf.insert(&1_i32);
         let mut bloom_statistics = BloomFilterStatistics::new();

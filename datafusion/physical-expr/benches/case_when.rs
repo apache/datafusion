@@ -1,26 +1,20 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::array::{Array, ArrayRef, Int32Array, Int32Builder, StringArray};
-use arrow::datatypes::{ArrowNativeTypeOp, Field, Schema};
+use arrow::array::{
+    Array, ArrayRef, Int32Array, Int32Builder, ListArray, StringArray, StructArray,
+};
+use arrow::buffer::OffsetBuffer;
+use arrow::compute::cast;
+use arrow::datatypes::{ArrowNativeTypeOp, DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow_schema::Fields;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::Operator;
+use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::expressions::{BinaryExpr, case, col, lit};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use itertools::Itertools;
@@ -99,7 +93,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     run_benchmarks(c, &make_batch(8192, 100));
 
     benchmark_lookup_table_case_when(c, 8192);
+    benchmark_lookup_table_by_number_of_entries(c, 8192);
     benchmark_divide_by_zero_protection(c, 8192);
+    benchmark_struct_field_case_when(c, 8192);
 }
 
 fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
@@ -524,6 +520,76 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
     }
 }
 
+/// `CASE c WHEN 0 THEN 0 WHEN 7 THEN 1 ... ELSE -1 END` over values of a primitive type,
+/// 90% of the non-null values matching one of the literals, for a range of numbers of
+/// literals, with no nulls and with 50% nulls.
+fn benchmark_lookup_table_by_number_of_entries(c: &mut Criterion, batch_size: usize) {
+    let mut group = c.benchmark_group("lookup_table_case_when_entries");
+
+    /// Converts an `i32` value to a scalar of the benchmarked type
+    type ToScalar = fn(i32) -> ScalarValue;
+    let types: [(&str, DataType, ToScalar); 3] = [
+        ("i32", DataType::Int32, |v| ScalarValue::Int32(Some(v))),
+        ("i64", DataType::Int64, |v| {
+            ScalarValue::Int64(Some(v as i64))
+        }),
+        ("decimal128", DataType::Decimal128(38, 0), |v| {
+            ScalarValue::Decimal128(Some(v as i128), 38, 0)
+        }),
+    ];
+
+    for (type_name, data_type, to_scalar) in types {
+        for (num_entries, null_percent) in [2, 4, 8, 12, 16, 24, 32, 64]
+            .into_iter()
+            .flat_map(|n| [(n, 0), (n, 50)])
+        {
+            let literal = |i: i32| i * 7;
+            let rng = &mut seedable_rng();
+            let array: Int32Array = (0..batch_size)
+                .map(|_| {
+                    if rng.random_ratio(null_percent, 100) {
+                        None
+                    } else if rng.random_bool(0.9) {
+                        Some(literal(rng.random_range(0..num_entries)))
+                    } else {
+                        // Not a multiple of 7, so matching no literal
+                        Some(literal(rng.random_range(0..num_entries)) + 3)
+                    }
+                })
+                .collect();
+            let array = cast(&array, &data_type).unwrap();
+            let batch = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new("c", data_type.clone(), true)])),
+                vec![array],
+            )
+            .unwrap();
+
+            group.bench_function(
+                format!(
+                    "{batch_size} rows: {type_name} -> i32, {num_entries} entries, {null_percent}% nulls"
+                ),
+                |b| {
+                    let when_thens = (0..num_entries)
+                        .map(|i| (lit(to_scalar(literal(i))), lit(i)))
+                        .collect();
+                    let expr = Arc::new(
+                        case(
+                            Some(col("c", batch.schema_ref()).unwrap()),
+                            when_thens,
+                            Some(lit(-1)),
+                        )
+                        .unwrap(),
+                    );
+
+                    b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
 fn benchmark_divide_by_zero_protection(c: &mut Criterion, batch_size: usize) {
     let mut group = c.benchmark_group("divide_by_zero_protection");
 
@@ -593,6 +659,129 @@ fn benchmark_divide_by_zero_protection(c: &mut Criterion, batch_size: usize) {
                 let else_null: Arc<dyn PhysicalExpr> = lit(ScalarValue::Int32(None));
                 let expr =
                     Arc::new(case(None, vec![(when, then)], Some(else_null)).unwrap());
+
+                b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Create a record batch with an int32 column `x` and a struct column `s` with
+/// fields `a: Int32`, `b: Utf8` and `items: List<Struct<id: Int32, name: Utf8>>`,
+/// with `list_len` items per row.
+fn make_struct_batch(row_count: usize, list_len: usize) -> RecordBatch {
+    let rng = &mut seedable_rng();
+    let a =
+        Int32Array::from_iter_values((0..row_count).map(|_| rng.random_range(0..100)));
+    let b = StringArray::from_iter_values((0..row_count).map(|i| format!("value {i}")));
+
+    let item_count = row_count * list_len;
+    let item_fields = Fields::from(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("name", DataType::Utf8, true),
+    ]);
+    let items = StructArray::new(
+        item_fields.clone(),
+        vec![
+            Arc::new(Int32Array::from_iter_values(0..item_count as i32)),
+            Arc::new(StringArray::from_iter_values(
+                (0..item_count).map(|i| format!("item name {i}")),
+            )),
+        ],
+        None,
+    );
+    let item_field = Arc::new(Field::new("item", DataType::Struct(item_fields), true));
+    let items = ListArray::new(
+        Arc::clone(&item_field),
+        OffsetBuffer::from_lengths(std::iter::repeat_n(list_len, row_count)),
+        Arc::new(items),
+        None,
+    );
+
+    let s = StructArray::new(
+        Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("items", DataType::List(item_field), true),
+        ]),
+        vec![Arc::new(a), Arc::new(b), Arc::new(items)],
+        None,
+    );
+    let x = Int32Array::from_iter_values(0..row_count as i32);
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x", DataType::Int32, false),
+        Field::new("s", s.data_type().clone(), true),
+    ]));
+    RecordBatch::try_new(schema, vec![Arc::new(x), Arc::new(s)]).unwrap()
+}
+
+fn benchmark_struct_field_case_when(c: &mut Criterion, batch_size: usize) {
+    let mut group = c.benchmark_group("struct_field_case_when");
+
+    for list_len in [0, 4, 16] {
+        let batch = make_struct_batch(batch_size, list_len);
+        let schema = batch.schema();
+        let s = col("s", &schema).unwrap();
+        let get_field = |name: &str| -> Arc<dyn PhysicalExpr> {
+            Arc::new(
+                ScalarFunctionExpr::try_new(
+                    datafusion_functions::core::get_field(),
+                    vec![Arc::clone(&s), lit(name)],
+                    &schema,
+                    Arc::new(ConfigOptions::default()),
+                )
+                .unwrap(),
+            )
+        };
+        let s_a = get_field("a");
+        let s_b = get_field("b");
+        let x = col("x", &schema).unwrap();
+
+        group.bench_function(
+            format!(
+                "{batch_size} rows, {list_len} items: CASE WHEN s.a < 10 THEN s.b WHEN s.a < 20 THEN 'b' ... ELSE s.b END"
+            ),
+            |b| {
+                let when_thens = (1..10)
+                    .map(|i| {
+                        (
+                            make_x_cmp_y(&s_a, Operator::Lt, i * 10),
+                            if i % 2 == 0 { lit(format!("{i}")) } else { Arc::clone(&s_b) },
+                        )
+                    })
+                    .collect();
+                let expr =
+                    Arc::new(case(None, when_thens, Some(Arc::clone(&s_b))).unwrap());
+
+                b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+            },
+        );
+
+        group.bench_function(
+            format!("{batch_size} rows, {list_len} items: CASE WHEN s.a < 50 THEN s.a + x ELSE x END"),
+            |b| {
+                let when = make_x_cmp_y(&s_a, Operator::Lt, 50);
+                let then = Arc::new(BinaryExpr::new(
+                    Arc::clone(&s_a),
+                    Operator::Plus,
+                    Arc::clone(&x),
+                ));
+                let expr =
+                    Arc::new(case(None, vec![(when, then)], Some(Arc::clone(&x))).unwrap());
+
+                b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+            },
+        );
+
+        group.bench_function(
+            format!("{batch_size} rows, {list_len} items: CASE s.a WHEN 0 THEN s.b WHEN 1 THEN s.b ... END"),
+            |b| {
+                let when_thens = (0..10).map(|i| (lit(i), Arc::clone(&s_b))).collect();
+                let expr =
+                    Arc::new(case(Some(Arc::clone(&s_a)), when_thens, None).unwrap());
 
                 b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
             },

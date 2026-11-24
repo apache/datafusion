@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Usage
@@ -50,10 +37,10 @@ Options:
       --maxrows <MAXROWS>
           The max number of rows to display for 'Table' format
           [possible values: numbers(0/10/...), inf(no limit)] [default: 40]
+      --target-width <TARGET_WIDTH>
+          Target output width in terminal columns (auto, 1..65535, 0 or inf for no limit). A wide character or TREE node may exceed this width. [default: auto]
       --color
           Enables console syntax highlighting
-      --spark
-          Enable Apache Spark-compatible SQL dialect, functions, and expression planning
   -d, --disk-limit <DISK_LIMIT>
           Available disk space for spilling queries (e.g. '10g'), default to None (uses DataFusion's default value of '100g')
       --object-store-profiling <OBJECT_STORE_PROFILING>
@@ -65,17 +52,15 @@ Options:
           Print version
 ```
 
-## Apache Spark compatibility
+## Output width
 
-Use `--spark` to enable the Apache Spark SQL dialect, expression planner, and
-function library for the CLI session:
+`--target-width auto` (default) uses the terminal width as the target for tables and explain plans.
+Use `--target-width 100` for a fixed target, or `--target-width 0` / `--target-width inf` for
+no limit. Change it in the CLI with `\pset target_width <value>`.
+A character wider than the target is kept intact. TREE plans use 29-column boxes,
+so a single node can exceed a narrower target.
 
-```bash
-datafusion-cli --spark -c "SELECT next_day('2015-07-27'::DATE, 'Sun'::STRING);"
-```
-
-Spark compatibility is disabled by default. Enabling it overrides DataFusion
-functions with the same name for the duration of the session.
+With `auto`, redirected output is unlimited. CSV, TSV, and JSON output is unchanged.
 
 ## Commands
 

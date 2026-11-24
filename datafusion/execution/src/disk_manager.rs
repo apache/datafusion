@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`DiskManager`]: Manages files generated during query execution
 
@@ -30,7 +17,7 @@ use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use tempfile::{Builder, NamedTempFile, TempDir};
+use tempfile::{Builder, TempDir, TempPath};
 pub const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
 pub const DEFAULT_MAX_SPILL_MERGE_FAN_IN: usize = 0;
 
@@ -386,7 +373,8 @@ impl DiskManager {
                 Builder::new()
                     .prefix(&escape_for_temp_file_name_prefix(request_description))
                     .tempfile_in(local_dirs[dir_index].as_ref())
-                    .map_err(DataFusionError::IoError)?,
+                    .map_err(DataFusionError::IoError)?
+                    .into_temp_path(),
             ),
             current_file_disk_usage: Arc::new(AtomicU64::new(0)),
             disk_manager: Arc::clone(self),
@@ -394,8 +382,12 @@ impl DiskManager {
     }
 }
 
-/// A wrapper around a [`NamedTempFile`] that also contains
+/// A wrapper around a temporary file path ([`TempPath`]) that also contains
 /// a reference to its parent temporary directory.
+///
+/// This type does not keep the file open. It holds no file descriptor, so
+/// the number of live spill files does not count against the process file
+/// limit. Only open writers and read streams hold descriptors.
 ///
 /// This type is Clone-able, allowing multiple references to the same underlying file.
 /// The file is deleted only when the last reference is dropped.
@@ -408,10 +400,11 @@ impl DiskManager {
 #[derive(Debug)]
 pub struct RefCountedTempFile {
     /// The reference to the directory in which temporary files are created to ensure
-    /// it is not cleaned up prior to the NamedTempFile
+    /// it is not cleaned up prior to the temporary file
     parent_temp_dir: Arc<TempDir>,
-    /// The underlying temporary file, wrapped in Arc to allow cloning
-    tempfile: Arc<NamedTempFile>,
+    /// The path of the underlying temporary file, wrapped in Arc to allow
+    /// cloning. Dropping the last reference deletes the file.
+    tempfile: Arc<TempPath>,
     /// Tracks the current disk usage of this temporary file.
     ///
     /// This is wrapped in `Arc<AtomicU64>` so that all clones share the same
@@ -434,11 +427,7 @@ impl Clone for RefCountedTempFile {
 
 impl RefCountedTempFile {
     pub fn path(&self) -> &Path {
-        self.tempfile.path()
-    }
-
-    pub fn inner(&self) -> &NamedTempFile {
-        self.tempfile.as_ref()
+        &self.tempfile
     }
 
     fn current_disk_usage(&self) -> u64 {
@@ -536,7 +525,7 @@ impl SpillWriter for FileSpillWriter {
 
 impl SpillFile for RefCountedTempFile {
     fn path(&self) -> Option<&Path> {
-        Some(self.tempfile.path())
+        Some(&self.tempfile)
     }
 
     fn size(&self) -> Option<u64> {
@@ -585,10 +574,11 @@ impl SpillFile for RefCountedTempFile {
     }
 
     fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
-        let file = self
-            .tempfile
-            .as_file()
-            .try_clone()
+        // Append mode keeps the shared-offset behavior of several writers
+        // on one file.
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&*self.tempfile)
             .map_err(DataFusionError::IoError)?;
         Ok(Box::new(FileSpillWriter {
             file,
