@@ -1255,7 +1255,7 @@ query TT
 explain SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) = 0) from t1
 ----
 logical_plan
-01)Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) WHEN __scalar_sq_1.count(Int64(1)) != Int64(0) THEN Int64(NULL) ELSE __scalar_sq_1.cnt_plus_2 END AS cnt_plus_2
+01)Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) WHEN __scalar_sq_1.count(Int64(1)) = Int64(0) IS NOT TRUE THEN Int64(NULL) ELSE __scalar_sq_1.cnt_plus_2 END AS cnt_plus_2
 02)--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 03)----TableScan: t1 projection=[t1_id, t1_int]
 04)----SubqueryAlias: __scalar_sq_1
@@ -1329,7 +1329,7 @@ select t1.t1_int from t1 where (
 ----
 logical_plan
 01)Projection: t1.t1_int
-02)--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) WHEN __scalar_sq_1.count(Int64(1)) != Int64(0) THEN Int64(NULL) ELSE __scalar_sq_1.cnt_plus_two END = Int64(2)
+02)--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) WHEN __scalar_sq_1.count(Int64(1)) = Int64(0) IS NOT TRUE THEN Int64(NULL) ELSE __scalar_sq_1.cnt_plus_two END = Int64(2)
 03)----Projection: t1.t1_int, __scalar_sq_1.cnt_plus_two, __scalar_sq_1.count(Int64(1)), __scalar_sq_1.__always_true
 04)------Left Join: t1.t1_int = __scalar_sq_1.t2_int
 05)--------TableScan: t1 projection=[t1_int]
@@ -1362,6 +1362,56 @@ SELECT t1_id, (
 22 NULL
 33 NULL
 44 NULL
+
+# A HAVING that is true on empty input over an aggregate that is NULL on empty
+# input. https://github.com/apache/datafusion/issues/26505
+# Errors rather than returning wrong rows. Expected `(1, NULL), (2, NULL)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT x.a, (SELECT sum(y.b) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING sum(y.b) IS NULL) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
+
+# Errors rather than returning wrong rows. Expected `(1, NULL), (2, NULL)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT x.a, (SELECT max(y.b) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING max(y.b) IS NULL) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
+
+# Errors rather than returning wrong rows. Expected `(1, NULL), (2, NULL)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT x.a, (SELECT sum(y.b) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING count(*) = 0) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
+
+# The HAVING reads a different aggregate than the output and also filters out a
+# non-empty group (`a = 1`, where `count(*)` is 2). Errors rather than returning
+# wrong rows. Expected `(1, NULL), (2, NULL), (3, NULL), (4, 7)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT x.a, (SELECT sum(y.b) FROM (VALUES (1, 10), (1, 5), (3, NULL), (4, 7)) AS y(a, b) WHERE y.a = x.a HAVING count(*) < 2) AS v FROM (VALUES (1), (2), (3), (4)) AS x(a) ORDER BY x.a;
+
+# Still decorrelated: the HAVING is applied to `count(*)`.
+query II
+SELECT x.a, (SELECT count(*) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING count(*) = 0) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
+----
+1 NULL
+2 0
+
+# Still decorrelated: the HAVING reads an aggregate that is NULL on empty input,
+# but the subquery returns `count(*)`, which the HAVING is applied to.
+query II
+SELECT x.a, (SELECT count(*) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING sum(y.b) IS NULL) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
+----
+1 NULL
+2 0
+
+# Still decorrelated: a HAVING that is NULL for a matched group (`sum(y.b)` is
+# NULL for `a = 1`) filters it out like a false one.
+query II
+SELECT x.a, (SELECT count(*) FROM (VALUES (1, CAST(NULL AS INT))) AS y(a, b) WHERE y.a = x.a HAVING count(*) = 0 OR sum(y.b) > 5) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
+----
+1 NULL
+2 0
+
+# Still decorrelated: a HAVING that is false on empty input is not pulled up.
+query II
+SELECT x.a, (SELECT sum(y.b) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING sum(y.b) > 5) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
+----
+1 10
+2 NULL
 
 #correlated_scalar_subquery_count_agg_in_case_when
 query TT
@@ -4842,3 +4892,216 @@ DROP TABLE unbounded_not_in_right_nn;
 
 statement ok
 RESET datafusion.execution.batch_size;
+
+# Issue #26234: Correlated subquery confusing same-named columns of two relations
+statement ok
+CREATE TABLE t26234(k INT) AS VALUES (1), (2);
+
+# Query 1: EXISTS
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT 1 FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+);
+
+# Query 2: NOT EXISTS
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE NOT EXISTS (
+    SELECT 1 FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+);
+
+# Query 3: IN
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE t_outer.k IN (
+    SELECT one.k FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+);
+
+# Query 4: Scalar subquery
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k, (
+    SELECT count(*) FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+) FROM t26234 t_outer ORDER BY t_outer.k;
+
+# Query 5: IN with projection from one relation and correlation from another
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE t_outer.k IN (
+    SELECT one.k FROM t26234 one, t26234 two WHERE two.k = t_outer.k + 1
+);
+
+# Query 6: LATERAL join
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k, s.c FROM t26234 t_outer, LATERAL (
+    SELECT count(*) AS c FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+) s;
+
+# Same-named columns are fine when only the first one is correlated
+query I
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT * FROM t26234 one, t26234 two WHERE one.k = t_outer.k
+) ORDER BY t_outer.k;
+----
+1
+2
+
+query I
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT one.k, two.k FROM t26234 one, t26234 two WHERE one.k = t_outer.k
+) ORDER BY t_outer.k;
+----
+1
+2
+
+# Single relation correlated column works without ambiguity
+query I
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT 1 FROM t26234 one WHERE one.k = t_outer.k
+) ORDER BY t_outer.k;
+----
+1
+2
+
+# Same-named columns of a derived table inside the subquery
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT 1 FROM (
+        SELECT * FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+    ) d
+);
+
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE NOT EXISTS (
+    SELECT 1 FROM (
+        SELECT * FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+    ) d
+);
+
+# A derived table with one relation still works
+query I
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT 1 FROM (SELECT * FROM t26234 one WHERE one.k = t_outer.k + 1) d
+) ORDER BY t_outer.k;
+----
+1
+
+# A column literally named `k:1` after two `k` columns: the alias renames the
+# second `k` to `k:1`, so it renames this column too.
+statement ok
+CREATE TABLE c26234("k:1" INT) AS VALUES (1), (2);
+
+statement error Unsupported correlated subquery: correlated column c.k:1 has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT * FROM t26234 one, t26234 two, c26234 c
+    WHERE c."k:1" = t_outer.k AND two.k = 1
+);
+
+statement error Unsupported correlated subquery: correlated column c.k:1 has the same name as an earlier column of the subquery output
+SELECT t_outer.k FROM t26234 t_outer WHERE NOT EXISTS (
+    SELECT * FROM t26234 one, t26234 two, c26234 c
+    WHERE c."k:1" = t_outer.k AND two.k = 1
+);
+
+statement ok
+DROP TABLE c26234;
+
+statement ok
+DROP TABLE t26234;
+
+
+
+# Two equal `SubqueryAlias` nodes in one subquery share an entry in the
+# decorrelation maps, so the second `t2 AS s` would replace what the first
+# one records. These error instead of returning wrong rows.
+# See https://github.com/apache/datafusion/issues/26692
+statement ok
+CREATE TABLE t26692 (a INT, b INT) AS VALUES (1, 1), (2, 2), (3, NULL);
+
+statement ok
+CREATE TABLE t26692_2 (a INT, b INT) AS VALUES (1, 1), (3, 30), (2, NULL);
+
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT t.a FROM t26692 t, t26692_2 AS s
+WHERE EXISTS (
+  SELECT 1 FROM (SELECT * FROM t26692_2 AS s WHERE s.a = t.a) x
+  CROSS JOIN t26692_2 AS s
+);
+
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT t.a FROM t26692 t, t26692_2 AS s
+WHERE NOT EXISTS (
+  SELECT 1 FROM (SELECT * FROM t26692_2 AS s WHERE s.a = t.a) x
+  CROSS JOIN t26692_2 AS s
+);
+
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+SELECT t.a FROM t26692 t, t26692_2 AS s
+WHERE t.a IN (
+  SELECT x.a FROM (SELECT * FROM t26692_2 AS s WHERE s.b = t.b) x
+  CROSS JOIN t26692_2 AS s
+);
+
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT t.a, (
+  SELECT count(*) FROM (SELECT * FROM t26692_2 AS s WHERE s.a = t.a) x
+  CROSS JOIN t26692_2 AS s
+) FROM t26692 t, t26692_2 AS s;
+
+# The plain `t26692_2 AS s` comes first here, and the correlated one below
+# it fills the entry they share.
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT t.a, (
+  SELECT count(*) FROM t26692_2 AS s
+  CROSS JOIN (SELECT * FROM t26692_2 AS s WHERE s.a = t.a) x
+) FROM t26692 t;
+
+# The `LIMIT` of an `EXISTS` subquery is removed before its input is visited.
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT t.a FROM t26692 t, t26692_2 AS s
+WHERE EXISTS (
+  SELECT 1 FROM (SELECT * FROM t26692_2 AS s WHERE s.a = t.a) x
+  CROSS JOIN t26692_2 AS s
+  LIMIT 1
+);
+
+# After a first pass keeps the subquery, the filters move below each `s`, so
+# the two `s` differ and the equal scans below them collide instead.
+query error Unsupported correlated subquery: correlated column x\.a has the same name as an earlier column of the subquery output
+SELECT t.a FROM t26692 t
+WHERE EXISTS (
+  SELECT 1 FROM (SELECT * FROM t26692_2 AS s WHERE s.a = t.a) x
+  CROSS JOIN t26692_2 AS s WHERE s.b = 30
+);
+
+# Two equal `t26692_2 AS s` without correlated columns of their own still
+# decorrelate.
+query I
+SELECT t.a FROM t26692 t
+WHERE EXISTS (
+  SELECT 1 FROM (SELECT * FROM t26692_2 AS s) p
+  CROSS JOIN (SELECT * FROM t26692_2 AS s) q
+  WHERE p.a = t.a
+)
+ORDER BY 1;
+----
+1
+2
+3
+
+query I
+SELECT t.a FROM t26692 t, t26692_2 AS s
+WHERE EXISTS (SELECT 1 FROM t26692_2 AS s WHERE s.a = t.a)
+ORDER BY 1;
+----
+1
+1
+1
+2
+2
+2
+3
+3
+3
+
+statement ok
+DROP TABLE t26692;
+
+statement ok
+DROP TABLE t26692_2;

@@ -146,3 +146,23 @@ select *, a as aka from t;
 
 statement count 0
 drop table t;
+
+# REPLACE over a USING join: the replacements resolve the unqualified join key
+# through the USING columns, and the key appears once
+statement ok
+create table using_l(k int, v int) as values (1, 10), (2, 20);
+
+statement ok
+create table using_r(k int, w int) as values (1, 100), (2, 200);
+
+query III rowsort
+select * replace (k + v as v, k * w as w) from using_l join using_r using (k);
+----
+1 11 100
+2 22 400
+
+statement count 0
+drop table using_l;
+
+statement count 0
+drop table using_r;

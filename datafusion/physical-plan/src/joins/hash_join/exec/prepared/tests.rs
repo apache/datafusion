@@ -24,7 +24,7 @@ use arrow::buffer::Buffer;
 use arrow::compute::kernels::sort::SortOptions;
 use arrow_schema::Field;
 use datafusion_common::test_util::batches_to_sort_string;
-use datafusion_common::{DataFusionError, assert_batches_eq};
+use datafusion_common::{DataFusionError, assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::GreedyMemoryPool;
 use datafusion_expr::Operator;
@@ -148,6 +148,69 @@ fn payload_filter(op: Operator) -> JoinFilter {
             Field::new("probe_payload", DataType::Int64, true),
         ])),
     )
+}
+
+// Construct a prepared build with `enable_migration_hash_join = X`, then use it
+// with the opposite setting to verify compatibility.
+//
+// Temporary test for the refactor; see the comments on
+// `enable_migration_hash_join` for details.
+#[tokio::test]
+async fn prepared_build_uses_consumer_executor_setting() -> Result<()> {
+    let build = batch(vec![Some(1), Some(1)]);
+    let base = join(build.schema(), batch(vec![Some(1)]))?;
+    for prepare_regular in [false, true] {
+        let mut config = ConfigOptions::default();
+        config.execution.enable_migration_hash_join = prepare_regular;
+        let prepared = base
+            .prepare_build(
+                input(vec![build.clone()], build.schema()),
+                Arc::new(GreedyMemoryPool::new(1 << 20)),
+                Arc::new(config),
+            )
+            .await?;
+        for consume_regular in [false, true] {
+            let task = base
+                .builder()
+                .with_prepared_build(Arc::clone(&prepared))
+                .build()?;
+            let mut config = ConfigOptions::default();
+            config.execution.enable_migration_hash_join = consume_regular;
+            let context =
+                Arc::new(TaskContext::default().with_session_config(config.into()));
+            let actual = common::collect(task.execute(0, context)?).await?;
+            assert_batches_sorted_eq!(
+                [
+                    "+-----+---------+-----+---------+",
+                    "| key | payload | key | payload |",
+                    "+-----+---------+-----+---------+",
+                    "| 1   | 10      | 1   | 10      |",
+                    "| 1   | 11      | 1   | 10      |",
+                    "+-----+---------+-----+---------+",
+                ],
+                &actual
+            );
+
+            // Both executors return the same rows; check which one was initialized.
+            let mut initialized_by_check = false;
+            if consume_regular {
+                task.regular_left_fut.try_once(|| {
+                    initialized_by_check = true;
+                    Ok(std::future::pending())
+                })?;
+            } else {
+                task.left_fut.try_once(|| {
+                    initialized_by_check = true;
+                    Ok(std::future::pending())
+                })?;
+            }
+            assert!(
+                !initialized_by_check,
+                "prepare={prepare_regular}, consume={consume_regular}"
+            );
+        }
+    }
+    Ok(())
 }
 
 #[tokio::test]

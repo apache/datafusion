@@ -552,3 +552,28 @@ select coalesce(a, y / x + random()) from volatile_args where a is not null;
 
 statement ok
 drop table volatile_args;
+
+##########
+# Struct coercion
+##########
+
+query ?T
+select
+  coalesce(null, {a: arrow_cast(1, 'Int32'), b: 'x'}, {b: 'y', a: 2}),
+  arrow_typeof(coalesce(null, {a: arrow_cast(1, 'Int32'), b: 'x'}, {b: 'y', a: 2}));
+----
+{b: x, a: 1} Struct("b": Utf8, "a": Int64)
+
+query ?T
+select
+  coalesce({nested: {a: arrow_cast(1, 'Int32'), b: 'x'}}, {nested: {b: 'y', a: 2}}),
+  arrow_typeof(coalesce({nested: {a: arrow_cast(1, 'Int32'), b: 'x'}}, {nested: {b: 'y', a: 2}}));
+----
+{nested: {a: 1, b: x}} Struct("nested": Struct("a": Int64, "b": Utf8))
+
+# Structs whose field names only match after joining with commas must fail planning
+query error Function 'coalesce' user-defined coercion failed with: Execution error: Fail to find the coerced type for \[Struct\(\[Field \{ name: "a,b", data_type: Int64, nullable: true \}, Field \{ name: "c", data_type: Int64, nullable: true \}\]\), Struct\(\[Field \{ name: "a", data_type: Int64, nullable: true \}, Field \{ name: "b,c", data_type: Int64, nullable: true \}\]\)\]
+select coalesce(named_struct('a,b', 1, 'c', 2), named_struct('a', 3, 'b,c', 4));
+
+query error Function 'make_array' user-defined coercion failed with: Error during planning: Failed to unify argument types of make_array: \[Struct\("a,b": Int64, "c": Int64\), Struct\("a": Int64, "b,c": Int64\)\]
+select make_array(named_struct('a,b', 1, 'c', 2), named_struct('a', 3, 'b,c', 4));

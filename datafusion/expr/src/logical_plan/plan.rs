@@ -25,9 +25,7 @@ use crate::expr_rewriter::{
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::logical_plan::materialized_cte::{
-    MaterializedCte, MaterializedCtePlan, MaterializedCteScan,
-};
+use crate::logical_plan::materialized_cte::{MaterializedCte, MaterializedCtePlan};
 use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::type_coercion::other::coerce_union_type;
 use crate::utils::{
@@ -417,7 +415,9 @@ impl LogicalPlan {
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => cte.schema(),
-            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => &scan.schema,
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
+                scan.schema()
+            }
             LogicalPlan::Union(Union { schema, .. }) => schema,
             LogicalPlan::Show(Show { output_schema, .. }) => output_schema,
             LogicalPlan::Dml(DmlStatement { output_schema, .. }) => output_schema,
@@ -810,8 +810,8 @@ impl LogicalPlan {
             LogicalPlan::Limit(_) => Ok(self),
             LogicalPlan::Ddl(_) => Ok(self),
             // A `Cte` takes the schema of its continuation, and does not store
-            // it. A `Scan` keeps the schema of the CTE body, which also keeps
-            // its schema.
+            // it. The schema of a `Scan` is fixed by the columns of the CTE
+            // body that the scan reads.
             LogicalPlan::MaterializedCte(_) => Ok(self),
             LogicalPlan::Extension(Extension { node }) => {
                 // todo make an API that does not require cloning
@@ -1702,8 +1702,9 @@ impl LogicalPlan {
 
     /// Returns the skip (offset) of this plan node, if it has one.
     ///
-    /// Only [`LogicalPlan::Limit`] carries a skip value; all other variants
-    /// return `Ok(None)`. Returns `Ok(None)` for a zero skip.
+    /// [`LogicalPlan::Limit`] and [`LogicalPlan::TableScan`] may carry a skip
+    /// value. All other variants return `Ok(None)`. Returns `Ok(None)` for a
+    /// zero skip.
     pub fn skip(&self) -> Result<Option<usize>> {
         match self {
             LogicalPlan::Limit(limit) => match limit.get_skip_type()? {
@@ -1712,7 +1713,7 @@ impl LogicalPlan {
                 SkipType::UnsupportedExpr => Ok(None),
             },
             LogicalPlan::Sort(_) => Ok(None),
-            LogicalPlan::TableScan(_) => Ok(None),
+            LogicalPlan::TableScan(TableScan { skip, .. }) => Ok(skip.filter(|&n| n > 0)),
             LogicalPlan::Projection(_) => Ok(None),
             LogicalPlan::Filter(_) => Ok(None),
             LogicalPlan::Window(_) => Ok(None),
@@ -2521,10 +2522,18 @@ impl LogicalPlan {
                     )) => {
                         write!(f, "MaterializedCte: name={name}")
                     }
-                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
-                        MaterializedCteScan { name, .. },
-                    )) => {
-                        write!(f, "MaterializedCteScan: name={name}")
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
+                        write!(f, "MaterializedCteScan: name={}", scan.name())?;
+                        if scan.projection().is_some() {
+                            let names: Vec<&str> = scan
+                                .schema()
+                                .fields()
+                                .iter()
+                                .map(|field| field.name().as_str())
+                                .collect();
+                            write!(f, " projection=[{}]", names.join(", "))?;
+                        }
+                        Ok(())
                     }
                     LogicalPlan::Show(Show { kind, .. }) => match kind {
                         ShowKind::Describe { .. }
@@ -3256,6 +3265,31 @@ impl PartialOrd for Window {
 }
 
 /// Produces rows from a table provider by reference or from the context
+///
+/// # Row order
+///
+/// A `TableScan` combines several operators in one node. It produces rows in
+/// this order:
+///
+/// ```text
+/// source rows -> filters -> skip -> fetch -> projection
+/// ```
+///
+/// The filters step means the filters that the source applies exactly (see
+/// [`TableProviderFilterPushDown::Exact`]). The skip and the fetch apply to
+/// the rows that pass these filters.
+///
+/// This order goes in one direction only:
+///
+/// * `Limit(Filter(scan))` can fold into one scan with filters and a fetch.
+/// * `Filter(scan)` cannot move into the scan when the scan has a skip or a
+///   fetch. Inside the scan, the filter runs before the skip and the fetch,
+///   so the scan keeps different rows.
+///
+/// Use [`TableScan::try_with_filters`] to add filters to a scan. It refuses
+/// a scan with a skip or a fetch.
+///
+/// [`TableProviderFilterPushDown::Exact`]: crate::TableProviderFilterPushDown::Exact
 #[derive(Clone)]
 pub struct TableScan {
     /// The name of the table
@@ -3268,9 +3302,11 @@ pub struct TableScan {
     pub projected_schema: DFSchemaRef,
     /// Optional expressions to be used as filters by the table provider
     pub filters: Vec<Expr>,
-    /// Optional number of rows to read
+    /// Optional number of rows to read. The fetch applies after the filters
+    /// and the skip. See [Row order](TableScan#row-order).
     pub fetch: Option<usize>,
-    /// Optional number of rows to skip
+    /// Optional number of rows to skip. The skip applies after the filters
+    /// and before the fetch. See [Row order](TableScan#row-order).
     pub skip: Option<usize>,
     /// Statistics the planner would like the provider to answer for this
     /// scan, typically attached by a custom optimizer rule from the
@@ -3305,6 +3341,7 @@ impl PartialEq for TableScan {
             && self.projected_schema == other.projected_schema
             && self.filters == other.filters
             && self.fetch == other.fetch
+            && self.skip == other.skip
     }
 }
 
@@ -3324,18 +3361,22 @@ impl PartialOrd for TableScan {
             pub filters: &'a Vec<Expr>,
             /// Optional number of rows to read
             pub fetch: &'a Option<usize>,
+            /// Optional number of rows to skip
+            pub skip: &'a Option<usize>,
         }
         let comparable_self = ComparableTableScan {
             table_name: &self.table_name,
             projection: &self.projection,
             filters: &self.filters,
             fetch: &self.fetch,
+            skip: &self.skip,
         };
         let comparable_other = ComparableTableScan {
             table_name: &other.table_name,
             projection: &other.projection,
             filters: &other.filters,
             fetch: &other.fetch,
+            skip: &other.skip,
         };
         comparable_self
             .partial_cmp(&comparable_other)
@@ -3351,6 +3392,7 @@ impl Hash for TableScan {
         self.projected_schema.hash(state);
         self.filters.hash(state);
         self.fetch.hash(state);
+        self.skip.hash(state);
     }
 }
 
@@ -3370,6 +3412,23 @@ impl TableScan {
             .with_filters(filters)
             .with_fetch(fetch)
             .build()
+    }
+
+    /// Returns this scan with its filters replaced by `filters`.
+    ///
+    /// Returns `Err(self)` unchanged when the scan has a nonzero skip or any
+    /// fetch, because the filters apply before both. See
+    /// [Row order](TableScan#row-order).
+    #[expect(clippy::result_large_err)]
+    pub fn try_with_filters(
+        mut self,
+        filters: Vec<Expr>,
+    ) -> std::result::Result<Self, Self> {
+        if self.fetch.is_some() || self.skip.is_some_and(|n| n > 0) {
+            return Err(self);
+        }
+        self.filters = filters;
+        Ok(self)
     }
 }
 
@@ -5933,20 +5992,14 @@ mod tests {
             vec![i32_split_point(20), i32_split_point(10)],
         )
         .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("split points must be strictly ordered")
-        );
+        assert!(err.to_string().contains("split points must be ordered"));
 
-        let err = RangePartitioning::try_new(
+        let range = RangePartitioning::try_new(
             vec![col("id").sort(true, true)],
             vec![i32_split_point(10), i32_split_point(10)],
         )
-        .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("split points must be strictly ordered")
-        );
+        .unwrap();
+        assert_eq!(range.partition_count(), 3);
 
         let range = RangePartitioning::try_new(
             vec![col("id").sort(true, true)],
@@ -7798,6 +7851,76 @@ mod tests {
             Union::try_new_by_name(inputs)?,
         ] {
             assert_eq!(union.schema.field(0).data_type(), &DataType::Int16);
+        }
+        Ok(())
+    }
+
+    fn employee_scan() -> Result<TableScan> {
+        let LogicalPlan::TableScan(scan) =
+            table_scan(Some("employee_csv"), &employee_schema(), None)?.build()?
+        else {
+            unreachable!()
+        };
+        Ok(scan)
+    }
+
+    #[test]
+    fn table_scan_skip() -> Result<()> {
+        for (skip, expected) in [(None, None), (Some(0), None), (Some(3), Some(3))] {
+            let scan = TableScan {
+                skip,
+                ..employee_scan()?
+            };
+            assert_eq!(LogicalPlan::TableScan(scan).skip()?, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn table_scan_skip_in_eq_ord_and_hash() -> Result<()> {
+        fn hash_of(scan: &TableScan) -> u64 {
+            let mut hasher = DefaultHasher::new();
+            scan.hash(&mut hasher);
+            hasher.finish()
+        }
+        let no_skip = employee_scan()?;
+        let skip = TableScan {
+            skip: Some(3),
+            ..employee_scan()?
+        };
+
+        assert_ne!(no_skip, skip);
+        assert_eq!(no_skip.partial_cmp(&skip), Some(Ordering::Less));
+        assert_ne!(hash_of(&no_skip), hash_of(&skip));
+        assert_eq!(skip, skip.clone());
+        assert_eq!(hash_of(&skip), hash_of(&skip.clone()));
+        Ok(())
+    }
+
+    #[test]
+    fn table_scan_try_with_filters() -> Result<()> {
+        let filters = vec![col("id").gt(lit(1))];
+
+        let scan = employee_scan()?.try_with_filters(filters.clone()).unwrap();
+        assert_eq!(scan.filters, filters);
+
+        // A zero skip removes no rows, so the filters can move in.
+        let scan = TableScan {
+            skip: Some(0),
+            ..employee_scan()?
+        };
+        let scan = scan.try_with_filters(filters.clone()).unwrap();
+        assert_eq!(scan.filters, filters);
+
+        for (skip, fetch) in [(Some(3), None), (None, Some(5)), (None, Some(0))] {
+            let scan = TableScan {
+                fetch,
+                skip,
+                ..employee_scan()?
+            };
+            let scan = scan.try_with_filters(filters.clone()).unwrap_err();
+            assert!(scan.filters.is_empty());
+            assert_eq!((scan.skip, scan.fetch), (skip, fetch));
         }
         Ok(())
     }

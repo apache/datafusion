@@ -47,10 +47,10 @@ use datafusion_expr::type_coercion::{
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     AsOfJoin, AsOfMatch, Cast, DmlStatement, Expr, ExprSchemable, Join, Limit,
-    LogicalPlan, MaterializedCte, MaterializedCteId, MaterializedCtePlan,
-    MaterializedCteScan, Operator, Projection, Union, ValueOrLambda, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WriteOp, is_false, is_not_false, is_not_true,
-    is_not_unknown, is_true, is_unknown, lit, not,
+    LogicalPlan, MaterializedCte, MaterializedCteId, MaterializedCtePlan, Operator,
+    Projection, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WriteOp, is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
+    lit, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -163,7 +163,7 @@ fn coerce_plan_and_subqueries(
 
 /// Give the fields of `body_schema` to each scan of the materialized CTE `id`
 /// in `continuation`, also in subquery expressions. A scan keeps its
-/// qualifiers.
+/// qualifiers and reads only the fields of its projection.
 fn with_materialized_cte_scan_schema(
     continuation: LogicalPlan,
     id: MaterializedCteId,
@@ -178,21 +178,16 @@ fn with_materialized_cte_scan_schema(
                 Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
             }
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
-                if scan.id == id && scan.schema.inner() != body_schema.inner() =>
+                if scan.id == id =>
             {
-                let qualifiers = scan.schema.iter().map(|(q, _)| q.cloned()).collect();
-                let schema = DFSchema::from_field_specific_qualified_schema(
-                    qualifiers,
-                    body_schema.inner(),
-                )?
-                .with_functional_dependencies(
-                    body_schema.functional_dependencies().clone(),
-                )?;
+                let new_scan = scan.with_body_schema(body_schema)?;
+                if new_scan.schema().inner() == scan.schema().inner() {
+                    return Ok(Transformed::no(LogicalPlan::MaterializedCte(
+                        MaterializedCtePlan::Scan(scan),
+                    )));
+                }
                 Ok(Transformed::yes(LogicalPlan::MaterializedCte(
-                    MaterializedCtePlan::Scan(MaterializedCteScan {
-                        schema: Arc::new(schema),
-                        ..scan
-                    }),
+                    MaterializedCtePlan::Scan(new_scan),
                 )))
             }
             _ => Ok(Transformed::no(node)),
@@ -452,7 +447,29 @@ impl<'a> TypeCoercionRewriter<'a> {
                             Arc::clone(&union_schema),
                         )?))
                     }
-                    other_plan => Ok(Arc::new(other_plan)),
+                    other_plan => {
+                        let needs_rename = other_plan
+                            .schema()
+                            .fields()
+                            .iter()
+                            .zip(union_schema.fields())
+                            .any(|(input, output)| input.name() != output.name());
+                        if needs_rename {
+                            let expr = other_plan
+                                .schema()
+                                .columns()
+                                .into_iter()
+                                .map(Expr::Column)
+                                .collect();
+                            Ok(Arc::new(project_with_column_index(
+                                expr,
+                                Arc::new(other_plan),
+                                Arc::clone(&union_schema),
+                            )?))
+                        } else {
+                            Ok(Arc::new(other_plan))
+                        }
+                    }
                 }
             })
             .collect::<Result<Vec<_>>>()?;

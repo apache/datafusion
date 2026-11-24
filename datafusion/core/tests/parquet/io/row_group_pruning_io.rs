@@ -45,7 +45,7 @@ async fn test_row_group_pruning_io_no_predicate() {
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 489..1402)
+        Read Parquet footer (offsets 489..1396)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
     Request 4
@@ -73,7 +73,7 @@ async fn test_row_group_pruning_io_one_row_group() {
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 489..1402)
+        Read Parquet footer (offsets 489..1396)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
     Request 4
@@ -93,7 +93,7 @@ async fn test_row_group_pruning_io_two_row_groups() {
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 489..1402)
+        Read Parquet footer (offsets 489..1396)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
     Request 4
@@ -116,7 +116,7 @@ async fn test_row_group_pruning_io_all_pruned() {
     Request 1
         Head (object size and metadata)
     Request 2
-        Read Parquet footer (offsets 489..1402)
+        Read Parquet footer (offsets 489..1396)
     Request 3
         Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
     ");
