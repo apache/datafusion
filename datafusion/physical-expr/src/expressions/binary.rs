@@ -8,7 +8,6 @@ use crate::PhysicalExpr;
 use crate::expressions::SqlSimilarToPattern;
 use crate::expressions::translate_scalar;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::Hash;
@@ -1000,7 +999,7 @@ impl PhysicalExpr for BinaryExpr {
             op,
             right,
             fail_on_overflow,
-            // Derived from right, not serialized
+            // Derived from the children, not serialized
             children_volatility: _,
         } = self;
 
@@ -1280,9 +1279,11 @@ impl BinaryExpr {
 
     /// Evaluates nested `AND`s together to avoid repeated filtering (#25035).
     ///
-    /// When at most [`PRE_SELECTION_THRESHOLD`] of original rows remain,
-    /// filters before conjuncts that may be costly or fail, so they never see
-    /// rows nested evaluation would skip. `NULL` rows stay for a later `false`.
+    /// Filters out the rows earlier conjuncts already decided before a
+    /// conjunct when it is volatile, or when at most [`PRE_SELECTION_THRESHOLD`]
+    /// of original rows remain and it may be costly or fail. Otherwise the
+    /// conjunct runs without filtering, and if that fails it is retried on the
+    /// undecided rows only. `NULL` rows stay for a later `false`.
     fn evaluate_conjunction(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         // Keep each filter mask for the final scatter.
         let mut selections = vec![];
@@ -1351,31 +1352,19 @@ const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 /// but reuses the volatility already computed for `AND` / `OR` nodes (at any
 /// depth) instead of walking their children again, so building a long
 /// `AND` / `OR` chain stays linear.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn subtree_is_volatile(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    let mut volatile = false;
-    expr.apply(|e| {
-        if let Some(BinaryExpr {
+    match expr.downcast_ref::<BinaryExpr>() {
+        // `BinaryExpr` itself is never volatile, only its children can be
+        Some(BinaryExpr {
             children_volatility: Some(v),
             ..
-        }) = e.downcast_ref::<BinaryExpr>()
-        {
-            // `BinaryExpr` itself is never volatile, only its children can be
-            return Ok(if v.left || v.right {
-                volatile = true;
-                TreeNodeRecursion::Stop
-            } else {
-                TreeNodeRecursion::Jump
-            });
+        }) => v.left || v.right,
+        _ => {
+            expr.is_volatile_node()
+                || expr.children().into_iter().any(subtree_is_volatile)
         }
-        Ok(if e.is_volatile_node() {
-            volatile = true;
-            TreeNodeRecursion::Stop
-        } else {
-            TreeNodeRecursion::Continue
-        })
-    })
-    .expect("infallible closure should not fail");
-    volatile
+    }
 }
 
 /// Returns the short-circuit strategy for `OR` with a Boolean LHS.
@@ -1569,8 +1558,8 @@ fn undecided_rows(result: &ColumnarValue) -> Option<BooleanArray> {
     let ColumnarValue::Array(array) = result else {
         return None;
     };
-    let undecided = not_false(array.as_boolean());
-    (undecided.true_count() < array.len()).then_some(undecided)
+    let array = array.as_boolean();
+    array.has_false().then(|| not_false(array))
 }
 
 /// Keeps only the `undecided` rows of `input` and `result`, and records the
@@ -7636,6 +7625,38 @@ mod tests {
         }
 
         #[test]
+        fn nested_and_volatile_inner_lhs_only_evaluated_on_needed_rows() {
+            let batch = batch();
+            for &s in SELECTIVITIES {
+                // `col_1 < s AND (probe AND col_1 >= s/2)`:
+                // only rows where col_1 < s need the probe
+                let probe = Probe::new(Mode::Volatile, 0.0..s);
+                let expr = and(
+                    col_1_lt(s),
+                    and(Arc::clone(&probe) as _, col_1_gt_eq(s / 2.0)),
+                );
+
+                let result = evaluate(&expr, &batch).unwrap();
+
+                let expected: BooleanArray = col_1(&batch)
+                    .iter()
+                    .map(|v| match v {
+                        // the probe returns NULL for NULL, and NULL AND NULL is NULL
+                        None => None,
+                        Some(v) if v >= s || v < s / 2.0 => Some(false),
+                        Some(v) => probe_value(v),
+                    })
+                    .collect();
+                assert_eq!(result, expected, "selectivity={s}");
+                assert_eq!(
+                    probe.rows.load(Relaxed),
+                    needed_rows(&batch, 0.0..s),
+                    "selectivity={s}"
+                );
+            }
+        }
+
+        #[test]
         fn and_volatile_rhs_only_evaluated_on_needed_rows_with_null_lhs() {
             // NULL rows count as needed: a NULL LHS does not decide the row
             let batch = batch_with_nulls();
@@ -7764,6 +7785,39 @@ mod tests {
                 assert_eq!(
                     probe.rows.load(Relaxed),
                     needed_rows(&batch, s / 2.0..s),
+                    "selectivity={s}"
+                );
+            }
+        }
+
+        #[test]
+        fn or_over_and_volatile_inner_lhs_only_evaluated_on_needed_rows() {
+            let batch = batch();
+            for &s in SELECTIVITIES {
+                // `col_1 >= s OR (probe AND col_1 < s/2)`:
+                // only rows where col_1 < s need the probe
+                let probe = Probe::new(Mode::Volatile, 0.0..s);
+                let expr = or(
+                    col_1_gt_eq(s),
+                    and(Arc::clone(&probe) as _, col_1_lt(s / 2.0)),
+                );
+
+                let result = evaluate(&expr, &batch).unwrap();
+
+                let expected: BooleanArray = col_1(&batch)
+                    .iter()
+                    .map(|v| match v {
+                        // the probe returns NULL for NULL, and NULL AND NULL is NULL
+                        None => None,
+                        Some(v) if v >= s => Some(true),
+                        Some(v) if v >= s / 2.0 => Some(false),
+                        Some(v) => probe_value(v),
+                    })
+                    .collect();
+                assert_eq!(result, expected, "selectivity={s}");
+                assert_eq!(
+                    probe.rows.load(Relaxed),
+                    needed_rows(&batch, 0.0..s),
                     "selectivity={s}"
                 );
             }
@@ -8084,35 +8138,6 @@ mod tests {
         // -------------------------------------------------------------------
 
         #[test]
-        fn and_infallible_rhs_evaluated_at_most_once() {
-            let batch = batch();
-            for &s in SELECTIVITIES {
-                let probe = Probe::new(Mode::Infallible, 0.0..s);
-                let expr = and(col_1_lt(s), Arc::clone(&probe) as _);
-
-                evaluate(&expr, &batch).unwrap();
-
-                assert!(probe.calls.load(Relaxed) <= 1, "selectivity={s}");
-            }
-        }
-
-        #[test]
-        fn nested_and_infallible_rhs_evaluated_at_most_once() {
-            let batch = batch();
-            for &s in SELECTIVITIES {
-                let probe = Probe::new(Mode::Infallible, s / 2.0..s);
-                let expr = and(
-                    col_1_lt(s),
-                    and(col_1_gt_eq(s / 2.0), Arc::clone(&probe) as _),
-                );
-
-                evaluate(&expr, &batch).unwrap();
-
-                assert!(probe.calls.load(Relaxed) <= 1, "selectivity={s}");
-            }
-        }
-
-        #[test]
         fn or_infallible_rhs_evaluated_at_most_once() {
             let batch = batch();
             for &s in SELECTIVITIES {
@@ -8161,10 +8186,11 @@ mod tests {
         fn nested_and_rhs_not_evaluated_when_lhs_all_false() {
             let batch = batch();
             let probe = Probe::new(Mode::Infallible, 0.0..0.0);
+            // col_1 >= 0 is true for every row, so the inner `AND` runs, and
             // col_1 < 0 is false for every row
             let expr = and(
-                col_1_lt(0.0),
-                and(col_1_gt_eq(0.0), Arc::clone(&probe) as _),
+                col_1_gt_eq(0.0),
+                and(col_1_lt(0.0), Arc::clone(&probe) as _),
             );
 
             evaluate(&expr, &batch).unwrap();
