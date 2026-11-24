@@ -10,7 +10,7 @@ use std::task::{Context, Poll};
 
 #[cfg(feature = "proto")]
 use super::proto::{decode_physical_window_expr, encode_physical_window_expr};
-use super::utils::create_schema;
+use super::utils::{compute_window_aggregates, create_schema};
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::statistics::{ChildStats, StatisticsArgs};
@@ -26,14 +26,12 @@ use crate::{
     Statistics, WindowExpr, validate_child_count,
 };
 
-use arrow::array::ArrayRef;
-use arrow::compute::{concat, concat_batches};
+use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::utils::{evaluate_partition_ranges, transpose};
+use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr_common::sort_expr::{
@@ -294,6 +292,7 @@ impl ExecutionPlan for WindowAggExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, context)?;
         let stream = Box::pin(WindowAggStream::new(
             Arc::clone(&self.schema),
@@ -302,6 +301,7 @@ impl ExecutionPlan for WindowAggExec {
             BaselineMetrics::new(&self.metrics, partition),
             self.partition_by_sort_keys()?,
             self.ordered_partition_by_indices.clone(),
+            batch_size,
         )?);
         Ok(stream)
     }
@@ -474,17 +474,6 @@ impl WindowAggExec {
     }
 }
 
-/// Compute the window aggregate columns
-fn compute_window_aggregates(
-    window_expr: &[Arc<dyn WindowExpr>],
-    batch: &RecordBatch,
-) -> Result<Vec<ArrayRef>> {
-    window_expr
-        .iter()
-        .map(|window_expr| window_expr.evaluate(batch))
-        .collect()
-}
-
 /// stream for window aggregation plan
 pub struct WindowAggStream {
     schema: SchemaRef,
@@ -495,6 +484,7 @@ pub struct WindowAggStream {
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
     ordered_partition_by_indices: Vec<usize>,
+    batch_size: usize,
 }
 
 impl WindowAggStream {
@@ -506,6 +496,7 @@ impl WindowAggStream {
         baseline_metrics: BaselineMetrics,
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
         ordered_partition_by_indices: Vec<usize>,
+        batch_size: usize,
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.
         assert_eq_or_internal_err!(
@@ -522,6 +513,7 @@ impl WindowAggStream {
             baseline_metrics,
             partition_by_sort_keys,
             ordered_partition_by_indices,
+            batch_size,
         })
     }
 
@@ -541,20 +533,12 @@ impl WindowAggStream {
             .collect::<Result<Vec<_>>>()?;
         let partition_points =
             evaluate_partition_ranges(batch.num_rows(), &partition_by_sort_keys)?;
-
-        let mut partition_results = Vec::with_capacity(partition_points.len());
-        // Calculate window cols
-        for partition_point in partition_points {
-            let length = partition_point.end - partition_point.start;
-            partition_results.push(compute_window_aggregates(
-                &self.window_expr,
-                &batch.slice(partition_point.start, length),
-            )?)
-        }
-        let columns = transpose(partition_results)
-            .iter()
-            .map(|elems| concat(&elems.iter().map(|x| x.as_ref()).collect::<Vec<_>>()))
-            .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
+        let columns = compute_window_aggregates(
+            &self.window_expr,
+            &batch,
+            &partition_points,
+            self.batch_size,
+        )?;
 
         // combine with the original cols
         // note the setup of window aggregates is that they newly calculated window
