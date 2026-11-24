@@ -4986,6 +4986,27 @@ mod tests {
     }
 
     #[test]
+    fn filter_not_pushed_down_through_table_scan_with_skip() -> Result<()> {
+        let LogicalPlan::TableScan(scan) = test_table_scan()? else {
+            unreachable!()
+        };
+        let scan_with_skip = LogicalPlan::TableScan(TableScan {
+            skip: Some(3),
+            ..scan
+        });
+        let plan = LogicalPlanBuilder::from(scan_with_skip)
+            .filter(col("a").gt(lit(10i64)))?
+            .build()?;
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a > Int64(10)
+          TableScan: test, skip=3
+        "
+        )
+    }
+
+    #[test]
     fn filter_push_down_through_sort_without_fetch() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)

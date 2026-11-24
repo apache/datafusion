@@ -1702,8 +1702,9 @@ impl LogicalPlan {
 
     /// Returns the skip (offset) of this plan node, if it has one.
     ///
-    /// Only [`LogicalPlan::Limit`] carries a skip value; all other variants
-    /// return `Ok(None)`. Returns `Ok(None)` for a zero skip.
+    /// [`LogicalPlan::Limit`] and [`LogicalPlan::TableScan`] may carry a skip
+    /// value. All other variants return `Ok(None)`. Returns `Ok(None)` for a
+    /// zero skip.
     pub fn skip(&self) -> Result<Option<usize>> {
         match self {
             LogicalPlan::Limit(limit) => match limit.get_skip_type()? {
@@ -1712,7 +1713,7 @@ impl LogicalPlan {
                 SkipType::UnsupportedExpr => Ok(None),
             },
             LogicalPlan::Sort(_) => Ok(None),
-            LogicalPlan::TableScan(_) => Ok(None),
+            LogicalPlan::TableScan(TableScan { skip, .. }) => Ok(skip.filter(|&n| n > 0)),
             LogicalPlan::Projection(_) => Ok(None),
             LogicalPlan::Filter(_) => Ok(None),
             LogicalPlan::Window(_) => Ok(None),
@@ -7800,6 +7801,27 @@ mod tests {
             Union::try_new_by_name(inputs)?,
         ] {
             assert_eq!(union.schema.field(0).data_type(), &DataType::Int16);
+        }
+        Ok(())
+    }
+
+    fn employee_scan() -> Result<TableScan> {
+        let LogicalPlan::TableScan(scan) =
+            table_scan(Some("employee_csv"), &employee_schema(), None)?.build()?
+        else {
+            unreachable!()
+        };
+        Ok(scan)
+    }
+
+    #[test]
+    fn table_scan_skip() -> Result<()> {
+        for (skip, expected) in [(None, None), (Some(0), None), (Some(3), Some(3))] {
+            let scan = TableScan {
+                skip,
+                ..employee_scan()?
+            };
+            assert_eq!(LogicalPlan::TableScan(scan).skip()?, expected);
         }
         Ok(())
     }
