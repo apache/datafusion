@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, UInt32Array, UInt64Array};
+use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -31,6 +31,7 @@ use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinKeyComparator,
     adjust_indices_by_join_type, apply_join_filter_to_indices,
     build_batch_empty_build_side, build_batch_from_indices, matchable_join_keys,
+    project_batch_for_join_side,
 };
 
 /// Join semantics and output settings for one probe partition.
@@ -232,12 +233,12 @@ impl BatchedJoinProcessor {
 
             // Evaluate one final joined batch and put it into the output coalescer
             // to combine potentially small batches.
-            let batch = match &mut self.phase {
+            let push_status = match &mut self.phase {
                 Phase::Probing => {
-                    let Some(batch) = self.probe_chunk()? else {
+                    let Some(push_status) = self.probe_chunk()? else {
                         return Ok(JoinStep::NeedInput);
                     };
-                    batch
+                    push_status
                 }
                 Phase::UnmatchedBuild {
                     visited,
@@ -261,7 +262,7 @@ impl BatchedJoinProcessor {
                         continue;
                     }
                     let probe_indices = UInt32Array::new_null(indices.len());
-                    build_batch_from_indices(
+                    let batch = build_batch_from_indices(
                         &self.context.schema,
                         &self.build.data.batch,
                         empty_probe,
@@ -271,7 +272,8 @@ impl BatchedJoinProcessor {
                         JoinSide::Left,
                         self.context.kind.join_type(),
                         None,
-                    )?
+                    )?;
+                    self.output.push_batch(batch)?
                 }
                 Phase::DrainingOutput => {
                     self.output.finish()?;
@@ -282,7 +284,7 @@ impl BatchedJoinProcessor {
             };
             // Operator-level limit reached; stop probing.
             // See the comments on `output` for details.
-            if self.output.push_batch(batch)? == PushBatchStatus::LimitReached {
+            if push_status == PushBatchStatus::LimitReached {
                 self.release_probe();
                 self.phase = Phase::DrainingOutput;
             }
@@ -327,9 +329,9 @@ impl BatchedJoinProcessor {
     /// output. Right and full joins also emit the probe rows this chunk proves
     /// unmatched.
     ///
-    /// Returns an empty batch when no row survives, and `None` once the current
-    /// probe batch is drained. The caller coalesces small batches.
-    fn probe_chunk(&mut self) -> Result<Option<RecordBatch>> {
+    /// Pushes the next probe chunk into the output coalescer. Returns `None`
+    /// once the current probe batch is drained.
+    fn probe_chunk(&mut self) -> Result<Option<PushBatchStatus>> {
         let Some(probe) = &mut self.probe else {
             return Ok(None);
         };
@@ -349,7 +351,7 @@ impl BatchedJoinProcessor {
                 context.kind.join_type(),
             )?;
             self.probe = None;
-            return Ok(Some(batch));
+            return Ok(Some(self.output.push_batch(batch)?));
         }
 
         // Hash lookup reclaims its scratch internally. ArrayMap returns the
@@ -449,17 +451,33 @@ impl BatchedJoinProcessor {
             (build_indices, probe_indices)
         };
 
-        let output = build_batch_from_indices(
-            &context.schema,
-            &build.data.batch,
-            input,
-            &build_indices,
-            &probe_indices,
-            &context.column_indices,
-            JoinSide::Left,
-            context.kind.join_type(),
-            None,
-        )?;
+        let push_status = if probe_indices.null_count() == 0
+            && (!context.column_indices.is_empty()
+                || matches!(
+                    context.kind.join_type(),
+                    JoinType::RightAnti | JoinType::RightSemi
+                ))
+            && let Some(batch) = project_batch_for_join_side(
+                &context.schema,
+                input,
+                &context.column_indices,
+                JoinSide::Right,
+            )? {
+            self.output.push_batch_with_indices(batch, &probe_indices)?
+        } else {
+            let output = build_batch_from_indices(
+                &context.schema,
+                &build.data.batch,
+                input,
+                &build_indices,
+                &probe_indices,
+                &context.column_indices,
+                JoinSide::Left,
+                context.kind.join_type(),
+                None,
+            )?;
+            self.output.push_batch(output)?
+        };
         drop((build_indices, probe_indices));
         if let Some((build_buffer, probe_buffer)) = array_map_buffers {
             self.build_indices_buffer = build_buffer.into();
@@ -470,7 +488,7 @@ impl BatchedJoinProcessor {
         } else {
             self.probe = None;
         }
-        Ok(Some(output))
+        Ok(Some(push_status))
     }
 
     /// Release input and lookup storage on probe EOF or a fetch cutoff.

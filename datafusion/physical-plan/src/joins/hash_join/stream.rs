@@ -46,7 +46,7 @@ use crate::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
         StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_empty_build_side, build_batch_from_indices,
-        need_produce_result_in_final,
+        need_produce_result_in_final, project_batch_for_join_side,
     },
 };
 
@@ -62,6 +62,45 @@ use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::{Stream, StreamExt, ready};
+
+#[expect(clippy::too_many_arguments)]
+fn push_batch_from_indices(
+    output: &mut LimitedBatchCoalescer,
+    schema: &SchemaRef,
+    build_batch: &RecordBatch,
+    probe_batch: &RecordBatch,
+    build_indices: &UInt64Array,
+    probe_indices: &UInt32Array,
+    column_indices: &[ColumnIndex],
+    build_side: JoinSide,
+    join_type: JoinType,
+    mark_column: Option<&ArrayRef>,
+) -> Result<PushBatchStatus> {
+    let probe_side = build_side.negate();
+    let empty_projection_uses_probe_indices =
+        matches!(join_type, JoinType::RightAnti | JoinType::RightSemi);
+    if mark_column.is_none()
+        && probe_indices.null_count() == 0
+        && (!column_indices.is_empty() || empty_projection_uses_probe_indices)
+        && let Some(batch) =
+            project_batch_for_join_side(schema, probe_batch, column_indices, probe_side)?
+    {
+        return output.push_batch_with_indices(batch, probe_indices);
+    }
+
+    let batch = build_batch_from_indices(
+        schema,
+        build_batch,
+        probe_batch,
+        build_indices,
+        probe_indices,
+        column_indices,
+        build_side,
+        join_type,
+        mark_column,
+    )?;
+    output.push_batch(batch)
+}
 
 /// Represents build-side of hash join.
 pub(super) enum BuildSide {
@@ -1035,7 +1074,8 @@ impl HashJoinStream {
                 (build_side.left_data.batch(), &state.batch, JoinSide::Left)
             };
 
-        let batch = build_batch_from_indices(
+        let push_status = push_batch_from_indices(
+            &mut self.output_buffer,
             &self.schema,
             build_batch,
             probe_batch,
@@ -1054,8 +1094,6 @@ impl HashJoinStream {
             self.build_indices_buffer = build_buffer.into();
             self.probe_indices_buffer = probe_buffer.into();
         }
-
-        let push_status = self.output_buffer.push_batch(batch)?;
 
         timer.done();
 

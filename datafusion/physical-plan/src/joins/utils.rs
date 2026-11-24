@@ -1563,6 +1563,28 @@ fn new_empty_schema_batch(schema: &SchemaRef, row_count: usize) -> Result<Record
     )?)
 }
 
+pub(crate) fn project_batch_for_join_side(
+    schema: &SchemaRef,
+    batch: &RecordBatch,
+    column_indices: &[ColumnIndex],
+    side: JoinSide,
+) -> Result<Option<RecordBatch>> {
+    if !column_indices.iter().all(|column| column.side == side) {
+        return Ok(None);
+    }
+
+    let columns = column_indices
+        .iter()
+        .map(|column| Arc::clone(batch.column(column.index)))
+        .collect();
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    Ok(Some(RecordBatch::try_new_with_options(
+        Arc::clone(schema),
+        columns,
+        &options,
+    )?))
+}
+
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
 /// The resulting batch has [Schema] `schema`.
 #[expect(clippy::too_many_arguments)]
