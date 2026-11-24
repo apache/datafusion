@@ -41,6 +41,34 @@ async fn spill_pool_scenario() -> Result<()> {
     .await
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn float_zero() -> Result<()> {
+    run_suite(
+        &suites::float_zero::FloatZeroFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: None,
+            time_limit: Some(Duration::from_secs(10)),
+            cases_per_dataset: 100,
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn lru_queue() -> Result<()> {
+    run_suite(
+        &suites::lru_queue::LruQueueFuzzer,
+        RunConfig {
+            run_seed: Some(0),
+            max_cases: Some(100),
+            time_limit: None,
+            cases_per_dataset: 100,
+        },
+    )
+    .await
+}
+
 #[tokio::test]
 async fn key_range_bitmap_union() -> Result<()> {
     run_suite(
@@ -50,6 +78,62 @@ async fn key_range_bitmap_union() -> Result<()> {
             max_cases: None,
             time_limit: Some(Duration::from_secs(5)),
             cases_per_dataset: 10000,
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn sort_topk() -> Result<()> {
+    run_suite(
+        &suites::limit::LimitFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: Some(100),
+            time_limit: None,
+            cases_per_dataset: 100,
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn record_batch_memory_tracker() -> Result<()> {
+    run_suite(
+        &suites::memory::RecordBatchMemoryFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: None,
+            time_limit: Some(Duration::from_secs(1)),
+            cases_per_dataset: 100,
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn timestamp_arithmetic() -> Result<()> {
+    run_suite(
+        &suites::timestamp::TimestampArithmeticFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: None,
+            time_limit: Some(Duration::from_secs(1)),
+            cases_per_dataset: 1000,
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn merge() -> Result<()> {
+    run_suite(
+        &suites::merge::MergeFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: None,
+            time_limit: Some(Duration::from_secs(4)),
+            cases_per_dataset: 7,
         },
     )
     .await

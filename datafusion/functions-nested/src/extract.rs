@@ -549,7 +549,10 @@ where
             let mut index = from;
             while index <= to {
                 indices.push(index);
-                index += stride;
+                let Some(next) = index.checked_add(&stride) else {
+                    break;
+                };
+                index = next;
             }
             Ok(SlicePlan::Indices)
         }

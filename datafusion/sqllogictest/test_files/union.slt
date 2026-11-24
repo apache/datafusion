@@ -1284,6 +1284,33 @@ DROP TABLE t_26625_r;
 statement ok
 DROP TABLE t_26625;
 
+# issue 27418
+query TT
+EXPLAIN SELECT x, y FROM (
+  SELECT floor(random() * 3) AS x, floor(random() * 3) AS y FROM generate_series(1, 10)
+  UNION ALL
+  SELECT floor(random() * 3) AS x, floor(random() * 3) AS y FROM generate_series(1, 10)
+) ORDER BY x, y;
+----
+logical_plan
+01)Sort: x ASC NULLS LAST, y ASC NULLS LAST
+02)--Union
+03)----Projection: floor(random() * Float64(3)) AS x, floor(random() * Float64(3)) AS y
+04)------TableScan: generate_series() projection=[]
+05)----Projection: floor(random() * Float64(3)) AS x, floor(random() * Float64(3)) AS y
+06)------TableScan: generate_series() projection=[]
+physical_plan
+01)SortPreservingMergeExec: [x@0 ASC NULLS LAST, y@1 ASC NULLS LAST]
+02)--UnionExec
+03)----SortExec: expr=[x@0 ASC NULLS LAST, y@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------ProjectionExec: expr=[floor(random() * 3) as x, floor(random() * 3) as y]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=2]
+07)----SortExec: expr=[x@0 ASC NULLS LAST, y@1 ASC NULLS LAST], preserve_partitioning=[true]
+08)------ProjectionExec: expr=[floor(random() * 3) as x, floor(random() * 3) as y]
+09)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)----------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10, batch_size=2]
+
 # Config reset
 statement ok
 RESET datafusion.execution.batch_size;
