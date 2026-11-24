@@ -3041,11 +3041,11 @@ SELECT TIMESTAMPTZ '2023-03-11 02:00:00 America/Los_Angeles' as ts_geo
 ----
 2023-03-11T10:00:00Z
 
-# will error if provide geo longform with time not possible due to daylight savings
-# Arrow error: Parser error: Error parsing timestamp from '2023-03-12 02:00:00 America/Los_Angeles': error computing timezone offset
-# postgresql: accepts
-statement error
+# Nonexistent local times are shifted forward through daylight savings.
+query P
 SELECT TIMESTAMPTZ '2023-03-12 02:00:00 America/Los_Angeles' as ts_geo
+----
+2023-03-12T10:00:00Z
 
 
 
