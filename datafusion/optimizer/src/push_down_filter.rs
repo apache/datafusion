@@ -5098,6 +5098,63 @@ mod tests {
         )
     }
 
+    fn filter_above_extraction_projection_over_mixed_source() -> Result<LogicalPlan> {
+        let source = PerPredicatePushDownProvider;
+        let scan = LogicalPlan::TableScan(TableScan {
+            table_name: "test".into(),
+            filters: vec![],
+            projected_schema: Arc::new(DFSchema::try_from(source.schema())?),
+            projection: None,
+            source: Arc::new(source),
+            fetch: None,
+            skip: None,
+            statistics_requests: Box::default(),
+        });
+        let proj = LogicalPlanBuilder::from(scan)
+            .project(vec![
+                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+                col("a"),
+                col("b"),
+            ])?
+            .build()?;
+        LogicalPlanBuilder::from(proj)
+            .filter(
+                col("b")
+                    .is_not_null()
+                    .and(col("__datafusion_extracted_1").eq(lit(1i64)))
+                    .and(col("a").gt(lit(2i64)))
+                    .and(col("b").eq(lit(1i64))),
+            )?
+            .build()
+    }
+
+    #[test]
+    fn mixed_acceptance_above_pure_extraction_projection() -> Result<()> {
+        // `b = 1` is exact and leaves the filter. `a > 2` is inexact, so the
+        // scan records it and the filter keeps it. `b IS NOT NULL` is
+        // unsupported and stays in the filter only. The predicate on the
+        // extracted alias is never offered to the scan. The residual
+        // predicates keep their order.
+        let plan = filter_above_extraction_projection_over_mixed_source()?;
+        assert_optimized_plan_equal!(plan, @"
+        Filter: b IS NOT NULL AND __datafusion_extracted_1 = Int64(1) AND a > Int64(2)
+          Projection: leaf_udf(a) AS __datafusion_extracted_1, a, b
+            TableScan: test, full_filters=[b = Int64(1)], partial_filters=[a > Int64(2)]
+        ")?;
+
+        let rule = PushDownFilter::new();
+        let config = OptimizerContext::new();
+        let once = rule.rewrite(
+            filter_above_extraction_projection_over_mixed_source()?,
+            &config,
+        )?;
+        assert!(once.transformed);
+        let twice = rule.rewrite(once.data.clone(), &config)?;
+        assert!(!twice.transformed);
+        assert_eq!(twice.data, once.data);
+        Ok(())
+    }
+
     #[test]
     fn pushdown_into_scan_below_extraction_projection_is_a_fixed_point() -> Result<()> {
         let rule = PushDownFilter::new();
