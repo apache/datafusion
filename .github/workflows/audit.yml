@@ -35,7 +35,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rustup
       - name: Install cargo-audit
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21  # v2.90.4
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c  # v2.90.7
         with:
           tool: cargo-audit
       - name: Run audit check
