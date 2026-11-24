@@ -977,6 +977,17 @@ config_namespace! {
         /// See <https://github.com/apache/datafusion/issues/22710> for details.
         pub enable_migration_aggregate: bool, default = true
 
+        /// Whether inner, left outer, right outer, and full outer hash joins use
+        /// the refactored probe implementation. When set to `false`, these joins
+        /// use the previous probe implementation.
+        ///
+        /// The fallback exists only as a workaround for bugs in the new
+        /// implementation and will be removed, together with this option, once
+        /// the migration is complete.
+        ///
+        /// See <https://github.com/apache/datafusion/issues/26361> for details.
+        pub enable_migration_hash_join: bool, default = true
+
         /// Sets the compression codec used when spilling data to disk.
         ///
         /// Since datafusion writes spill files using the Arrow IPC Stream format,
@@ -1132,9 +1143,11 @@ config_namespace! {
         /// runtime reassignment occurs.
         pub enable_file_stream_work_stealing: bool, default = true
 
-        /// Aggregation ratio (number of distinct groups / number of input rows)
-        /// threshold for skipping partial aggregation. If the value is greater
-        /// then partial aggregation will skip aggregation for further input
+        /// Aggregation ratio (number of groups the partial aggregation creates /
+        /// number of input rows) threshold for skipping partial aggregation. A key
+        /// that returns after an early emit under memory pressure counts again.
+        /// If the value is greater then partial aggregation will skip aggregation
+        /// for further input
         pub skip_partial_aggregation_probe_ratio_threshold: f64, default = 0.8
 
         /// Number of input rows partial aggregation partition should process, before
@@ -1983,6 +1996,11 @@ config_namespace! {
 
         /// When set to true, the explain statement will print schema information
         pub show_schema: bool, default = false
+
+        /// When set to true, the explain statement will print the equivalence
+        /// properties (orderings, equivalent expressions, and constants) of each
+        /// physical plan node
+        pub show_equivalences: bool, default = false
 
         /// Display format of explain. Default is "indent".
         /// When set to "tree", it will print the plan in a tree-rendered format.

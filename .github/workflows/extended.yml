@@ -45,6 +45,7 @@ jobs:
     # Long-running job: run in the merge queue, on release pushes, or manually.
     if: github.event_name != 'pull_request'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    timeout-minutes: 90
     # note: do not use amd/rust container to preserve disk space
     steps:
       - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670  # v2.7.1
@@ -93,6 +94,7 @@ jobs:
     # Long-running job: run in the merge queue, on release pushes, or manually.
     if: github.event_name != 'pull_request'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    timeout-minutes: 60
     container:
       image: amd64/rust
     steps:
@@ -117,6 +119,7 @@ jobs:
     # Long-running job: run in the merge queue, on release pushes, or manually.
     if: github.event_name != 'pull_request'
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
+    timeout-minutes: 90
     container:
       image: amd64/rust
     steps:

@@ -21,7 +21,7 @@ use datafusion_common::cast::as_int64_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, Statistics};
-use datafusion_common::{ScalarValue, assert_batches_eq};
+use datafusion_common::{ScalarValue, assert_batches_eq, assert_contains};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::TaskContext;
 use datafusion_execution::object_store::ObjectStoreUrl;
@@ -889,6 +889,48 @@ async fn aggregate_statistics_consults_statistics_providers() -> Result<()> {
             "+----------+"
         ],
         &batches
+    );
+    Ok(())
+}
+
+/// A statistics provider reporting fewer column statistics than a scan has
+/// columns makes planning fail with an error naming the provider, instead of
+/// `count(b)` reading out of bounds.
+#[tokio::test]
+async fn short_column_statistics_are_reported() -> Result<()> {
+    let provider = ClosureStatisticsProvider::with_matches(
+        |plan| plan.is::<DataSourceExec>(),
+        |plan, _child_stats| {
+            let mut stats = Statistics::new_unknown(&plan.schema());
+            stats.column_statistics.pop();
+            Ok(StatisticsResult::Computed(stats.into()))
+        },
+    );
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_statistics_registry(StatisticsRegistry::with_providers(vec![Arc::new(
+            provider,
+        )]))
+        .build();
+    let ctx = SessionContext::new_with_state(state);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Int32, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2])),
+            Arc::new(Int32Array::from(vec![10, 20])),
+        ],
+    )?;
+    ctx.register_batch("t", batch)?;
+
+    let sql = "SELECT count(b) FROM t";
+    let err = ctx.sql(sql).await?.collect().await.expect_err(sql);
+    assert_contains!(
+        err.to_string(),
+        "Statistics provider ClosureStatisticsProvider returned 0 column statistics for DataSourceExec, expected 1 (one per field of its schema)"
     );
     Ok(())
 }

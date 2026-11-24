@@ -25,9 +25,7 @@ use crate::expr_rewriter::{
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
-use crate::logical_plan::materialized_cte::{
-    MaterializedCte, MaterializedCtePlan, MaterializedCteScan,
-};
+use crate::logical_plan::materialized_cte::{MaterializedCte, MaterializedCtePlan};
 use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::type_coercion::other::coerce_union_type;
 use crate::utils::{
@@ -417,7 +415,9 @@ impl LogicalPlan {
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => cte.schema(),
-            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => &scan.schema,
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
+                scan.schema()
+            }
             LogicalPlan::Union(Union { schema, .. }) => schema,
             LogicalPlan::Show(Show { output_schema, .. }) => output_schema,
             LogicalPlan::Dml(DmlStatement { output_schema, .. }) => output_schema,
@@ -810,8 +810,8 @@ impl LogicalPlan {
             LogicalPlan::Limit(_) => Ok(self),
             LogicalPlan::Ddl(_) => Ok(self),
             // A `Cte` takes the schema of its continuation, and does not store
-            // it. A `Scan` keeps the schema of the CTE body, which also keeps
-            // its schema.
+            // it. The schema of a `Scan` is fixed by the columns of the CTE
+            // body that the scan reads.
             LogicalPlan::MaterializedCte(_) => Ok(self),
             LogicalPlan::Extension(Extension { node }) => {
                 // todo make an API that does not require cloning
@@ -2521,10 +2521,18 @@ impl LogicalPlan {
                     )) => {
                         write!(f, "MaterializedCte: name={name}")
                     }
-                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
-                        MaterializedCteScan { name, .. },
-                    )) => {
-                        write!(f, "MaterializedCteScan: name={name}")
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
+                        write!(f, "MaterializedCteScan: name={}", scan.name())?;
+                        if scan.projection().is_some() {
+                            let names: Vec<&str> = scan
+                                .schema()
+                                .fields()
+                                .iter()
+                                .map(|field| field.name().as_str())
+                                .collect();
+                            write!(f, " projection=[{}]", names.join(", "))?;
+                        }
+                        Ok(())
                     }
                     LogicalPlan::Show(Show { kind, .. }) => match kind {
                         ShowKind::Describe { .. }

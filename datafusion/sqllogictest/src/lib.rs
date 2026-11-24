@@ -24,6 +24,7 @@ pub use engines::DFSqlLogicTestError;
 pub use engines::DataFusion;
 #[cfg(feature = "substrait")]
 pub use engines::DataFusionSubstraitRoundTrip;
+pub use engines::DataFusionUnparserRoundTrip;
 pub use engines::convert_batches;
 pub use engines::convert_schema_to_types;
 

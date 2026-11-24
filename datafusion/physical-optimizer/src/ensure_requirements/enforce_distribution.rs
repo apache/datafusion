@@ -327,6 +327,10 @@ pub fn reorder_aggregate_keys(
         && *agg_exec.mode() == AggregateMode::Partial
     {
         let group_exprs = agg_exec.group_expr().expr();
+        let mut orig_to_new = vec![0; positions.len()];
+        for (new_idx, &orig_idx) in positions.iter().enumerate() {
+            orig_to_new[orig_idx] = new_idx;
+        }
         let new_group_exprs = positions
             .into_iter()
             .map(|idx| group_exprs[idx].clone())
@@ -373,13 +377,13 @@ pub fn reorder_aggregate_keys(
             .iter()
             .map(|col| {
                 let name = col.name();
-                let index = agg_schema.index_of(name)?;
-                Ok(ProjectionExpr {
+                let index = orig_to_new[col.index()];
+                ProjectionExpr {
                     expr: Arc::new(Column::new(name, index)) as _,
                     alias: name.to_owned(),
-                })
+                }
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         let agg_fields = agg_schema.fields();
         for (idx, field) in agg_fields.iter().enumerate().skip(output_columns.len()) {
             let name = field.name();
