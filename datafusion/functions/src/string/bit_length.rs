@@ -11,13 +11,13 @@ use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+    ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
 #[user_doc(
     doc_section(label = "String Functions"),
-    description = "Returns the bit length of a string.",
+    description = "Returns the bit length of a string or a binary.",
     syntax_example = "bit_length(str)",
     sql_example = r#"```sql
 > select bit_length('datafusion');
@@ -45,10 +45,22 @@ impl Default for BitLengthFunc {
 impl BitLengthFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
+            signature: Signature::one_of(
                 vec![
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
-                        .with_encoding_preservation(EncodingPreservation::dictionary()),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+                            .with_encoding_preservation(
+                                EncodingPreservation::dictionary(),
+                            ),
+                    ]),
+                    // `TypeSignatureClass::Binary` also admits FixedSizeBinary,
+                    // which `Native(logical_binary())` would reject.
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Binary)
+                            .with_encoding_preservation(
+                                EncodingPreservation::dictionary(),
+                            ),
+                    ]),
                 ],
                 Volatility::Immutable,
             ),
@@ -96,6 +108,16 @@ fn bit_length_scalar(value: &ScalarValue) -> ScalarValue {
         ScalarValue::Utf8View(v) => {
             ScalarValue::Int32(v.as_ref().map(|x| (x.len() * 8) as i32))
         }
+        ScalarValue::Binary(v) => {
+            ScalarValue::Int32(v.as_ref().map(|x| (x.len() * 8) as i32))
+        }
+        ScalarValue::LargeBinary(v) => {
+            ScalarValue::Int64(v.as_ref().map(|x| (x.len() * 8) as i64))
+        }
+        ScalarValue::BinaryView(v) => {
+            ScalarValue::Int32(v.as_ref().map(|x| (x.len() * 8) as i32))
+        }
+        ScalarValue::FixedSizeBinary(length, _) => ScalarValue::Int32(Some(length * 8)),
         ScalarValue::Dictionary(key_type, value) => {
             ScalarValue::Dictionary(key_type.clone(), Box::new(bit_length_scalar(value)))
         }
