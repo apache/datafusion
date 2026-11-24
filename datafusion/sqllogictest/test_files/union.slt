@@ -1195,12 +1195,15 @@ UNION ALL
 
 # The first input is empty and more than one input remains, with different
 # column names. Planning must alias those inputs by position.
+# LIMIT keeps the surviving inputs from being bare projections: type
+# coercion renames a bare projection to the union schema, which hides
+# the mismatch.
 query I rowsort
 SELECT a FROM (VALUES (1)) t(a) WHERE false
 UNION ALL
-SELECT b FROM (VALUES (2)) s(b)
+(SELECT b FROM (VALUES (2)) s(b) LIMIT 1)
 UNION ALL
-SELECT c FROM (VALUES (3)) u(c);
+(SELECT c FROM (VALUES (3)) u(c) LIMIT 1);
 ----
 2
 3
@@ -1208,9 +1211,9 @@ SELECT c FROM (VALUES (3)) u(c);
 query T rowsort
 SELECT a FROM (VALUES ('left')) t(a) WHERE false
 UNION
-SELECT b FROM (VALUES ('middle')) s(b)
+(SELECT b FROM (VALUES ('middle')) s(b) LIMIT 1)
 UNION
-SELECT c FROM (VALUES ('right')) u(c);
+(SELECT c FROM (VALUES ('right')) u(c) LIMIT 1);
 ----
 middle
 right
