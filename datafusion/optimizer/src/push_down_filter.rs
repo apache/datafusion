@@ -45,7 +45,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan};
+use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, TableScan};
 use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
@@ -1313,103 +1313,11 @@ impl OptimizerRule for PushDownFilter {
 
                 result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
             }
-            LogicalPlan::TableScan(scan) => {
-                let filter_predicates = split_conjunction(&filter.predicate);
-                // Filters containing scalar subqueries cannot be pushed to
-                // providers because the subquery result is not available
-                // until execution time.
-                let (subquery_filters, pushdown_candidates): (Vec<&Expr>, Vec<&Expr>) =
-                    filter_predicates
-                        .into_iter()
-                        .partition(|pred| pred.contains_scalar_subquery());
-
-                let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
-                    pushdown_candidates
-                        .into_iter()
-                        .partition(|pred| pred.is_volatile());
-
-                // Check which non-volatile filters are supported by source
-                let supported_filters = scan
-                    .source
-                    .supports_filters_pushdown(non_volatile_filters.as_slice())?;
-                assert_eq_or_internal_err!(
-                    non_volatile_filters.len(),
-                    supported_filters.len(),
-                    "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
-                    supported_filters.len(),
-                    non_volatile_filters.len()
-                );
-
-                if supported_filters
-                    .iter()
-                    .all(|res| res == &TableProviderFilterPushDown::Unsupported)
-                {
-                    filter.input = Arc::new(LogicalPlan::TableScan(scan));
-                    return Ok(Transformed::new(
-                        LogicalPlan::Filter(filter),
-                        predicates_changed || reorder_changed,
-                        TreeNodeRecursion::Continue,
-                    ));
-                }
-
-                // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
-                let zip = non_volatile_filters.iter().zip(supported_filters.iter());
-
-                let new_scan_filters = zip
-                    .clone()
-                    .filter(|(_, res)| *res != &TableProviderFilterPushDown::Unsupported)
-                    .map(|(&pred, _)| pred);
-
-                // Add new scan filters
-                let new_scan_filters: Vec<Expr> = scan
-                    .filters
-                    .iter()
-                    .chain(new_scan_filters)
-                    .unique()
-                    .cloned()
-                    .collect();
-
-                if supported_filters
-                    .iter()
-                    .all(|res| res == &TableProviderFilterPushDown::Inexact)
-                    && scan.filters == new_scan_filters
-                {
-                    filter.input = Arc::new(LogicalPlan::TableScan(scan));
-                    return Ok(Transformed::new(
-                        LogicalPlan::Filter(filter),
-                        predicates_changed || reorder_changed,
-                        TreeNodeRecursion::Continue,
-                    ));
-                }
-                let scan = match scan.try_with_filters(new_scan_filters) {
-                    Ok(scan) => scan,
-                    // The fetch and skip guard above returns before this point
-                    // today. This arm keeps the plan correct if that guard moves.
-                    Err(scan) => {
-                        filter.input = Arc::new(LogicalPlan::TableScan(scan));
-                        return Ok(Transformed::new(
-                            LogicalPlan::Filter(filter),
-                            predicates_changed || reorder_changed,
-                            TreeNodeRecursion::Continue,
-                        ));
-                    }
-                };
-
-                // Compose predicates to be of `Unsupported` or `Inexact` pushdown type,
-                // and also include volatile and subquery-containing filters
-                let new_predicate: Vec<Expr> = zip
-                    .filter(|(_, res)| *res != &TableProviderFilterPushDown::Exact)
-                    .map(|(&pred, _)| pred)
-                    .chain(volatile_filters)
-                    .chain(subquery_filters)
-                    .cloned()
-                    .collect();
-
-                Ok(Transformed::yes(with_filters(
-                    new_predicate,
-                    LogicalPlan::TableScan(scan),
-                )))
-            }
+            LogicalPlan::TableScan(scan) => push_down_into_table_scan(
+                filter.predicate,
+                scan,
+                predicates_changed || reorder_changed,
+            ),
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(mut cte)) => {
                 // The output is the output of the continuation, so the filter
                 // moves onto the continuation. The body is shared by every scan
@@ -1605,6 +1513,118 @@ fn rewrite_projection(
     };
 
     Ok((projection, keep_predicates))
+}
+
+/// Pushes the conjuncts of `predicate` into `scan`, as far as the source of the
+/// scan accepts them, and keeps the rest in a filter above the scan. `changed`
+/// tells whether the caller already changed the predicate, so that a result
+/// without a pushdown still reports the change.
+fn push_down_into_table_scan(
+    predicate: Expr,
+    scan: TableScan,
+    changed: bool,
+) -> Result<Transformed<LogicalPlan>> {
+    let filter_predicates = split_conjunction(&predicate);
+    // Filters containing scalar subqueries cannot be pushed to
+    // providers because the subquery result is not available
+    // until execution time.
+    let (subquery_filters, pushdown_candidates): (Vec<&Expr>, Vec<&Expr>) =
+        filter_predicates
+            .into_iter()
+            .partition(|pred| pred.contains_scalar_subquery());
+
+    let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
+        pushdown_candidates
+            .into_iter()
+            .partition(|pred| pred.is_volatile());
+
+    // Check which non-volatile filters are supported by source
+    let supported_filters = scan
+        .source
+        .supports_filters_pushdown(non_volatile_filters.as_slice())?;
+    assert_eq_or_internal_err!(
+        non_volatile_filters.len(),
+        supported_filters.len(),
+        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
+        supported_filters.len(),
+        non_volatile_filters.len()
+    );
+
+    if supported_filters
+        .iter()
+        .all(|res| res == &TableProviderFilterPushDown::Unsupported)
+    {
+        return Ok(Transformed::new(
+            LogicalPlan::Filter(Filter::new(
+                predicate,
+                Arc::new(LogicalPlan::TableScan(scan)),
+            )),
+            changed,
+            TreeNodeRecursion::Continue,
+        ));
+    }
+
+    // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
+    let zip = non_volatile_filters.iter().zip(supported_filters.iter());
+
+    let new_scan_filters = zip
+        .clone()
+        .filter(|(_, res)| *res != &TableProviderFilterPushDown::Unsupported)
+        .map(|(&pred, _)| pred);
+
+    // Add new scan filters
+    let new_scan_filters: Vec<Expr> = scan
+        .filters
+        .iter()
+        .chain(new_scan_filters)
+        .unique()
+        .cloned()
+        .collect();
+
+    if supported_filters
+        .iter()
+        .all(|res| res == &TableProviderFilterPushDown::Inexact)
+        && scan.filters == new_scan_filters
+    {
+        return Ok(Transformed::new(
+            LogicalPlan::Filter(Filter::new(
+                predicate,
+                Arc::new(LogicalPlan::TableScan(scan)),
+            )),
+            changed,
+            TreeNodeRecursion::Continue,
+        ));
+    }
+    let scan = match scan.try_with_filters(new_scan_filters) {
+        Ok(scan) => scan,
+        // The fetch and skip guard above returns before this point
+        // today. This arm keeps the plan correct if that guard moves.
+        Err(scan) => {
+            return Ok(Transformed::new(
+                LogicalPlan::Filter(Filter::new(
+                    predicate,
+                    Arc::new(LogicalPlan::TableScan(scan)),
+                )),
+                changed,
+                TreeNodeRecursion::Continue,
+            ));
+        }
+    };
+
+    // Compose predicates to be of `Unsupported` or `Inexact` pushdown type,
+    // and also include volatile and subquery-containing filters
+    let new_predicate: Vec<Expr> = zip
+        .filter(|(_, res)| *res != &TableProviderFilterPushDown::Exact)
+        .map(|(&pred, _)| pred)
+        .chain(volatile_filters)
+        .chain(subquery_filters)
+        .cloned()
+        .collect();
+
+    Ok(Transformed::yes(with_filters(
+        new_predicate,
+        LogicalPlan::TableScan(scan),
+    )))
 }
 
 /// Creates a new LogicalPlan::Filter node.
