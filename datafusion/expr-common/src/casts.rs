@@ -22,6 +22,7 @@ use arrow::datatypes::{
 use arrow::temporal_conversions::{
     MICROSECONDS, MILLISECONDS, MILLISECONDS_IN_DAY, NANOSECONDS,
 };
+use datafusion_common::scalar::date_to_timestamp_multiplier;
 use datafusion_common::{Result, ScalarValue};
 
 /// Source-domain preimage of `CAST(source_expr AS target_type) OP literal`.
@@ -106,26 +107,18 @@ pub fn try_cast_literal_to_type(
 /// [`CastPredicatePreimage::Exact`] where moving the cast preserves comparison
 /// semantics subject to the documented family-level overflow exceptions, and a
 /// [`CastPredicatePreimage::Range`] for many-to-one casts with known preimages
-/// (timestamp precision narrowing) or for non-aligned timestamp widening
-/// literals.
+/// (timestamp precision narrowing) or for non-aligned timestamp widening and
+/// date-to-timestamp literals.
 pub fn cast_predicate_preimage(
     source_type: &DataType,
     target_type: &DataType,
     op: Operator,
     lit_value: &ScalarValue,
 ) -> Result<Option<CastPredicatePreimage>> {
-    // Timestamp casts have their own rules: a truncation bucket when the cast
-    // narrows, and the source values equal to the literal when it does not. A
-    // rejected timestamp cast keeps its `CAST` instead of falling back to
-    // another cast family.
-    if let Some((source, target)) = timestamp_cast_types(source_type, target_type) {
-        return Ok(timestamp_preimage(
-            source_type,
-            source,
-            target,
-            op,
-            lit_value,
-        ));
+    match temporal_preimage(source_type, target_type, op, lit_value) {
+        PreimageOutcome::NotApplicable => {}
+        PreimageOutcome::NoRewrite => return Ok(None),
+        PreimageOutcome::Preimage(preimage) => return Ok(Some(preimage)),
     }
 
     if let Some(value) =
@@ -147,19 +140,13 @@ pub fn exact_preimage_cast(
     target_type: &DataType,
     lit_value: &ScalarValue,
 ) -> Option<ScalarValue> {
-    // Timestamp casts need unit arithmetic rather than a literal round trip; only
-    // their singleton preimages are valid here.
-    if let Some((source, target)) = timestamp_cast_types(source_type, target_type) {
-        return match timestamp_preimage(
-            source_type,
-            source,
-            target,
-            Operator::Eq,
-            lit_value,
-        )? {
-            CastPredicatePreimage::Exact(value) => Some(value),
-            CastPredicatePreimage::Range(_) => None,
-        };
+    match temporal_preimage(source_type, target_type, Operator::Eq, lit_value) {
+        PreimageOutcome::NotApplicable => {}
+        PreimageOutcome::NoRewrite
+        | PreimageOutcome::Preimage(CastPredicatePreimage::Range(_)) => return None,
+        PreimageOutcome::Preimage(CastPredicatePreimage::Exact(value)) => {
+            return Some(value);
+        }
     }
 
     // Apply a family-level gate: the source→target cast must normally preserve
@@ -188,20 +175,63 @@ pub fn is_timestamp_precision_narrowing_cast(
     timestamp_unit_scale(source_unit) > timestamp_unit_scale(target_unit)
 }
 
-/// Returns the source and target types of a timestamp cast, each unwrapped from
-/// at most one `Dictionary` level.
-fn timestamp_cast_types<'a>(
-    source_type: &'a DataType,
-    target_type: &'a DataType,
-) -> Option<(&'a DataType, &'a DataType)> {
-    let unwrap = |data_type: &'a DataType| match data_type {
+enum PreimageOutcome {
+    NotApplicable,
+    NoRewrite,
+    Preimage(CastPredicatePreimage),
+}
+
+/// Dispatches to the preimage calculation for the matching temporal cast family.
+fn temporal_preimage(
+    source_type: &DataType,
+    target_type: &DataType,
+    op: Operator,
+    lit_value: &ScalarValue,
+) -> PreimageOutcome {
+    let source = unwrap_dictionary_type(source_type);
+    let target = unwrap_dictionary_type(target_type);
+
+    let preimage = match (source, target) {
+        (
+            DataType::Date32 | DataType::Date64,
+            DataType::Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, None),
+        ) => {
+            // Scaling the full date domain to these units can overflow i64.
+            return PreimageOutcome::NoRewrite;
+        }
+        (DataType::Timestamp(_, _), DataType::Timestamp(_, _)) => {
+            timestamp_preimage(source_type, source, target, op, lit_value)
+        }
+        (DataType::Date32, DataType::Timestamp(_, None)) => {
+            date32_to_timestamp_preimage(source_type, source, target, op, lit_value)
+        }
+        (DataType::Date64, DataType::Timestamp(_, None)) => {
+            date64_to_timestamp_preimage(source_type, source, target, lit_value)
+        }
+        _ => return PreimageOutcome::NotApplicable,
+    };
+
+    match preimage {
+        Some(preimage) => PreimageOutcome::Preimage(preimage),
+        None => PreimageOutcome::NoRewrite,
+    }
+}
+
+fn unwrap_dictionary_type(data_type: &DataType) -> &DataType {
+    match data_type {
         DataType::Dictionary(_, value_type) => value_type.as_ref(),
         data_type => data_type,
-    };
-    let (source, target) = (unwrap(source_type), unwrap(target_type));
-    (matches!(source, DataType::Timestamp(_, _))
-        && matches!(target, DataType::Timestamp(_, _)))
-    .then_some((source, target))
+    }
+}
+
+/// Preserve the original source dictionary key on a preimage bound.
+fn wrap_dictionary_scalar(source_type: &DataType, scalar: ScalarValue) -> ScalarValue {
+    match source_type {
+        DataType::Dictionary(key_type, _) => {
+            ScalarValue::Dictionary(key_type.clone(), Box::new(scalar))
+        }
+        _ => scalar,
+    }
 }
 
 /// Returns `true` when casting `source_type` to `target_type` is exact and
@@ -391,6 +421,108 @@ fn exact_preimage_int_to_str_eq_like(
     }
 }
 
+/// Computes the source-domain preimage of a `Date32` to timezone-naive timestamp
+/// cast. Each source day maps to midnight, so aligned literals have an exact
+/// preimage. Non-midnight literals have no equality preimage; ordered predicates
+/// compare against the next day using an empty interval `[ceil, ceil)`.
+///
+/// For example, `1970-01-02 00:00:00` has the exact preimage `Date32(1)`.
+/// For `1970-01-02 12:00:00`, an ordered comparison uses the interval
+/// `[Date32(2), Date32(2))`, so a casted date less than that timestamp is
+/// equivalent to a source date less than `1970-01-03`.
+fn date32_to_timestamp_preimage(
+    source_type: &DataType,
+    source: &DataType,
+    target: &DataType,
+    op: Operator,
+    lit_value: &ScalarValue,
+) -> Option<CastPredicatePreimage> {
+    let (DataType::Date32, DataType::Timestamp(_, None)) = (source, target) else {
+        return None;
+    };
+
+    let lit_value = match lit_value {
+        ScalarValue::Dictionary(_, inner) => inner.as_ref(),
+        literal => literal,
+    };
+    if lit_value.data_type() != *target {
+        return None;
+    }
+    let (ScalarValue::TimestampSecond(value, _)
+    | ScalarValue::TimestampMillisecond(value, _)) = lit_value
+    else {
+        return None;
+    };
+
+    let bound = |value| wrap_dictionary_scalar(source_type, ScalarValue::Date32(value));
+    let Some(value) = *value else {
+        return Some(CastPredicatePreimage::Exact(bound(None)));
+    };
+
+    let ticks_per_day = date_to_timestamp_multiplier(source, target)?;
+    let floor = value.div_euclid(ticks_per_day);
+    if value.rem_euclid(ticks_per_day) == 0 {
+        return Some(CastPredicatePreimage::Exact(bound(Some(
+            i32::try_from(floor).ok()?,
+        ))));
+    }
+
+    if !matches!(
+        op,
+        Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
+    ) {
+        return None;
+    }
+    let ceil = i32::try_from(floor.checked_add(1)?).ok()?;
+    let bound = bound(Some(ceil));
+    Interval::try_new(bound.clone(), bound)
+        .ok()
+        .map(CastPredicatePreimage::Range)
+}
+
+/// Computes the source-domain preimage of a `Date64` to timezone-naive timestamp
+/// cast. Arrow preserves sub-day milliseconds in `Date64`, so seconds require a
+/// truncation bucket and milliseconds are exact.
+///
+/// For example, a timestamp literal of 1,234 milliseconds since the epoch has
+/// the exact preimage `Date64(1234)`. A literal of 1 second has the preimage
+/// `[Date64(1000), Date64(2000))` because every value in that interval
+/// truncates to 1 second. Truncation toward zero gives the epoch second the
+/// wider interval `[Date64(-999), Date64(1000))`.
+fn date64_to_timestamp_preimage(
+    source_type: &DataType,
+    source: &DataType,
+    target: &DataType,
+    lit_value: &ScalarValue,
+) -> Option<CastPredicatePreimage> {
+    let (DataType::Date64, DataType::Timestamp(unit, None)) = (source, target) else {
+        return None;
+    };
+    let lit_value = match lit_value {
+        ScalarValue::Dictionary(_, inner) => inner.as_ref(),
+        literal => literal,
+    };
+    if lit_value.data_type() != *target {
+        return None;
+    }
+    let bound = |value| wrap_dictionary_scalar(source_type, ScalarValue::Date64(value));
+    match (unit, lit_value) {
+        (TimeUnit::Millisecond, ScalarValue::TimestampMillisecond(value, _)) => {
+            Some(CastPredicatePreimage::Exact(bound(*value)))
+        }
+        (TimeUnit::Second, ScalarValue::TimestampSecond(Some(value), _)) => {
+            let (lower, upper) =
+                trunc_toward_zero_bucket(*value, i128::from(MILLISECONDS))?;
+            let lower = bound(Some(i64::try_from(lower).ok()?));
+            let upper = bound(Some(i64::try_from(upper).ok()?));
+            Interval::try_new(lower, upper)
+                .ok()
+                .map(CastPredicatePreimage::Range)
+        }
+        _ => None,
+    }
+}
+
 /// Computes the source-domain preimage of `CAST(source AS target) OP literal`
 /// for a timestamp precision cast.
 ///
@@ -443,12 +575,7 @@ fn timestamp_preimage(
 
     let bound = |value| {
         let scalar = timestamp_scalar(source_unit, source_tz.clone(), value);
-        match source_type {
-            DataType::Dictionary(key_type, _) => {
-                ScalarValue::Dictionary(key_type.clone(), Box::new(scalar))
-            }
-            _ => scalar,
-        }
+        wrap_dictionary_scalar(source_type, scalar)
     };
 
     let source_scale = i128::from(timestamp_unit_scale(source_unit));
@@ -984,6 +1111,42 @@ fn try_cast_binary(
             Some(ScalarValue::FixedSizeBinary(*n, Some(v.clone())))
         }
         _ => None,
+    }
+}
+
+/// Returns true if casting `from` to the decimal type `into` keeps every value
+/// exactly, i.e. `into` has at least as many integer and fractional digits as
+/// `from`. `from` can be an integer, which has no fractional digits, or a
+/// decimal.
+///
+/// Returns false if `into` is not a decimal.
+pub fn is_lossless_decimal_cast(from: &DataType, into: &DataType) -> bool {
+    fn precision_and_scale(data_type: &DataType) -> Option<(i16, i16)> {
+        match data_type {
+            DataType::Int8 | DataType::UInt8 => Some((3, 0)),
+            DataType::Int16 | DataType::UInt16 => Some((5, 0)),
+            DataType::Int32 | DataType::UInt32 => Some((10, 0)),
+            DataType::Int64 => Some((19, 0)),
+            DataType::UInt64 => Some((20, 0)),
+            DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale)
+            | DataType::Decimal128(precision, scale)
+            | DataType::Decimal256(precision, scale) => {
+                Some((*precision as i16, *scale as i16))
+            }
+            _ => None,
+        }
+    }
+
+    if !into.is_decimal() {
+        return false;
+    }
+    match (precision_and_scale(from), precision_and_scale(into)) {
+        (Some((from_precision, from_scale)), Some((into_precision, into_scale))) => {
+            into_scale >= from_scale
+                && into_precision - into_scale >= from_precision - from_scale
+        }
+        _ => false,
     }
 }
 
@@ -3435,5 +3598,28 @@ mod tests {
             result, expected,
             "unexpected narrowing bucket for {source_unit:?} → {target_unit:?} {lit}"
         );
+    }
+
+    #[test]
+    fn test_is_lossless_decimal_cast() {
+        use DataType::*;
+        for (from, into, expected) in [
+            (Int32, Decimal128(10, 0), true),
+            (Int32, Decimal128(9, 0), false),
+            (UInt64, Decimal128(20, 0), true),
+            (Decimal128(15, 2), Decimal128(20, 4), true),
+            (Decimal128(15, 2), Decimal128(15, 3), false),
+            (Decimal128(15, 2), Decimal128(15, 1), false),
+            // `into` must be a decimal:
+            (Decimal128(19, 0), Int64, false),
+            (Int64, UInt64, false),
+            (Decimal128(15, 2), Float64, false),
+        ] {
+            assert_eq!(
+                is_lossless_decimal_cast(&from, &into),
+                expected,
+                "{from} -> {into}"
+            );
+        }
     }
 }
