@@ -45,7 +45,7 @@ use crate::hash_utils::create_hashes;
 use crate::scalar::consts::{
     DECIMAL32_ONES, DECIMAL64_ONES, DECIMAL128_ONES, DECIMAL256_ONES,
 };
-use crate::utils::SingleRowListArrayBuilder;
+use crate::utils::{SingleRowListArrayBuilder, compact_view_buffers};
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
 use arrow::array::timezone::Tz;
 use arrow::array::{
@@ -5205,7 +5205,7 @@ impl ScalarValue {
         // copy_array_data + compact_view_buffers + downcast back, all in one step.
         macro_rules! compact_array {
             ($arr:expr, $from_type:ty, $($as_method:tt)+) => {
-                *Arc::make_mut($arr) = ScalarValue::compact_view_buffers(
+                *Arc::make_mut($arr) = compact_view_buffers(
                     Arc::new(<$from_type>::from(copy_array_data(&$arr.to_data()))) as ArrayRef,
                 ).$($as_method)+.clone()
             };
@@ -5285,112 +5285,6 @@ impl ScalarValue {
     pub fn compacted(mut self) -> Self {
         self.compact();
         self
-    }
-
-    /// Recursively compacts the backing buffers of any [`StringViewArray`] or
-    /// [`BinaryViewArray`] nested within `array`.
-    ///
-    /// View-typed arrays keep an `Arc` reference to their original backing
-    /// buffers, so a single scalar extracted from a large batch still retains
-    /// the entire buffer.  Calling [`.gc()`][StringViewArray::gc] copies only
-    /// the bytes that are actually referenced by the surviving views, releasing
-    /// the rest.
-    ///
-    /// Container types (`List`, `LargeList`, `FixedSizeList`, `ListView`,
-    /// `LargeListView`, `Struct`, `Map`) are handled by recursing into their
-    /// child / values arrays and reconstructing the parent with the compacted
-    /// children.  All other types are returned unchanged.
-    ///
-    /// `gc` copies the bytes of each view separately. Views that share bytes,
-    /// such as the output of `take` with repeated indices, each get their own
-    /// copy, so the result can be larger than the input.
-    ///
-    /// # Public Only for Internal Use:
-    ///
-    /// This is not a public API and is for internal use only; see [API policy] for details.
-    ///
-    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
-    #[doc(hidden)]
-    pub fn compact_view_buffers(array: ArrayRef) -> ArrayRef {
-        // Macro for the i32/i64-offset list pair (List / LargeList).
-        macro_rules! gc_list {
-            ($field:expr, $offset_type:ty, $array_type:ty) => {{
-                let list = array.as_list::<$offset_type>();
-                Arc::new(<$array_type>::new(
-                    Arc::clone($field),
-                    list.offsets().clone(),
-                    ScalarValue::compact_view_buffers(Arc::clone(list.values())),
-                    list.nulls().cloned(),
-                )) as ArrayRef
-            }};
-        }
-        // Macro for the i32/i64-offset list-view pair (ListView / LargeListView).
-        macro_rules! gc_list_view {
-            ($field:expr, $offset_type:ty, $array_type:ty) => {{
-                let list = array.as_list_view::<$offset_type>();
-                Arc::new(<$array_type>::new(
-                    Arc::clone($field),
-                    list.offsets().clone(),
-                    list.sizes().clone(),
-                    ScalarValue::compact_view_buffers(Arc::clone(list.values())),
-                    list.nulls().cloned(),
-                )) as ArrayRef
-            }};
-        }
-
-        match array.data_type() {
-            DataType::Utf8View => Arc::new(array.as_string_view().gc()),
-            DataType::BinaryView => Arc::new(array.as_binary_view().gc()),
-            DataType::Struct(_) => {
-                let s = array.as_struct();
-                if s.fields().is_empty() {
-                    // Zero-field structs carry no child buffers to compact, so
-                    // return the input array unchanged.
-                    array
-                } else {
-                    let columns = s
-                        .columns()
-                        .iter()
-                        .map(|c| ScalarValue::compact_view_buffers(Arc::clone(c)))
-                        .collect();
-                    Arc::new(StructArray::new(
-                        s.fields().clone(),
-                        columns,
-                        s.nulls().cloned(),
-                    ))
-                }
-            }
-            DataType::List(field) => gc_list!(field, i32, ListArray),
-            DataType::LargeList(field) => gc_list!(field, i64, LargeListArray),
-            DataType::FixedSizeList(field, size) => {
-                let list = array.as_fixed_size_list();
-                Arc::new(FixedSizeListArray::new(
-                    Arc::clone(field),
-                    *size,
-                    ScalarValue::compact_view_buffers(Arc::clone(list.values())),
-                    list.nulls().cloned(),
-                ))
-            }
-            DataType::ListView(field) => gc_list_view!(field, i32, ListViewArray),
-            DataType::LargeListView(field) => {
-                gc_list_view!(field, i64, LargeListViewArray)
-            }
-            DataType::Map(field, ordered) => {
-                let map = array.as_map();
-                let entries = ScalarValue::compact_view_buffers(Arc::new(
-                    map.entries().clone(),
-                )
-                    as ArrayRef);
-                Arc::new(MapArray::new(
-                    Arc::clone(field),
-                    map.offsets().clone(),
-                    entries.as_struct().clone(),
-                    map.nulls().cloned(),
-                    *ordered,
-                ))
-            }
-            _ => array,
-        }
     }
 
     /// Returns the minimum value for the given numeric `DataType`.

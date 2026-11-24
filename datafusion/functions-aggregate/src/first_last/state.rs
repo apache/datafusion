@@ -12,6 +12,7 @@ use arrow::array::{
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::DataType;
+use datafusion_common::utils::{compact_view_buffers, has_view_types};
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::EmitTo;
 
@@ -307,22 +308,6 @@ impl GenericValueState {
     }
 }
 
-/// Returns true if `data_type` is or contains a type whose data buffers
-/// [`ScalarValue::compact_view_buffers`] compacts.
-fn has_view_types(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Utf8View | DataType::BinaryView => true,
-        DataType::Struct(fields) => fields.iter().any(|f| has_view_types(f.data_type())),
-        DataType::List(field)
-        | DataType::LargeList(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::ListView(field)
-        | DataType::LargeListView(field)
-        | DataType::Map(field, _) => has_view_types(field.data_type()),
-        _ => false,
-    }
-}
-
 impl ValueState for GenericValueState {
     fn resize(&mut self, new_size: usize) {
         if new_size < self.vals.len() {
@@ -370,7 +355,7 @@ impl ValueState for GenericValueState {
         // merge that copies a row out of this array clones every buffer, so
         // merging N groups costs O(N^2). Each value owns its bytes, so the
         // compacted array is no larger than the values were.
-        Ok(ScalarValue::compact_view_buffers(array))
+        Ok(compact_view_buffers(array))
     }
 
     fn size(&self) -> usize {

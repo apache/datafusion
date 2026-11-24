@@ -26,7 +26,7 @@ use arrow::array::{
     ArrowPrimitiveType, BooleanArray, Datum, DictionaryArray, GenericListArray,
     Int32Array, Int64Array, MutableArrayData, PrimitiveArray, layout, make_array,
 };
-use arrow::array::{LargeListViewArray, ListViewArray};
+use arrow::array::{LargeListViewArray, ListViewArray, MapArray, StructArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::length::length;
@@ -492,6 +492,125 @@ pub fn compact_dictionary<K: ArrowDictionaryKeyType>(
     )?;
     let keys = PrimitiveArray::<K>::new(remapped, keys.nulls().cloned());
     Ok(DictionaryArray::try_new(keys, values)?)
+}
+
+/// Recursively compacts the backing buffers of any [`StringViewArray`] or
+/// [`BinaryViewArray`] nested within `array`.
+///
+/// View-typed arrays keep an `Arc` reference to their original backing
+/// buffers, so a single scalar extracted from a large batch still retains
+/// the entire buffer.  Calling [`.gc()`][StringViewArray::gc] copies only
+/// the bytes that are actually referenced by the surviving views, releasing
+/// the rest.
+///
+/// Container types (`List`, `LargeList`, `FixedSizeList`, `ListView`,
+/// `LargeListView`, `Struct`, `Map`) are handled by recursing into their
+/// child / values arrays and reconstructing the parent with the compacted
+/// children.  All other types are returned unchanged.
+///
+/// `gc` copies the bytes of each view separately. Views that share bytes,
+/// such as the output of `take` with repeated indices, each get their own
+/// copy, so the result can be larger than the input.
+///
+/// [`has_view_types`] tells whether a data type has anything to compact.
+///
+/// [`StringViewArray`]: arrow::array::StringViewArray
+/// [`BinaryViewArray`]: arrow::array::BinaryViewArray
+/// [StringViewArray::gc]: arrow::array::StringViewArray::gc
+pub fn compact_view_buffers(array: ArrayRef) -> ArrayRef {
+    // Macro for the i32/i64-offset list pair (List / LargeList).
+    macro_rules! gc_list {
+        ($field:expr, $offset_type:ty, $array_type:ty) => {{
+            let list = array.as_list::<$offset_type>();
+            Arc::new(<$array_type>::new(
+                Arc::clone($field),
+                list.offsets().clone(),
+                compact_view_buffers(Arc::clone(list.values())),
+                list.nulls().cloned(),
+            )) as ArrayRef
+        }};
+    }
+    // Macro for the i32/i64-offset list-view pair (ListView / LargeListView).
+    macro_rules! gc_list_view {
+        ($field:expr, $offset_type:ty, $array_type:ty) => {{
+            let list = array.as_list_view::<$offset_type>();
+            Arc::new(<$array_type>::new(
+                Arc::clone($field),
+                list.offsets().clone(),
+                list.sizes().clone(),
+                compact_view_buffers(Arc::clone(list.values())),
+                list.nulls().cloned(),
+            )) as ArrayRef
+        }};
+    }
+
+    match array.data_type() {
+        DataType::Utf8View => Arc::new(array.as_string_view().gc()),
+        DataType::BinaryView => Arc::new(array.as_binary_view().gc()),
+        DataType::Struct(_) => {
+            let s = array.as_struct();
+            if s.fields().is_empty() {
+                // Zero-field structs carry no child buffers to compact, so
+                // return the input array unchanged.
+                array
+            } else {
+                let columns = s
+                    .columns()
+                    .iter()
+                    .map(|c| compact_view_buffers(Arc::clone(c)))
+                    .collect();
+                Arc::new(StructArray::new(
+                    s.fields().clone(),
+                    columns,
+                    s.nulls().cloned(),
+                ))
+            }
+        }
+        DataType::List(field) => gc_list!(field, i32, ListArray),
+        DataType::LargeList(field) => gc_list!(field, i64, LargeListArray),
+        DataType::FixedSizeList(field, size) => {
+            let list = array.as_fixed_size_list();
+            Arc::new(FixedSizeListArray::new(
+                Arc::clone(field),
+                *size,
+                compact_view_buffers(Arc::clone(list.values())),
+                list.nulls().cloned(),
+            ))
+        }
+        DataType::ListView(field) => gc_list_view!(field, i32, ListViewArray),
+        DataType::LargeListView(field) => {
+            gc_list_view!(field, i64, LargeListViewArray)
+        }
+        DataType::Map(field, ordered) => {
+            let map = array.as_map();
+            let entries =
+                compact_view_buffers(Arc::new(map.entries().clone()) as ArrayRef);
+            Arc::new(MapArray::new(
+                Arc::clone(field),
+                map.offsets().clone(),
+                entries.as_struct().clone(),
+                map.nulls().cloned(),
+                *ordered,
+            ))
+        }
+        _ => array,
+    }
+}
+
+/// Returns true if `data_type` is or contains a type whose data buffers
+/// [`compact_view_buffers`] compacts.
+pub fn has_view_types(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Utf8View | DataType::BinaryView => true,
+        DataType::Struct(fields) => fields.iter().any(|f| has_view_types(f.data_type())),
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::Map(field, _) => has_view_types(field.data_type()),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
