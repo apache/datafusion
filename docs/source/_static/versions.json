@@ -5,10 +5,15 @@
     "version": "main"
   },
   {
+    "name": "56.0.0",
+    "url": "/versions/56.0.0/",
+    "version": "56.0.0",
+    "preferred": true
+  },
+  {
     "name": "55.2.0",
     "url": "/versions/55.2.0/",
-    "version": "55.2.0",
-    "preferred": true
+    "version": "55.2.0"
   },
   {
     "name": "54.1.0",

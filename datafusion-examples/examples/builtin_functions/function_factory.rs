@@ -190,14 +190,16 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
                 .function_body
                 .expect("Expression has to be defined!"),
             return_type: definition
-                .return_type
-                .expect("Return type has to be defined!"),
+                .return_field
+                .expect("Return type has to be defined!")
+                .data_type()
+                .clone(),
             signature: Signature::exact(
                 definition
                     .args
                     .unwrap_or_default()
                     .into_iter()
-                    .map(|a| a.data_type)
+                    .map(|a| a.field.data_type().clone())
                     .collect(),
                 definition.params.behavior.unwrap_or(Volatility::Volatile),
             ),

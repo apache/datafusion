@@ -139,3 +139,101 @@ statement ok
 DROP TABLE t1;
 
 # End repartition on empty columns test
+
+# Start reorder aggregate keys with duplicate group column names test.
+# See https://github.com/apache/datafusion/issues/27221
+
+# Force partitioned hash joins so the join reorders the aggregate's keys
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 0;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 0;
+
+statement ok
+CREATE TABLE t1 (a INT) AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE t2 (a INT) AS VALUES (10), (20), (30);
+
+statement ok
+CREATE TABLE t3 (a INT) AS VALUES (100), (200), (300);
+
+statement ok
+CREATE TABLE t4 (k1 INT, k2 INT, k3 INT, v VARCHAR) AS VALUES
+  (1, 20, 300, 'x'),
+  (2, 30, 100, 'y'),
+  (3, 10, 200, 'z');
+
+query TT
+EXPLAIN SELECT g.a1, g.a2, t4.v
+FROM (SELECT t1.a AS a1, t2.a AS a2 FROM t1 CROSS JOIN t2 GROUP BY t1.a, t2.a) g
+JOIN t4 ON g.a2 = t4.k2 AND g.a1 = t4.k1;
+----
+logical_plan
+01)Projection: g.a1, g.a2, t4.v
+02)--Inner Join: g.a2 = t4.k2, g.a1 = t4.k1
+03)----SubqueryAlias: g
+04)------Projection: t1.a AS a1, t2.a AS a2
+05)--------Aggregate: groupBy=[[t1.a, t2.a]], aggr=[[]]
+06)----------Cross Join:
+07)------------TableScan: t1 projection=[a]
+08)------------TableScan: t2 projection=[a]
+09)----TableScan: t4 projection=[k1, k2, v]
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a2@1, k2@1), (a1@0, k1@0)], projection=[a1@0, a2@1, v@4]
+02)--ProjectionExec: expr=[a@1 as a1, a@0 as a2]
+03)----AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, a@1 as a], aggr=[]
+04)------RepartitionExec: partitioning=Hash([a@0, a@1], 4), input_partitions=1
+05)--------AggregateExec: mode=Partial, gby=[a@1 as a, a@0 as a], aggr=[]
+06)----------CrossJoinExec
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)--RepartitionExec: partitioning=Hash([k2@1, k1@0], 4), input_partitions=1
+10)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Two keys swapped
+query IIT
+SELECT g.a1, g.a2, t4.v
+FROM (SELECT t1.a AS a1, t2.a AS a2 FROM t1 CROSS JOIN t2 GROUP BY t1.a, t2.a) g
+JOIN t4 ON g.a2 = t4.k2 AND g.a1 = t4.k1
+ORDER BY t4.v;
+----
+1 20 x
+2 30 y
+3 10 z
+
+# Three keys in an order that is not its own inverse
+query IIIT
+SELECT g.a1, g.a2, g.a3, t4.v
+FROM (
+  SELECT t1.a AS a1, t2.a AS a2, t3.a AS a3
+  FROM t1 CROSS JOIN t2 CROSS JOIN t3
+  GROUP BY t1.a, t2.a, t3.a
+) g
+JOIN t4 ON g.a3 = t4.k3 AND g.a1 = t4.k1 AND g.a2 = t4.k2
+ORDER BY t4.v;
+----
+1 20 300 x
+2 30 100 y
+3 10 200 z
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold;
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold_rows;
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+DROP TABLE t3;
+
+statement ok
+DROP TABLE t4;
+
+# End reorder aggregate keys with duplicate group column names test

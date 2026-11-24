@@ -166,6 +166,41 @@ SELECT * from foo;
 
 Assuming it looks good, check it in!
 
+## Cookbook: Testing errors
+
+To check an error message, write it as plain text after `----`:
+
+```text
+statement error
+SELECT * FROM no_such_table;
+----
+DataFusion error: Error during planning: table 'datafusion.public.no_such_table' not found
+
+
+```
+
+The message must match exactly, and the block must end with **two** blank
+lines. With only one, the next record is read as part of the expected error:
+the test fails, and `--complete` deletes that record from the file.
+
+To fill in the message, write the query, then `----` and two blank lines, and
+run `--complete`.
+
+Avoid putting the whole message on the `statement error` line. There it is a
+regex, so `--complete` escapes every special character:
+
+```text
+statement error DataFusion error: Error during planning: table 'datafusion\.public\.no_such_table' not found
+SELECT * FROM no_such_table;
+```
+
+Use that line only to match part of a message:
+
+```text
+statement error no_such_table
+SELECT * FROM no_such_table;
+```
+
 ## Cookbook: Testing for whitespace
 
 The `sqllogictest` runner will automatically strip trailing whitespace, meaning
@@ -224,7 +259,8 @@ Runs the same `.slt` once per combination of config values. Each directive is a 
 - Each override is applied like `SET <key> = <value>`, so `datafusion.runtime.*`
   keys (e.g. `datafusion.runtime.memory_limit`) and config-dependent UDFs behave
   exactly as they would for an in-file `SET`.
-- Supported by the default runner and by `--substrait-round-trip`. `--complete`
+- Supported by the default runner, by `--substrait-round-trip`, and by
+  `--unparser-round-trip`. `--complete`
   rejects a file that declares directives, since it would overwrite the file
   with the output of a single combination. The Postgres runner ignores them.
 - Every combination runs even if an earlier one fails. Each failure is prefixed
@@ -450,6 +486,45 @@ and uncorrelated `WHERE EXISTS`:
 
 ```shell
 cargo test --test sqllogictests --features substrait -- --substrait-round-trip --substrait-optimize joins_conditionless.slt
+```
+
+## Running tests: Unparser round-trip mode
+
+This mode runs each query through the SQL unparser. The runner plans the SQL, unparses the
+logical plan with `plan_to_sql` and the default dialect, plans the unparsed SQL again in the
+same `SessionContext`, and executes the result (SQL statement → DF logical → SQL statement →
+DF logical → DF physical → execute).
+
+The runner passes `Ddl`, `Dml`, `Copy`, `Explain`, `Analyze`, `Show` and `Statement` plans through unchanged,
+because SQL cannot express them as a query.
+
+| Failure                 | Meaning                                        |
+| ----------------------- | ---------------------------------------------- |
+| Error while unparsing   | The unparser does not support the plan.        |
+| Error while re-planning | The unparser produced SQL that does not plan.  |
+| Different rows          | The unparser changed the meaning of the query. |
+
+Many files fail in this mode. [`unparser_known_failures.txt`](unparser_known_failures.txt) lists them, one path
+relative to `test_files` per line. CI runs every other file through `cargo xtask ci step test unparser`:
+
+```shell
+cargo test --test sqllogictests -- --unparser-round-trip --unparser-known-failures unparser_known_failures.txt
+```
+
+A new `.slt` file runs in this mode by default. If the unparser cannot handle it yet, add the file to the list.
+When a fix makes a listed file pass, remove the file from the list. The runner rejects an entry that names no
+file in `test_files`.
+
+To run every file, including the listed ones, leave out `--unparser-known-failures`:
+
+```shell
+cargo test --test sqllogictests -- --unparser-round-trip
+```
+
+Add `--unparser-optimize` to optimize the logical plan before unparsing it:
+
+```shell
+cargo test --test sqllogictests -- --unparser-round-trip --unparser-optimize select.slt
 ```
 
 ## `.slt` file format

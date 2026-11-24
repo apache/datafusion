@@ -205,6 +205,11 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// NOTE that checking `!is_empty()` does **not** check for a
     /// required input ordering. Instead, the correct check is that at
     /// least one entry must be `Some`
+    ///
+    /// See [Required orderings] for how the planner checks these requirements
+    /// against the orderings a child provides.
+    ///
+    /// [Required orderings]: EquivalenceProperties#required-orderings
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         vec![None; self.children().len()]
     }
@@ -726,6 +731,8 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// If statistics are not available, should return [`Statistics::new_unknown`]
     /// (the default), not an error.
     /// If `args.partition()` is `None`, it returns statistics for all partitions.
+    ///
+    /// The result must hold one [`ColumnStatistics`] per field of [`Self::schema`].
     ///
     /// Implementations should not call [`StatisticsContext::compute`] from within
     /// this method; child statistics are provided via `input_stats`.

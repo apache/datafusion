@@ -11,7 +11,6 @@ mod min_max_struct;
 use arrow::array::{ArrayRef, ArrowPrimitiveType, downcast_primitive};
 use arrow::datatypes::{DataType, FieldRef, Float16Type, Float32Type, Float64Type};
 use datafusion_common::float_semantics::{float_gt, float_lt};
-use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, exec_err, internal_err};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
@@ -25,7 +24,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::DistinctHandling;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, SetMonotonicity, Signature, Volatility,
-    function::AccumulatorArgs, udaf_default_return_field,
+    function::AccumulatorArgs, udaf_return_field_preserving_arg_metadata,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
@@ -182,7 +181,7 @@ trait FromColumnStatistics {
                             statistics_args.exprs[0].downcast_ref::<expressions::Column>()
                         {
                             return self.value_from_column_statistics(
-                                &col_stats[col_expr.index()],
+                                col_stats.get(col_expr.index())?,
                             );
                         }
                     }
@@ -208,16 +207,6 @@ impl FromColumnStatistics for Max {
     }
 }
 
-/// Returns the field of the result of `min` or `max`. The result has the type of the argument,
-/// so it keeps the metadata of the argument field, such as an extension type.
-fn min_max_return_field(
-    func: &impl AggregateUDFImpl,
-    arg_fields: &[FieldRef],
-) -> Result<FieldRef> {
-    let field = udaf_default_return_field(func, arg_fields)?;
-    Ok(FieldMetadata::from(arg_fields[0].as_ref()).add_to_field_ref(field))
-}
-
 impl AggregateUDFImpl for Max {
     fn name(&self) -> &str {
         "max"
@@ -232,7 +221,7 @@ impl AggregateUDFImpl for Max {
     }
 
     fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
-        min_max_return_field(self, arg_fields)
+        udaf_return_field_preserving_arg_metadata(self, arg_fields)
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -464,7 +453,7 @@ impl AggregateUDFImpl for Min {
     }
 
     fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
-        min_max_return_field(self, arg_fields)
+        udaf_return_field_preserving_arg_metadata(self, arg_fields)
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -1741,5 +1730,26 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    /// `value_from_stats` is public and cannot return an error, so a column
+    /// without statistics gives `None` instead of a panic, as in `sum`.
+    #[test]
+    fn min_max_value_from_stats_out_of_bounds_column_returns_none() {
+        let statistics = datafusion_common::Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+        };
+        let exprs: Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>> =
+            vec![Arc::new(expressions::Column::new("b", 1))];
+        let statistics_args = StatisticsArgs {
+            statistics: &statistics,
+            return_type: &DataType::Int32,
+            is_distinct: false,
+            exprs: &exprs,
+        };
+        assert_eq!(Min::new().value_from_stats(&statistics_args), None);
+        assert_eq!(Max::new().value_from_stats(&statistics_args), None);
     }
 }

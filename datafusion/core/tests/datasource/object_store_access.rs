@@ -830,7 +830,7 @@ async fn create_single_parquet_file_default() {
     RequestCountingObjectStore()
     Total Requests: 2
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (ranges) path=parquet_table.parquet ranges=0-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=0-2990
     "
     );
 }
@@ -849,7 +849,7 @@ async fn create_single_parquet_file_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 2
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (ranges) path=parquet_table.parquet ranges=1994-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=1990-2990
     "
     );
 }
@@ -878,8 +878,8 @@ async fn create_single_parquet_file_too_small_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 4
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (ranges) path=parquet_table.parquet ranges=2494-2994
-    - GET  (ranges) path=parquet_table.parquet ranges=2264-2986
+    - GET  (ranges) path=parquet_table.parquet ranges=2490-2990
+    - GET  (ranges) path=parquet_table.parquet ranges=2264-2982
     - GET  (ranges) path=parquet_table.parquet ranges=2124-2264
     "
     );
@@ -910,7 +910,7 @@ async fn create_single_parquet_file_small_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 3
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (ranges) path=parquet_table.parquet ranges=2254-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=2250-2990
     - GET  (ranges) path=parquet_table.parquet ranges=2124-2264
     "
     );
@@ -934,7 +934,7 @@ async fn create_single_parquet_file_no_prefetch() {
     RequestCountingObjectStore()
     Total Requests: 2
     - GET  (opts) path=parquet_table.parquet head=true
-    - GET  (ranges) path=parquet_table.parquet ranges=0-2994
+    - GET  (ranges) path=parquet_table.parquet ranges=0-2990
     "
     );
 }
@@ -1641,4 +1641,51 @@ impl ObjectStore for RequestCountingObjectStore {
     ) -> object_store::Result<()> {
         unimplemented!()
     }
+}
+
+#[tokio::test]
+async fn listing_statistics_pruning_adds_no_object_store_requests() {
+    let unfiltered = Test::new().with_single_file_parquet().await;
+    unfiltered
+        .session_context
+        .sql("SET datafusion.execution.collect_statistics = true")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    unfiltered.object_store.clear_requests();
+    unfiltered
+        .session_context
+        .sql("select * from parquet_table")
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+    let baseline = unfiltered.requests();
+    let filtered = Test::new().with_single_file_parquet().await;
+    filtered
+        .session_context
+        .sql("SET datafusion.execution.collect_statistics = true")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    filtered.object_store.clear_requests();
+    let plan = filtered
+        .session_context
+        .sql("select * from parquet_table where a > 1000")
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+    let display = datafusion_physical_plan::displayable(plan.as_ref())
+        .indent(true)
+        .to_string();
+    assert!(display.contains("EmptyExec"), "{display}");
+    assert!(!display.contains("DataSourceExec"), "{display}");
+    assert_eq!(filtered.requests(), baseline);
 }

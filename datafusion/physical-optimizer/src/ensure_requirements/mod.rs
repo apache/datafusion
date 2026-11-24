@@ -34,6 +34,7 @@
 //! EnsureRequirements::optimize(plan)
 //! │
 //! ├─ Phase 0: top-down Interleave → Union      (replace_interleave_with_union)
+//! │           and Auto join modes resolved     (resolve_auto_join_mode)
 //! │
 //! ├─ Phase 1: top-down join-key reorder        (adjust_input_keys_ordering)
 //! │
@@ -144,6 +145,7 @@ use crate::PhysicalOptimizerRule;
 use crate::optimizer::{
     ConfigOnlyContext, PhysicalOptimizerContext, with_statistics_context,
 };
+use enforce_distribution::{replace_interleave_with_union, resolve_auto_join_mode};
 
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
@@ -187,8 +189,16 @@ impl PhysicalOptimizerRule for EnsureRequirements {
         // Interleaves are distribution artifacts of Phase 2, which re-derives
         // them from the children's final partitioning. Keeping them would
         // fail as soon as a child loses the partitioning they depend on.
-        use super::enforce_distribution::replace_interleave_with_union;
-        let plan = plan.transform_down(replace_interleave_with_union).data()?;
+        //
+        // A hash join still in `Auto` mode declares no distribution, so it would
+        // get no repartitioning. `JoinSelection` normally picks the mode earlier;
+        // when it hasn't, pick one here that enforcement can satisfy.
+        let plan = plan
+            .transform_down(|plan| {
+                replace_interleave_with_union(plan)?
+                    .transform_data(|plan| resolve_auto_join_mode(plan, config))
+            })
+            .data()?;
 
         // Phase 1: Join key reordering (top-down, from EnforceDistribution)
         use super::enforce_distribution::{

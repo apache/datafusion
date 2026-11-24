@@ -19,6 +19,7 @@ use self::dependency::{
     generate_dependency_orderings, referred_dependencies,
 };
 use self::walk::SortKeyWalk;
+use crate::equivalence::ordering::ExplicitNullsOrdering;
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, GroupingEquivalenceClass,
     OrderingEquivalenceClass, ProjectionMapping,
@@ -37,6 +38,7 @@ use datafusion_common::{
 };
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 
 use hashbrown::DefaultHashBuilder;
 use indexmap::{IndexMap, IndexSet};
@@ -44,10 +46,12 @@ use itertools::{Either, Itertools};
 
 type ColumnRanges = IndexMap<usize, Interval, DefaultHashBuilder>;
 
-/// `EquivalenceProperties` stores information about the output of a plan node
-/// that can be used to optimize the plan. Currently, it keeps track of:
+/// `EquivalenceProperties` stores information about how values are distributed
+/// across the output of a plan node that can be used to optimize the plan.
+///
+/// Currently, it tracks:
 /// - Sort expressions (orderings),
-/// - Complete expression tuples whose values are contiguous,
+/// - When all rows of equal values are contiguous for certain tuples (groupings),
 /// - Equivalent expressions; i.e. expressions known to have the same value.
 /// - Constants expressions; i.e. expressions known to contain a single constant
 ///   value.
@@ -56,7 +60,24 @@ type ColumnRanges = IndexMap<usize, Interval, DefaultHashBuilder>;
 ///
 /// [Using Ordering for Better Plans]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis/
 ///
-/// # Example equivalent sort expressions
+/// This document explains the concepts and how the pieces fit together.
+///
+/// # Overview
+///
+/// | Concept                | Example                                   | Stored in                                                           |
+/// |------------------------|-------------------------------------------|---------------------------------------------------------------------|
+/// | Equivalent expressions | `a` and `b` after the filter `a = b`      | An [`EquivalenceGroup`] of [`EquivalenceClass`]es                   |
+/// | Constants              | `a` after the filter `a = 5`              | The `constant` of an [`EquivalenceClass`], added as a [`ConstExpr`] |
+/// | Orderings              | `[a ASC, b DESC]` after a sort            | An [`OrderingEquivalenceClass`]                                     |
+/// | Groupings              | `[a, b]` declared by a custom data source | A [`GroupingEquivalenceClass`]                                      |
+/// | Constraints            | A primary key or unique constraint        | [`Constraints`]                                                     |
+///
+/// [`EquivalenceClass`]: crate::equivalence::EquivalenceClass
+/// [Required orderings]: #required-orderings
+/// [`ExecutionPlan::required_input_ordering`]: https://docs.rs/datafusion-physical-plan/latest/datafusion_physical_plan/trait.ExecutionPlan.html#method.required_input_ordering
+/// [Checking whether a requirement is satisfied]: #checking-whether-a-requirement-is-satisfied
+///
+/// # Equivalent sort expressions
 ///
 /// Consider table below:
 ///
@@ -73,11 +94,11 @@ type ColumnRanges = IndexMap<usize, Interval, DefaultHashBuilder>;
 ///
 /// In this case, both `a ASC` and `b DESC` can describe the table ordering.
 /// `EquivalenceProperties` tracks these different valid sort expressions and
-/// treat `a ASC` and `b DESC` on an equal footing. For example, if the query
+/// treats `a ASC` and `b DESC` on an equal footing. For example, if the query
 /// specifies the output sorted by EITHER `a ASC` or `b DESC`, the sort can be
 /// avoided.
 ///
-/// # Example equivalent expressions
+/// # Equivalent expressions
 ///
 /// Similarly, consider the table below:
 ///
@@ -92,11 +113,242 @@ type ColumnRanges = IndexMap<usize, Interval, DefaultHashBuilder>;
 /// └---┴---┘
 /// ```
 ///
-/// In this case,  columns `a` and `b` always have the same value. With this
-/// information, Datafusion can optimize various operations. For example, if
-/// the partition requirement is `Hash(a)` and output partitioning is
-/// `Hash(b)`, then DataFusion avoids repartitioning the data as the existing
-/// partitioning satisfies the requirement.
+/// In this case, columns `a` and `b` always have the same value. DataFusion
+/// uses this information to optimize various operations. For example, if the
+/// partition requirement is `Hash(a)` and output partitioning is `Hash(b)`,
+/// then DataFusion avoids repartitioning the data as the existing partitioning
+/// satisfies the requirement.
+///
+/// # Constants
+///
+/// A constant is an expression with a single value in the output of a plan
+/// node. A constant is *uniform* if it has the same value in every output
+/// partition, and *heterogeneous* if it has one value within each output
+/// partition but may differ between output partitions (see
+/// [`AcrossPartitions`]).
+///
+/// ## Example: Uniform Constant from a Filter
+///
+/// Consider an input sorted by `b ASC` and the filter `a = 5`, which produces
+/// the following table:
+///
+/// ```text
+/// ┌───┬───┐
+/// │ a │ b │
+/// ├───┼───┤
+/// │ 5 │ 1 │
+/// │ 5 │ 2 │
+/// │ 5 │ 4 │
+/// └───┴───┘
+/// ```
+///
+/// The filter adds `a` as a uniform [`ConstExpr`]. If the query requests
+/// sorting on `[a ASC, b ASC]` DataFusion knows it can skip sorting.
+///
+/// ## Example: Heterogeneous Constant from `UNION ALL`
+///
+/// Consider `SELECT 1 AS c, x FROM t1 UNION ALL SELECT 2 AS c, x FROM t2`,
+/// where each input is sorted by `x ASC` and has one output partition. The
+/// union has two output partitions, one from each input:
+///
+/// ```text
+/// Partition 0   Partition 1
+/// ┌───┬───┐     ┌───┬───┐
+/// │ c │ x │     │ c │ x │
+/// ├───┼───┤     ├───┼───┤
+/// │ 1 │ 1 │     │ 2 │ 2 │
+/// │ 1 │ 3 │     │ 2 │ 5 │
+/// └───┴───┘     └───┴───┘
+/// ```
+///
+/// Observations:
+/// - Within each output partition `c` has one value, but the values differ
+///   between output partitions, so `c` is an
+///   [`AcrossPartitions::Heterogeneous`] constant.
+/// - Each output partition is sorted by `[x ASC]`, and therefore also by
+///   `[c ASC, x ASC]`.
+/// - However, when the output partitions are merged by `[x ASC]` alone, the
+///   result is NOT sorted by `c`, unlike with an [`AcrossPartitions::Uniform`]
+///   constant, which would have the same value in every output partition and
+///   thus be sorted by `[c ASC, x ASC]` as well.
+///
+/// Given those observations, `c` must stay in the ordering `[c ASC, x ASC]`
+/// rather than being removed as a uniform constant would be.
+///
+/// # Window functions
+///
+/// NOTE: it is important to distinguish between *window partition*, the rows
+/// with equal `PARTITION BY` keys, and *output partition*, how the data is
+/// divided up across execution units during execution.
+///
+/// ## Example: Window Functions with `PARTITION BY`
+///
+/// Consider an input sorted by `k ASC` and the window expression
+/// `SUM(x) OVER (PARTITION BY k) AS w`, which produces the following rows:
+///
+/// ```text
+/// ┌───┬───┬────┐
+/// │ k │ x │ w  │
+/// ├───┼───┼────┤
+/// │ 1 │ 3 │  5 │
+/// │ 1 │ 2 │  5 │
+/// │ 2 │ 4 │ 10 │
+/// │ 2 │ 6 │ 10 │
+/// │ 3 │ 1 │  1 │
+/// └───┴───┴────┘
+/// ```
+///
+/// Observations:
+/// - `w` is not a constant because it differs between window partitions.
+/// - The output is sorted by `k` (the window partition key), because
+///   DataFusion's window implementation keeps the input order.
+/// - Within each run of equal `k`, `w` has one value.
+///
+/// Given those observations, the output is sorted by `[k, w]` in *every*
+/// direction of `w`: ascending or descending, nulls first or last:
+///
+/// - `[k ASC, w ASC NULLS FIRST]`
+/// - `[k ASC, w ASC NULLS LAST]`
+/// - `[k ASC, w DESC NULLS FIRST]`
+/// - `[k ASC, w DESC NULLS LAST]`
+///
+/// ## Example: Window Functions without `PARTITION BY`
+///
+/// Consider the same input and the window expression `SUM(x) OVER () AS w`,
+/// which produces the following rows:
+///
+/// ```text
+/// ┌───┬───┬────┐
+/// │ k │ x │ w  │
+/// ├───┼───┼────┤
+/// │ 1 │ 3 │ 16 │
+/// │ 1 │ 2 │ 16 │
+/// │ 2 │ 4 │ 16 │
+/// │ 2 │ 6 │ 16 │
+/// │ 3 │ 1 │ 16 │
+/// └───┴───┴────┘
+/// ```
+///
+/// Observations:
+/// - The frame of every row is the whole table, so `w` has one value.
+/// - The output is still sorted by `k`, as the input was.
+///
+/// Given those observations, `w` is added as a constant (a [`ConstExpr`])
+/// rather than as orderings.
+///
+/// ## Example: Set-Monotonic Window Functions
+///
+/// Consider an input sorted by `[ts ASC]` and the window function
+/// `MAX(x) OVER (ORDER BY ts) AS m`, which produces the following rows:
+///
+/// ```text
+/// ┌────┬───┬───┐
+/// │ ts │ x │ m │
+/// ├────┼───┼───┤
+/// │  1 │ 3 │ 3 │
+/// │  2 │ 1 │ 3 │
+/// │  3 │ 5 │ 5 │
+/// │  4 │ 2 │ 5 │
+/// └────┴───┴───┘
+/// ```
+///
+/// Observations:
+/// - When written with explicit defaults, this query is equivalent to
+///   `SELECT ts, x, MAX(x) OVER (ORDER BY ts RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS m`,
+///   so each row's frame contains every earlier row's frame.
+/// - `MAX` is set-monotonically increasing: adding rows to its input can only
+///   raise its value or leave it unchanged (see [`SetMonotonicity`]).
+///
+/// Given those observations, `m` never decreases as `ts` increases, so the
+/// output sorting is described by both `[ts ASC]` and `[m ASC]`.
+///
+/// If the query had a `PARTITION BY k`, with the input sorted by `k` first,
+/// the added ordering would be `[k, m ASC]`.
+///
+/// A decreasing aggregate such as `MIN` results in `DESC`.
+///
+/// A frame that shrinks as rows advance, such as `CURRENT ROW` to
+/// `UNBOUNDED FOLLOWING`, reverses the direction: `MAX` then results in
+/// `DESC`.
+///
+/// [`SetMonotonicity`]: datafusion_expr::SetMonotonicity
+///
+/// # Required orderings
+///
+/// Some operators only work on sorted input. A sort merge join needs
+/// inputs sorted on the join keys, and a streaming window needs its input
+/// sorted by its `PARTITION BY` and then its `ORDER BY` expressions.
+///
+/// Each operator describes its requirements via
+/// [`ExecutionPlan::required_input_ordering`].
+///
+/// **Orderings** describe how the data is actually distributed.
+/// **Requirements** describe what an operator *needs*. The physical optimizer
+/// (`EnforceSorting`) compares orderings to requirements with
+/// [`Self::ordering_satisfy_requirement`] and inserts or removes Sort
+/// operations so that they match (see [Checking whether a requirement is
+/// satisfied]).
+///
+/// # Normal form
+///
+/// Orderings and requirements (see [Required orderings]) are compared in
+/// *normal form*: every expression is replaced by the first member of its
+/// equivalence class, uniform constants and expressions that repeat an earlier
+/// one are removed.
+///
+/// For example, if `a` and `b` are equal and `d` is a uniform constant, the
+/// requirement `[b ASC, d DESC, c ASC, a ASC]` normalizes to `[a ASC, c ASC]`.
+///
+/// # Checking whether a requirement is satisfied
+///
+/// The requirement `[a, b]` holds if the rows are sorted by `a`, and the rows
+/// that tie on `a` are sorted by `b`.
+///
+/// [`Self::ordering_satisfy_requirement`] checks whether a requirement is
+/// satisfied by an ordering, and is quite complex.
+///
+/// # Discovering orderings
+///
+/// `EquivalenceProperties` discovers and accounts for additional orderings that
+/// may not be obvious from various additional information such as constants and
+/// equality.
+///
+/// ## Example: Ordering Implied by a `CAST`
+///
+/// Consider a table `t` sorted by `[c ASC, a ASC, b ASC]` and a query `SELECT
+/// a, b, c FROM t WHERE c = CAST(a AS BIGINT) ORDER BY a, b` that produces the
+/// following rows:
+///
+/// ```text
+/// ┌───┬───┬───┐
+/// │ a │ b │ c │
+/// ├───┼───┼───┤
+/// │ 1 │ 2 │ 1 │
+/// │ 1 │ 5 │ 1 │
+/// │ 2 │ 1 │ 2 │
+/// │ 3 │ 4 │ 3 │
+/// └───┴───┴───┘
+/// ```
+///
+/// Observations:
+/// - The filter keeps the input order, so the rows are still sorted by
+///   `[c ASC, a ASC, b ASC]`.
+/// - Casting an `INT` to a `BIGINT` preserves order and never maps two
+///   different values to the same one, so rows with different `a` are in the
+///   order of `c`, which is the order of `a`.
+/// - Rows with equal `c` are sorted by `[a, b]`.
+///
+/// Given those observations, the rows are also sorted by `[a ASC, b ASC]`,
+/// even though `a` is not the leading sort key. `EquivalenceProperties`
+/// derives this ordering when the equality is added, so the `ORDER BY a, b`
+/// needs no sort.
+///
+/// This holds in general for a function `f` whose output follows the
+/// lexicographical order of its arguments, which `f` declares by setting
+/// [`ExprProperties::preserves_lex_ordering`].
+///
+/// [`Self::add_equal_conditions`] and [`Self::add_constants`] look for such
+/// orderings whenever they learn something new.
 ///
 /// # Code Example
 /// ```
@@ -113,10 +365,10 @@ type ColumnRanges = IndexMap<usize, Interval, DefaultHashBuilder>;
 /// # let col_a = col("a", &schema).unwrap();
 /// # let col_b = col("b", &schema).unwrap();
 /// # let col_c = col("c", &schema).unwrap();
-/// // This object represents data that is sorted by a ASC, c DESC
-/// // with a single constant value of b
 /// let mut eq_properties = EquivalenceProperties::new(schema);
+/// // Single constant value of b
 /// eq_properties.add_constants(vec![ConstExpr::from(col_b)]);
+/// // ORDER BY a ASC, c DESC
 /// eq_properties.add_ordering([
 ///     PhysicalSortExpr::new_default(col_a).asc(),
 ///     PhysicalSortExpr::new_default(col_c).desc(),
@@ -124,7 +376,7 @@ type ColumnRanges = IndexMap<usize, Interval, DefaultHashBuilder>;
 ///
 /// assert_eq!(
 ///     eq_properties.to_string(),
-///     "order: [[a@0 ASC, c@2 DESC]], eq: [{members: [b@1], constant: (heterogeneous)}]"
+///     "order: [a@0 ASC NULLS FIRST, c@2 DESC NULLS FIRST]; constant: b@1 (one value per partition)"
 /// );
 /// ```
 #[derive(Clone, Debug)]
@@ -385,22 +637,26 @@ impl EquivalenceProperties {
         Ok(self)
     }
 
-    /// Clears (empties) the ordering equivalence class within this object.
-    /// Call this method when existing orderings are invalidated.
+    /// Clears ordering and explicit grouping information.
+    ///
+    /// Call this method when existing orderings are invalidated. Grouping
+    /// assertions are also cleared because the operation may split groups.
     pub fn clear_orderings(&mut self) {
         self.oeq_class.clear();
         self.oeq_cache.clear();
+        // Row reordering can also split groups, invalidating their contiguity.
+        self.clear_groupings();
     }
 
-    /// Clears grouping information invalidated by an operation that changes
-    /// row sequence or combines input partitions.
+    /// Clears explicit grouping information without changing orderings.
     pub fn clear_groupings(&mut self) {
         self.geq_class.clear();
         self.geq_cache.clear();
     }
 
-    /// Removes constant expressions that may change across partitions.
-    /// This method should be used when merging data from different partitions.
+    /// Removes constant expressions that may change across output partitions.
+    /// This method should be used when merging data from different output
+    /// partitions.
     pub fn clear_per_partition_constants(&mut self) {
         if self.eq_group.clear_per_partition_constants() {
             // Renormalize orderings if the equivalence group changes:
@@ -414,7 +670,8 @@ impl EquivalenceProperties {
         }
     }
 
-    /// Adds new orderings into the existing ordering equivalence class.
+    /// Adds new orderings into the existing ordering equivalence class, along
+    /// with the orderings they imply through known equalities.
     pub fn add_orderings(
         &mut self,
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
@@ -426,14 +683,32 @@ impl EquivalenceProperties {
             .cloned()
             .filter_map(|o| self.normalize_sort_exprs(o))
             .collect();
-        if !normal_orderings.is_empty() {
-            self.oeq_class.extend(orderings);
-            // Normalize given orderings to update the cache:
-            self.oeq_cache.normal_cls.extend(normal_orderings);
-            // TODO: If no ordering is found to be redundant during extension, we
-            //       can use a shortcut algorithm to update the leading map.
-            self.oeq_cache.update_map();
+        if normal_orderings.is_empty() {
+            return;
         }
+        // `add_constants` and `add_equal_conditions` discover implied orderings
+        // too, and whether an ordering is satisfied must not depend on which of
+        // them ran last. Deriving one fails only on an expression that does not
+        // match the schema; that ordering is then not implied, which can cost a
+        // sort but not a wrong result.
+        let mut implied: Vec<LexOrdering> = vec![];
+        for ordering in &normal_orderings {
+            // Two orderings can imply the same one; expand it only once:
+            for ordering in self.implied_by(ordering).unwrap_or_default() {
+                if !implied.contains(&ordering) {
+                    implied.push(ordering);
+                }
+            }
+        }
+        self.oeq_class.extend(orderings);
+        // Normalize given orderings to update the cache:
+        self.oeq_cache.normal_cls.extend(normal_orderings);
+        // TODO: If no ordering is found to be redundant during extension, we
+        //       can use a shortcut algorithm to update the leading map.
+        self.oeq_cache.update_map();
+        // Each implied ordering is shorter than the one implying it, so this
+        // terminates:
+        self.add_orderings(implied);
     }
 
     /// Adds a single ordering to the existing ordering equivalence class.
@@ -603,13 +878,74 @@ impl EquivalenceProperties {
         let mut new_orderings = vec![];
         for idx in ordering_idxs {
             let ordering = &self.oeq_cache.normal_cls[*idx];
-            new_orderings
-                .extend(self.implied_ordering(&ordering[0], ordering[1..].iter())?);
+            // As in `add_orderings`, an ordering that cannot be derived is
+            // not implied, so the result does not depend on the call order:
+            new_orderings.extend(self.implied_by(ordering).unwrap_or_default());
         }
-        if !new_orderings.is_empty() {
-            self.add_orderings(new_orderings);
-        }
+        self.add_orderings(new_orderings);
         Ok(())
+    }
+
+    /// Returns the orderings that the normal ordering `ordering` implies
+    /// through known equalities: for each key that is a function of the keys
+    /// after it (see [`Self::implied_ordering`]), `ordering` without that key.
+    ///
+    /// # Example: a key that is a function of the keys after it
+    ///
+    /// * Ordering: `[k ASC, a ASC, c ASC]`
+    /// * Equality: `a = CAST(c AS DATE)`
+    /// * Returns: `[k ASC, c ASC]`
+    ///
+    /// Among the rows that tie on `k`, the rows are sorted by `a`, and the
+    /// rows that also tie on `a` are sorted by `c`. `a` is the date of `c`, so
+    /// a row with an earlier `a` also has an earlier `c`, and the rows that
+    /// tie on `k` are sorted by `c` alone:
+    ///
+    /// ```text
+    /// ┌───┬────────────┬──────────────────┐
+    /// │ k │ a          │ c                │
+    /// ├───┼────────────┼──────────────────┤
+    /// │ x │ 2026-01-01 │ 2026-01-01 09:00 │
+    /// │ x │ 2026-01-02 │ 2026-01-02 01:00 │
+    /// │ x │ 2026-01-02 │ 2026-01-02 05:00 │
+    /// │ y │ 2026-01-01 │ 2026-01-01 03:00 │
+    /// └───┴────────────┴──────────────────┘
+    /// ```
+    ///
+    /// # Example: a constant that differs between partitions
+    ///
+    /// * Ordering: `[k ASC, a ASC, c ASC]`, where `k` is a constant whose value
+    ///   differs between partitions
+    /// * Equality: `a = CAST(c AS DATE)`
+    /// * Returns: `[c ASC]`
+    ///
+    /// A normal ordering can keep such a constant (see
+    /// `EquivalenceGroup::normalize_sort_exprs`). Within a partition `k` has
+    /// one value, so it is left out of the keys and of the result.
+    ///
+    /// # Example: directions that differ
+    ///
+    /// * Ordering: `[a ASC, c DESC]`
+    /// * Equality: `a = CAST(c AS DATE)`
+    /// * Returns: nothing
+    ///
+    /// `c` descends within a date but ascends across dates, so the rows are
+    /// not sorted by `c` in either direction.
+    fn implied_by(&self, ordering: &LexOrdering) -> Result<Vec<LexOrdering>> {
+        let keys: Vec<_> = ordering
+            .iter()
+            .filter(|sort_expr| self.eq_group.is_expr_constant(&sort_expr.expr).is_none())
+            .collect();
+        let mut implied = vec![];
+        for (idx, key) in keys.iter().enumerate() {
+            if let Some(rest) =
+                self.implied_ordering(key, keys[idx + 1..].iter().copied())?
+            {
+                let prefix = keys[..idx].iter().copied().cloned();
+                implied.extend(LexOrdering::new(prefix.chain(rest)));
+            }
+        }
+        Ok(implied)
     }
 
     /// Returns the ordering that the normal ordering `[leading, rest..]`
@@ -792,6 +1128,10 @@ impl EquivalenceProperties {
     ///    tie on `a`.
     /// 3. The orderings now start at `[b, c]` and `[d]`.
     /// 4. The function returns `true` as `[d]` satisfies `d`.
+    ///
+    /// See [Required orderings] for what a requirement is.
+    ///
+    /// [Required orderings]: EquivalenceProperties#required-orderings
     pub fn ordering_satisfy_requirement(
         &self,
         given: impl IntoIterator<Item = PhysicalSortRequirement>,
@@ -1144,6 +1484,9 @@ impl EquivalenceProperties {
     fn normalize_mapping(&self, mapping: &ProjectionMapping) -> ProjectionMapping {
         mapping
             .iter()
+            // A volatile source is evaluated again by the projection, so it
+            // does not carry any ordering from the input.
+            .filter(|(source, _)| !is_volatile(source))
             .map(|(source, target)| {
                 let normal_source = self.eq_group.normalize_expr(Arc::clone(source));
                 (normal_source, target.clone())
@@ -1266,9 +1609,26 @@ impl EquivalenceProperties {
 
     /// Projects constraints according to the given projection mapping.
     ///
-    /// This function takes a projection mapping and extracts column indices of
-    /// target columns. It then projects the constraints to only include
-    /// relationships between columns that exist in the projected output.
+    /// A primary key or unique constraint is propagated only when the projection
+    /// includes every column that forms the key as a plain column reference.
+    /// Their indices are remapped to their positions in the output schema.
+    ///
+    /// # Example
+    ///
+    /// The original scan has columns `[a, b]`, with `a` as the primary key.
+    ///
+    /// The required projection is `[b, a]`, so the constraints must be updated.
+    /// Column `a` remains the primary key, but the constraint's physical
+    /// representation is updated to match the projected schema:
+    ///
+    /// ```text
+    /// Original:  [a, b]  constraints=[PrimaryKey([0])]
+    /// Projected: [b, a]  constraints=[PrimaryKey([1])]
+    /// ```
+    ///
+    /// Projecting `[b, a + 1]` instead drops the constraint because `a` is not
+    /// projected directly. This function does not infer constraints on computed
+    /// expressions.
     ///
     /// # Parameters
     ///
@@ -1277,18 +1637,27 @@ impl EquivalenceProperties {
     ///
     /// # Returns
     ///
-    /// Returns an optional `Constraints` object containing only the constraints
-    /// that are valid for the projected columns (if any exists).
+    /// Returns `Some` containing the propagated constraints if at least one
+    /// constraint survives the projection, or `None` if none do.
     fn projected_constraints(&self, mapping: &ProjectionMapping) -> Option<Constraints> {
-        let indices = mapping
-            .iter()
-            .flat_map(|(_, targets)| {
-                targets.iter().filter_map(|(target, _)| {
-                    target.downcast_ref::<Column>().map(|c| c.index())
-                })
-            })
-            .collect::<Vec<_>>();
-        self.constraints.project(&indices)
+        // Source column index of each output column, `usize::MAX` if the
+        // output is not a plain column
+        let mut source_indices = vec![];
+        for (source, targets) in mapping.iter() {
+            let Some(source) = source.downcast_ref::<Column>() else {
+                continue;
+            };
+            for (target, _) in targets.iter() {
+                if let Some(target) = target.downcast_ref::<Column>() {
+                    let index = target.index();
+                    if source_indices.len() <= index {
+                        source_indices.resize(index + 1, usize::MAX);
+                    }
+                    source_indices[index] = source.index();
+                }
+            }
+        }
+        self.constraints.project(&source_indices)
     }
 
     /// Projects these equivalence properties onto `output_schema` according to
@@ -1501,7 +1870,7 @@ impl EquivalenceProperties {
     /// Returns a `Some` value if the expression is constant according to
     /// equivalence group, and `None` otherwise. The `Some` variant contains
     /// an `AcrossPartitions` value indicating whether the expression is
-    /// constant across partitions, and its actual value (if available).
+    /// constant across output partitions, and its actual value (if available).
     pub fn is_expr_constant(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
@@ -1636,34 +2005,84 @@ impl From<EquivalenceProperties> for OrderingEquivalenceClass {
     }
 }
 
-/// More readable display version of the `EquivalenceProperties`.
+impl EquivalenceProperties {
+    /// The facts this object states about its output, as `(key, value)` pairs.
+    ///
+    /// Orderings always spell out NULL placement. Literal-only constants and
+    /// equivalence classes are skipped, and empty sections are omitted.
+    fn facts(&self) -> Vec<(&'static str, String)> {
+        let is_literal = |expr: &Arc<dyn PhysicalExpr>| expr.is::<Literal>();
+        let mut facts = vec![];
+
+        let orders = self
+            .oeq_class
+            .iter()
+            .map(|ordering| format!("[{}]", ExplicitNullsOrdering(ordering)))
+            .collect::<Vec<_>>();
+        if !orders.is_empty() {
+            facts.push(("order", orders.join(" | ")));
+        }
+        if !self.geq_class.is_empty() {
+            facts.push(("group", self.geq_class.to_string()));
+        }
+
+        let equal = self
+            .eq_group
+            .iter()
+            .filter_map(|class| {
+                let members = class
+                    .iter()
+                    .filter(|expr| !is_literal(expr))
+                    .map(|expr| expr.to_string())
+                    .collect::<Vec<_>>();
+                (members.len() >= 2).then(|| format!("{{{}}}", members.join(", ")))
+            })
+            .collect::<Vec<_>>();
+        if !equal.is_empty() {
+            facts.push(("equal", equal.join(", ")));
+        }
+
+        let constants = self
+            .constants()
+            .into_iter()
+            .filter(|constant| !is_literal(&constant.expr))
+            .map(|constant| match constant.across_partitions {
+                AcrossPartitions::Uniform(Some(value)) => {
+                    format!("{} = {value}", constant.expr)
+                }
+                AcrossPartitions::Uniform(None) => constant.expr.to_string(),
+                AcrossPartitions::Heterogeneous => {
+                    format!("{} (one value per partition)", constant.expr)
+                }
+            })
+            .collect::<Vec<_>>();
+        if !constants.is_empty() {
+            facts.push(("constant", constants.join(", ")));
+        }
+        facts
+    }
+}
+
+/// Readable display of the facts, separated by `; `.
 ///
 /// Format:
 /// ```text
-/// order: [[b@1 ASC NULLS LAST]], group: [[a@0, b@1]], eq: [{members: [a@0], constant: (heterogeneous)}]
+/// order: [a@0 ASC NULLS FIRST] | [b@1 DESC NULLS LAST]; equal: {a@0, c@2}; constant: d@3 (one value per partition)
 /// ```
+///
+/// Prints `none` when there are no facts.
 impl Display for EquivalenceProperties {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let empty_eq_group = self.eq_group.is_empty();
-        let empty_oeq_class = self.oeq_class.is_empty();
-        let empty_geq_class = self.geq_class.is_empty();
-        if empty_oeq_class && empty_geq_class && empty_eq_group {
-            return write!(f, "No properties");
+        let facts = self.facts();
+        if facts.is_empty() {
+            return write!(f, "none");
         }
-
-        let mut separator = "";
-        if !empty_oeq_class {
-            write!(f, "order: {}", self.oeq_class)?;
-            separator = ", ";
-        }
-        if !empty_geq_class {
-            write!(f, "{separator}group: {}", self.geq_class)?;
-            separator = ", ";
-        }
-        if !empty_eq_group {
-            write!(f, "{separator}eq: {}", self.eq_group)?;
-        }
-        Ok(())
+        let text = facts
+            .iter()
+            .map(|(key, value)| format!("{key}: {value}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        f.write_str(&text)
     }
 }
 
@@ -1698,7 +2117,6 @@ fn expr_refers(
 /// Only `Column`s are cached, by index: the schema is fixed for the cache's lifetime. Other
 /// expressions and failures are computed as before and never cached. Cloning a cached range
 /// clones its two endpoints, which for nested types share their arrays.
-#[derive(Default)]
 struct ColumnRangeCache<'a> {
     bounds: Option<&'a ColumnRanges>,
     ranges: std::cell::RefCell<HashMap<usize, Interval>>,
@@ -1772,9 +2190,10 @@ fn get_expr_properties(
             )
             .map(|properties| properties.range)
             .ok();
+            let data_type = expr.data_type(schema)?;
             match range {
-                Some(range) if range.data_type() == expr.data_type(schema)? => range,
-                _ => Interval::make_unbounded(&expr.data_type(schema)?)?,
+                Some(range) if range.data_type() == data_type => range,
+                _ => Interval::make_unbounded(&data_type)?,
             }
         };
         Ok(ExprProperties {
@@ -1850,9 +2269,64 @@ mod tests {
     use super::*;
 
     use crate::equivalence::tests::create_test_params;
-    use crate::expressions::col;
+    use crate::expressions::{BinaryExpr, col, lit};
 
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::Operator;
+
+    #[test]
+    fn test_ordering_satisfy_with_column_statistics() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let a = col("a", &schema)?;
+        let ordering = [PhysicalSortExpr::new_default(Arc::clone(&a))];
+        let properties = EquivalenceProperties::new_with_orderings(schema, [ordering]);
+        let required = [PhysicalSortExpr::new_default(Arc::new(BinaryExpr::new(
+            a,
+            Operator::Plus,
+            lit(1_i64),
+        )))];
+
+        let exact = |value: i64| Precision::Exact(ScalarValue::from(value));
+        let inexact = |value: i64| Precision::Inexact(ScalarValue::from(value));
+        let null = Precision::Exact(ScalarValue::Int64(None));
+        for (case, min_value, max_value, expected) in [
+            ("exact extrema", exact(1), exact(3), true),
+            ("inexact min", inexact(1), exact(3), false),
+            ("inexact max", exact(1), inexact(3), false),
+            ("missing min", Precision::Absent, exact(3), false),
+            ("missing max", exact(1), Precision::Absent, false),
+            ("null min", null.clone(), exact(3), false),
+            ("null max", exact(1), null, false),
+            ("reversed extrema", exact(3), exact(1), false),
+            (
+                "wrong min type",
+                Precision::Exact(ScalarValue::from(1_i32)),
+                exact(3),
+                false,
+            ),
+            (
+                "wrong max type",
+                exact(1),
+                Precision::Exact(ScalarValue::from(3_i32)),
+                false,
+            ),
+        ] {
+            let statistics = ColumnStatistics {
+                min_value,
+                max_value,
+                null_count: Precision::Exact(1),
+                ..ColumnStatistics::new_unknown()
+            };
+            let properties = properties.clone().with_column_statistics(&[statistics]);
+            assert_eq!(
+                properties.ordering_satisfy(required.clone())?,
+                expected,
+                "{case}"
+            );
+        }
+        Ok(())
+    }
 
     /// Renames `a`, `b`, `c` and `d` so the projection is non-trivial while
     /// still carrying every ordering and the `a = c` class across.
@@ -1884,6 +2358,50 @@ mod tests {
             Field::new("c1", DataType::Int32, true),
             Field::new("d1", DataType::Int32, true),
         ]))
+    }
+
+    #[test]
+    fn test_facts_spell_out_null_placement_and_skip_literals() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+        let col_d = col("d", &schema)?;
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        assert!(eq_properties.facts().is_empty());
+        assert_eq!(eq_properties.to_string(), "none");
+
+        eq_properties.add_ordering([
+            PhysicalSortExpr::new(
+                Arc::clone(&col_a),
+                SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            ),
+            PhysicalSortExpr::new(
+                Arc::clone(&col_b),
+                SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            ),
+        ]);
+        eq_properties.add_equal_conditions(Arc::clone(&col_a), Arc::clone(&col_c))?;
+        eq_properties.add_constants([
+            ConstExpr::from(Arc::clone(&col_d)),
+            ConstExpr::from(lit(5i32)),
+        ])?;
+        assert_eq!(
+            eq_properties.to_string(),
+            "order: [a@0 ASC NULLS FIRST, b@1 DESC NULLS LAST]; equal: {a@0, c@2}; constant: d@3 (one value per partition)"
+        );
+        Ok(())
     }
 
     #[test]
