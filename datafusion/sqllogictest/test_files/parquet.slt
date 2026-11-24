@@ -367,6 +367,46 @@ NULL
 statement ok
 DROP TABLE single_nan;
 
+# NaN values are excluded from Parquet min/max statistics.
+# Arrange: write columns with finite min=max and no nulls.
+query I
+COPY (
+  SELECT x::REAL AS f32, x::DOUBLE AS f64
+  FROM (VALUES ('NaN'), ('5')) AS t(x)
+)
+TO 'test_files/scratch/parquet/nan_statistics.parquet'
+STORED AS PARQUET;
+----
+2
+
+# Act: read the file with its stored statistics.
+statement ok
+CREATE EXTERNAL TABLE nan_statistics
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/nan_statistics.parquet';
+
+# Assert: equal finite bounds must not replace NaN values.
+query RR rowsort
+SELECT f32, f64 FROM nan_statistics;
+----
+5 5
+NaN NaN
+
+# Equality must filter out NaN.
+query RR
+SELECT f32, f64 FROM nan_statistics WHERE f32 = 5 AND f64 = 5;
+----
+5 5
+
+# NaN sorts above finite values and must not be pruned.
+query RR
+SELECT f32, f64 FROM nan_statistics WHERE f32 > 5 AND f64 > 5;
+----
+NaN NaN
+
+statement ok
+DROP TABLE nan_statistics;
+
 statement ok
 CREATE EXTERNAL TABLE list_columns
 STORED AS PARQUET
