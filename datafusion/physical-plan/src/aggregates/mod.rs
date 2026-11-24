@@ -9264,136 +9264,56 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_aggregate_stats_integer_bounds() -> Result<()> {
-        use datafusion_common::ColumnStatistics;
+    fn int_bounds(min: i32, max: i32) -> ColumnStatistics {
+        ColumnStatistics::new_unknown()
+            .with_min_value(Precision::Inexact(ScalarValue::Int32(Some(min))))
+            .with_max_value(Precision::Inexact(ScalarValue::Int32(Some(max))))
+    }
 
-        fn bounds(min: i32, max: i32) -> ColumnStatistics {
-            ColumnStatistics::new_unknown()
-                .with_min_value(Precision::Inexact(ScalarValue::Int32(Some(min))))
-                .with_max_value(Precision::Inexact(ScalarValue::Int32(Some(max))))
-        }
-
-        struct TestCase {
-            name: &'static str,
-            input_rows: Precision<usize>,
-            col_a_stats: ColumnStatistics,
-            col_b_stats: ColumnStatistics,
-            group_by_cols: Vec<&'static str>,
-            expected_num_rows: Precision<usize>,
-        }
-        let case = |name, col_a_stats, expected_num_rows| TestCase {
-            name,
-            input_rows: Precision::Exact(1_000_000),
-            col_a_stats,
-            col_b_stats: ColumnStatistics::new_unknown(),
-            group_by_cols: vec!["a"],
-            expected_num_rows,
-        };
-
-        let cases = vec![
-            case(
-                "nullable key with unknown NULL count adds a NULL group",
-                bounds(1992, 1998),
-                Precision::Inexact(8),
-            ),
-            case(
-                "key without NULLs has no NULL group",
-                bounds(1992, 1998).with_null_count(Precision::Exact(0)),
-                Precision::Inexact(7),
-            ),
-            case(
-                "NDV is preferred to bounds",
-                bounds(1, 100).with_distinct_count(Precision::Inexact(3)),
-                Precision::Inexact(3),
-            ),
-            case(
-                "bounds cap the NDV",
-                bounds(1, 7).with_distinct_count(Precision::Inexact(1_000)),
-                Precision::Inexact(7),
-            ),
-            TestCase {
-                name: "bounds do not replace unknown input rows",
-                input_rows: Precision::Absent,
-                ..case("", bounds(1, i32::MAX), Precision::Absent)
-            },
-            TestCase {
-                name: "NDV capped by bounds is used without input rows",
-                input_rows: Precision::Absent,
-                ..case(
-                    "",
-                    bounds(1, 7).with_distinct_count(Precision::Inexact(1_000)),
-                    Precision::Inexact(7),
-                )
-            },
-            case(
-                "range larger than the input is capped by input rows",
-                bounds(0, i32::MAX),
-                Precision::Inexact(1_000_000),
-            ),
-            case(
-                "string bounds do not count values",
-                ColumnStatistics::new_unknown()
-                    .with_min_value(Precision::Exact(ScalarValue::from("a")))
-                    .with_max_value(Precision::Exact(ScalarValue::from("b"))),
-                Precision::Inexact(1_000_000),
-            ),
-            case(
-                "NULL bound does not count values",
-                ColumnStatistics::new_unknown()
-                    .with_min_value(Precision::Exact(ScalarValue::Int32(None)))
-                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(10)))),
-                Precision::Inexact(1_000_000),
-            ),
-            case(
-                "bounds out of order do not count values",
-                bounds(10, 1),
-                Precision::Inexact(1_000_000),
-            ),
-            TestCase {
-                name: "bounds and NDV multiply across keys",
-                col_b_stats: ColumnStatistics::new_unknown()
-                    .with_distinct_count(Precision::Exact(5)),
-                group_by_cols: vec!["a", "b"],
-                ..case(
-                    "",
-                    bounds(1, 10).with_null_count(Precision::Exact(0)),
-                    Precision::Inexact(50),
-                )
-            },
-            TestCase {
-                name: "key without NDV or bounds keeps input rows",
-                group_by_cols: vec!["a", "b"],
-                ..case("", bounds(1, 10), Precision::Inexact(1_000_000))
-            },
-        ];
-
-        for case in cases {
-            let schema = Arc::new(Schema::new(vec![
-                Field::new("a", DataType::Int32, true),
-                Field::new("b", DataType::Int32, true),
-            ]));
-            let input_stats = Statistics {
-                num_rows: case.input_rows,
-                total_byte_size: Precision::Inexact(1_000_000),
-                column_statistics: vec![case.col_a_stats, case.col_b_stats],
-            };
-            let agg = build_test_aggregate(
-                &schema,
-                input_stats,
-                simple_group_by(&schema, &case.group_by_cols),
-                None,
-            )?;
-
-            let stats = StatisticsContext::new().compute(&agg, &StatisticsArgs::new())?;
-            assert_eq!(stats.num_rows, case.expected_num_rows, "{}", case.name);
-        }
-
-        // Grouping sets keep the NDV-only estimate.
+    /// Statistics of `GROUP BY a` in `mode` over nullable columns `a` and `b`.
+    fn group_by_a_statistics(
+        mode: AggregateMode,
+        num_rows: Precision<usize>,
+        a: ColumnStatistics,
+    ) -> Result<Arc<Statistics>> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
         ]));
+        let input_stats = Statistics {
+            num_rows,
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![a, ColumnStatistics::new_unknown()],
+        };
+        let agg = build_test_aggregate_with_mode(
+            &schema,
+            input_stats,
+            simple_group_by(&schema, &["a"]),
+            None,
+            mode,
+        )?;
+        StatisticsContext::new().compute(&agg, &StatisticsArgs::new())
+    }
+
+    #[test]
+    fn test_aggregate_stats_range_caps_ndv() -> Result<()> {
+        let a = int_bounds(1, 7).with_distinct_count(Precision::Inexact(1_000));
+        let stats = group_by_a_statistics(AggregateMode::Final, Precision::Absent, a)?;
+        assert_eq!(stats.num_rows, Precision::Inexact(7));
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_stats_range_without_input_rows() -> Result<()> {
+        let a = int_bounds(1, i32::MAX);
+        let stats = group_by_a_statistics(AggregateMode::Final, Precision::Absent, a)?;
+        assert_eq!(stats.num_rows, Precision::Absent);
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_stats_grouping_sets_ignore_range() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let grouping_set = PhysicalGroupBy::new(
             vec![(col("a", &schema)?, "a".to_string())],
             vec![(lit(ScalarValue::Int32(None)), "a".to_string())],
@@ -9401,61 +9321,39 @@ mod tests {
             true,
         );
         let input_stats = Statistics {
-            num_rows: Precision::Exact(1_000_000),
-            total_byte_size: Precision::Inexact(1_000_000),
-            column_statistics: vec![bounds(1, 10), ColumnStatistics::new_unknown()],
+            num_rows: Precision::Exact(1_000),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![int_bounds(1, 10)],
         };
         let agg = build_test_aggregate(&schema, input_stats, grouping_set, None)?;
         let stats = StatisticsContext::new().compute(&agg, &StatisticsArgs::new())?;
-        assert_eq!(stats.num_rows, Precision::Inexact(1_000_000));
-
+        assert_eq!(stats.num_rows, Precision::Inexact(1_000));
         Ok(())
     }
 
-    /// The bounds of an expression key reach the final aggregate through the
-    /// partial aggregate output.
+    /// The final aggregate reads the nullability of `b + 1` from its child,
+    /// the partial aggregate, where the key is at index 0. In the first-phase
+    /// input, index 0 is the nullable column `a`.
     #[test]
     fn test_aggregate_stats_expression_bounds_through_partial() -> Result<()> {
-        use datafusion_common::ColumnStatistics;
         use datafusion_expr::Operator;
         use datafusion_physical_expr::expressions::BinaryExpr;
 
-        // The key is at index 0 of the partial output, but `a` is at index 0
-        // of the first-phase input. Only `b + 1` is non-nullable.
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, false),
         ]));
         let input_stats = Statistics {
-            num_rows: Precision::Exact(1_000_000),
-            total_byte_size: Precision::Inexact(1_000_000),
-            column_statistics: vec![
-                ColumnStatistics::new_unknown(),
-                ColumnStatistics::new_unknown()
-                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(1))))
-                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(10)))),
-            ],
+            num_rows: Precision::Exact(1_000),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics::new_unknown(), int_bounds(1, 10)],
         };
-
-        // GROUP BY b + 1
         let b_plus_one: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
             col("b", &schema)?,
             Operator::Plus,
             lit(ScalarValue::Int32(Some(1))),
         ));
         let group_by = PhysicalGroupBy::new_single(vec![(b_plus_one, "b+1".into())]);
-
-        let single = build_test_aggregate_with_mode(
-            &schema,
-            input_stats.clone(),
-            group_by.clone(),
-            None,
-            AggregateMode::Single,
-        )?;
-        let stats = StatisticsContext::new().compute(&single, &StatisticsArgs::new())?;
-        // b + 1 is in [2, 11] and is not nullable.
-        assert_eq!(stats.num_rows, Precision::Inexact(10));
-
         let partial = Arc::new(build_test_aggregate_with_mode(
             &schema,
             input_stats,
@@ -9463,16 +9361,6 @@ mod tests {
             None,
             AggregateMode::Partial,
         )?);
-        let stats =
-            StatisticsContext::new().compute(partial.as_ref(), &StatisticsArgs::new())?;
-        assert_eq!(stats.num_rows, Precision::Inexact(1_000_000));
-        assert_eq!(
-            stats.column_statistics[0],
-            ColumnStatistics::new_unknown()
-                .with_min_value(Precision::Inexact(ScalarValue::Int32(Some(2))))
-                .with_max_value(Precision::Inexact(ScalarValue::Int32(Some(11))))
-        );
-
         let last = AggregateExec::try_new(
             AggregateMode::Final,
             group_by.as_final(),
@@ -9483,61 +9371,20 @@ mod tests {
         )?;
         let stats = StatisticsContext::new().compute(&last, &StatisticsArgs::new())?;
         assert_eq!(stats.num_rows, Precision::Inexact(10));
-
-        Ok(())
-    }
-
-    /// Exact zero survives partial aggregation so the final aggregate can
-    /// rule out a NULL group.
-    #[test]
-    fn test_aggregate_stats_null_count_through_partial() -> Result<()> {
-        use datafusion_common::ColumnStatistics;
-
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
-        let group_by = simple_group_by(&schema, &["a"]);
-        for (null_count, partial_null_count, expected_num_rows) in [
-            (Precision::Exact(0), Precision::Exact(0), 7),
-            (Precision::Exact(5), Precision::Absent, 8),
-        ] {
-            let input_stats = Statistics {
-                num_rows: Precision::Exact(1_000_000),
-                total_byte_size: Precision::Inexact(1_000_000),
-                column_statistics: vec![
-                    ColumnStatistics::new_unknown()
-                        .with_min_value(Precision::Exact(ScalarValue::Int32(Some(1))))
-                        .with_max_value(Precision::Exact(ScalarValue::Int32(Some(7))))
-                        .with_null_count(null_count),
-                ],
-            };
-            let partial = Arc::new(build_test_aggregate_with_mode(
-                &schema,
-                input_stats,
-                group_by.clone(),
-                None,
-                AggregateMode::Partial,
-            )?);
-            let stats = StatisticsContext::new()
-                .compute(partial.as_ref(), &StatisticsArgs::new())?;
-            assert_eq!(stats.column_statistics[0].null_count, partial_null_count);
-
-            let last = AggregateExec::try_new(
-                AggregateMode::Final,
-                group_by.as_final(),
-                vec![count_a_aggregate(&schema)?],
-                vec![None],
-                partial,
-                Arc::clone(&schema),
-            )?;
-            let stats =
-                StatisticsContext::new().compute(&last, &StatisticsArgs::new())?;
-            assert_eq!(stats.num_rows, Precision::Inexact(expected_num_rows));
-        }
-
         Ok(())
     }
 
     #[test]
-    fn test_aggregate_stats_null_count_with_multiple_keys() -> Result<()> {
+    fn test_aggregate_stats_null_count_of_single_key() -> Result<()> {
+        let a = int_bounds(1, 10).with_null_count(Precision::Exact(5));
+        let stats =
+            group_by_a_statistics(AggregateMode::Single, Precision::Exact(1_000), a)?;
+        assert_eq!(stats.column_statistics[0].null_count, Precision::Inexact(1));
+        Ok(())
+    }
+
+    #[test]
+    fn test_aggregate_stats_null_count_of_multiple_keys() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, false),

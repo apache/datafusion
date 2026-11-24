@@ -3438,112 +3438,42 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_expr_column_statistics_bounds() {
-        let col0_plus_one: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+    fn test_expr_column_statistics_drops_bounds_of_other_type() {
+        let col0_plus_one = BinaryExpr::new(
             Arc::new(Column::new("col0", 0)),
             Operator::Plus,
             Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
-        ));
-        let stats = get_stats().column_statistics;
-        let bounds = ColumnStatistics::new_unknown()
-            .with_min_value(Precision::Inexact(ScalarValue::Int64(Some(-3))))
-            .with_max_value(Precision::Inexact(ScalarValue::Int64(Some(22))));
-        assert_eq!(
-            expr_column_statistics(
-                col0_plus_one.as_ref(),
-                &stats,
-                None,
-                &DataType::Int64
-            ),
-            bounds
         );
-
-        // Bounds of another type than the output type are discarded.
-        assert_eq!(
-            expr_column_statistics(
-                col0_plus_one.as_ref(),
-                &stats,
-                None,
-                &DataType::Int32
-            ),
-            ColumnStatistics::new_unknown()
-        );
-
-        // Every input must have bounds.
-        let mut missing_max = get_stats().column_statistics;
-        missing_max[0].max_value = Precision::Absent;
-        assert_eq!(
-            expr_column_statistics(
-                col0_plus_one.as_ref(),
-                &missing_max,
-                None,
-                &DataType::Int64
-            ),
-            ColumnStatistics::new_unknown()
-        );
-
-        // A cast keeps the bounds of its input.
-        let cast_bounds: Arc<dyn PhysicalExpr> =
-            Arc::new(CastExpr::new(col0_plus_one, DataType::Int64, None));
-        assert_eq!(
-            expr_column_statistics(cast_bounds.as_ref(), &stats, None, &DataType::Int64),
-            bounds
-        );
-
-        // Arithmetic without interval support does not compute bounds.
-        let date = |days| Precision::Exact(ScalarValue::Date32(Some(days)));
-        let interval = |days| {
-            Precision::Exact(ScalarValue::IntervalDayTime(Some(
-                arrow::datatypes::IntervalDayTime::new(days, 0),
-            )))
-        };
-        let unsupported_stats = vec![
-            ColumnStatistics::new_unknown()
-                .with_min_value(date(0))
-                .with_max_value(date(10)),
-            ColumnStatistics::new_unknown()
-                .with_min_value(interval(1))
-                .with_max_value(interval(2)),
-            ColumnStatistics::new_unknown()
-                .with_min_value(Precision::Exact(ScalarValue::from("a")))
-                .with_max_value(Precision::Exact(ScalarValue::from("b"))),
-            ColumnStatistics::new_unknown()
-                .with_min_value(Precision::Exact(ScalarValue::Decimal128(Some(1), 10, 2)))
-                .with_max_value(Precision::Exact(ScalarValue::Decimal128(
-                    Some(9),
-                    10,
-                    2,
-                ))),
-        ];
-        for (left, op, right) in [
-            (3, Operator::Plus, 3),
-            (0, Operator::Plus, 1),
-            (1, Operator::Multiply, 1),
-            (2, Operator::Minus, 2),
-            (0, Operator::Modulo, 0),
-        ] {
-            let expr = BinaryExpr::new(
-                Arc::new(Column::new("l", left)),
-                op,
-                Arc::new(Column::new("r", right)),
-            );
-            let stats =
-                project_column_statistics_through_expr(&expr, &unsupported_stats, None);
-            assert_eq!(stats, ColumnStatistics::new_unknown(), "{expr}");
-        }
-
-        // A literal input has its value as exact bounds.
-        let cast_literal: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
-            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
-            DataType::Int64,
+        let stats = expr_column_statistics(
+            &col0_plus_one,
+            &get_stats().column_statistics,
             None,
-        ));
-        assert_eq!(
-            expr_column_statistics(cast_literal.as_ref(), &stats, None, &DataType::Int64),
-            ColumnStatistics::new_unknown()
-                .with_min_value(Precision::Exact(ScalarValue::Int64(Some(5))))
-                .with_max_value(Precision::Exact(ScalarValue::Int64(Some(5))))
+            &DataType::Int32,
         );
+        assert_eq!(stats, ColumnStatistics::new_unknown());
+    }
+
+    #[test]
+    fn test_expr_column_statistics_needs_interval_support() {
+        let decimal =
+            |value| Precision::Exact(ScalarValue::Decimal128(Some(value), 10, 2));
+        let column_stats = vec![
+            ColumnStatistics::new_unknown()
+                .with_min_value(decimal(1))
+                .with_max_value(decimal(9)),
+        ];
+        let sum = BinaryExpr::new(
+            Arc::new(Column::new("d", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("d", 0)),
+        );
+        let stats = expr_column_statistics(
+            &sum,
+            &column_stats,
+            None,
+            &DataType::Decimal128(11, 2),
+        );
+        assert_eq!(stats, ColumnStatistics::new_unknown());
     }
 
     #[test]

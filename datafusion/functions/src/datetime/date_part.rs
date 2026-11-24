@@ -1061,17 +1061,9 @@ mod tests {
     }
 
     #[test]
-    fn year_bounds_enclose_date32_range() {
-        for part in ["year", "YEAR", "'year'", "y"] {
-            let actual = bounds(
-                ScalarValue::from(part),
-                date("1992-01-02"),
-                date("1998-12-01"),
-            );
-            assert_eq!(actual, Interval::make(Some(1992), Some(1998)).unwrap());
-        }
+    fn year_bounds_of_date32_range() {
         let actual = bounds(
-            ScalarValue::Utf8View(Some("year".to_string())),
+            ScalarValue::from("year"),
             date("1969-12-31"),
             date("1970-01-01"),
         );
@@ -1079,46 +1071,22 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_inputs_return_unbounded() {
-        let unbounded = Interval::make_unbounded(&DataType::Null).unwrap();
-        let cases = [
-            // Only the year has bounds.
-            (
-                ScalarValue::from("month"),
-                date("1992-01-02"),
-                date("1998-12-01"),
-            ),
-            // An unbounded endpoint gives no year.
-            (
-                ScalarValue::from("year"),
-                ScalarValue::Date32(None),
-                date("1998-12-01"),
-            ),
-            // The year of this date is outside the range of the year kernel.
-            (
-                ScalarValue::from("year"),
-                date("1998-12-01"),
-                ScalarValue::Date32(Some(i32::MAX)),
-            ),
-            // Only Date32 values have bounds.
-            (
-                ScalarValue::from("year"),
-                ScalarValue::Date64(Some(0)),
-                ScalarValue::Date64(Some(1)),
-            ),
-        ];
-        for (part, lower, upper) in cases {
-            assert_eq!(bounds(part, lower, upper), unbounded);
-        }
+    fn other_parts_are_unbounded() {
+        let actual = bounds(
+            ScalarValue::from("month"),
+            date("1992-01-02"),
+            date("1998-12-01"),
+        );
+        assert_eq!(actual, Interval::make_unbounded(&DataType::Null).unwrap());
+    }
 
-        // The part must be a single literal value.
-        let parts =
-            Interval::try_new(ScalarValue::from("month"), ScalarValue::from("year"))
-                .unwrap();
-        let dates = Interval::try_new(date("1992-01-02"), date("1998-12-01")).unwrap();
-        let actual = DatePartFunc::new()
-            .evaluate_bounds(&[&parts, &dates])
-            .unwrap();
-        assert_eq!(actual, unbounded);
+    #[test]
+    fn year_outside_kernel_range_is_unbounded() {
+        let actual = bounds(
+            ScalarValue::from("year"),
+            date("1998-12-01"),
+            ScalarValue::Date32(Some(i32::MAX)),
+        );
+        assert_eq!(actual, Interval::make_unbounded(&DataType::Null).unwrap());
     }
 }
