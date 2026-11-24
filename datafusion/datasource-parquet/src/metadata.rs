@@ -30,7 +30,7 @@ use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
-use parquet::arrow::parquet_to_arrow_schema;
+use parquet::arrow::{ArrowSchemaConverter, parquet_column, parquet_to_arrow_schema};
 use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
@@ -1121,12 +1121,13 @@ impl FileMetadata for CachedParquetMetaData {
 ///
 /// Returns `Ok(None)` if the referenced column is not in `writer_schema`, such as a
 /// hive partition column that is removed before writing the Parquet file. Returns
-/// `Err` if the expression is not a simple column reference or references a column
-/// outside `input_schema`.
+/// `Err` if the expression is not a simple column reference, references a column
+/// outside `input_schema`, or references a nested column.
 pub(crate) fn sort_expr_to_sorting_column(
     sort_expr: &PhysicalSortExpr,
     input_schema: &Schema,
     writer_schema: &Schema,
+    parquet_schema: &SchemaDescriptor,
 ) -> Result<Option<SortingColumn>> {
     let column = sort_expr.expr.downcast_ref::<Column>().ok_or_else(|| {
         DataFusionError::Plan(format!(
@@ -1144,14 +1145,25 @@ pub(crate) fn sort_expr_to_sorting_column(
             input_schema.fields().len()
         )
     })?;
-    let Some((writer_index, _)) = writer_schema.column_with_name(input_field.name())
-    else {
+    if writer_schema.column_with_name(input_field.name()).is_none() {
         return Ok(None);
+    }
+
+    // `column_idx` is a Parquet leaf column index, which differs from the Arrow
+    // field index when an earlier field is nested, such as a struct.
+    let Some((leaf_index, _)) =
+        parquet_column(parquet_schema, writer_schema, input_field.name())
+    else {
+        return Err(DataFusionError::Plan(format!(
+            "Parquet sorting_columns only supports primitive columns, \
+                 but got nested column: {}",
+            input_field.name()
+        )));
     };
 
-    let column_idx: i32 = writer_index.try_into().map_err(|_| {
+    let column_idx: i32 = leaf_index.try_into().map_err(|_| {
         DataFusionError::Plan(format!(
-            "Column index {writer_index} is too large to be represented as i32"
+            "Column index {leaf_index} is too large to be represented as i32"
         ))
     })?;
 
@@ -1165,18 +1177,24 @@ pub(crate) fn sort_expr_to_sorting_column(
 /// Convert a [`LexOrdering`] to `Vec<SortingColumn>` for Parquet.
 ///
 /// Columns that are not present in `writer_schema` are omitted from the resulting
-/// metadata. Returns `Err` if any expression is not a simple column reference or
-/// references a column outside `input_schema`.
+/// metadata. Returns `Err` if any expression is not a simple column reference,
+/// references a column outside `input_schema`, or references a nested column.
 pub(crate) fn lex_ordering_to_sorting_columns(
     ordering: &LexOrdering,
     input_schema: &Schema,
     writer_schema: &Schema,
 ) -> Result<Vec<SortingColumn>> {
+    let parquet_schema = ArrowSchemaConverter::new().convert(writer_schema)?;
     ordering
         .iter()
         .filter_map(|sort_expr| {
-            sort_expr_to_sorting_column(sort_expr, input_schema, writer_schema)
-                .transpose()
+            sort_expr_to_sorting_column(
+                sort_expr,
+                input_schema,
+                writer_schema,
+                &parquet_schema,
+            )
+            .transpose()
         })
         .collect()
 }
@@ -1253,7 +1271,7 @@ mod tests {
     use super::*;
     use arrow::array::Int32Array;
     use arrow::compute::SortOptions;
-    use arrow::datatypes::Field;
+    use arrow::datatypes::{Field, Fields};
 
     #[test]
     fn test_lex_ordering_to_sorting_columns_uses_writer_schema() -> Result<()> {
@@ -1300,6 +1318,49 @@ mod tests {
                 },
             ]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_lex_ordering_to_sorting_columns_uses_leaf_index() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new(
+                "st",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("x", DataType::Int32, true),
+                    Field::new("y", DataType::Int32, true),
+                ])),
+                true,
+            ),
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+
+        // The struct takes leaves 0 and 1, so `b` is leaf 3, not field 2
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("b", 2)),
+            SortOptions::default(),
+        )])
+        .unwrap();
+        let sorting_columns =
+            lex_ordering_to_sorting_columns(&ordering, &schema, &schema)?;
+        assert_eq!(
+            sorting_columns,
+            vec![SortingColumn {
+                column_idx: 3,
+                descending: false,
+                nulls_first: true,
+            }]
+        );
+
+        // A nested column can't be a Parquet sorting column
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new("st", 0)),
+            SortOptions::default(),
+        )])
+        .unwrap();
+        assert!(lex_ordering_to_sorting_columns(&ordering, &schema, &schema).is_err());
 
         Ok(())
     }
