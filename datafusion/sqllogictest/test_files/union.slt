@@ -1450,3 +1450,25 @@ SELECT CAST(NULL AS SMALLINT) AS x WHERE false
 UNION ALL
 SELECT CAST(NULL AS BIGINT) AS x WHERE false;
 ----
+
+# The empty first input is removed, leaving inputs named b and c under a union
+# whose column is named a. LIMIT keeps type coercion from renaming the inputs.
+query I rowsort
+SELECT a FROM (VALUES (1)) t(a) WHERE false
+UNION ALL
+(SELECT b FROM (VALUES (2)) s(b) LIMIT 1)
+UNION ALL
+(SELECT c FROM (VALUES (3)) u(c) LIMIT 1);
+----
+2
+3
+
+query T rowsort
+SELECT a FROM (VALUES ('left')) t(a) WHERE false
+UNION
+(SELECT b FROM (VALUES ('middle')) s(b) LIMIT 1)
+UNION
+(SELECT c FROM (VALUES ('right')) u(c) LIMIT 1);
+----
+middle
+right

@@ -90,7 +90,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::aggregate::{
     AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
 };
-use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::expressions::{Column as PhysicalColumn, Literal};
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
@@ -2053,7 +2053,13 @@ impl DefaultPhysicalPlanner {
             }
 
             // N Children
-            LogicalPlan::Union(_) => UnionExec::try_new(children.vec())?,
+            LogicalPlan::Union(union) => {
+                let mut inputs = children.vec();
+                if let Some(first) = inputs.first_mut() {
+                    *first = align_union_input_names(Arc::clone(first), &union.schema)?;
+                }
+                UnionExec::try_new(inputs)?
+            }
             LogicalPlan::Extension(Extension { node }) => {
                 let mut maybe_plan = None;
                 let children = children.vec();
@@ -2801,6 +2807,43 @@ fn zero_rows_affected_exec(schema: Arc<Schema>) -> Result<Arc<dyn ExecutionPlan>
         schema,
         None,
     )?)
+}
+
+/// [`UnionExec`] names its output columns after its first input, while the
+/// logical [`Union`] schema can use other names: duplicate names are made
+/// unique, and an optimizer rule may have removed the input the names came
+/// from. Renames the first input's columns by position so both agree.
+///
+/// [`Union`]: datafusion_expr::logical_plan::Union
+fn align_union_input_names(
+    input: Arc<dyn ExecutionPlan>,
+    union_schema: &DFSchema,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let input_schema = input.schema();
+    assert_eq_or_internal_err!(
+        input_schema.fields().len(),
+        union_schema.fields().len(),
+        "Union input and output column counts differ"
+    );
+    if input_schema
+        .fields()
+        .iter()
+        .zip(union_schema.fields())
+        .all(|(input_field, union_field)| input_field.name() == union_field.name())
+    {
+        return Ok(input);
+    }
+    let exprs = input_schema
+        .fields()
+        .iter()
+        .zip(union_schema.fields())
+        .enumerate()
+        .map(|(idx, (input_field, union_field))| ProjectionExpr {
+            expr: Arc::new(PhysicalColumn::new(input_field.name(), idx)),
+            alias: union_field.name().clone(),
+        })
+        .collect::<Vec<_>>();
+    Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
 }
 
 /// Extract filter predicates from a DML input plan (DELETE/UPDATE).

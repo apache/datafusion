@@ -1402,3 +1402,13 @@ SELECT * FROM (
 
 statement ok
 DROP TABLE t_26162;
+
+# The union renames duplicate names to a and a_1, so its first input must be
+# renamed to match before it is planned.
+query II rowsort
+(SELECT * FROM (VALUES (1)) AS x(a) CROSS JOIN (VALUES (2)) AS y(a) LIMIT 1)
+UNION ALL
+SELECT * FROM (VALUES (3)) AS x(a) CROSS JOIN (VALUES (4)) AS y(a);
+----
+1 2
+3 4

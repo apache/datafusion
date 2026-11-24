@@ -20,7 +20,7 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::{SortOptions, TimeUnit};
-use datafusion::{assert_batches_eq, dataframe};
+use datafusion::{assert_batches_eq, assert_batches_sorted_eq, dataframe};
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_functions_aggregate::count::{count_all, count_all_window};
@@ -6349,6 +6349,66 @@ async fn union_literal_is_null_and_not_null() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn single_value(value: i32, name: &str) -> Result<LogicalPlanBuilder> {
+    LogicalPlanBuilder::values(vec![vec![lit(value)]])?
+        .project(vec![col("column1").alias(name)])
+}
+
+#[tokio::test]
+async fn union_after_removing_empty_first_input_keeps_union_names() -> Result<()> {
+    let empty = single_value(1, "a")?.filter(lit(false))?.build()?;
+    let middle = single_value(2, "b")?.limit(0, Some(1))?.build()?;
+    let right = single_value(3, "c")?.limit(0, Some(1))?.build()?;
+    let plan = LogicalPlanBuilder::from(empty)
+        .union(middle)?
+        .union(right)?
+        .build()?;
+
+    let batches = SessionContext::new()
+        .execute_logical_plan(plan)
+        .await?
+        .collect()
+        .await?;
+
+    assert_batches_sorted_eq!(
+        ["+---+", "| a |", "+---+", "| 2 |", "| 3 |", "+---+"],
+        &batches
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn union_of_inputs_with_duplicate_names_uses_unique_union_names() -> Result<()> {
+    let cross_join = |left: i32, right: i32| -> Result<LogicalPlanBuilder> {
+        single_value(left, "a")?
+            .alias("x")?
+            .cross_join(single_value(right, "a")?.alias("y")?.build()?)
+    };
+    let plan = cross_join(1, 2)?
+        .limit(0, Some(1))?
+        .union(cross_join(3, 4)?.build()?)?
+        .build()?;
+
+    let batches = SessionContext::new()
+        .execute_logical_plan(plan)
+        .await?
+        .collect()
+        .await?;
+
+    assert_batches_sorted_eq!(
+        [
+            "+---+-----+",
+            "| a | a_1 |",
+            "+---+-----+",
+            "| 1 | 2   |",
+            "| 3 | 4   |",
+            "+---+-----+",
+        ],
+        &batches
+    );
     Ok(())
 }
 
