@@ -564,6 +564,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             Some(Distinct::Distinct) => {
                 let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
+                if let LogicalPlan::Projection(projection) = &plan {
+                    // DISTINCT exposes only the projection's output columns.
+                    //
+                    // SELECT DISTINCT a + 1 AS v FROM t ORDER BY a + 1;
+                    //
+                    // The sort input has v, so trying to resolve t.a would fail.
+                    // Match a + 1 against the aliased projection expression and
+                    // use v as the sort key, as in ORDER BY v.
+                    for sort in &mut order_by_rex {
+                        if matches!(sort.expr, Expr::Column(_)) {
+                            continue;
+                        }
+                        let index = projection.expr.iter().position(|expr| match expr {
+                            Expr::Alias(alias) => alias.expr.as_ref() == &sort.expr,
+                            expr => expr == &sort.expr,
+                        });
+                        if let Some(index) = index {
+                            let field = projection.schema.qualified_field(index);
+                            sort.expr = Expr::Column(Column::from(field));
+                        }
+                    }
+                }
                 // HAVING and QUALIFY are evaluated before DISTINCT
                 let plan =
                     self.filter_post_projection(plan, having_post_projection, "HAVING")?;

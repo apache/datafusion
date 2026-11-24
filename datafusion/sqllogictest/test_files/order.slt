@@ -672,6 +672,37 @@ SELECT DISTINCT time as "first_seen" FROM t ORDER BY 1;
 2022-01-01T01:00:10
 2022-01-02T00:00:20
 
+query I
+SELECT DISTINCT a + 1 FROM (VALUES (2), (1), (2)) AS input(a) ORDER BY a + 1;
+----
+2
+3
+
+query I
+SELECT DISTINCT a + 1 AS v
+FROM (VALUES (2), (1), (2), (NULL)) AS input(a)
+ORDER BY a + 1 DESC NULLS LAST;
+----
+3
+2
+NULL
+
+query II
+SELECT DISTINCT a + 1 AS v, b * 2 AS w
+FROM (VALUES (2, 1), (1, 1), (1, 3), (2, 2), (1, 3)) AS input(a, b)
+ORDER BY a + 1, b * 2 DESC;
+----
+2 6
+2 2
+3 4
+3 2
+
+statement error
+SELECT DISTINCT a + 1 FROM (VALUES (2), (1), (2)) AS input(a) ORDER BY a + 2;
+----
+DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions input.a must appear in select list
+
+
 ## Cleanup
 statement ok
 drop table t;
