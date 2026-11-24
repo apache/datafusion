@@ -122,17 +122,6 @@
 //! This mode is useful in a distributed setting.
 //!
 //! See [`PartialReduceHashAggregateStream`] for details.
-//!
-//! ## 6. Legacy grouped hash aggregation
-//!
-//! [`GroupedHashAggregateStream`] is the legacy implementation that all of the
-//! grouped streams above were split out of. The split is complete, so it is no
-//! longer planned: it is only reachable by setting
-//! [`datafusion.execution.enable_migration_aggregate`](datafusion_common::config::ExecutionOptions::enable_migration_aggregate)
-//! to `false`. That fallback is kept for one release and will then be removed
-//! together with this stream.
-//!
-//! See the issue for details: <https://github.com/apache/datafusion/issues/22710>
 #![expect(rustdoc::private_intra_doc_links)]
 
 use std::borrow::Cow;
@@ -144,7 +133,6 @@ use crate::aggregates::{
     clustered_final_stream::ClusteredFinalAggregateStream,
     clustered_partial_stream::ClusteredPartialAggregateStream,
     clustered_single_stream::ClusteredSingleAggregateStream,
-    grouped_hash_stream::GroupedHashAggregateStream,
     grouped_topk_stream::GroupedTopKAggregateStream,
     hash_stream::{FinalHashAggregateStream, PartialHashAggregateStream},
     partial_reduce_stream::PartialReduceHashAggregateStream,
@@ -209,7 +197,6 @@ mod clustered_single_stream;
 #[cfg(test)]
 mod clustered_test_util;
 pub mod group_values;
-mod grouped_hash_stream;
 mod grouped_topk_stream;
 mod hash_stream;
 mod optimizations;
@@ -657,7 +644,6 @@ impl PartialEq for PhysicalGroupBy {
 /// partial state:              [g, AVG(x) state columns, e.g. sum/count]
 /// final result:               [g, AVG(x)]
 /// ```
-#[expect(clippy::large_enum_variant)]
 enum StreamType {
     /// Single group (no group by) aggregate stream.
     /// Input output scheme: initial input -> final result
@@ -680,12 +666,6 @@ enum StreamType {
     ClusteredFinalAggregate(ClusteredFinalAggregateStream),
     /// Single stage of aggregation for clustered input.
     ClusteredSingleAggregate(ClusteredSingleAggregateStream),
-    /// Legacy hash aggregation reused for multiple stages
-    ///
-    /// Every path it handles now has a dedicated stream, so this variant is only
-    /// produced when `datafusion.execution.enable_migration_aggregate` is set to
-    /// `false`. See [`grouped_hash_stream`] for the deprecation schedule.
-    GroupedHash(GroupedHashAggregateStream),
     /// Grouped TopK aggregate stream.
     /// Input output scheme: initial input -> final result
     ///
@@ -705,7 +685,6 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::ClusteredPartialAggregate(stream) => stream.into_stream(),
             StreamType::ClusteredFinalAggregate(stream) => stream.into_stream(),
             StreamType::ClusteredSingleAggregate(stream) => Box::pin(stream),
-            StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
         }
     }
@@ -1353,21 +1332,6 @@ impl AggregateExec {
                     *descending,
                 )?,
             ));
-        }
-
-        // `GroupedHashAggregateStream` is the legacy implementation of every
-        // grouped path below. It is only planned as an opt-in fallback, see the
-        // `grouped_hash_stream` module documentation for the deprecation
-        // schedule.
-        if !context
-            .session_config()
-            .options()
-            .execution
-            .enable_migration_aggregate
-        {
-            return Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
-                self, context, partition,
-            )?));
         }
 
         // Grouping sets are expanded by the raw-input stages, so the stages
@@ -3296,22 +3260,6 @@ pub fn evaluate_many(
 ) -> Result<Vec<Vec<ArrayRef>>> {
     expr.iter()
         .map(|expr| evaluate_expressions_to_arrays(expr, batch))
-        .collect()
-}
-
-fn evaluate_optional(
-    expr: &[Option<Arc<dyn PhysicalExpr>>],
-    batch: &RecordBatch,
-) -> Result<Vec<Option<ArrayRef>>> {
-    expr.iter()
-        .map(|expr| {
-            expr.as_ref()
-                .map(|expr| {
-                    expr.evaluate(batch)
-                        .and_then(|v| v.into_array(batch.num_rows()))
-                })
-                .transpose()
-        })
         .collect()
 }
 

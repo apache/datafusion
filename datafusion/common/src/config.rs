@@ -966,17 +966,6 @@ config_namespace! {
         /// the new schema verification step.
         pub skip_physical_aggregate_schema_check: bool, default = false
 
-        /// Whether aggregation uses the implementation from the major refactor
-        /// completed in the 56.0.0 release. When set to `false`, aggregation
-        /// falls back to the implementation used before 55.0.0.
-        ///
-        /// The fallback exists only as a workaround for bugs in the new
-        /// implementation and will be removed, together with this option, after
-        /// the 56.0.0 release.
-        ///
-        /// See <https://github.com/apache/datafusion/issues/22710> for details.
-        pub enable_migration_aggregate: bool, default = true
-
         /// Whether inner, left outer, right outer, and full outer hash joins use
         /// the refactored probe implementation. When set to `false`, these joins
         /// use the previous probe implementation.

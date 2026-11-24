@@ -141,7 +141,6 @@ pub(crate) struct PartialHashAggregateStream {
     /// Execution metrics shared with the aggregate plan node.
     baseline_metrics: BaselineMetrics,
 
-    /// Tracks partial aggregation row reduction, matching `GroupedHashAggregateStream`.
     reduction_factor: metrics::RatioMetrics,
 
     /// Number of times accumulated states were emitted due to memory pressure.

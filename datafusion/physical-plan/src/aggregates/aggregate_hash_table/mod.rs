@@ -84,7 +84,6 @@ impl AggregateTableMetrics {
     }
 }
 
-pub(super) use common::create_group_accumulator;
 pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialReduceMarker,
     PartialSkipMarker, SingleMarker,
