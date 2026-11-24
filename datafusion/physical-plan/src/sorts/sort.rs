@@ -537,7 +537,7 @@ impl ExternalSorter {
     }
 
     /// Sorts the in-memory batches and writes sorted runs to spill files.
-    /// Potentially expanding keys spill independently when merge workspace is limited.
+    /// Dictionary keys spill independently when merge workspace is limited.
     async fn sort_and_spill_in_mem_batches(&mut self) -> Result<()> {
         let result = self.try_sort_and_spill_in_mem_batches().await;
         if result.is_err() {
@@ -552,31 +552,31 @@ impl ExternalSorter {
             "in_mem_batches must not be empty when attempting to sort and spill"
         );
 
-        let has_expanding_keys = self.expr.iter().try_fold(false, |found, expr| {
-            let data_type = expr.expr.data_type(&self.schema)?;
-            Ok::<_, DataFusionError>(
-                found
-                    || !(data_type.is_primitive()
-                        || matches!(
-                            data_type,
-                            DataType::Boolean
-                                | DataType::Null
-                                | DataType::FixedSizeBinary(_)
-                        )),
-            )
-        })?;
-        if has_expanding_keys
-            && self.expr.len() > 1
+        if self.expr.len() > 1
             && self.in_mem_batches.len() > 1
             && self.reservation.size() >= self.sort_in_place_threshold_bytes
             && self.merge_reservation.size() < self.reservation.size()
+            && self.expr.iter().try_fold(false, |found, expr| {
+                Ok::<_, DataFusionError>(
+                    found
+                        || match expr.expr.data_type(&self.schema)? {
+                            DataType::Dictionary(_, _) => true,
+                            DataType::RunEndEncoded(_, values) => {
+                                matches!(values.data_type(), DataType::Dictionary(_, _))
+                            }
+                            _ => false,
+                        },
+                )
+            })?
         {
             // A row-format merge initializes keys for every buffered run before
-            // releasing any input. Dictionary keys can expand beyond the remaining
-            // pool capacity. Spill independent runs instead, retaining the input
-            // reservations and merge workspace while each run is written.
-            // Keep fixed-width keys and better-reserved merges on the existing
-            // path: independent runs lose parallel preparation and add merge I/O.
+            // releasing any input. Dictionary keys, including run-end-encoded ones,
+            // can expand beyond the remaining pool capacity. Spill independent runs
+            // instead, retaining the input reservations and merge workspace while
+            // each run is written.
+            // Keep non-dictionary keys and better-reserved merges on the existing
+            // path: independent runs lose parallel preparation and add merge I/O,
+            // and even short strings can exceed disk quotas through file overhead.
             // This workspace comparison is a heuristic, not a bound on encoded keys.
             let batches = std::mem::take(&mut self.in_mem_batches);
             let (sizes, shared_input_size) = self.sort_run_sizes(&batches)?;
@@ -1357,8 +1357,8 @@ pub fn sort_batch_chunked(
 /// [`ExecutionPlan::reset_state`] starts with a fresh limit.
 /// Inputs sorted in a single pass, current-thread runtimes, execution outside
 /// Tokio, and TopK sorting continue sorting inline.
-/// Under memory pressure, multi-key spills with potentially expanding keys and
-/// limited reserved merge workspace sort and write one run at a time inline.
+/// Under memory pressure, multi-key spills with dictionary keys and limited
+/// reserved merge workspace sort and write one run at a time inline.
 #[derive(Debug, Clone)]
 pub struct SortExec {
     /// Input schema
@@ -2581,7 +2581,7 @@ mod tests {
     use datafusion_execution::{
         AsyncSpillWriter, SpillFile, SpillWriter, TempFileFactory,
     };
-    use datafusion_physical_expr::expressions::{Column, Literal};
+    use datafusion_physical_expr::expressions::{CastExpr, Column, Literal};
     use datafusion_physical_expr::{DynamicFilterTracking, EquivalenceProperties};
 
     use datafusion_physical_expr_common::metrics::MetricValue;
@@ -3007,6 +3007,7 @@ mod tests {
         #[case] merge_headroom: usize,
         #[case] batch_size: usize,
         #[values(false, true)] multithreaded: bool,
+        #[values(false, true)] run_end_encoded: bool,
     ) -> Result<()> {
         const KEY_COLUMNS: usize = 32;
         const VALUE_COUNT: usize = 32;
@@ -3029,6 +3030,21 @@ mod tests {
             .map(|batch| {
                 let start = batch * ROWS_PER_BATCH;
                 let mut columns = keys.clone();
+                columns[1] = Arc::new(DictionaryArray::<UInt32Type>::from_iter(
+                    (0..ROWS_PER_BATCH).map(|row| {
+                        Some(values[(row / VALUE_COUNT + batch) % VALUE_COUNT].as_str())
+                    }),
+                ));
+                if run_end_encoded {
+                    let run_ends =
+                        Int32Array::from_iter_values(1..=ROWS_PER_BATCH as i32);
+                    for column in &mut columns {
+                        *column = Arc::new(RunArray::<Int32Type>::try_new(
+                            &run_ends,
+                            column.as_ref(),
+                        )?);
+                    }
+                }
                 columns.push(Arc::new(Int64Array::from_iter_values(
                     (start..start + ROWS_PER_BATCH).rev().map(|id| id as i64),
                 )));
@@ -3098,12 +3114,22 @@ mod tests {
         let actual = concat_batches(&decoded[0].schema(), &decoded)?;
         let key_index =
             |id: usize| (ROWS_PER_BATCH - 1 - id % ROWS_PER_BATCH) % VALUE_COUNT;
+        let second_key_index = |id: usize| {
+            ((ROWS_PER_BATCH - 1 - id % ROWS_PER_BATCH) / VALUE_COUNT
+                + id / ROWS_PER_BATCH)
+                % VALUE_COUNT
+        };
         let mut ids = (0..ROWS_PER_BATCH * BATCH_COUNT).collect::<Vec<_>>();
-        ids.sort_by_key(|&id| (key_index(id), id));
+        ids.sort_by_key(|&id| (key_index(id), second_key_index(id), id));
         let mut expected = (0..KEY_COLUMNS)
             .map(|column| {
                 Arc::new(StringArray::from_iter_values(ids.iter().map(|&id| {
-                    values[(key_index(id) + column) % VALUE_COUNT].as_str()
+                    let index = if column == 1 {
+                        second_key_index(id)
+                    } else {
+                        (key_index(id) + column) % VALUE_COUNT
+                    };
+                    values[index].as_str()
                 }))) as ArrayRef
             })
             .collect::<Vec<_>>();
@@ -3359,6 +3385,85 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_spill_short_utf8_keys_with_disk_quota() -> Result<()> {
+        const ROWS: usize = 4096;
+        const ROWS_PER_BATCH: usize = 4;
+        const KEYS: [&str; 4] = [
+            "key-000000000003",
+            "key-000000000000",
+            "key-000000000002",
+            "key-000000000001",
+        ];
+        let batches = (0..ROWS / ROWS_PER_BATCH)
+            .map(|batch| {
+                let start = batch * ROWS_PER_BATCH;
+                RecordBatch::try_from_iter([
+                    (
+                        "key",
+                        Arc::new(StringArray::from_iter_values(
+                            (start..start + ROWS_PER_BATCH)
+                                .map(|id| KEYS[id % KEYS.len()]),
+                        )) as ArrayRef,
+                    ),
+                    (
+                        "id",
+                        Arc::new(Int64Array::from_iter_values(
+                            (start..start + ROWS_PER_BATCH).map(|id| id as i64),
+                        )) as ArrayRef,
+                    ),
+                ])
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let schema = batches[0].schema();
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let sort = Arc::new(SortExec::new(
+            [
+                PhysicalSortExpr::new_default(col("key", &schema)?),
+                PhysicalSortExpr::new_default(col("id", &schema)?),
+            ]
+            .into(),
+            input,
+        ));
+        let pool: Arc<dyn MemoryPool> = Arc::new(FairSpillPool::new(256 * 1024));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .with_max_spill_merge_fan_in(2)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_max_temp_directory_size(300 * 1024),
+            )
+            .build_arc()?;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(Arc::clone(&runtime))
+                .with_session_config(
+                    SessionConfig::new()
+                        .with_batch_size(128)
+                        .with_sort_in_place_threshold_bytes(0)
+                        .with_sort_spill_reservation_bytes(120 * 1024),
+                ),
+        );
+        let output = collect(Arc::clone(&sort) as _, task_ctx).await?;
+        let mut ids = (0..ROWS).collect::<Vec<_>>();
+        ids.sort_by_key(|&id| (KEYS[id % KEYS.len()], id));
+        let expected = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from_iter_values(
+                    ids.iter().map(|&id| KEYS[id % KEYS.len()]),
+                )),
+                Arc::new(Int64Array::from_iter_values(
+                    ids.into_iter().map(|id| id as i64),
+                )),
+            ],
+        )?;
+        assert_eq!(concat_batches(&schema, &output)?, expected);
+        assert!(sort.metrics().unwrap().spill_count().unwrap_or(0) > 0);
+        assert_eq!(pool.reserved(), 0);
+        assert_eq!(runtime.disk_manager.used_disk_space(), 0);
         Ok(())
     }
 
@@ -4767,9 +4872,15 @@ mod tests {
                 )),
             )
             .build_arc()?;
+        // A dictionary-valued expression keeps shared-input accounting enabled:
+        // dictionary buffers in the input schema would disable it.
         let ordering = [
             PhysicalSortExpr::new_default(Arc::new(Column::new("shared", 0))),
-            PhysicalSortExpr::new_default(Arc::new(Column::new("private", 1))),
+            PhysicalSortExpr::new_default(Arc::new(CastExpr::new(
+                Arc::new(Column::new("private", 1)),
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                None,
+            ))),
         ]
         .into();
         let mut sorter = ExternalSorter::new(
