@@ -19,7 +19,7 @@ use std::vec;
 use super::Unparser;
 use super::dialect::{ArrayTypeStyle, DistinctFromStyle, IntervalStyle};
 use arrow::array::{
-    ArrayRef, Date32Array, Date64Array, PrimitiveArray,
+    Array as _, ArrayRef, Date32Array, Date64Array, PrimitiveArray,
     types::{
         ArrowTemporalType, Time32MillisecondType, Time32SecondType,
         Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
@@ -731,6 +731,10 @@ impl Unparser<'_> {
             args.len().is_multiple_of(2),
             "named_struct must have an even number of arguments"
         );
+
+        if !self.dialect.supports_dictionary_syntax() {
+            return self.function_to_sql_internal("named_struct", args);
+        }
 
         let args = args
             .as_chunks::<2>()
@@ -1574,6 +1578,24 @@ impl Unparser<'_> {
             ScalarValue::DurationNanosecond(None) => {
                 Ok(ast::Expr::value(ast::Value::Null))
             }
+            ScalarValue::Struct(array) if array.len() == 1 && array.is_valid(0) => {
+                let args = array
+                    .fields()
+                    .iter()
+                    .zip(array.columns())
+                    .map(|(field, column)| {
+                        Ok([
+                            Expr::Literal(
+                                ScalarValue::Utf8(Some(field.name().clone())),
+                                None,
+                            ),
+                            Expr::Literal(ScalarValue::try_from_array(column, 0)?, None),
+                        ])
+                    })
+                    .collect::<Result<Vec<_>>>()?
+                    .concat();
+                self.named_struct_to_sql(&args)
+            }
             ScalarValue::Struct(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
@@ -1988,8 +2010,11 @@ mod tests {
     use std::{sync::Arc, vec};
 
     use crate::unparser::dialect::{MySqlDialect, SnowflakeDialect, SqliteDialect};
-    use arrow::array::{LargeListArray, LargeListViewArray, ListArray, ListViewArray};
-    use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
+    use arrow::array::{
+        Int32Array, LargeListArray, LargeListViewArray, ListArray, ListViewArray,
+        StringArray, StructArray,
+    };
+    use arrow::datatypes::{DataType::Int8, Field, Fields, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
     use datafusion_common::datatype::DataTypeExt;
     use datafusion_common::{Spans, TableReference};
@@ -3496,6 +3521,70 @@ mod tests {
 
         let ast = unparser.expr_to_sql(&expr)?;
         assert_eq!(ast.to_string(), "ARRAY[1, 2, 3]");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_named_struct_to_sql_by_dialect() -> Result<()> {
+        let expr = named_struct(vec![lit("a"), col("x"), lit("b"), lit(2)]);
+        let default_dialect = DefaultDialect {};
+        let duckdb = DuckDBDialect::new();
+        let postgres = PostgreSqlDialect {};
+        let mysql = MySqlDialect {};
+        let sqlite = SqliteDialect {};
+        let bigquery = BigQueryDialect {};
+        let custom_default = CustomDialect::default();
+        let custom_no_dictionary = CustomDialectBuilder::new()
+            .with_supports_dictionary_syntax(false)
+            .build();
+        let cases: [(&dyn Dialect, &str); 8] = [
+            (&default_dialect, "{a: x, b: 2}"),
+            (&duckdb, r#"{"a": "x", "b": 2}"#),
+            (&postgres, r#"named_struct('a', "x", 'b', 2)"#),
+            (&mysql, "named_struct('a', `x`, 'b', 2)"),
+            (&sqlite, "named_struct('a', `x`, 'b', 2)"),
+            (&bigquery, "named_struct('a', `x`, 'b', 2)"),
+            (&custom_default, "{a: x, b: 2}"),
+            (&custom_no_dictionary, "named_struct('a', x, 'b', 2)"),
+        ];
+
+        for (dialect, expected) in cases {
+            let ast = Unparser::new(dialect).expr_to_sql(&expr)?;
+            assert_eq!(ast.to_string(), expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_literal_scalar_value_to_sql() -> Result<()> {
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]);
+        let array = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(StringArray::from(vec!["one"])),
+            ],
+            None,
+        );
+        let expr = Expr::Literal(ScalarValue::Struct(Arc::new(array)), None);
+
+        let ast = Unparser::new(&DefaultDialect {}).expr_to_sql(&expr)?;
+        assert_eq!(ast.to_string(), "{a: 1, b: 'one'}");
+
+        let ast = Unparser::new(&PostgreSqlDialect {}).expr_to_sql(&expr)?;
+        assert_eq!(ast.to_string(), "named_struct('a', 1, 'b', 'one')");
+
+        let null_struct =
+            Expr::Literal(ScalarValue::try_from(DataType::Struct(fields))?, None);
+        let err = Unparser::new(&DefaultDialect {})
+            .expr_to_sql(&null_struct)
+            .unwrap_err();
+        assert!(err.to_string().contains("Unsupported scalar"), "{err}");
 
         Ok(())
     }

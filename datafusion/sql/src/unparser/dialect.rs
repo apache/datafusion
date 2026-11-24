@@ -108,6 +108,13 @@ pub trait Dialect: Send + Sync {
         true
     }
 
+    /// Whether the dialect parses the `{'key': value}` dictionary syntax for a
+    /// struct, as DuckDB does. If not, the unparser emits a
+    /// `named_struct('key', value)` function call.
+    fn supports_dictionary_syntax(&self) -> bool {
+        true
+    }
+
     /// The character length extraction style to use: `CharacterLengthStyle`
     fn character_length_style(&self) -> CharacterLengthStyle {
         CharacterLengthStyle::CharacterLength
@@ -421,6 +428,10 @@ impl Dialect for DefaultDialect {
 pub struct PostgreSqlDialect {}
 
 impl Dialect for PostgreSqlDialect {
+    fn supports_dictionary_syntax(&self) -> bool {
+        false
+    }
+
     fn array_type_style(&self) -> ArrayTypeStyle {
         ArrayTypeStyle::SquareBracket
     }
@@ -619,6 +630,10 @@ impl Dialect for DuckDBDialect {
 pub struct MySqlDialect {}
 
 impl Dialect for MySqlDialect {
+    fn supports_dictionary_syntax(&self) -> bool {
+        false
+    }
+
     fn supports_qualify(&self) -> bool {
         false
     }
@@ -728,6 +743,10 @@ impl Dialect for MySqlDialect {
 pub struct SqliteDialect {}
 
 impl Dialect for SqliteDialect {
+    fn supports_dictionary_syntax(&self) -> bool {
+        false
+    }
+
     fn supports_qualify(&self) -> bool {
         false
     }
@@ -806,6 +825,10 @@ impl Dialect for SqliteDialect {
 pub struct BigQueryDialect {}
 
 impl Dialect for BigQueryDialect {
+    fn supports_dictionary_syntax(&self) -> bool {
+        false
+    }
+
     fn supports_nested_arrays(&self) -> bool {
         false
     }
@@ -986,6 +1009,7 @@ pub struct CustomDialect {
     unnest_as_lateral_flatten: bool,
     array_type_style: ArrayTypeStyle,
     supports_nested_arrays: bool,
+    supports_dictionary_syntax: bool,
 }
 
 impl Default for CustomDialect {
@@ -1023,6 +1047,7 @@ impl Default for CustomDialect {
             unnest_as_lateral_flatten: false,
             array_type_style: ArrayTypeStyle::Unsupported,
             supports_nested_arrays: true,
+            supports_dictionary_syntax: true,
         }
     }
 }
@@ -1030,6 +1055,10 @@ impl Default for CustomDialect {
 impl Dialect for CustomDialect {
     fn supports_nested_arrays(&self) -> bool {
         self.supports_nested_arrays
+    }
+
+    fn supports_dictionary_syntax(&self) -> bool {
+        self.supports_dictionary_syntax
     }
 
     fn array_type_style(&self) -> ArrayTypeStyle {
@@ -1215,6 +1244,7 @@ pub struct CustomDialectBuilder {
     unnest_as_lateral_flatten: bool,
     array_type_style: ArrayTypeStyle,
     supports_nested_arrays: bool,
+    supports_dictionary_syntax: bool,
 }
 
 impl Default for CustomDialectBuilder {
@@ -1258,6 +1288,7 @@ impl CustomDialectBuilder {
             unnest_as_lateral_flatten: false,
             array_type_style: ArrayTypeStyle::Unsupported,
             supports_nested_arrays: true,
+            supports_dictionary_syntax: true,
         }
     }
 
@@ -1293,6 +1324,7 @@ impl CustomDialectBuilder {
             unnest_as_lateral_flatten: self.unnest_as_lateral_flatten,
             array_type_style: self.array_type_style,
             supports_nested_arrays: self.supports_nested_arrays,
+            supports_dictionary_syntax: self.supports_dictionary_syntax,
         }
     }
 
@@ -1438,6 +1470,16 @@ impl CustomDialectBuilder {
     /// Customize whether the dialect allows an array whose elements are arrays
     pub fn with_supports_nested_arrays(mut self, supports_nested_arrays: bool) -> Self {
         self.supports_nested_arrays = supports_nested_arrays;
+        self
+    }
+
+    /// Customize whether the dialect parses the `{'key': value}` dictionary
+    /// syntax for a struct
+    pub fn with_supports_dictionary_syntax(
+        mut self,
+        supports_dictionary_syntax: bool,
+    ) -> Self {
+        self.supports_dictionary_syntax = supports_dictionary_syntax;
         self
     }
 
