@@ -1,0 +1,244 @@
+<!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+
+# Upgrade Guides
+
+## DataFusion 48.0.0
+
+### `Expr::Literal` has optional metadata
+
+The [`Expr::Literal`] variant now includes optional metadata, which allows for
+carrying through Arrow field metadata to support extension types and other uses.
+
+This means code such as
+
+```rust
+# /* comment to avoid running
+match expr {
+...
+  Expr::Literal(scalar) => ...
+...
+}
+#  */
+```
+
+Should be updated to:
+
+```rust
+# /* comment to avoid running
+match expr {
+...
+  Expr::Literal(scalar, _metadata) => ...
+...
+}
+#  */
+```
+
+Likewise constructing `Expr::Literal` requires metadata as well. The [`lit`] function
+has not changed and returns an `Expr::Literal` with no metadata.
+
+[`expr::literal`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html#variant.Literal
+[`lit`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.lit.html
+
+### `Expr::WindowFunction` is now `Box`ed
+
+`Expr::WindowFunction` is now a `Box<WindowFunction>` instead of a `WindowFunction` directly.
+This change was made to reduce the size of `Expr` and improve performance when
+planning queries (see [details on #16207]).
+
+This is a breaking change, so you will need to update your code if you match
+on `Expr::WindowFunction` directly. For example, if you have code like this:
+
+```rust
+# /* comment to avoid running
+match expr {
+  Expr::WindowFunction(WindowFunction {
+    params:
+      WindowFunctionParams {
+       partition_by,
+       order_by,
+      ..
+    }
+  }) => {
+    // Use partition_by and order_by as needed
+  }
+  _ => {
+    // other expr
+  }
+}
+# */
+```
+
+You will need to change it to:
+
+```rust
+# /* comment to avoid running
+match expr {
+  Expr::WindowFunction(window_fun) => {
+    let WindowFunction {
+      fun,
+      params: WindowFunctionParams {
+        args,
+        partition_by,
+        ..
+        },
+    } = window_fun.as_ref();
+    // Use partition_by and order_by as needed
+  }
+  _ => {
+    // other expr
+  }
+}
+#  */
+```
+
+[details on #16207]: https://github.com/apache/datafusion/pull/16207#issuecomment-2922659103
+
+### The `VARCHAR` SQL type is now represented as `Utf8View` in Arrow
+
+The mapping of the SQL `VARCHAR` type has been changed from `Utf8` to `Utf8View`
+which improves performance for many string operations. You can read more about
+`Utf8View` in the [DataFusion blog post on German-style strings]
+
+[datafusion blog post on german-style strings]: https://datafusion.apache.org/blog/2024/09/13/string-view-german-style-strings-part-1/
+
+This means that when you create a table with a `VARCHAR` column, it will now use
+`Utf8View` as the underlying data type. For example:
+
+```sql
+> CREATE TABLE my_table (my_column VARCHAR);
+0 row(s) fetched.
+Elapsed 0.001 seconds.
+
+> DESCRIBE my_table;
++-------------+-----------+-------------+
+| column_name | data_type | is_nullable |
++-------------+-----------+-------------+
+| my_column   | Utf8View  | YES         |
++-------------+-----------+-------------+
+1 row(s) fetched.
+Elapsed 0.000 seconds.
+```
+
+You can restore the old behavior of using `Utf8` by changing the
+`datafusion.sql_parser.map_varchar_to_utf8view` configuration setting. For
+example
+
+```sql
+> set datafusion.sql_parser.map_varchar_to_utf8view = false;
+0 row(s) fetched.
+Elapsed 0.001 seconds.
+
+> CREATE TABLE my_table (my_column VARCHAR);
+0 row(s) fetched.
+Elapsed 0.014 seconds.
+
+> DESCRIBE my_table;
++-------------+-----------+-------------+
+| column_name | data_type | is_nullable |
++-------------+-----------+-------------+
+| my_column   | Utf8      | YES         |
++-------------+-----------+-------------+
+1 row(s) fetched.
+Elapsed 0.004 seconds.
+```
+
+### `ListingOptions` default for `collect_stat` changed from `true` to `false`
+
+This makes it agree with the default for `SessionConfig`.
+Most users won't be impacted by this change but if you were using `ListingOptions` directly
+and relied on the default value of `collect_stat` being `true`, you will need to
+explicitly set it to `true` in your code.
+
+```rust
+# /* comment to avoid running
+ListingOptions::new(Arc::new(ParquetFormat::default()))
+    .with_collect_stat(true)
+    // other options
+# */
+```
+
+### Processing `FieldRef` instead of `DataType` for user defined functions
+
+In order to support metadata handling and extension types, user defined functions are
+now switching to traits which use `FieldRef` rather than a `DataType` and nullability.
+This gives a single interface to both of these parameters and additionally allows
+access to metadata fields, which can be used for extension types.
+
+To upgrade structs which implement `ScalarUDFImpl`, if you have implemented
+`return_type_from_args` you need instead to implement `return_field_from_args`.
+If your functions do not need to handle metadata, this should be straightforward
+repackaging of the output data into a `FieldRef`. The name you specify on the
+field is not important. It will be overwritten during planning. `ReturnInfo`
+has been removed, so you will need to remove all references to it.
+
+`ScalarFunctionArgs` now contains a field called `arg_fields`. You can use this
+to access the metadata associated with the columnar values during invocation.
+
+To upgrade user defined aggregate functions, there is now a function
+`return_field` that will allow you to specify both metadata and nullability of
+your function. You are not required to implement this if you do not need to
+handle metadata.
+
+The largest change to aggregate functions happens in the accumulator arguments.
+Both the `AccumulatorArgs` and `StateFieldsArgs` now contain `FieldRef` rather
+than `DataType`.
+
+To upgrade window functions, `ExpressionArgs` now contains input fields instead
+of input data types. When setting these fields, the name of the field is
+not important since this gets overwritten during the planning stage. All you
+should need to do is wrap your existing data types in fields with nullability
+set depending on your use case.
+
+### Physical Expression return `Field`
+
+To support the changes to user defined functions processing metadata, the
+`PhysicalExpr` trait, which now must specify a return `Field` based on the input
+schema. To upgrade structs which implement `PhysicalExpr` you need to implement
+the `return_field` function. There are numerous examples in the `physical-expr`
+crate.
+
+### `FileFormat::supports_filters_pushdown` replaced with `FileSource::try_pushdown_filters`
+
+To support more general filter pushdown, the `FileFormat::supports_filters_pushdown` was replaced with
+`FileSource::try_pushdown_filters`.
+If you implemented a custom `FileFormat` that uses a custom `FileSource` you will need to implement
+`FileSource::try_pushdown_filters`.
+See `ParquetSource::try_pushdown_filters` for an example of how to implement this.
+
+`FileFormat::supports_filters_pushdown` has been removed.
+
+### `ParquetExec`, `AvroExec`, `CsvExec`, `JsonExec` Removed
+
+`ParquetExec`, `AvroExec`, `CsvExec`, and `JsonExec` were deprecated in
+DataFusion 46 and are removed in DataFusion 48. This is sooner than the normal
+process described in the [API Deprecation Guidelines] because all the tests
+cover the new `DataSourceExec` rather than the older structures. As we evolve
+`DataSource`, the old structures began to show signs of "bit rotting" (not
+working but no one knows due to lack of test coverage).
+
+[api deprecation guidelines]: https://datafusion.apache.org/contributor-guide/api-health.html#deprecation-guidelines
+
+### `PartitionedFile` added as an argument to the `FileOpener` trait
+
+This is necessary to properly fix filter pushdown for filters that combine partition
+columns and file columns (e.g. `day = username['dob']`).
+
+If you implemented a custom `FileOpener` you will need to add the `PartitionedFile` argument
+but are not required to use it in any way.
