@@ -2861,6 +2861,9 @@ impl DataFrame {
     /// Returns an error if `columns` is empty or the arrays have different
     /// lengths.
     ///
+    /// The returned `DataFrame` has its own session. To create one in the
+    /// session of an existing `DataFrame`, use [`Self::from_arrays`].
+    ///
     /// See also the [`dataframe!`] macro for building a `DataFrame` from
     /// literal values.
     ///
@@ -2898,6 +2901,53 @@ impl DataFrame {
     {
         let batch = record_batch_from_columns(columns)?;
         SessionContext::new().read_batch(batch)
+    }
+
+    /// Create a new `DataFrame` from named Arrow arrays, in the same session
+    /// as this `DataFrame`.
+    ///
+    /// Columns are built as in [`Self::from_columns`].
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion::arrow::array::{ArrayRef, Int32Array, StringArray};
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let empty = ctx.read_empty()?;
+    /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
+    /// let df = empty.from_arrays([("id", id), ("name", name)])?;
+    /// let expected = vec![
+    ///     "+----+------+",
+    ///     "| id | name |",
+    ///     "+----+------+",
+    ///     "| 1  | foo  |",
+    ///     "| 2  | bar  |",
+    ///     "| 3  | baz  |",
+    ///     "+----+------+",
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_arrays<'a, I>(&self, columns: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = (&'a str, ArrayRef)>,
+    {
+        let batch = record_batch_from_columns(columns)?;
+        let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+        let plan = LogicalPlanBuilder::scan(
+            UNNAMED_TABLE,
+            provider_as_source(Arc::new(provider)),
+            None,
+        )?
+        .build()?;
+        Ok(DataFrame::new((*self.session_state).clone(), plan))
     }
 }
 
