@@ -376,13 +376,15 @@ pub(super) trait ToLookupKey: ArrowNativeTypeOp {
     }
 
     /// `key - min` as an unsigned number, which exceeds the range of the
-    /// [`PrimitiveLookup::Direct`] table if `key < min`, and is `u64::MAX` if it does
-    /// not fit in `u64`.
+    /// [`PrimitiveLookup::Direct`] table if `key < min`. An offset that does not fit
+    /// in `u64` saturates to `u64::MAX`, so it is also out of the range of the table.
     ///
     /// Only called for types for which [`Self::supports_direct_lookup`] returns true.
-    #[inline]
     fn direct_lookup_offset(_key: Self::HashableKey, _min: Self::HashableKey) -> u64 {
-        u64::MAX
+        unreachable!(
+            "{} does not support direct lookup",
+            std::any::type_name::<Self>()
+        )
     }
 }
 
