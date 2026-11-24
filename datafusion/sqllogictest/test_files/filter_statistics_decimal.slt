@@ -182,8 +182,8 @@ query TT
 EXPLAIN SELECT k FROM t GROUP BY k HAVING sum(i) > CAST(300.5 AS DECIMAL(10, 1));
 ----
 physical_plan
-01)FilterExec: CAST(sum(t.i)@1 AS Decimal128(21, 1)) > 300.5, projection=[k@0], statistics=[Rows=Inexact(220), Bytes=Inexact(2640), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(9)))]]
-02)--AggregateExec: mode=Single, gby=[k@1 as k], aggr=[sum(t.i)], statistics=[Rows=Inexact(1100), Bytes=Inexact(13200), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(9))),(Col[1]:)]]
+01)FilterExec: CAST(sum(t.i)@1 AS Decimal128(21, 1)) > 300.5, projection=[k@0], statistics=[Rows=Inexact(2), Bytes=Inexact(24), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(9)) Null=Inexact(0))]]
+02)--AggregateExec: mode=Single, gby=[k@1 as k], aggr=[sum(t.i)], statistics=[Rows=Inexact(10), Bytes=Inexact(120), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(9)) Null=Exact(0)),(Col[1]:)]]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/t.parquet]]}, projection=[i, k], file_type=parquet, statistics=[Rows=Exact(1100), Bytes=Exact(13200), [(Col[0]: Min=Exact(Int32(0)) Max=Exact(Int32(99)) Null=Exact(0) ScanBytes=Exact(4400)),(Col[1]: Min=Exact(Int64(0)) Max=Exact(Int64(9)) Null=Exact(0) ScanBytes=Exact(8800))]]
 
 statement ok
@@ -251,8 +251,8 @@ EXPLAIN SELECT l_orderkey FROM lineitem
 GROUP BY l_orderkey HAVING sum(l_quantity) > 300;
 ----
 physical_plan
-01)FilterExec: sum(lineitem.l_quantity)@1 > 300.00, projection=[l_orderkey@0], statistics=[Rows=Inexact(12000), Bytes=Inexact(288000), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(15000)))]]
-02)--AggregateExec: mode=Single, gby=[l_orderkey@0 as l_orderkey], aggr=[sum(lineitem.l_quantity)], statistics=[Rows=Inexact(60000), Bytes=Inexact(1440000), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(15000))),(Col[1]:)]]
+01)FilterExec: sum(lineitem.l_quantity)@1 > 300.00, projection=[l_orderkey@0], statistics=[Rows=Inexact(3000), Bytes=Inexact(72000), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(15000)) Null=Inexact(0))]]
+02)--AggregateExec: mode=Single, gby=[l_orderkey@0 as l_orderkey], aggr=[sum(lineitem.l_quantity)], statistics=[Rows=Inexact(15000), Bytes=Inexact(360000), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(15000)) Null=Exact(0)),(Col[1]:)]]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/lineitem.parquet]]}, projection=[l_orderkey, l_quantity], file_type=parquet, statistics=[Rows=Exact(60000), Bytes=Exact(1440000), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(15000)) Null=Exact(0) ScanBytes=Exact(480000)),(Col[1]: Min=Exact(Decimal128(1.00,15,2)) Max=Exact(Decimal128(50.00,15,2)) Null=Exact(0) ScanBytes=Exact(960000))]]
 
 statement ok
