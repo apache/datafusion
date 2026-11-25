@@ -18,6 +18,7 @@ use datafusion::error::Result;
 use datafusion::functions_aggregate::expr_fn::{count, sum};
 use datafusion::prelude::*;
 use futures::{StreamExt, TryStreamExt};
+use object_store::chunked::ChunkedStore;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
@@ -38,20 +39,17 @@ enum Format {
     JsonArray,
 }
 
-/// A compressed file made of two concatenated members, such as
+/// A compressed file made of several concatenated members, such as
 /// `cat a.csv.zst b.csv.zst` produces, returns every row whether it is read
-/// from a local file or from an object store.
+/// from a local file or from an object store, wherever the store's chunks
+/// split the members.
 #[tokio::test]
 async fn concatenated_members_read_in_full() -> Result<()> {
     const ROWS: i64 = 20_000;
     let expected = (ROWS, ROWS * (ROWS - 1) / 2);
 
     let ctx = SessionContext::new();
-    let store = Arc::new(InMemory::new());
-    ctx.register_object_store(
-        &Url::parse("memory://").unwrap(),
-        Arc::clone(&store) as Arc<dyn ObjectStore>,
-    );
+    let store = register_stores(&ctx);
     let dir = TempDir::new()?;
 
     let mut wrong = Vec::new();
@@ -82,17 +80,18 @@ async fn concatenated_members_read_in_full() -> Result<()> {
                 DEFAULT_JSON_EXTENSION,
             ),
         };
-        // Split inside a row, so that one row spans both members.
+        // Split inside a row, so that one row spans two members, with an
+        // empty member between them.
         let split = text.len() / 2;
         assert!(!text[..split].ends_with('\n'));
         let (first, second) = text.as_bytes().split_at(split);
+        let members: [&[u8]; 3] = [first, &[], second];
 
         for codec in CODECS {
-            let bytes = [
-                compress(codec, first).await?,
-                compress(codec, second).await?,
-            ]
-            .concat();
+            let mut bytes = Vec::new();
+            for member in members {
+                bytes.extend(compress(codec, member).await?);
+            }
 
             let file_ext = format!("{ext}{}", codec.get_ext());
             let name = format!("{format:?}{file_ext}");
@@ -118,11 +117,7 @@ async fn concatenated_members_read_in_full() -> Result<()> {
 #[tokio::test]
 async fn bytes_after_the_last_member_are_an_error() -> Result<()> {
     let ctx = SessionContext::new();
-    let store = Arc::new(InMemory::new());
-    ctx.register_object_store(
-        &Url::parse("memory://").unwrap(),
-        Arc::clone(&store) as Arc<dyn ObjectStore>,
-    );
+    let store = register_stores(&ctx);
     let dir = TempDir::new()?;
 
     let mut wrong = Vec::new();
@@ -144,6 +139,29 @@ async fn bytes_after_the_last_member_are_an_error() -> Result<()> {
     Ok(())
 }
 
+/// Chunk sizes of the [`ChunkedStore`]s that [`register_stores`] registers,
+/// small enough that member boundaries fall at every position within a chunk.
+const CHUNK_SIZES: [usize; 2] = [1, 13];
+
+/// Registers an [`InMemory`] store as `memory://`, which returns each file as
+/// one chunk, and a [`ChunkedStore`] over it as `memory://chunks-<size>` for
+/// each of [`CHUNK_SIZES`].
+fn register_stores(ctx: &SessionContext) -> Arc<InMemory> {
+    let store = Arc::new(InMemory::new());
+    ctx.register_object_store(
+        &Url::parse("memory://").unwrap(),
+        Arc::clone(&store) as Arc<dyn ObjectStore>,
+    );
+    for size in CHUNK_SIZES {
+        let inner = Arc::clone(&store) as Arc<dyn ObjectStore>;
+        ctx.register_object_store(
+            &Url::parse(&format!("memory://chunks-{size}")).unwrap(),
+            Arc::new(ChunkedStore::new(inner, size)),
+        );
+    }
+    store
+}
+
 /// Compresses `data` as one member.
 async fn compress(codec: FileCompressionType, data: &[u8]) -> Result<Vec<u8>> {
     let input = futures::stream::iter([Ok(Bytes::copy_from_slice(data))]);
@@ -155,20 +173,32 @@ async fn compress(codec: FileCompressionType, data: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Writes `bytes` as `name` to a local file in `dir` and to `store`, and
-/// returns a `(description, location)` for each copy.
+/// returns a `(description, location)` for the local file and for each store
+/// that [`register_stores`] registers.
 async fn write_file(
     dir: &TempDir,
     store: &InMemory,
     name: &str,
     bytes: Vec<u8>,
-) -> Result<[(&'static str, String); 2]> {
+) -> Result<Vec<(String, String)>> {
     let local = dir.path().join(name);
     std::fs::write(&local, &bytes)?;
     store.put(&Path::from(name), bytes.into()).await?;
-    Ok([
-        ("local file", local.to_str().unwrap().to_string()),
-        ("object store", format!("memory:///{name}")),
-    ])
+
+    let mut locations = vec![
+        (
+            "local file".to_string(),
+            local.to_str().unwrap().to_string(),
+        ),
+        ("object store".to_string(), format!("memory:///{name}")),
+    ];
+    for size in CHUNK_SIZES {
+        locations.push((
+            format!("object store, {size}-byte chunks"),
+            format!("memory://chunks-{size}/{name}"),
+        ));
+    }
+    Ok(locations)
 }
 
 /// Returns `(count(a), sum(a))` over the file at `location`.
