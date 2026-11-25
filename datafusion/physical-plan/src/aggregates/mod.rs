@@ -4,6 +4,11 @@
 
 //! Aggregate functionality
 //!
+//! # Physical design for vectorization
+//!
+//! See [`aggregate_hash_table`] for details on the physical design of group-key
+//! and accumulator storage.
+//!
 //! # Aggregate planning
 //!
 //! DataFusion selects different aggregate implementations (streams) based on the
