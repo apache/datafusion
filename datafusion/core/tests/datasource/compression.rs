@@ -24,6 +24,13 @@ use object_store::{ObjectStore, ObjectStoreExt};
 use tempfile::TempDir;
 use url::Url;
 
+const CODECS: [FileCompressionType; 4] = [
+    FileCompressionType::GZIP,
+    FileCompressionType::BZIP2,
+    FileCompressionType::XZ,
+    FileCompressionType::ZSTD,
+];
+
 #[derive(Debug, Clone, Copy)]
 enum Format {
     Csv,
@@ -80,32 +87,16 @@ async fn concatenated_members_read_in_full() -> Result<()> {
         assert!(!text[..split].ends_with('\n'));
         let (first, second) = text.as_bytes().split_at(split);
 
-        for codec in [
-            FileCompressionType::GZIP,
-            FileCompressionType::BZIP2,
-            FileCompressionType::XZ,
-            FileCompressionType::ZSTD,
-        ] {
-            let mut bytes = Vec::new();
-            for member in [first, second] {
-                let input = futures::stream::iter([Ok(Bytes::copy_from_slice(member))]);
-                let compressed: Vec<Bytes> = codec
-                    .convert_to_compress_stream(input.boxed())?
-                    .try_collect()
-                    .await?;
-                bytes.extend(compressed.concat());
-            }
+        for codec in CODECS {
+            let bytes = [
+                compress(codec, first).await?,
+                compress(codec, second).await?,
+            ]
+            .concat();
 
             let file_ext = format!("{ext}{}", codec.get_ext());
             let name = format!("{format:?}{file_ext}");
-            let local = dir.path().join(&name);
-            std::fs::write(&local, &bytes)?;
-            store.put(&Path::from(name.as_str()), bytes.into()).await?;
-
-            for (source, location) in [
-                ("local file", local.to_str().unwrap().to_string()),
-                ("object store", format!("memory:///{name}")),
-            ] {
+            for (source, location) in write_file(&dir, &store, &name, bytes).await? {
                 match count_and_sum(&ctx, format, location, &file_ext, codec).await {
                     Ok(got) if got == expected => {}
                     Ok(got) => wrong.push(format!("{name} from {source}: {got:?}")),
@@ -120,6 +111,64 @@ async fn concatenated_members_read_in_full() -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Bytes after the last member that do not start another member are an
+/// error, whether the file is read from a local file or from an object store.
+#[tokio::test]
+async fn bytes_after_the_last_member_are_an_error() -> Result<()> {
+    let ctx = SessionContext::new();
+    let store = Arc::new(InMemory::new());
+    ctx.register_object_store(
+        &Url::parse("memory://").unwrap(),
+        Arc::clone(&store) as Arc<dyn ObjectStore>,
+    );
+    let dir = TempDir::new()?;
+
+    let mut wrong = Vec::new();
+    for codec in CODECS {
+        let bytes = [compress(codec, b"a\n1\n2\n").await?, b"garbage".to_vec()].concat();
+
+        let file_ext = format!("{DEFAULT_CSV_EXTENSION}{}", codec.get_ext());
+        let name = format!("garbage{file_ext}");
+        for (source, location) in write_file(&dir, &store, &name, bytes).await? {
+            if let Ok(got) =
+                count_and_sum(&ctx, Format::Csv, location, &file_ext, codec).await
+            {
+                wrong.push(format!("{name} from {source}: {got:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "read without an error: {wrong:#?}");
+
+    Ok(())
+}
+
+/// Compresses `data` as one member.
+async fn compress(codec: FileCompressionType, data: &[u8]) -> Result<Vec<u8>> {
+    let input = futures::stream::iter([Ok(Bytes::copy_from_slice(data))]);
+    let compressed: Vec<Bytes> = codec
+        .convert_to_compress_stream(input.boxed())?
+        .try_collect()
+        .await?;
+    Ok(compressed.concat())
+}
+
+/// Writes `bytes` as `name` to a local file in `dir` and to `store`, and
+/// returns a `(description, location)` for each copy.
+async fn write_file(
+    dir: &TempDir,
+    store: &InMemory,
+    name: &str,
+    bytes: Vec<u8>,
+) -> Result<[(&'static str, String); 2]> {
+    let local = dir.path().join(name);
+    std::fs::write(&local, &bytes)?;
+    store.put(&Path::from(name), bytes.into()).await?;
+    Ok([
+        ("local file", local.to_str().unwrap().to_string()),
+        ("object store", format!("memory:///{name}")),
+    ])
 }
 
 /// Returns `(count(a), sum(a))` over the file at `location`.
