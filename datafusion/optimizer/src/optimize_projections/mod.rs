@@ -284,10 +284,7 @@ fn optimize_projections(
             // scan reads.
             let new_scan = scan.with_projection(indices.indices())?;
             let transformed = new_scan.projection() != scan.projection();
-            return Ok(Transformed::new_transformed(
-                LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(new_scan)),
-                transformed,
-            ));
+            return Ok(Transformed::new_transformed(new_scan.into(), transformed));
         }
         LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
             return optimize_materialized_cte(cte, config, indices);
