@@ -112,7 +112,8 @@ pub(crate) struct RgPlanEntry {
     pub(crate) bytes: u64,
     /// The row-group-local selection the decoder was built with for this RG.
     /// A runtime-pruning rebuild passes it back, because the decoder does not
-    /// expose the selections of the row groups it has not started.
+    /// expose the selections of the row groups it has not started. `None`
+    /// when the scan has no runtime pruner, because nothing reads it then.
     pub(crate) selection: Option<RowSelection>,
 }
 
@@ -126,6 +127,9 @@ pub(crate) struct InitialDecoderState {
     pub(crate) decoder: ParquetPushDecoder,
     /// The per-row-group plan, in the physical scan order the decoder reads.
     pub(crate) rg_plan: VecDeque<RgPlanEntry>,
+    /// Whether the scan builds a runtime row-group pruner. When it does not,
+    /// the `rg_plan` entries hold no selections.
+    pub(crate) pruner_eligible: bool,
     /// Whether the freshly built decoder carries a real (non-empty)
     /// [`RowFilter`]. `false` when the first row group is fully matched and
     /// the filter was suppressed at open time.
