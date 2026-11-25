@@ -32,7 +32,7 @@ where
 {
     // Get the current process ID
     let pid = sysinfo::get_current_pid().expect("Failed to get current PID");
-    let mut system = System::new();
+    let mut system = System::new().expect("Failed to initialize sysinfo");
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[pid]),
         true,

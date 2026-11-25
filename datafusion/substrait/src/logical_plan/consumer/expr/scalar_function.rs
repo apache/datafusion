@@ -2,8 +2,10 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use super::literal::{
+    has_struct_literal_value, name_struct_literals_like_first_struct_expr,
+};
 use crate::logical_plan::consumer::SubstraitConsumerContext;
-
 use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
 use datafusion::common::Result;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -11,7 +13,9 @@ use datafusion::common::{
     DFSchema, DataFusionError, ScalarValue, not_impl_err, plan_err, substrait_err,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::{Between, BinaryExpr, Expr, Like, Operator, expr};
+use datafusion::logical_expr::{
+    Between, BinaryExpr, Expr, ExprSchemable, Like, Operator, expr,
+};
 use std::vec::Drain;
 use substrait::proto::expression::ScalarFunction;
 
@@ -33,7 +37,7 @@ pub async fn from_scalar_function(
     };
 
     let fn_name = substrait_fun_name(fn_signature);
-    let args =
+    let mut args =
         from_substrait_func_args(consumer, &f.arguments, input_schema, context).await?;
 
     let higher_order_func = consumer
@@ -80,10 +84,8 @@ pub async fn from_scalar_function(
             Ok(expr.resolve_lambda_variables(input_schema)?.data)
         }
     } else if let Ok(func) = udf_func {
-        Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
-            func.to_owned(),
-            args,
-        )))
+        let call = expr::ScalarFunction::new_udf(func.to_owned(), args);
+        Ok(name_struct_literal_args_if_needed(call, input_schema))
     } else if let Some(op) = name_to_op(fn_name) {
         if args.len() < 2 {
             return not_impl_err!(
@@ -91,12 +93,52 @@ pub async fn from_scalar_function(
                 f.arguments.len()
             );
         }
+        // an operator always combines its operands, so they need the same field names
+        name_struct_literals_like_first_struct_expr(&mut args, input_schema);
         // In those cases we build a balanced tree of BinaryExprs
         arg_list_to_binary_op_tree(op, args)
     } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
+        // these combine their arguments too, as in `s BETWEEN low AND high`
+        name_struct_literals_like_first_struct_expr(&mut args, input_schema);
         builder.build(consumer, f, args)
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
+    }
+}
+
+/// Renames the struct literals among the arguments of `call` after a same-shaped
+/// argument, only if `call` doesn't type-check without it.
+///
+/// `coalesce(s, [])` needs one type for `s: List<Struct{a, b}>` and the literal's
+/// `List<Struct{c0, c1}>`, so the literal takes `s`'s names. `named_struct('left', s,
+/// 'right', {c0: 42})` type-checks as is, and renaming would break a later
+/// `get_field(..., 'c0')`, so the literal is left alone. Function signatures can't tell
+/// these apart, hence the check; operators always combine their operands and always
+/// rename.
+fn name_struct_literal_args_if_needed(
+    mut call: expr::ScalarFunction,
+    input_schema: &DFSchema,
+) -> Expr {
+    if !call
+        .args
+        .iter()
+        .any(|arg| has_struct_literal_value(arg, input_schema))
+    {
+        return Expr::ScalarFunction(call);
+    }
+    // works as is (`get_type` runs the function's own type coercion): keep the names
+    let original = Expr::ScalarFunction(call.clone());
+    if original.get_type(input_schema).is_ok() {
+        return original;
+    }
+    // doesn't type-check: retry with the literals renamed
+    name_struct_literals_like_first_struct_expr(&mut call.args, input_schema);
+    let renamed = Expr::ScalarFunction(call);
+    // if renaming doesn't help either, keep the original so the error stays the same
+    if renamed.get_type(input_schema).is_ok() {
+        renamed
+    } else {
+        original
     }
 }
 

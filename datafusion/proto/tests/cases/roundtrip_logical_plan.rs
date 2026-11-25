@@ -74,7 +74,7 @@ use datafusion_expr::dml::{
 };
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, LambdaVariable, Like,
-    NullTreatment, ScalarFunction, Unnest, WildcardOptions,
+    NullTreatment, ScalarFunction, Unnest,
 };
 use datafusion_expr::logical_plan::{
     ExplainOption, Extension, UserDefinedLogicalNodeCore,
@@ -2873,30 +2873,6 @@ fn roundtrip_unnest_outer() {
 }
 
 #[test]
-fn roundtrip_wildcard() {
-    #[expect(deprecated)]
-    let test_expr = Expr::Wildcard {
-        qualifier: None,
-        options: Box::new(WildcardOptions::default()),
-    };
-
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
-fn roundtrip_qualified_wildcard() {
-    #[expect(deprecated)]
-    let test_expr = Expr::Wildcard {
-        qualifier: Some("foo".into()),
-        options: Box::new(WildcardOptions::default()),
-    };
-
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
 fn roundtrip_like() {
     fn like(negated: bool, escape_char: Option<char>) {
         let test_expr = Expr::Like(Like::new(
@@ -2936,21 +2912,23 @@ fn roundtrip_ilike() {
 
 #[test]
 fn roundtrip_similar_to() {
-    fn similar_to(negated: bool, escape_char: Option<char>) {
+    fn similar_to(negated: bool, escape_char: Option<char>, case_insensitive: bool) {
         let test_expr = Expr::SimilarTo(Like::new(
             negated,
             Box::new(col("col")),
             Box::new(lit("[0-9]+")),
             escape_char,
-            false,
+            case_insensitive,
         ));
         let ctx = SessionContext::new();
         roundtrip_expr_test(test_expr, ctx);
     }
-    similar_to(true, Some('X'));
-    similar_to(false, Some('\\'));
-    similar_to(true, None);
-    similar_to(false, None);
+    similar_to(true, Some('X'), false);
+    similar_to(false, Some('\\'), false);
+    similar_to(true, None, false);
+    similar_to(false, None, false);
+    similar_to(false, None, true);
+    similar_to(true, Some('X'), true);
 }
 
 #[test]

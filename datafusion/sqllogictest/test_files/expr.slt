@@ -711,9 +711,26 @@ SELECT split_part('a,b', '', -2)
 statement error DataFusion error: Execution error: field position must not be zero
 SELECT split_part('abc~@~def~@~ghi', '~@~', 0)
 
-# Position 0 with column input errors even for empty/null inputs
+# Position 0 with column input errors when some row has a string
 statement error DataFusion error: Execution error: field position must not be zero
+SELECT split_part(column1, '.', 0) FROM (VALUES ('a.b'), (NULL::text)) AS t(column1)
+
+# A NULL string returns NULL for position 0 (no row to evaluate the position
+# on), the same for a literal position, a position column and all literals.
+query T
 SELECT split_part(column1, '.', 0) FROM (VALUES (NULL::text)) AS t(column1)
+----
+NULL
+
+query T
+SELECT split_part(column1, '.', column2) FROM (VALUES (NULL::text, 0)) AS t(column1, column2)
+----
+NULL
+
+query T
+SELECT split_part(NULL::text, '.', 0)
+----
+NULL
 
 # NULL delimiter with position 0 returns null (not an error), matching the
 # slow path where null args short-circuit before the position check.

@@ -83,9 +83,9 @@ use datafusion_expr::physical_planning_context::{
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, MaterializedCte, MaterializedCteId, MaterializedCtePlan,
-    MaterializedCteScan, Operator, RecursiveQuery, Show, ShowKind, SkipType,
-    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    Filter, JoinType, MaterializedCte, MaterializedCteId, MaterializedCtePlan, Operator,
+    RecursiveQuery, Show, ShowKind, SkipType, StringifiedPlan, WindowFrame,
+    WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{
     AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
@@ -285,14 +285,12 @@ fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>>
                     )) if nested.id == old_id => {
                         Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
                     }
-                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(mut scan))
                         if scan.id == old_id =>
                     {
+                        scan.id = new_id;
                         Ok(Transformed::yes(LogicalPlan::MaterializedCte(
-                            MaterializedCtePlan::Scan(MaterializedCteScan {
-                                id: new_id,
-                                ..scan
-                            }),
+                            MaterializedCtePlan::Scan(scan),
                         )))
                     }
                     _ => Ok(Transformed::no(node)),
@@ -381,8 +379,13 @@ impl MaterializedCteBinder {
                 }
                 return internal_err!("MaterializedCteScanExec {} has no CTE", scan.id());
             };
-            let bound =
-                (bind && !scan.is_bound()).then(|| scan.bind(Arc::clone(cte.buffer())));
+            let bound = if bind && !scan.is_bound() {
+                // The scan reads the batches of the body by position.
+                scan.check_body_schema(&cte.body().schema())?;
+                Some(scan.bind(Arc::clone(cte.buffer())))
+            } else {
+                None
+            };
             let scan = bound.as_ref().unwrap_or(scan);
             let scan = match self.body_statistics(scan.id())? {
                 Some(statistics) => scan.with_body_statistics(statistics),
@@ -943,12 +946,18 @@ impl DefaultPhysicalPlanner {
 
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
                 // Unbound until `bind_materialized_cte_scans` runs on the whole plan.
-                Arc::new(MaterializedCteScanExec::new(
+                let exec = MaterializedCteScanExec::new(
                     scan.id.as_u64(),
                     &scan.name,
-                    Arc::clone(scan.schema.inner()),
+                    Arc::clone(scan.schema().inner()),
                     session.config().target_partitions(),
-                ))
+                );
+                match scan.projection() {
+                    Some(projection) => {
+                        Arc::new(exec.with_body_projection(projection.to_vec())?)
+                    }
+                    None => Arc::new(exec),
+                }
             }
 
             // 1 Child
@@ -1042,7 +1051,18 @@ impl DefaultPhysicalPlanner {
                     file_output_mode,
                 };
 
-                let ordering = input_exec.properties().output_ordering().cloned();
+                // For queries like:
+                // `COPY (SELECT * FROM t ORDER BY c1) TO 'ordered.parquet'`
+                // Preserve the explicit sort order as an input ordering requirement,
+                // otherwise it might be lost during optimization.
+                //
+                // Use the explicit ordering from SortExec rather than the child's inferred
+                // output ordering, which may be incorrect at this stage. The plan may still
+                // require a `CoalescePartitionsExec`, inserted later by `EnsureRequirements`,
+                // which can change the inferred output ordering.
+                let ordering = input_exec
+                    .downcast_ref::<SortExec>()
+                    .map(|sort| sort.expr().clone());
 
                 sink_format
                     .create_writer_physical_plan(
@@ -3269,6 +3289,7 @@ impl DefaultPhysicalPlanner {
                     FinalPhysicalPlan,
                     displayable(optimized_plan.as_ref())
                         .set_tree_maximum_render_width(config.tree_maximum_render_width)
+                        .set_show_equivalences(config.show_equivalences)
                         .tree_render()
                         .to_string(),
                 ));
@@ -3311,6 +3332,7 @@ impl DefaultPhysicalPlanner {
                         .set_show_statistics(show_statistics)
                         .set_statistics_registry(statistics_registry.clone())
                         .set_show_schema(show_schema)
+                        .set_show_equivalences(config.show_equivalences)
                         .indent(e.verbose)
                         .to_string()
                 };
