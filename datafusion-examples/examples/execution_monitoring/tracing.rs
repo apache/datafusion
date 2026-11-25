@@ -6,11 +6,37 @@
 //!
 //! This example demonstrates the tracing injection feature for the DataFusion runtime.
 //! Tasks spawned on new threads behave differently depending on whether a tracer is injected.
+//! The log output clearly distinguishes the two cases.
 //!
-//! Without an injected tracer, logs from tasks running on `tokio-runtime-worker`
-//! threads do not include the `run_instrumented_query` span. Injecting `SpanTracer`
-//! instruments spawned futures and blocking closures with the current span, so
-//! their log entries include `run_instrumented_query`.
+//! # Expected Log Output
+//!
+//! When **no tracer** is injected, logs from tasks running on `tokio-runtime-worker` threads
+//! will _not_ include the `run_instrumented_query` span:
+//!
+//! ```text
+//! 10:29:40.714  INFO                 main ThreadId(01) tracing: ***** RUNNING WITHOUT INJECTED TRACER *****
+//! 10:29:40.714  INFO                 main ThreadId(01) run_instrumented_query: tracing: Starting query execution
+//! 10:29:40.728  INFO                 main ThreadId(01) run_instrumented_query: tracing: Executing SQL query sql="SELECT COUNT(*), string_col FROM alltypes GROUP BY string_col"
+//! 10:29:40.743 DEBUG                 main ThreadId(01) run_instrumented_query: datafusion_optimizer::optimizer: Optimizer took 6 ms
+//! 10:29:40.759 DEBUG tokio-runtime-worker ThreadId(03) datafusion_physical_plan::aggregates::row_hash: Creating GroupedHashAggregateStream
+//! 10:29:40.758 DEBUG tokio-runtime-worker ThreadId(04) datafusion_physical_plan::aggregates::row_hash: Creating GroupedHashAggregateStream
+//! 10:29:40.771  INFO                 main ThreadId(01) run_instrumented_query: tracing: Query complete: 6 batches returned
+//! 10:29:40.772  INFO                 main ThreadId(01) tracing: ***** WITHOUT tracer: Non-main tasks did NOT inherit the `run_instrumented_query` span *****
+//! ```
+//!
+//! When a tracer **is** injected, tasks spawned on non‑main threads _do_ inherit the span:
+//!
+//! ```text
+//! 10:29:40.772  INFO                 main ThreadId(01) tracing: Injecting custom tracer...
+//! 10:29:40.772  INFO                 main ThreadId(01) tracing: ***** RUNNING WITH INJECTED TRACER *****
+//! 10:29:40.772  INFO                 main ThreadId(01) run_instrumented_query: tracing: Starting query execution
+//! 10:29:40.775  INFO                 main ThreadId(01) run_instrumented_query: tracing: Executing SQL query sql="SELECT COUNT(*), string_col FROM alltypes GROUP BY string_col"
+//! 10:29:40.784 DEBUG                 main ThreadId(01) run_instrumented_query: datafusion_optimizer::optimizer: Optimizer took 7 ms
+//! 10:29:40.801 DEBUG tokio-runtime-worker ThreadId(03) run_instrumented_query: datafusion_physical_plan::aggregates::row_hash: Creating GroupedHashAggregateStream
+//! 10:29:40.801 DEBUG tokio-runtime-worker ThreadId(04) run_instrumented_query: datafusion_physical_plan::aggregates::row_hash: Creating GroupedHashAggregateStream
+//! 10:29:40.809  INFO                 main ThreadId(01) run_instrumented_query: tracing: Query complete: 6 batches returned
+//! 10:29:40.809  INFO                 main ThreadId(01) tracing: ***** WITH tracer: Non-main tasks DID inherit the `run_instrumented_query` span *****
+//! ```
 
 use std::any::Any;
 use std::sync::Arc;
