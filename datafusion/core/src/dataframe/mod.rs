@@ -2969,7 +2969,7 @@ impl DataFrame {
 ///
 /// A column is nullable only when its values may contain nulls: `"a" => [1, 2]`
 /// gives a non-nullable column, `"b" => [Some(1), None]` a nullable one. See
-/// [`DataFrame::from_columns`] for the exact rule.
+/// [`DataFrame::from_arrays`] for the exact rule.
 ///
 /// # Example
 ///
@@ -3002,6 +3002,7 @@ impl DataFrame {
 #[macro_export]
 macro_rules! dataframe {
     () => {{
+        // An empty DataFrame: no columns and no rows
         let batch = $crate::arrow::array::RecordBatch::new_empty(
             ::std::sync::Arc::new($crate::arrow::datatypes::Schema::empty()),
         );
@@ -3019,7 +3020,9 @@ macro_rules! dataframe {
             )+
         ];
 
-        $crate::prelude::DataFrame::from_columns(columns)
+        $crate::prelude::SessionContext::new()
+            .read_empty()
+            .and_then(|df| df.from_arrays(columns))
     }};
 }
 

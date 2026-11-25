@@ -7704,6 +7704,10 @@ async fn test_dataframe_macro() -> Result<()> {
     assert_eq!(df_empty.schema().fields().len(), 0);
     assert_eq!(df_empty.count().await?, 0);
 
+    // columns of different lengths are an error
+    let err = dataframe!("a" => [1, 2, 3], "b" => [1, 2]).unwrap_err();
+    assert_contains!(err.to_string(), "must have the same length");
+
     Ok(())
 }
 
