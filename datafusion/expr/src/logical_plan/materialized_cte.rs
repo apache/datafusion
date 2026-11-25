@@ -223,16 +223,31 @@ impl MaterializedCte {
         MaterializedCteScan::find_in(&self.continuation, self.id)
     }
 
-    /// Call `f` with the body and the continuation, in this order, so that a
-    /// rule can change them in place. Return the result of `f`.
+    /// Call `f` with the body, then with the continuation, so that a rule can
+    /// change them in place. Return `true` if a call of `f` returns `true`.
     ///
-    /// The schemas of the scans are not checked again. The signature lets a
-    /// later version validate the new inputs and return an error.
-    pub fn try_map_inputs_mut<R>(
+    /// Returns an error if `f` changes the names or the types of the columns
+    /// of the body, because the scans read them by position. The continuation
+    /// is not checked: its schema can change, and the optimizer then
+    /// recomputes the schema of this node.
+    pub fn map_inputs_mut(
         &mut self,
-        f: impl FnOnce(&mut Arc<LogicalPlan>, &mut Arc<LogicalPlan>) -> Result<R>,
-    ) -> Result<R> {
-        f(&mut self.cte, &mut self.continuation)
+        mut f: impl FnMut(&mut LogicalPlan) -> Result<bool>,
+    ) -> Result<bool> {
+        let schema = Arc::clone(self.cte.schema());
+        let body = f(Arc::make_mut(&mut self.cte))?;
+        if !Arc::ptr_eq(&schema, self.cte.schema()) {
+            schema
+                .has_equivalent_names_and_types(self.cte.schema())
+                .map_err(|e| {
+                    e.context(format!(
+                        "The body of the materialized CTE {} changed its columns",
+                        self.name
+                    ))
+                })?;
+        }
+        let continuation = f(Arc::make_mut(&mut self.continuation))?;
+        Ok(body || continuation)
     }
 
     /// The id, the name, the body and the continuation, in this order. Build
@@ -1006,6 +1021,44 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("reads the column 2 as c, but the CTE names it z"),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn map_inputs_mut_rejects_a_body_with_other_columns() -> Result<()> {
+        let id = MaterializedCteId::next();
+        let mut cte = MaterializedCte::try_new(
+            id,
+            "c",
+            body(DataType::Int32),
+            Arc::new(scan(id, DataType::Int32)),
+        )?;
+        assert!(!cte.map_inputs_mut(|_| Ok(false))?);
+
+        // A new body with the same names and types is accepted.
+        let mut visited = 0;
+        assert!(cte.map_inputs_mut(|input| {
+            visited += 1;
+            if visited == 1 {
+                *input = LogicalPlan::clone(&body(DataType::Int32));
+            }
+            Ok(visited == 1)
+        })?);
+        assert_eq!(visited, 2);
+
+        let err = cte
+            .map_inputs_mut(|input| {
+                if matches!(input, LogicalPlan::EmptyRelation(_)) {
+                    *input = LogicalPlan::clone(&body(DataType::Utf8));
+                }
+                Ok(true)
+            })
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("The body of the materialized CTE c changed its columns"),
             "{err}"
         );
         Ok(())
