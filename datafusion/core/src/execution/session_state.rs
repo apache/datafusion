@@ -1482,18 +1482,12 @@ impl SessionStateBuilder {
 
     /// Set the [`sqlparser`] dialect object used to parse SQL.
     ///
-    /// Use this method for a dialect that `datafusion.sql_parser.dialect`
-    /// cannot name, for example a custom implementation of
-    /// [`sqlparser::dialect::Dialect`].
+    /// Use this method for custom dialects that `datafusion.sql_parser.dialect`
+    /// does not support.
     ///
-    /// The dialect object takes precedence over the dialect name in the
-    /// session config. If it is set, [`SessionContext::sql`],
-    /// [`SessionState::create_logical_plan`],
-    /// [`SessionState::create_logical_expr`], [`SessionState::sql_to_statement`]
-    /// and [`SessionState::sql_to_expr`] parse with it. A `SET
-    /// datafusion.sql_parser.dialect = ...` statement then changes the config
-    /// value but not the parser. [`SessionStateBuilder::new_from_existing`]
-    /// keeps the dialect object.
+    /// The dialect object takes precedence over `datafusion.sql_parser.dialect`.
+    /// A `SET datafusion.sql_parser.dialect = ...` statement then changes the
+    /// config value but not the parser.
     ///
     /// # Example
     /// ```
