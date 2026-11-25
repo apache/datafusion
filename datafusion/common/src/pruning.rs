@@ -127,6 +127,47 @@ pub trait PruningStatistics {
         column: &Column,
         values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray>;
+
+    /// Return the minimum values for the struct field reached from `column`
+    /// by `path`, if known.
+    ///
+    /// For example, `get_field(s, 'a', 'b')` has `column` `s` and `path`
+    /// `["a", "b"]`. The path is never empty. The contract matches
+    /// [`Self::min_values`].
+    ///
+    /// The default returns `None`, so pruning keeps every container.
+    fn min_values_for_field(
+        &self,
+        _column: &Column,
+        _path: &[String],
+    ) -> Option<ArrayRef> {
+        None
+    }
+
+    /// Return the maximum values for a struct field.
+    ///
+    /// See [`Self::min_values_for_field`].
+    fn max_values_for_field(
+        &self,
+        _column: &Column,
+        _path: &[String],
+    ) -> Option<ArrayRef> {
+        None
+    }
+
+    /// Return the null counts for a struct field.
+    ///
+    /// A row counts as null when the field or any of its ancestors is null,
+    /// because `get_field` returns null in both cases.
+    ///
+    /// See [`Self::min_values_for_field`].
+    fn null_counts_for_field(
+        &self,
+        _column: &Column,
+        _path: &[String],
+    ) -> Option<ArrayRef> {
+        None
+    }
 }
 
 /// Prune files based on their partition values.
@@ -518,6 +559,28 @@ impl PruningStatistics for CompositePruningStatistics {
             }
         }
         None
+    }
+
+    fn min_values_for_field(&self, column: &Column, path: &[String]) -> Option<ArrayRef> {
+        self.statistics
+            .iter()
+            .find_map(|stats| stats.min_values_for_field(column, path))
+    }
+
+    fn max_values_for_field(&self, column: &Column, path: &[String]) -> Option<ArrayRef> {
+        self.statistics
+            .iter()
+            .find_map(|stats| stats.max_values_for_field(column, path))
+    }
+
+    fn null_counts_for_field(
+        &self,
+        column: &Column,
+        path: &[String],
+    ) -> Option<ArrayRef> {
+        self.statistics
+            .iter()
+            .find_map(|stats| stats.null_counts_for_field(column, path))
     }
 }
 
