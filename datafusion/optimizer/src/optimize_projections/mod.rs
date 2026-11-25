@@ -1067,9 +1067,9 @@ mod tests {
         Column, DFSchema, DFSchemaRef, JoinType, Result, ScalarValue, TableReference,
     };
     use datafusion_expr::ExprFunctionExt;
+    use datafusion_expr::logical_plan::InvariantLevel;
     use datafusion_expr::{
-        BinaryExpr, Expr, Extension, Like, LogicalPlan, MaterializedCte,
-        MaterializedCteId, MaterializedCtePlan, MaterializedCteScan, Operator,
+        BinaryExpr, Expr, Extension, Like, LogicalPlan, MaterializedCteBuilder, Operator,
         Projection, UserDefinedLogicalNodeCore, WindowFunctionDefinition, binary_expr,
         build_join_schema,
         builder::table_scan_with_filters,
@@ -2969,32 +2969,21 @@ mod tests {
     /// `WITH w AS MATERIALIZED (test), x AS MATERIALIZED (SELECT a, b FROM w)
     /// SELECT a FROM x UNION ALL SELECT c FROM w`
     fn nested_materialized_ctes() -> Result<LogicalPlan> {
-        let w = MaterializedCteId::next();
-        let x = MaterializedCteId::next();
-        let body_w = test_table_scan()?;
-        let scan_w = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
-            MaterializedCteScan::new(w, "w", Arc::clone(body_w.schema())),
-        ));
-        let body_x = LogicalPlanBuilder::from(scan_w.clone())
+        let w = MaterializedCteBuilder::new("w", test_table_scan()?);
+        let body_x = LogicalPlanBuilder::from(LogicalPlan::from(w.scan()))
             .project(vec![col("a"), col("b")])?
             .build()?;
-        let scan_x = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
-            MaterializedCteScan::new(x, "x", Arc::clone(body_x.schema())),
-        ));
-        let continuation = LogicalPlanBuilder::from(scan_x)
+        let x = MaterializedCteBuilder::new("x", body_x);
+        let continuation = LogicalPlanBuilder::from(LogicalPlan::from(x.scan()))
             .project(vec![col("a")])?
             .union(
-                LogicalPlanBuilder::from(scan_w)
+                LogicalPlanBuilder::from(LogicalPlan::from(w.scan()))
                     .project(vec![col("c")])?
                     .build()?,
             )?
             .build()?;
-        let inner = LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-            MaterializedCte::try_new(x, "x", Arc::new(body_x), Arc::new(continuation))?,
-        ));
-        Ok(LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-            MaterializedCte::try_new(w, "w", Arc::new(body_w), Arc::new(inner))?,
-        )))
+        let inner = LogicalPlan::from(x.build(continuation)?);
+        Ok(w.build(inner)?.into())
     }
 
     /// The body of `w` keeps the columns that its scan in the body of `x` and
@@ -3022,16 +3011,8 @@ mod tests {
         let once = optimize(nested_materialized_ctes()?)?;
         let twice = optimize(once.clone())?;
         assert_eq!(once, twice);
-        // The checks of `try_new` pass for the pruned plan.
-        let LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) = &twice else {
-            panic!("expected a MaterializedCte, got {twice}");
-        };
-        MaterializedCte::try_new(
-            cte.id(),
-            cte.name(),
-            Arc::clone(cte.body()),
-            Arc::clone(cte.continuation()),
-        )?;
+        // The scans of the pruned plan match the bodies.
+        twice.check_invariants(InvariantLevel::Executable)?;
         Ok(())
     }
 
@@ -3039,17 +3020,11 @@ mod tests {
     /// first column.
     #[test]
     fn materialized_cte_scan_without_columns() -> Result<()> {
-        let id = MaterializedCteId::next();
-        let body = test_table_scan()?;
-        let scan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
-            MaterializedCteScan::new(id, "w", Arc::clone(body.schema())),
-        ));
-        let continuation = LogicalPlanBuilder::from(scan)
+        let w = MaterializedCteBuilder::new("w", test_table_scan()?);
+        let continuation = LogicalPlanBuilder::from(LogicalPlan::from(w.scan()))
             .aggregate(Vec::<Expr>::new(), vec![count(lit(1))])?
             .build()?;
-        let plan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-            MaterializedCte::try_new(id, "w", Arc::new(body), Arc::new(continuation))?,
-        ));
+        let plan = LogicalPlan::from(w.build(continuation)?);
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -3067,28 +3042,22 @@ mod tests {
     /// body from its own scans.
     #[test]
     fn materialized_cte_nested_occurrence_with_the_same_id() -> Result<()> {
-        let id = MaterializedCteId::next();
-        let occurrence =
-            |column: &str, rest: Option<LogicalPlan>| -> Result<LogicalPlan> {
-                let body = test_table_scan()?;
-                let scan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
-                    MaterializedCteScan::new(id, "w", Arc::clone(body.schema())),
-                ));
-                let mut continuation =
-                    LogicalPlanBuilder::from(scan).project(vec![col(column)])?;
-                if let Some(rest) = rest {
-                    continuation = continuation.union(rest)?;
-                }
-                Ok(LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-                    MaterializedCte::try_new(
-                        id,
-                        "w",
-                        Arc::new(body),
-                        Arc::new(continuation.build()?),
-                    )?,
-                )))
-            };
-        let plan = occurrence("c", Some(occurrence("b", None)?))?;
+        // The inner occurrence is a clone of a plan that declares `w`. The
+        // outer occurrence rewrites the continuation of another clone.
+        let w = MaterializedCteBuilder::new("w", test_table_scan()?);
+        let outer_scan = LogicalPlan::from(w.scan());
+        let inner_continuation = LogicalPlanBuilder::from(LogicalPlan::from(w.scan()))
+            .project(vec![col("b")])?
+            .build()?;
+        let inner = w.build(inner_continuation)?;
+        let outer = inner.clone().map_continuation(|_| {
+            LogicalPlanBuilder::from(outer_scan)
+                .project(vec![col("c")])?
+                .union(LogicalPlan::from(inner))?
+                .build()
+                .map(Transformed::yes)
+        })?;
+        let plan = LogicalPlan::from(outer.data);
         assert_optimized_plan_equal!(
             plan,
             @r"

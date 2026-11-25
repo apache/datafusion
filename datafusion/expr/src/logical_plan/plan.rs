@@ -1231,9 +1231,11 @@ impl LogicalPlan {
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
                 self.assert_no_expressions(expr)?;
                 let (body, continuation) = self.only_two_inputs(inputs)?;
-                Ok(LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-                    cte.with_new_inputs(Arc::new(body), Arc::new(continuation))?,
-                )))
+                // The scans are not checked. See the documentation of
+                // `materialized_cte`.
+                Ok(cte
+                    .with_new_inputs_unchecked(Arc::new(body), Arc::new(continuation))
+                    .into())
             }
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => {
                 self.assert_no_expressions(expr)?;
