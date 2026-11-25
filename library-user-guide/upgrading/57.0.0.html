@@ -576,6 +576,21 @@ available without the Spark function library:</p>
 </pre></div>
 </div>
 </section>
+<section id="sparkoptions-mapkeydeduppolicy-and-configoptions-spark-removed">
+<span id="sparkoptions-mapkeydeduppolicy-and-configoptionsspark-removed"></span><h3><code class="docutils literal notranslate"><span class="pre">SparkOptions</span></code>, <code class="docutils literal notranslate"><span class="pre">MapKeyDedupPolicy</span></code>, and <code class="docutils literal notranslate"><span class="pre">ConfigOptions::spark</span></code> removed<a class="headerlink" href="#sparkoptions-mapkeydeduppolicy-and-configoptions-spark-removed" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">SparkOptions</span></code> and <code class="docutils literal notranslate"><span class="pre">MapKeyDedupPolicy</span></code> have been removed from
+<code class="docutils literal notranslate"><span class="pre">datafusion_common::config</span></code>, along with the <code class="docutils literal notranslate"><span class="pre">ConfigOptions::spark</span></code> field and the
+built-in <code class="docutils literal notranslate"><span class="pre">datafusion.spark.map_key_dedup_policy</span></code> key. The
+<a class="reference external" href="https://github.com/apache/datafusion-spark">datafusion-spark</a> extension now
+defines <code class="docutils literal notranslate"><span class="pre">SparkOptions</span></code> as a <code class="docutils literal notranslate"><span class="pre">ConfigExtension</span></code> with the prefix <code class="docutils literal notranslate"><span class="pre">spark</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">SessionStateBuilder::with_spark_features()</span></code> registers the extension. To
+register it manually, use
+<code class="docutils literal notranslate"><span class="pre">SessionConfig::with_option_extension(SparkOptions::default())</span></code>. Once
+registered, use the new key:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">spark</span><span class="p">.</span><span class="n">map_key_dedup_policy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;LAST_WIN&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 <section id="parquetfilereaderfactory-adds-any-as-a-supertrait">
 <h3><code class="docutils literal notranslate"><span class="pre">ParquetFileReaderFactory</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait<a class="headerlink" href="#parquetfilereaderfactory-adds-any-as-a-supertrait" title="Link to this heading">#</a></h3>
 <p>To enable downcasting of <code class="docutils literal notranslate"><span class="pre">dyn</span> <span class="pre">ParquetFileReaderFactory</span></code> to concrete factory
@@ -704,6 +719,7 @@ that does not remap the scans now fails with an error that names the rule.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-results-of-set-monotonic-aggregate-udfs">NULL results of set-monotonic aggregate UDFs</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupclusteringmode-full-no-longer-implies-sorted-input"><code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> no longer implies sorted input</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-spark-moved-to-its-own-repository"><code class="docutils literal notranslate"><span class="pre">datafusion-spark</span></code> moved to its own repository</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sparkoptions-mapkeydeduppolicy-and-configoptions-spark-removed"><code class="docutils literal notranslate"><span class="pre">SparkOptions</span></code>, <code class="docutils literal notranslate"><span class="pre">MapKeyDedupPolicy</span></code>, and <code class="docutils literal notranslate"><span class="pre">ConfigOptions::spark</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetfilereaderfactory-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">ParquetFileReaderFactory</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#copy-to-ordering"><code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">TO</span></code> ordering</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#deprecated-expr-wildcard-has-been-removed">Deprecated <code class="docutils literal notranslate"><span class="pre">Expr::Wildcard</span></code> has been removed</a></li>
