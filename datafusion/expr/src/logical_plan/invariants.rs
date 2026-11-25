@@ -416,6 +416,9 @@ fn strip_inner_query(inner_plan: &LogicalPlan) -> &LogicalPlan {
             strip_inner_query(projection.input.as_ref())
         }
         LogicalPlan::SubqueryAlias(alias) => strip_inner_query(alias.input.as_ref()),
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+            strip_inner_query(cte.continuation.as_ref())
+        }
         other => other,
     }
 }
