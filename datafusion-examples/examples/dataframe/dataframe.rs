@@ -31,6 +31,7 @@ use tokio::fs::create_dir_all;
 /// * [read_csv]: execute queries against csv files
 /// * [read_memory]: execute queries against in-memory arrow data
 /// * [read_memory_macro]: execute queries against in-memory arrow data using macro
+/// * [read_memory_arrays]: create DataFrames from in-memory arrow arrays
 ///
 /// # Writing out to local storage
 ///
@@ -53,6 +54,7 @@ pub async fn dataframe_example() -> Result<()> {
     read_csv(&ctx).await?;
     read_memory(&ctx).await?;
     read_memory_macro().await?;
+    read_memory_arrays(&ctx).await?;
     write_out(&ctx).await?;
     register_cars_test_data("t1", &ctx).await?;
     register_cars_test_data("t2", &ctx).await?;
@@ -178,6 +180,43 @@ async fn read_memory_macro() -> Result<()> {
     // create empty DataFrame using macro
     let df_empty = dataframe!()?;
     df_empty.show().await?;
+
+    Ok(())
+}
+
+/// Use the DataFrame API to:
+/// 1. Create a DataFrame from Arrow arrays in a new session
+/// 2. Create a DataFrame from Arrow arrays in the session of a `SessionContext`
+/// 3. Create a DataFrame from Arrow arrays in the session of another DataFrame
+async fn read_memory_arrays(ctx: &SessionContext) -> Result<()> {
+    // define data in memory
+    let a: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "d"]));
+    let b: ArrayRef = Arc::new(Int32Array::from(vec![1, 10, 10, 100]));
+
+    // `from_arrays` creates a DataFrame in the session of the DataFrame it is
+    // called on. Called on an empty DataFrame from the macro, the new
+    // DataFrame gets a new session
+    let df = dataframe!()?.from_arrays([("a", a.clone()), ("b", b.clone())])?;
+    df.show().await?;
+
+    // Called on an empty DataFrame from `ctx`, the new DataFrame shares the
+    // session of `ctx`, so it can use the tables, functions and configuration
+    // registered there
+    let df = ctx
+        .read_empty()?
+        .from_arrays([("a", a.clone()), ("b", b.clone())])?;
+    df.show().await?;
+
+    // The same works with any DataFrame from `ctx`. Here the new DataFrame is
+    // created from a registered table and joined with it
+    let c: ArrayRef = Arc::new(StringArray::from(vec!["w", "x", "y", "z"]));
+    let batch = RecordBatch::try_from_iter(vec![("a", a.clone()), ("c", c)])?;
+    ctx.register_batch("lookup", batch)?;
+
+    let lookup = ctx.table("lookup").await?;
+    let df = lookup.clone().from_arrays([("a", a), ("b", b)])?;
+    let df = df.join(lookup, JoinType::Inner, &["a"], &["a"], None)?;
+    df.show().await?;
 
     Ok(())
 }

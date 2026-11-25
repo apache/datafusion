@@ -177,7 +177,7 @@ impl Default for DataFrameWriteOptions {
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
 /// # use datafusion::functions_aggregate::expr_fn::min;
-/// # use datafusion::arrow::array::{Int32Array, RecordBatch, StringArray};
+/// # use datafusion::arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 /// # use datafusion::arrow::datatypes::{DataType, Field, Schema};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
@@ -212,6 +212,16 @@ impl Default for DataFrameWriteOptions {
 ///     "id" => [1, 2, 3],
 ///     "name" => ["foo", "bar", "baz"]
 ///  )?;
+/// df.show().await?;
+///
+/// // Create a new dataframe from Arrow arrays, in a new session
+/// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+/// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
+/// let df = dataframe!()?.from_arrays([("id", id.clone()), ("name", name.clone())])?;
+/// df.show().await?;
+///
+/// // Create a new dataframe from Arrow arrays, in the same session as `ctx`
+/// let df = ctx.read_empty()?.from_arrays([("id", id), ("name", name)])?;
 /// df.show().await?;
 /// # Ok(())
 /// # }

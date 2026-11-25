@@ -45,8 +45,8 @@ use crate::{
 // backwards compatibility
 pub use crate::execution::session_state::SessionState;
 
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::{Schema, SchemaRef};
 use datafusion_catalog::MemoryCatalogProvider;
 use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::{

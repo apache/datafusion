@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
     // Create a new dataframe from Arrow arrays, in a new session
     let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
     let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
-    let df = DataFrame::from_columns([("id", id.clone()), ("name", name.clone())])?;
+    let df = dataframe!()?.from_arrays([("id", id.clone()), ("name", name.clone())])?;
     df.show().await?;
 
     // Create a new dataframe from Arrow arrays, in the same session as `ctx`
