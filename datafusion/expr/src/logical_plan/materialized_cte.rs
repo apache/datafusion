@@ -764,11 +764,7 @@ mod tests {
     }
 
     fn scan(id: MaterializedCteId, data_type: DataType) -> LogicalPlan {
-        LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(MaterializedCteScan::new(
-            id,
-            "c",
-            schema(data_type),
-        )))
+        MaterializedCteScan::new(id, "c", schema(data_type)).into()
     }
 
     #[test]
@@ -1082,8 +1078,7 @@ mod tests {
             body(DataType::Int32),
             Arc::new(scan(id, DataType::Int32)),
         )?;
-        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte.clone()))
-            .check_invariants(InvariantLevel::Executable)?;
+        LogicalPlan::from(cte.clone()).check_invariants(InvariantLevel::Executable)?;
 
         // `with_new_exprs` does not check the scans, so a rule can build
         // this plan. The invariant check rejects it.
@@ -1115,8 +1110,7 @@ mod tests {
         }));
         let scan = MaterializedCteScan::new(id, "c", wide_schema());
         let narrow = scan.with_projection(&[1, 3])?;
-        let plan =
-            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(narrow.clone()));
+        let plan = LogicalPlan::from(narrow.clone());
         assert_eq!(
             plan.display_indent().to_string(),
             "MaterializedCteScan: name=c projection=[b, d]"
@@ -1128,18 +1122,14 @@ mod tests {
             projection: Some(vec![0, 1]),
             ..narrow.clone()
         };
-        let plan = Arc::new(LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
-            wrong,
-        )));
+        let plan = Arc::new(LogicalPlan::from(wrong));
         assert!(MaterializedCte::try_new(id, "c", Arc::clone(&body), plan).is_err());
 
         let out_of_range = MaterializedCteScan {
             projection: Some(vec![1, 9]),
             ..narrow
         };
-        let plan = Arc::new(LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
-            out_of_range,
-        )));
+        let plan = Arc::new(LogicalPlan::from(out_of_range));
         assert!(MaterializedCte::try_new(id, "c", body, plan).is_err());
         Ok(())
     }
@@ -1154,14 +1144,12 @@ mod tests {
         let plan = LogicalPlanBuilder::from(scan(id, DataType::Int32))
             .filter(exists(Arc::new(scan(id, DataType::Int32))))?
             .union(scan(other, DataType::Int32))?
-            .union(LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-                MaterializedCte::try_new(
-                    id,
-                    "c",
-                    body(DataType::Int32),
-                    Arc::new(scan(id, DataType::Int32)),
-                )?,
-            )))?
+            .union(LogicalPlan::from(MaterializedCte::try_new(
+                id,
+                "c",
+                body(DataType::Int32),
+                Arc::new(scan(id, DataType::Int32)),
+            )?))?
             .build()?;
         assert_eq!(MaterializedCteScan::find_in(&plan, id)?.len(), 2);
         assert_eq!(MaterializedCteScan::find_in(&plan, other)?.len(), 1);

@@ -373,14 +373,12 @@ impl TreeNode for LogicalPlan {
                 (cte, continuation)
                     .map_elements(f)?
                     .update_data(|(cte, continuation)| {
-                        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-                            MaterializedCte {
-                                id,
-                                name,
-                                cte,
-                                continuation,
-                            },
-                        ))
+                        LogicalPlan::from(MaterializedCte {
+                            id,
+                            name,
+                            cte,
+                            continuation,
+                        })
                     })
             }
             LogicalPlan::Statement(stmt) => match stmt {
