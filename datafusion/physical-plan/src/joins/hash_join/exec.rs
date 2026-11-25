@@ -8445,6 +8445,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn join_stops_consuming_probe_at_fetch_with_empty_build_map() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, true)]));
+        let probe_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+        let key = Arc::new(Column::new_with_schema("key", &schema)?);
+        let on: JoinOn = vec![(Arc::clone(&key) as _, key)];
+        let fetch = 2;
+
+        for build_keys in [vec![], vec![None]] {
+            let build_batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(build_keys))],
+            )?;
+            let left = TestMemoryExec::try_new_exec(
+                &[vec![build_batch]],
+                Arc::clone(&schema),
+                None,
+            )?;
+            let right = Arc::new(
+                MockExec::new(
+                    vec![Ok(probe_batch.clone()), exec_err!("unexpected probe poll")],
+                    Arc::clone(&schema),
+                )
+                .with_use_task(false)
+                .with_unknown_statistics(),
+            );
+            let join = join(
+                left,
+                right,
+                on.clone(),
+                &JoinType::RightAnti,
+                NullEquality::NullEqualsNothing,
+            )?
+            .builder()
+            .with_fetch(Some(fetch))
+            .build()?;
+
+            let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+            assert_eq!(
+                common::collect(stream).await?,
+                vec![probe_batch.slice(0, fetch)]
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn join_split_batch() {
         let left = build_table(
             ("a1", &vec![1, 2, 3, 4]),
