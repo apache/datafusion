@@ -533,12 +533,15 @@ impl<'a> PruningPredicateBuilder<'a> {
         // build predicate expression once
         let mut required_columns = RequiredColumns::new();
         let mut properties = PruningExpressionProperties::default();
+        let ctx = PredicateBuildContext {
+            schema: &file_schema,
+            unhandled_hook: &unhandled_hook,
+            max_in_list_size: self.max_in_list_size,
+        };
         let predicate_expr = build_predicate_expression(
             &predicate,
-            &file_schema,
+            &ctx,
             &mut required_columns,
-            &unhandled_hook,
-            self.max_in_list_size,
             &mut properties,
         );
         let predicate_schema = required_columns.schema();
@@ -1738,15 +1741,21 @@ impl PredicateRewriter {
     ) -> Arc<dyn PhysicalExpr> {
         let mut required_columns = RequiredColumns::new();
         let mut properties = PruningExpressionProperties::default();
-        build_predicate_expression(
-            expr,
-            &Arc::new(schema.clone()),
-            &mut required_columns,
-            &self.unhandled_hook,
-            self.max_in_list_size,
-            &mut properties,
-        )
+        let schema = Arc::new(schema.clone());
+        let ctx = PredicateBuildContext {
+            schema: &schema,
+            unhandled_hook: &self.unhandled_hook,
+            max_in_list_size: self.max_in_list_size,
+        };
+        build_predicate_expression(expr, &ctx, &mut required_columns, &mut properties)
     }
+}
+
+/// Read-only settings for [`build_predicate_expression`].
+struct PredicateBuildContext<'a> {
+    schema: &'a SchemaRef,
+    unhandled_hook: &'a Arc<dyn UnhandledPredicateHook>,
+    max_in_list_size: usize,
 }
 
 /// Translate logical filter expression into pruning predicate
@@ -1763,42 +1772,45 @@ impl PredicateRewriter {
 /// checks. Longer lists fall back to `unhandled_hook`.
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
-    schema: &SchemaRef,
+    ctx: &PredicateBuildContext,
     required_columns: &mut RequiredColumns,
-    unhandled_hook: &Arc<dyn UnhandledPredicateHook>,
-    max_in_list_size: usize,
     properties: &mut PruningExpressionProperties,
 ) -> Arc<dyn PhysicalExpr> {
     if is_always_false(expr) {
-        // Shouldn't return `unhandled_hook.handle(expr)`
+        // Shouldn't return `ctx.unhandled_hook.handle(expr)`
         // Because it will transfer false to true.
         return Arc::clone(expr);
     }
     // predicate expression can only be a binary expression
     if let Some(is_null) = expr.downcast_ref::<phys_expr::IsNullExpr>() {
-        return build_is_null_column_expr(is_null.arg(), schema, required_columns, false)
-            .unwrap_or_else(|| unhandled_hook.handle(expr));
+        return build_is_null_column_expr(
+            is_null.arg(),
+            ctx.schema,
+            required_columns,
+            false,
+        )
+        .unwrap_or_else(|| ctx.unhandled_hook.handle(expr));
     }
     if let Some(is_not_null) = expr.downcast_ref::<phys_expr::IsNotNullExpr>() {
         return build_is_null_column_expr(
             is_not_null.arg(),
-            schema,
+            ctx.schema,
             required_columns,
             true,
         )
-        .unwrap_or_else(|| unhandled_hook.handle(expr));
+        .unwrap_or_else(|| ctx.unhandled_hook.handle(expr));
     }
     if let Some(col) = expr.downcast_ref::<phys_expr::Column>() {
-        return build_single_column_expr(col, schema, required_columns, false)
-            .unwrap_or_else(|| unhandled_hook.handle(expr));
+        return build_single_column_expr(col, ctx.schema, required_columns, false)
+            .unwrap_or_else(|| ctx.unhandled_hook.handle(expr));
     }
     if let Some(not) = expr.downcast_ref::<phys_expr::NotExpr>() {
         // match !col (don't do so recursively)
         if let Some(col) = not.arg().downcast_ref::<phys_expr::Column>() {
-            return build_single_column_expr(col, schema, required_columns, true)
-                .unwrap_or_else(|| unhandled_hook.handle(expr));
+            return build_single_column_expr(col, ctx.schema, required_columns, true)
+                .unwrap_or_else(|| ctx.unhandled_hook.handle(expr));
         } else {
-            return unhandled_hook.handle(expr);
+            return ctx.unhandled_hook.handle(expr);
         }
     }
     if let Some(in_list) = expr.downcast_ref::<phys_expr::InListExpr>() {
@@ -1807,13 +1819,17 @@ fn build_predicate_expression(
         // performance threshold; compact pruning is opt-in via a raised cap.
         // The compact form covers both `IN` and `NOT IN`.
         if in_list.list().len() > MAX_IN_LIST_SIZE
-            && in_list.list().len() <= max_in_list_size
-            && let Some(pruning_expr) =
-                build_compact_in_list_expr(in_list, schema, required_columns, properties)
+            && in_list.list().len() <= ctx.max_in_list_size
+            && let Some(pruning_expr) = build_compact_in_list_expr(
+                in_list,
+                ctx.schema,
+                required_columns,
+                properties,
+            )
         {
             return pruning_expr;
         }
-        if !in_list.list().is_empty() && in_list.list().len() <= max_in_list_size {
+        if !in_list.list().is_empty() && in_list.list().len() <= ctx.max_in_list_size {
             let eq_op = if in_list.negated() {
                 Operator::NotEq
             } else {
@@ -1838,19 +1854,17 @@ fn build_predicate_expression(
                 .unwrap();
             return build_predicate_expression(
                 &change_expr,
-                schema,
+                ctx,
                 required_columns,
-                unhandled_hook,
-                max_in_list_size,
                 properties,
             );
         } else {
-            return unhandled_hook.handle(expr);
+            return ctx.unhandled_hook.handle(expr);
         }
     }
     if let Some(lookup) = expr.downcast_ref::<HashTableLookupExpr>() {
-        return build_hash_lookup_pruning_expr(lookup, schema, required_columns)
-            .unwrap_or_else(|| unhandled_hook.handle(expr));
+        return build_hash_lookup_pruning_expr(lookup, ctx.schema, required_columns)
+            .unwrap_or_else(|| ctx.unhandled_hook.handle(expr));
     }
     // A partitioned hash join hides its per-partition filters under a `CASE` on the
     // repartition hash. A row takes exactly one branch, so a container may match
@@ -1859,13 +1873,13 @@ fn build_predicate_expression(
     if let Some(case) = expr.downcast_ref::<phys_expr::CaseExpr>() {
         // Only a Boolean `CASE` is a predicate; anything else is a value for
         // whatever compares it to handle.
-        if !matches!(case.data_type(schema), Ok(DataType::Boolean)) {
-            return unhandled_hook.handle(expr);
+        if !matches!(case.data_type(ctx.schema), Ok(DataType::Boolean)) {
+            return ctx.unhandled_hook.handle(expr);
         }
         // Without an `ELSE`, unmatched rows are UNKNOWN: not a match, but not
         // FALSE either, which full-match inference must be able to tell apart.
         if case.else_expr().is_none() {
-            return unhandled_hook.handle(expr);
+            return ctx.unhandled_hook.handle(expr);
         }
         return case
             .when_then_expr()
@@ -1873,19 +1887,12 @@ fn build_predicate_expression(
             .map(|(_, then)| then)
             .chain(case.else_expr())
             .map(|branch| {
-                build_predicate_expression(
-                    branch,
-                    schema,
-                    required_columns,
-                    unhandled_hook,
-                    max_in_list_size,
-                    properties,
-                )
+                build_predicate_expression(branch, ctx, required_columns, properties)
             })
             .reduce(|acc, branch| {
                 Arc::new(phys_expr::BinaryExpr::new(acc, Operator::Or, branch)) as _
             })
-            .unwrap_or_else(|| unhandled_hook.handle(expr));
+            .unwrap_or_else(|| ctx.unhandled_hook.handle(expr));
     }
 
     let (left, op, right) = {
@@ -1897,7 +1904,7 @@ fn build_predicate_expression(
             )
         } else if let Some(like_expr) = expr.downcast_ref::<phys_expr::LikeExpr>() {
             if like_expr.case_insensitive() {
-                return unhandled_hook.handle(expr);
+                return ctx.unhandled_hook.handle(expr);
             }
             let op = match (like_expr.negated(), like_expr.case_insensitive()) {
                 (false, false) => Operator::LikeMatch,
@@ -1911,27 +1918,15 @@ fn build_predicate_expression(
                 Arc::clone(like_expr.pattern()),
             )
         } else {
-            return unhandled_hook.handle(expr);
+            return ctx.unhandled_hook.handle(expr);
         }
     };
 
     if op == Operator::And || op == Operator::Or {
-        let left_expr = build_predicate_expression(
-            &left,
-            schema,
-            required_columns,
-            unhandled_hook,
-            max_in_list_size,
-            properties,
-        );
-        let right_expr = build_predicate_expression(
-            &right,
-            schema,
-            required_columns,
-            unhandled_hook,
-            max_in_list_size,
-            properties,
-        );
+        let left_expr =
+            build_predicate_expression(&left, ctx, required_columns, properties);
+        let right_expr =
+            build_predicate_expression(&right, ctx, required_columns, properties);
         // simplify boolean expression if applicable
         let expr = match (&left_expr, op, &right_expr) {
             (left, Operator::And, right)
@@ -1962,7 +1957,7 @@ fn build_predicate_expression(
         left_columns,
         right_columns,
         op,
-        schema,
+        ctx.schema,
         required_columns,
     );
     let mut expr_builder = match expr_builder {
@@ -1971,12 +1966,12 @@ fn build_predicate_expression(
         // this can still produce a useful predicate when multiple conditions are joined using AND
         Err(e) => {
             debug!("Error building pruning expression: {e}");
-            return unhandled_hook.handle(expr);
+            return ctx.unhandled_hook.handle(expr);
         }
     };
 
     build_statistics_expr(&mut expr_builder)
-        .unwrap_or_else(|_| unhandled_hook.handle(expr))
+        .unwrap_or_else(|_| ctx.unhandled_hook.handle(expr))
 }
 
 /// Count of distinct column references in an expression.
@@ -7498,14 +7493,13 @@ mod tests {
         let expr = logical2physical(expr, schema);
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
         let mut properties = PruningExpressionProperties::default();
-        build_predicate_expression(
-            &expr,
-            &Arc::new(schema.clone()),
-            required_columns,
-            &unhandled_hook,
-            MAX_IN_LIST_SIZE,
-            &mut properties,
-        )
+        let schema = Arc::new(schema.clone());
+        let ctx = PredicateBuildContext {
+            schema: &schema,
+            unhandled_hook: &unhandled_hook,
+            max_in_list_size: MAX_IN_LIST_SIZE,
+        };
+        build_predicate_expression(&expr, &ctx, required_columns, &mut properties)
     }
 
     #[test]
