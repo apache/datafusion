@@ -945,8 +945,9 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Return [`DistinctHandling::Unsupported`] if the accumulator does not
     /// implement `DISTINCT`, that is, it does not read `is_distinct`, or it
     /// rejects `DISTINCT` with an error. The planner then has to deduplicate
-    /// the input or reject the query. Nothing reads this variant yet:
-    /// rejecting such queries at planning time is a follow-up change.
+    /// the input or reject the query. Today `SingleDistinctToGroupBy`
+    /// deduplicates the input when it can rewrite the query; rejecting the
+    /// rest at planning time is a follow-up change.
     fn distinct_handling(&self) -> DistinctHandling {
         DistinctHandling::Sensitive
     }
