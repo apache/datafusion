@@ -2901,7 +2901,11 @@ impl DataFrame {
     /// Create a new `DataFrame` from named Arrow arrays, in the same session
     /// as this `DataFrame`.
     ///
-    /// Columns are built as in [`Self::from_columns`].
+    /// Each `(name, array)` pair becomes one column. A field is nullable only
+    /// when its array may contain nulls (see [`Array::is_nullable`]).
+    ///
+    /// Returns an error if `columns` is empty or the arrays have different
+    /// lengths.
     ///
     /// # Example
     /// ```
@@ -2912,11 +2916,16 @@ impl DataFrame {
     /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let ctx = SessionContext::new();
-    /// let empty = ctx.read_empty()?;
     /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
     /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
-    /// let df = empty.from_arrays([("id", id), ("name", name)])?;
+    ///
+    /// // in the session of an existing `ctx`
+    /// let ctx = SessionContext::new();
+    /// let empty = ctx.read_empty()?;
+    /// let df1 = empty.from_arrays([("id", id.clone()), ("name", name.clone())])?;
+    ///
+    /// // in a new session
+    /// let df2 = dataframe!()?.from_arrays([("id", id), ("name", name)])?;
     /// let expected = vec![
     ///     "+----+------+",
     ///     "| id | name |",
@@ -2926,7 +2935,8 @@ impl DataFrame {
     ///     "| 3  | baz  |",
     ///     "+----+------+",
     /// ];
-    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # assert_batches_sorted_eq!(expected, &df1.collect().await?);
+    /// # assert_batches_sorted_eq!(expected, &df2.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -2934,7 +2944,16 @@ impl DataFrame {
     where
         I: IntoIterator<Item = (&'a str, ArrayRef)>,
     {
-        let batch = record_batch_from_columns(columns)?;
+        let (fields, arrays): (Vec<_>, Vec<_>) = columns
+            .into_iter()
+            .map(|(name, array)| {
+                (
+                    Field::new(name, array.data_type().clone(), array.is_nullable()),
+                    array,
+                )
+            })
+            .unzip();
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)?;
         let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
         let plan = LogicalPlanBuilder::scan(
             UNNAMED_TABLE,
@@ -2944,26 +2963,6 @@ impl DataFrame {
         .build()?;
         Ok(DataFrame::new((*self.session_state).clone(), plan))
     }
-}
-
-/// Build a [`RecordBatch`] from named arrays.
-///
-/// Each `(name, array)` pair becomes one column. A field is nullable only when
-/// its array may contain nulls (see [`Array::is_nullable`]).
-fn record_batch_from_columns<'a, I>(columns: I) -> Result<RecordBatch>
-where
-    I: IntoIterator<Item = (&'a str, ArrayRef)>,
-{
-    let (fields, arrays): (Vec<_>, Vec<_>) = columns
-        .into_iter()
-        .map(|(name, array)| {
-            (
-                Field::new(name, array.data_type().clone(), array.is_nullable()),
-                array,
-            )
-        })
-        .unzip();
-    Ok(RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)?)
 }
 
 /// Create a DataFrame from column names and values.
