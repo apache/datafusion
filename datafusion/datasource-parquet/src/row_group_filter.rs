@@ -11,7 +11,7 @@ use crate::metadata::{has_untrusted_byte_array_stats, has_untrusted_min_max_orde
 use crate::pruning::build_inverted_predicate;
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::compute::nullif;
-use arrow::datatypes::Schema;
+use arrow::datatypes::{DataType, Schema};
 use datafusion_common::parquet_config::RowGroupRangeAssignment;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
@@ -544,6 +544,56 @@ impl<'a> RowGroupPruningStatistics<'a> {
         Some(converter)
     }
 
+    /// A converter for the Parquet leaf below `column` at struct field `path`.
+    ///
+    /// Returns `None` unless every step is a struct field, the leaf is a
+    /// primitive, and no ancestor is repeated. A field below a list or map
+    /// has statistics per element, not per row.
+    fn field_statistics_converter(
+        &self,
+        column: &Column,
+        path: &[String],
+    ) -> Option<StatisticsConverter<'a>> {
+        let mut field = self.arrow_schema.field_with_name(&column.name).ok()?;
+        for name in path {
+            let DataType::Struct(fields) = field.data_type() else {
+                return None;
+            };
+            field = fields.iter().find(|f| f.name() == name)?;
+        }
+        if field.data_type().is_nested() {
+            return None;
+        }
+        let leaf = self.parquet_schema.columns().iter().position(|descr| {
+            let parts = descr.path().parts();
+            parts.len() == path.len() + 1
+                && parts[0] == column.name
+                && parts[1..].iter().zip(path).all(|(a, b)| a == b)
+        })?;
+        if self.parquet_schema.column(leaf).max_rep_level() > 0 {
+            return None;
+        }
+        Some(
+            StatisticsConverter::from_column_index(leaf, field, self.parquet_schema)
+                .ok()?
+                // Missing counts cannot rule out nulls.
+                .with_missing_null_counts_as_zero(false),
+        )
+    }
+
+    fn field_min_max_statistics_converter(
+        &self,
+        column: &Column,
+        path: &[String],
+    ) -> Option<StatisticsConverter<'a>> {
+        let converter = self.field_statistics_converter(column, path)?;
+        let index = converter.parquet_column_index()?;
+        if has_untrusted_min_max_order(self.parquet_schema, self.column_orders, index) {
+            return None;
+        }
+        Some(converter)
+    }
+
     fn mask_untrusted_byte_array_stats(
         &self,
         parquet_index: Option<usize>,
@@ -604,6 +654,28 @@ impl PruningStatistics for RowGroupPruningStatistics<'_> {
         _values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
         None
+    }
+
+    fn min_values_for_field(&self, column: &Column, path: &[String]) -> Option<ArrayRef> {
+        let converter = self.field_min_max_statistics_converter(column, path)?;
+        let values = converter.row_group_mins(self.metadata_iter()).ok()?;
+        self.mask_untrusted_byte_array_stats(converter.parquet_column_index(), values)
+    }
+
+    fn max_values_for_field(&self, column: &Column, path: &[String]) -> Option<ArrayRef> {
+        let converter = self.field_min_max_statistics_converter(column, path)?;
+        let values = converter.row_group_maxes(self.metadata_iter()).ok()?;
+        self.mask_untrusted_byte_array_stats(converter.parquet_column_index(), values)
+    }
+
+    fn null_counts_for_field(
+        &self,
+        column: &Column,
+        path: &[String],
+    ) -> Option<ArrayRef> {
+        let converter = self.field_statistics_converter(column, path)?;
+        let counts = converter.row_group_null_counts(self.metadata_iter()).ok()?;
+        Some(Arc::new(counts) as ArrayRef)
     }
 }
 
