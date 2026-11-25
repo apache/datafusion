@@ -1,21 +1,22 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! [`HashJoinExec`] Partitioned Hash Join Operator
+//! [`HashJoinExec`]: implementation for hash join.
+//!
+//! # Regular (inner/left/right/full) Hash Join implementation
+//!
+//! There are three major layers during execution:
+//!
+//! 1. [`RegularHashJoinStream::into_stream`]: the state machine entry point,
+//!    driving the build, probe, and final output stages.
+//! 2. [`BatchedJoinProcessor`]: probes the raw index, evaluates the residual filter,
+//!    and coalesces output. Each lookup returns up to `batch_size` candidate pairs.
+//! 3. [`Map`]: the raw build-side index (hash table or integer-key array map).
+//!
+//! [`RegularHashJoinStream::into_stream`]: regular_join::RegularHashJoinStream::into_stream
+//! [`BatchedJoinProcessor`]: batched_join_processor::BatchedJoinProcessor
+//! [`Map`]: crate::joins::Map
 
 pub use exec::{HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild};
 /// # Public Only for Internal Use:
@@ -27,9 +28,12 @@ pub use exec::{HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild};
 pub use partitioned_hash_eval::HashTableLookupExpr;
 pub use partitioned_hash_eval::{HashExpr, SeededRandomState};
 
+mod batched_join_processor;
+mod build;
 mod exec;
 mod inlist_builder;
+mod not_in;
 mod partitioned_hash_eval;
-mod probe_completion;
+mod regular_join;
 mod shared_bounds;
 mod stream;

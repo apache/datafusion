@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Partial-reduce hash aggregation stream implementation.
 
@@ -27,10 +14,11 @@ use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
+use super::GroupClusteringMode;
 use super::aggregate_hash_table::{AggregateHashTable, PartialReduceMarker};
+use crate::SendableRecordBatchStream;
 use crate::metrics::{BaselineMetrics, Count, MetricBuilder, RecordOutput, SpillMetrics};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
-use crate::{InputOrderMode, SendableRecordBatchStream};
 
 /// Hash aggregation can combine multiple partial stages before final
 /// evaluation. This stream implements the partial-reduce stage.
@@ -109,7 +97,7 @@ impl PartialReduceHashAggregateStream {
         partition: usize,
     ) -> Result<Self> {
         debug_assert_eq!(agg.mode, super::AggregateMode::PartialReduce);
-        debug_assert_eq!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_eq!(agg.group_clustering_mode, GroupClusteringMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;

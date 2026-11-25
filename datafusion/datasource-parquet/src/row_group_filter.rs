@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -100,6 +87,12 @@ impl RowGroupAccessPlanFilter {
     /// Return true if there are no row groups
     pub fn is_empty(&self) -> bool {
         self.access_plan.is_empty()
+    }
+
+    /// Return true if no row groups remain to be scanned, either because the
+    /// file has none or because pruning has skipped every one of them.
+    pub fn is_fully_pruned(&self) -> bool {
+        self.access_plan.row_group_index_iter().next().is_none()
     }
 
     /// Return the number of row groups that are currently expected to be scanned
@@ -487,6 +480,10 @@ impl RowGroupAccessPlanFilter {
     ///
     /// # Panics
     /// if `row_group_bloom_filters` does not have the same number of row groups as this set
+    #[deprecated(
+        since = "57.0.0",
+        note = "Bloom filters are now evaluated incrementally during loading in the parquet opener"
+    )]
     pub fn prune_by_bloom_filters(
         &mut self,
         predicate: &PruningPredicate,
@@ -530,9 +527,38 @@ impl RowGroupAccessPlanFilter {
 
             if prune_group {
                 metrics.row_groups_pruned_bloom_filter.add_pruned(1);
-                self.access_plan.skip(idx)
+                self.access_plan.skip(idx);
             } else {
                 metrics.row_groups_pruned_bloom_filter.add_matched(1);
+            }
+        }
+    }
+
+    /// Evaluates whether the currently loaded Bloom filters prune the specified row group.
+    ///
+    /// If the predicate evaluates to `false` on the loaded bloom filters, the row group is marked
+    /// as skipped in the access plan, the `row_groups_pruned_bloom_filter` metric is incremented,
+    /// and `true` is returned to indicate early rejection (allowing callers to skip loading
+    /// remaining column filters).
+    pub(crate) fn prune_row_group_with_bloom_filters(
+        &mut self,
+        idx: usize,
+        predicate: &PruningPredicate,
+        bloom_filters: &BloomFilterStatistics,
+        metrics: &ParquetFileMetrics,
+    ) -> bool {
+        let _timer_guard = metrics.bloom_filter_eval_time.timer();
+        match predicate.prune(bloom_filters) {
+            Ok(values) if !values[0] => {
+                metrics.row_groups_pruned_bloom_filter.add_pruned(1);
+                self.access_plan.skip(idx);
+                true
+            }
+            Ok(_) => false,
+            Err(e) => {
+                log::debug!("Error evaluating row group predicate on bloom filter: {e}");
+                metrics.predicate_evaluation_errors.add(1);
+                false
             }
         }
     }
@@ -799,6 +825,25 @@ mod tests {
 
         filter.access_plan.skip(3);
         assert_eq!(filter.remaining_row_group_count(), 2);
+    }
+
+    #[test]
+    fn is_fully_pruned_only_when_every_row_group_is_skipped() {
+        let mut filter = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(2));
+        assert!(!filter.is_fully_pruned());
+
+        filter.access_plan.skip(0);
+        assert!(!filter.is_fully_pruned());
+
+        filter.access_plan.skip(1);
+        assert!(filter.is_fully_pruned());
+        // Skipped row groups are still part of the plan
+        assert!(!filter.is_empty());
+
+        assert!(
+            RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(0))
+                .is_fully_pruned()
+        );
     }
 
     /// A row group with one column chunk of `size` bytes at the given offsets
@@ -1709,6 +1754,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn bloom_filter_pruning_evaluates_row_groups_with_bloom_filters() {
         // c1 = 15
         let schema =
@@ -1743,25 +1789,29 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn bloom_filter_pruning_error_retains_row_group_without_match() {
         let schema =
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
-        let cast_expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
-            Arc::new(PhysicalColumn::new("c1", 0)),
-            DataType::FixedSizeBinary(4),
+        // c1 = CAST('abc' AS Int32): constant folding fails, so the
+        // simplifier keeps the cast, and the cast fails at evaluation.
+        let value: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+            Arc::new(Literal::new(ScalarValue::from("abc"))),
+            DataType::Int32,
             None,
         ));
-        let literal: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(
-            ScalarValue::FixedSizeBinary(4, Some(vec![0, 0, 0, 1])),
+        let expr = Arc::new(BinaryExpr::new(
+            Arc::new(PhysicalColumn::new("c1", 0)),
+            Operator::Eq,
+            value,
         ));
-        let expr = Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal));
         let pruning_predicate = PruningPredicateBuilder::new()
             .with_file_schema(schema)
             .try_build(expr)
             .unwrap();
 
         // A nonempty map bypasses the no-filter path. Evaluating the predicate
-        // then fails because Arrow cannot cast Int32 statistics to FixedSizeBinary.
+        // then fails because 'abc' is not an Int32.
         let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
         sbbf.insert(&1_i32);
         let mut bloom_statistics = BloomFilterStatistics::new();

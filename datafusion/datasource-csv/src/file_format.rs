@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`CsvFormat`], Comma Separated Value (CSV) [`FileFormat`] abstractions
 
@@ -303,6 +290,14 @@ impl CsvFormat {
     /// - defaults to false
     pub fn with_truncate_rows(mut self, truncate_rows: bool) -> Self {
         self.options.truncated_rows = Some(truncate_rows);
+        self
+    }
+
+    /// Set whether file columns are matched to the table schema by header name
+    /// instead of by position
+    /// - defaults to false
+    pub fn with_match_columns_by_header(mut self, match_by_header: bool) -> Self {
+        self.options.match_columns_by_header = Some(match_by_header);
         self
     }
 
@@ -1010,6 +1005,9 @@ impl From<&CsvFormatFactory> for datafusion_proto_models::protobuf::CsvOptions {
                     .map_or(vec![], |v| vec![v as u8]),
                 ignore_trailing_whitespace: options
                     .ignore_trailing_whitespace
+                    .map_or(vec![], |v| vec![v as u8]),
+                match_columns_by_header: options
+                    .match_columns_by_header
                     .map_or(vec![], |v| vec![v as u8]),
             }
         } else {

@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Tests for statistics in parquet files.
 # Writes data into two files:
@@ -59,9 +46,9 @@ query TT
 EXPLAIN SELECT * FROM test_table WHERE column1 = 1;
 ----
 physical_plan
-01)FilterExec: column1@0 = 1, statistics=[Rows=Inexact(2), Bytes=Inexact(10), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Exact(0) Distinct=Inexact(1) ScanBytes=Inexact(10))]]
-02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2, statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0) ScanBytes=Inexact(40))]]
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/1.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)], statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0) ScanBytes=Inexact(40))]]
+01)FilterExec: column1@0 = 1, statistics=[Rows=Inexact(1), Bytes=Inexact(8), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Exact(0) Distinct=Inexact(1) ScanBytes=Inexact(8))]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, statistics=[Rows=Inexact(3), Bytes=Inexact(24), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(3)) Null=Inexact(0) ScanBytes=Inexact(24))]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)], statistics=[Rows=Inexact(3), Bytes=Inexact(24), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(3)) Null=Inexact(0) ScanBytes=Inexact(24))]]
 
 # cleanup
 statement ok
@@ -84,9 +71,9 @@ query TT
 EXPLAIN SELECT * FROM test_table WHERE column1 = 1;
 ----
 physical_plan
-01)FilterExec: column1@0 = 1, statistics=[Rows=Inexact(2), Bytes=Inexact(10), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Exact(0) Distinct=Inexact(1) ScanBytes=Inexact(10))]]
-02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2, statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0) ScanBytes=Inexact(40))]]
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/1.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)], statistics=[Rows=Inexact(5), Bytes=Inexact(40), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(4)) Null=Inexact(0) ScanBytes=Inexact(40))]]
+01)FilterExec: column1@0 = 1, statistics=[Rows=Inexact(1), Bytes=Inexact(8), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Exact(0) Distinct=Inexact(1) ScanBytes=Inexact(8))]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, statistics=[Rows=Inexact(3), Bytes=Inexact(24), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(3)) Null=Inexact(0) ScanBytes=Inexact(24))]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/test_table/0.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 = 1, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= 1 AND 1 <= column1_max@1, required_guarantees=[column1 in (1)], statistics=[Rows=Inexact(3), Bytes=Inexact(24), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(3)) Null=Inexact(0) ScanBytes=Inexact(24))]]
 
 # cleanup
 statement ok
@@ -172,7 +159,7 @@ EXPLAIN SELECT f32 FROM typed_table WHERE f32 = 2.5;
 physical_plan
 01)FilterExec: CAST(f32@0 AS Float64) = 2.5, statistics=[Rows=Inexact(1), Bytes=Inexact(1), [(Col[0]: Min=Exact(Float32(2.5)) Max=Exact(Float32(2.5)) Null=Inexact(0) Distinct=Inexact(1) ScanBytes=Inexact(1))]]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, statistics=[Rows=Inexact(5), Bytes=Inexact(20), [(Col[0]: Min=Inexact(Float32(1.5)) Max=Inexact(Float32(5.5)) Null=Inexact(0) ScanBytes=Inexact(20))]]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/typed_table.parquet]]}, projection=[f32], file_type=parquet, predicate=CAST(f32@2 AS Float64) = 2.5, pruning_predicate=f32_null_count@2 != row_count@3 AND CAST(f32_min@0 AS Float64) <= 2.5 AND 2.5 <= CAST(f32_max@1 AS Float64), required_guarantees=[], statistics=[Rows=Inexact(5), Bytes=Inexact(20), [(Col[0]: Min=Inexact(Float32(1.5)) Max=Inexact(Float32(5.5)) Null=Inexact(0) ScanBytes=Inexact(20))]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/typed_table.parquet]]}, projection=[f32], file_type=parquet, predicate=CAST(f32@2 AS Float64) = 2.5, pruning_predicate=f32_null_count@2 != row_count@3 AND CAST(f32_min@0 AS Float64;N) <= 2.5 AND 2.5 <= CAST(f32_max@1 AS Float64;N), required_guarantees=[], statistics=[Rows=Inexact(5), Bytes=Inexact(20), [(Col[0]: Min=Inexact(Float32(1.5)) Max=Inexact(Float32(5.5)) Null=Inexact(0) ScanBytes=Inexact(20))]]
 
 # Reversed operand order: literal = column (Float64)
 query TT
@@ -252,6 +239,30 @@ physical_plan
 
 statement ok
 DROP TABLE div_zero_endpoint;
+
+######
+# IN and NOT IN estimate the share of the column's distinct values they name
+######
+
+# The months 1 to 12, ten rows each. Parquet gives no distinct count, so the
+# values from min to max are the distinct values.
+statement ok
+COPY (SELECT CAST(value % 12 + 1 AS INT) AS m FROM generate_series(0, 119))
+TO 'test_files/scratch/parquet_statistics/months.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE months STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/months.parquet';
+
+query TT
+EXPLAIN SELECT m FROM months WHERE m NOT IN (1, 2, 3);
+----
+physical_plan
+01)FilterExec: m@0 NOT IN (SET) ([1, 2, 3]), statistics=[Rows=Inexact(90), Bytes=Inexact(360), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(12)) Null=Exact(0) ScanBytes=Inexact(360))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/months.parquet]]}, projection=[m], file_type=parquet, predicate=m@0 NOT IN (SET) ([1, 2, 3]), pruning_predicate=m_null_count@2 != row_count@3 AND (m_min@0 != 1 OR 1 != m_max@1) AND m_null_count@2 != row_count@3 AND (m_min@0 != 2 OR 2 != m_max@1) AND m_null_count@2 != row_count@3 AND (m_min@0 != 3 OR 3 != m_max@1), required_guarantees=[m not in (1, 2, 3)], statistics=[Rows=Inexact(120), Bytes=Inexact(480), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(12)) Null=Inexact(0) ScanBytes=Inexact(480))]]
+
+statement ok
+DROP TABLE months;
 
 ######
 # Aggregate statistics through casts
@@ -336,6 +347,151 @@ physical_plan
 
 statement ok
 DROP TABLE cast_stats_ints_overflow;
+
+######
+# Aggregate statistics through projected literals
+######
+
+statement ok
+COPY (SELECT * FROM (VALUES (1, 10), (3, 30)) AS t(a, b))
+TO 'test_files/scratch/parquet_statistics/literal_ndv.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE literal_ndv STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/literal_ndv.parquet';
+
+# No row has a = 2, but the filter only estimates its row count.
+query II
+SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT 1 AS x, 2 AS y FROM literal_ndv WHERE a = 2);
+----
+0 0
+
+# The filter estimates zero rows, but not exactly.
+query II
+SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT 1 AS x, 2 AS y FROM literal_ndv WHERE a > 100);
+----
+0 0
+
+# An exact positive row count proves each literal is present once.
+query II
+SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT 1 AS x, 2 AS y FROM literal_ndv);
+----
+1 1
+
+# COUNT(DISTINCT) does not count NULLs.
+query II
+SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT NULL AS x, 2 AS y FROM literal_ndv);
+----
+0 1
+
+statement ok
+DROP TABLE literal_ndv;
+
+# An exactly empty file has no distinct values.
+statement ok
+COPY (SELECT * FROM (VALUES (1, 10)) AS t(a, b) WHERE a > 100)
+TO 'test_files/scratch/parquet_statistics/literal_ndv_empty.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE literal_ndv_empty STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/literal_ndv_empty.parquet';
+
+query II
+SELECT count(DISTINCT x), count(DISTINCT y)
+FROM (SELECT 1 AS x, 2 AS y FROM literal_ndv_empty);
+----
+0 0
+
+statement ok
+DROP TABLE literal_ndv_empty;
+
+# The years of the date bounds limit the groups of the final aggregate. `d`
+# has no NULLs, but the statistics of `date_part` do not keep the NULL count of
+# `d`, so one NULL group is added to the 7 years. The partial aggregate keeps
+# the input row count.
+statement ok
+COPY (SELECT d FROM unnest(range(DATE '1992-01-02', DATE '1998-12-02', INTERVAL '1' DAY)) AS t(d))
+TO 'test_files/scratch/parquet_statistics/dates.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE date_stats STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/dates.parquet';
+
+statement ok
+SET datafusion.explain.show_statistics = true;
+
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+query TT
+EXPLAIN SELECT date_part('year', d) AS y, COUNT(*) FROM date_stats GROUP BY y;
+----
+physical_plan
+01)ProjectionExec: expr=[date_part(Utf8("year"),date_stats.d)@0 as y, count(Int64(1))@1 as count(*)], statistics=[Rows=Inexact(8), Bytes=Inexact(96), [(Col[0]: Min=Inexact(Int32(1992)) Max=Inexact(Int32(1998))),(Col[1]:)]]
+02)--AggregateExec: mode=FinalPartitioned, gby=[date_part(Utf8("year"),date_stats.d)@0 as date_part(Utf8("year"),date_stats.d)], aggr=[count(Int64(1))], statistics=[Rows=Inexact(8), Bytes=Inexact(32), [(Col[0]: Min=Inexact(Int32(1992)) Max=Inexact(Int32(1998))),(Col[1]:)]]
+03)----RepartitionExec: partitioning=Hash([date_part(Utf8("year"),date_stats.d)@0], 2), input_partitions=1, statistics=[Rows=Inexact(2526), Bytes=Inexact(10104), [(Col[0]: Min=Inexact(Int32(1992)) Max=Inexact(Int32(1998))),(Col[1]:)]]
+04)------AggregateExec: mode=Partial, gby=[date_part(year, d@0) as date_part(Utf8("year"),date_stats.d)], aggr=[count(Int64(1))], statistics=[Rows=Inexact(2526), Bytes=Inexact(10104), [(Col[0]: Min=Inexact(Int32(1992)) Max=Inexact(Int32(1998))),(Col[1]:)]]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/dates.parquet]]}, projection=[d], file_type=parquet, statistics=[Rows=Exact(2526), Bytes=Exact(10104), [(Col[0]: Min=Exact(Date32("1992-01-02")) Max=Exact(Date32("1998-12-01")) Null=Exact(0) ScanBytes=Exact(10104))]]
+
+statement ok
+SET datafusion.explain.show_statistics = false;
+
+query II rowsort
+SELECT date_part('year', d) AS y, COUNT(*) FROM date_stats GROUP BY y;
+----
+1992 365
+1993 365
+1994 365
+1995 365
+1996 366
+1997 365
+1998 335
+
+statement ok
+DROP TABLE date_stats;
+
+# The key is nullable but has no NULLs. The partial aggregate keeps the NULL
+# count of the key, so the final aggregate adds no NULL group to the 7 values.
+statement ok
+COPY (SELECT CASE WHEN value < 0 THEN NULL ELSE CAST(value % 7 + 1 AS INT) END AS k FROM range(0, 10000))
+TO 'test_files/scratch/parquet_statistics/nullable_key.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE nullable_key STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/nullable_key.parquet';
+
+statement ok
+SET datafusion.explain.show_statistics = true;
+
+query TT
+EXPLAIN SELECT k, COUNT(*) FROM nullable_key GROUP BY k;
+----
+physical_plan
+01)ProjectionExec: expr=[k@0 as k, count(Int64(1))@1 as count(*)], statistics=[Rows=Inexact(7), Bytes=Inexact(84), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0)),(Col[1]:)]]
+02)--AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[count(Int64(1))], statistics=[Rows=Inexact(7), Bytes=Inexact(28), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0)),(Col[1]:)]]
+03)----RepartitionExec: partitioning=Hash([k@0], 2), input_partitions=2, statistics=[Rows=Inexact(10000), Bytes=Inexact(40000), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0)),(Col[1]:)]]
+04)------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[count(Int64(1))], statistics=[Rows=Inexact(10000), Bytes=Inexact(40000), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0)),(Col[1]:)]]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, statistics=[Rows=Exact(10000), Bytes=Exact(40000), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0) ScanBytes=Exact(40000))]]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/nullable_key.parquet]]}, projection=[k], file_type=parquet, statistics=[Rows=Exact(10000), Bytes=Exact(40000), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0) ScanBytes=Exact(40000))]]
+
+# acos can return NaN, which floating-point intervals cannot represent.
+query TT
+EXPLAIN SELECT acos(CAST(k AS DOUBLE) * 100) FROM nullable_key;
+----
+physical_plan
+01)ProjectionExec: expr=[acos(CAST(k@0 AS Float64) * 100) as acos(nullable_key.k * Int64(100))], statistics=[Rows=Exact(10000), Bytes=Exact(80000), [(Col[0]:)]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, statistics=[Rows=Exact(10000), Bytes=Exact(40000), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0) ScanBytes=Exact(40000))]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/nullable_key.parquet]]}, projection=[k], file_type=parquet, statistics=[Rows=Exact(10000), Bytes=Exact(40000), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(7)) Null=Exact(0) ScanBytes=Exact(40000))]]
+
+statement ok
+SET datafusion.explain.show_statistics = false;
+
+statement ok
+DROP TABLE nullable_key;
 
 statement ok
 SET datafusion.execution.target_partitions = 4;

@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 <!---
@@ -1306,7 +1293,7 @@ character_length(str)
 #### Aliases
 
 - length
-- char_length
+- char\_length
 
 **Related functions**:
 
@@ -2043,7 +2030,7 @@ substr_index(str, delim, count)
 
 #### Aliases
 
-- substring_index
+- substring\_index
 
 ### `substring`
 
@@ -2384,6 +2371,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 - [make_date](#make_date)
 - [make_time](#make_time)
 - [now](#now)
+- [timezone](#timezone)
 - [to_char](#to_char)
 - [to_date](#to_date)
 - [to_local_time](#to_local_time)
@@ -2471,6 +2459,8 @@ _Alias of [now](#now)._
 Calculates time intervals and returns the start of the interval nearest to the specified timestamp. Use `date_bin` to downsample time series data by grouping rows into time-based "bins" or "windows" and applying an aggregate or selector function to each window.
 
 For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
+
+For timestamp inputs, binning beyond the supported numeric or calendar range returns an error. A NULL source or interval still produces NULL.
 
 ```sql
 date_bin(interval, expression[, origin_timestamp])
@@ -2617,7 +2607,6 @@ date_trunc(precision, expression)
 - **precision**: Time precision to truncate to. The following precisions are supported:
 
   For Timestamp types:
-
   - year / YEAR
   - quarter / QUARTER
   - month / MONTH
@@ -2630,7 +2619,6 @@ date_trunc(precision, expression)
   - microsecond / MICROSECOND
 
   For Time types (hour, minute, second, millisecond, microsecond only):
-
   - hour / HOUR
   - minute / MINUTE
   - second / SECOND
@@ -2805,7 +2793,45 @@ now()
 
 #### Aliases
 
-- current_timestamp
+- current\_timestamp
+
+### `timezone`
+
+Converts a timestamp to another timezone. This is the function form of `expression AT TIME ZONE zone`, and it follows PostgreSQL and DuckDB:
+
+- A timestamp **with** a timezone is an instant. The result is the wall-clock time of that instant in `zone`, as a timestamp **without** a timezone.
+- A timestamp **without** a timezone is a wall-clock time. The result is the instant at which that wall-clock time occurs in `zone`, as a timestamp **with** the timezone `zone`.
+- Any other type (for example a string) is converted as for a timestamp without a timezone.
+
+The result keeps the time unit of a timestamp input.
+
+```sql
+timezone(zone, expression)
+```
+
+#### Arguments
+
+- **zone**: Target timezone, as a constant string. An IANA timezone name such as `'America/Denver'`, or a fixed offset such as `'+05:30'`.
+- **expression**: Timestamp expression to convert. Can be a constant, column, or function.
+
+#### Example
+
+```sql
+> SET datafusion.execution.time_zone = 'UTC';
+> SELECT timezone('America/Denver', '2024-01-01T12:00:00Z'::timestamptz) AS denver_wall_clock;
++---------------------+
+| denver_wall_clock   |
++---------------------+
+| 2024-01-01T05:00:00 |
++---------------------+
+
+> SELECT timezone('America/Denver', '2024-01-01T12:00:00'::timestamp) AS denver_instant;
++---------------------------+
+| denver_instant            |
++---------------------------+
+| 2024-01-01T12:00:00-07:00 |
++---------------------------+
+```
 
 ### `to_char`
 
@@ -2835,7 +2861,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 #### Aliases
 
-- date_format
+- date\_format
 
 ### `to_date`
 
@@ -2880,6 +2906,10 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 ### `to_local_time`
 
 Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.
+
+A timestamp that already has no timezone is returned unchanged.
+
+`to_local_time` uses the timezone that the value already has. To get the wall-clock time in a timezone that you name in the query, use [`timezone(zone, expression)`](#timezone) or `expression AT TIME ZONE zone`: for a timestamp with a timezone, both return the wall-clock time in `zone`, without a timezone.
 
 ```sql
 to_local_time(expression)
@@ -3407,7 +3437,7 @@ array_add(array1, array2)
 
 #### Aliases
 
-- list_add
+- list\_add
 
 ### `array_any_match`
 
@@ -3435,8 +3465,8 @@ any_match(array, predicate)
 
 #### Aliases
 
-- any_match
-- list_any_match
+- any\_match
+- list\_any\_match
 
 ### `array_any_value`
 
@@ -3463,7 +3493,7 @@ array_any_value(array)
 
 #### Aliases
 
-- list_any_value
+- list\_any\_value
 
 ### `array_append`
 
@@ -3491,9 +3521,9 @@ array_append(array, element)
 
 #### Aliases
 
-- list_append
-- array_push_back
-- list_push_back
+- list\_append
+- array\_push\_back
+- list\_push\_back
 
 ### `array_avg`
 
@@ -3520,7 +3550,7 @@ array_avg(array)
 
 #### Aliases
 
-- list_avg
+- list\_avg
 
 ### `array_cat`
 
@@ -3551,7 +3581,7 @@ array_compact(array)
 
 #### Aliases
 
-- list_compact
+- list\_compact
 
 ### `array_concat`
 
@@ -3579,9 +3609,9 @@ array_concat(array[, ..., array_n])
 
 #### Aliases
 
-- array_cat
-- list_concat
-- list_cat
+- array\_cat
+- list\_concat
+- list\_cat
 
 ### `array_contains`
 
@@ -3612,7 +3642,7 @@ array_dims(array)
 
 #### Aliases
 
-- list_dims
+- list\_dims
 
 ### `array_distance`
 
@@ -3640,7 +3670,7 @@ array_distance(array1, array2)
 
 #### Aliases
 
-- list_distance
+- list\_distance
 
 ### `array_distinct`
 
@@ -3667,7 +3697,7 @@ array_distinct(array)
 
 #### Aliases
 
-- list_distinct
+- list\_distinct
 
 ### `array_element`
 
@@ -3695,9 +3725,9 @@ array_element(array, index)
 
 #### Aliases
 
-- array_extract
-- list_element
-- list_extract
+- array\_extract
+- list\_element
+- list\_extract
 
 ### `array_empty`
 
@@ -3735,7 +3765,7 @@ array_except(array1, array2)
 
 #### Aliases
 
-- list_except
+- list\_except
 
 ### `array_extract`
 
@@ -3767,7 +3797,7 @@ array_filter(array, x -> x > 2)
 
 #### Aliases
 
-- list_filter
+- list\_filter
 
 ### `array_first`
 
@@ -3795,7 +3825,7 @@ array_first(array, predicate)
 
 #### Aliases
 
-- list_first
+- list\_first
 
 ### `array_has`
 
@@ -3823,9 +3853,9 @@ array_has(array, element)
 
 #### Aliases
 
-- list_has
-- array_contains
-- list_contains
+- list\_has
+- array\_contains
+- list\_contains
 
 ### `array_has_all`
 
@@ -3853,7 +3883,7 @@ array_has_all(array, sub_array)
 
 #### Aliases
 
-- list_has_all
+- list\_has\_all
 
 ### `array_has_any`
 
@@ -3881,8 +3911,8 @@ array_has_any(array1, array2)
 
 #### Aliases
 
-- list_has_any
-- arrays_overlap
+- list\_has\_any
+- arrays\_overlap
 
 ### `array_indexof`
 
@@ -3920,7 +3950,7 @@ array_intersect(array1, array2)
 
 #### Aliases
 
-- list_intersect
+- list\_intersect
 
 ### `array_join`
 
@@ -3952,7 +3982,7 @@ array_length(array[, dimension])
 
 #### Aliases
 
-- list_length
+- list\_length
 
 ### `array_max`
 
@@ -3979,7 +4009,7 @@ array_max(array)
 
 #### Aliases
 
-- list_max
+- list\_max
 
 ### `array_min`
 
@@ -4029,7 +4059,7 @@ array_ndims(array)
 
 #### Aliases
 
-- list_ndims
+- list\_ndims
 
 ### `array_normalize`
 
@@ -4056,7 +4086,7 @@ array_normalize(array)
 
 #### Aliases
 
-- list_normalize
+- list\_normalize
 
 ### `array_pop_back`
 
@@ -4083,7 +4113,7 @@ array_pop_back(array)
 
 #### Aliases
 
-- list_pop_back
+- list\_pop\_back
 
 ### `array_pop_front`
 
@@ -4110,7 +4140,7 @@ array_pop_front(array)
 
 #### Aliases
 
-- list_pop_front
+- list\_pop\_front
 
 ### `array_position`
 
@@ -4145,9 +4175,9 @@ array_position(array, element[, index])
 
 #### Aliases
 
-- list_position
-- array_indexof
-- list_indexof
+- list\_position
+- array\_indexof
+- list\_indexof
 
 ### `array_positions`
 
@@ -4175,7 +4205,7 @@ array_positions(array, element)
 
 #### Aliases
 
-- list_positions
+- list\_positions
 
 ### `array_prepend`
 
@@ -4203,9 +4233,9 @@ array_prepend(element, array)
 
 #### Aliases
 
-- list_prepend
-- array_push_front
-- list_push_front
+- list\_prepend
+- array\_push\_front
+- list\_push\_front
 
 ### `array_product`
 
@@ -4232,7 +4262,7 @@ array_product(array)
 
 #### Aliases
 
-- list_product
+- list\_product
 
 ### `array_push_back`
 
@@ -4275,7 +4305,7 @@ array_remove(array, element)
 
 #### Aliases
 
-- list_remove
+- list\_remove
 
 ### `array_remove_all`
 
@@ -4310,7 +4340,7 @@ array_remove_all(array, element)
 
 #### Aliases
 
-- list_remove_all
+- list\_remove\_all
 
 ### `array_remove_n`
 
@@ -4346,7 +4376,7 @@ array_remove_n(array, element, max)
 
 #### Aliases
 
-- list_remove_n
+- list\_remove\_n
 
 ### `array_repeat`
 
@@ -4380,7 +4410,7 @@ array_repeat(element, count)
 
 #### Aliases
 
-- list_repeat
+- list\_repeat
 
 ### `array_replace`
 
@@ -4409,7 +4439,7 @@ array_replace(array, from, to)
 
 #### Aliases
 
-- list_replace
+- list\_replace
 
 ### `array_replace_all`
 
@@ -4438,7 +4468,7 @@ array_replace_all(array, from, to)
 
 #### Aliases
 
-- list_replace_all
+- list\_replace\_all
 
 ### `array_replace_n`
 
@@ -4468,7 +4498,7 @@ array_replace_n(array, from, to, max)
 
 #### Aliases
 
-- list_replace_n
+- list\_replace\_n
 
 ### `array_resize`
 
@@ -4497,7 +4527,7 @@ array_resize(array, size[, value])
 
 #### Aliases
 
-- list_resize
+- list\_resize
 
 ### `array_reverse`
 
@@ -4524,7 +4554,7 @@ array_reverse(array)
 
 #### Aliases
 
-- list_reverse
+- list\_reverse
 
 ### `array_scale`
 
@@ -4552,7 +4582,7 @@ array_scale(array, scalar)
 
 #### Aliases
 
-- list_scale
+- list\_scale
 
 ### `array_slice`
 
@@ -4582,7 +4612,7 @@ array_slice(array, begin, end[, stride])
 
 #### Aliases
 
-- list_slice
+- list\_slice
 
 ### `array_sort`
 
@@ -4617,7 +4647,7 @@ array_sort(array[, order[, nulls_order]])
 
 #### Aliases
 
-- list_sort
+- list\_sort
 
 ### `array_subtract`
 
@@ -4645,7 +4675,7 @@ array_subtract(array1, array2)
 
 #### Aliases
 
-- list_subtract
+- list\_subtract
 
 ### `array_sum`
 
@@ -4672,7 +4702,7 @@ array_sum(array)
 
 #### Aliases
 
-- list_sum
+- list\_sum
 
 ### `array_to_string`
 
@@ -4701,9 +4731,9 @@ array_to_string(array, delimiter[, null_string])
 
 #### Aliases
 
-- list_to_string
-- array_join
-- list_join
+- list\_to\_string
+- array\_join
+- list\_join
 
 ### `array_transform`
 
@@ -4731,7 +4761,7 @@ array_transform(array, lambda)
 
 #### Aliases
 
-- list_transform
+- list\_transform
 
 ### `array_union`
 
@@ -4765,7 +4795,7 @@ array_union(array1, array2)
 
 #### Aliases
 
-- list_union
+- list\_union
 
 ### `arrays_overlap`
 
@@ -4803,7 +4833,7 @@ arrays_zip(array1[, ..., array_n])
 
 #### Aliases
 
-- list_zip
+- list\_zip
 
 ### `cardinality`
 
@@ -4881,8 +4911,8 @@ empty(array)
 
 #### Aliases
 
-- array_empty
-- list_empty
+- array\_empty
+- list\_empty
 
 ### `flatten`
 
@@ -4964,7 +4994,7 @@ inner_product(array1, array2)
 
 #### Aliases
 
-- dot_product
+- dot\_product
 
 ### `list_add`
 
@@ -5207,7 +5237,7 @@ make_array([expression1, ..., expression_n])
 
 #### Aliases
 
-- make_list
+- make\_list
 
 ### `make_list`
 
@@ -5279,7 +5309,7 @@ string_to_array(str, delimiter[, null_str])
 
 #### Aliases
 
-- string_to_list
+- string\_to\_list
 
 ### `string_to_list`
 
@@ -5507,7 +5537,7 @@ SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'a');
 
 #### Aliases
 
-- element_at
+- element\_at
 
 ### `map_keys`
 

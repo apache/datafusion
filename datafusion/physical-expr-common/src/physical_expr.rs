@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 use std::fmt;
@@ -470,6 +457,26 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         false
     }
 
+    /// Returns true if this expression may skip evaluating some of its children
+    /// for some rows, so that an error in a skipped child (such as a failed cast
+    /// or a division by zero) is not raised.
+    ///
+    /// For example, `CASE WHEN a > 0 THEN 1 / a END` evaluates `1 / a` only for
+    /// the rows where `a > 0`. An optimizer must not move a child of such an
+    /// expression to a place where it is evaluated for every row.
+    ///
+    /// Like [`Self::is_volatile_node`], this only describes the expression node
+    /// itself, not its children. It is the physical counterpart of
+    /// [`Expr::short_circuits`].
+    ///
+    /// The default is `false`. Expressions that evaluate a child conditionally
+    /// should implement this method and return `true`.
+    ///
+    /// [`Expr::short_circuits`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html#method.short_circuits
+    fn short_circuits(&self) -> bool {
+        false
+    }
+
     /// Returns placement information for this expression.
     ///
     /// This is used by optimizers to make decisions about expression placement,
@@ -630,6 +637,7 @@ pub mod proto_encode {
 /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
 #[cfg(feature = "proto")]
 pub mod proto_decode {
+    use std::any::Any;
     use std::sync::Arc;
 
     use arrow::datatypes::Schema;
@@ -702,6 +710,17 @@ pub mod proto_decode {
         /// data-type resolution, etc.
         pub fn schema(&self) -> &Schema {
             self.schema
+        }
+
+        /// The session this decode runs under, if the decoder supplied one
+        /// and it is a `T`.
+        ///
+        /// `datafusion-proto` supplies its `TaskContext`, so an expression that
+        /// resolves a UDF by name or reads configuration calls
+        /// `ctx.session::<TaskContext>()`. The session is type-erased because
+        /// `TaskContext` is defined in a crate that depends on this one.
+        pub fn session<T: 'static>(&self) -> Option<&T> {
+            self.decoder.session()?.downcast_ref()
         }
 
         /// Decode an expression node, recursing into child sub-expressions.
@@ -793,6 +812,12 @@ pub mod proto_decode {
             node: &PhysicalExprNode,
             schema: &Schema,
         ) -> Result<Arc<dyn PhysicalExpr>>;
+
+        /// The session the decode runs under, read through
+        /// [`PhysicalExprDecodeCtx::session`]. Defaults to `None`.
+        fn session(&self) -> Option<&dyn Any> {
+            None
+        }
     }
 }
 

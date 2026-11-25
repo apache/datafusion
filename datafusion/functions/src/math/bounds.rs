@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use datafusion_common::ScalarValue;
 use datafusion_expr::interval_arithmetic::Interval;
@@ -87,10 +74,19 @@ pub(super) fn exp_bounds(input: &[&Interval]) -> crate::Result<Interval> {
 }
 
 pub(super) fn radians_bounds(input: &[&Interval]) -> crate::Result<Interval> {
-    // radians(x) is bounded by (-π, π)
-    let data_type = input[0].data_type();
-
-    Interval::make_symmetric_pi_interval(&data_type)
+    // radians(x) never decreases as x increases, so the radians of the input
+    // bounds are the output bounds. An unbounded side stays unbounded.
+    match (input[0].lower(), input[0].upper()) {
+        (ScalarValue::Float64(lower), ScalarValue::Float64(upper)) => Interval::try_new(
+            ScalarValue::Float64(lower.map(f64::to_radians)),
+            ScalarValue::Float64(upper.map(f64::to_radians)),
+        ),
+        (ScalarValue::Float32(lower), ScalarValue::Float32(upper)) => Interval::try_new(
+            ScalarValue::Float32(lower.map(f32::to_radians)),
+            ScalarValue::Float32(upper.map(f32::to_radians)),
+        ),
+        _ => Interval::make_unbounded(&input[0].data_type()),
+    }
 }
 
 pub(super) fn sqrt_bounds(input: &[&Interval]) -> crate::Result<Interval> {

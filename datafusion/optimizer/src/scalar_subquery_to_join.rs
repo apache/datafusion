@@ -1,28 +1,17 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarSubqueryToJoin`] rewriting scalar subquery filters to `JOIN`s
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
+use crate::decorrelate::{
+    PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR, build_join_filter,
+};
 use crate::optimizer::ApplyOrder;
-use crate::utils::{evaluates_to_null, replace_qualified_name};
+use crate::utils::evaluates_to_null;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
@@ -33,8 +22,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{Column, Result, ScalarValue, assert_or_internal_err, plan_err};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::utils::conjunction;
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, not, when};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, when};
 
 /// Optimizer rule that rewrites scalar subquery filters to joins and places an
 /// additional projection on top of the filter to preserve the original schema.
@@ -357,23 +345,52 @@ fn build_join(
         .collected_count_expr_map
         .get(&decorrelated_subquery)
         .cloned();
+    let join_filter_opt = build_join_filter(
+        pull_up.join_filters,
+        pull_up.correlated_subquery_cols_map.values().flatten(),
+        decorrelated_subquery.schema(),
+        subquery_alias,
+    )?;
+
+    // A HAVING or outer-only filter recorded from above the aggregate cannot
+    // be rewritten into the join when the output column gets a compensation
+    // CASE below. Kept in the ON, a row the condition rejects looks unmatched
+    // and falls back to the empty-input default, which is the issue's wrong 0. Checked
+    // in the compensation CASE instead, the condition would have to be
+    // evaluated twice, against the defaults for an unmatched row and against
+    // the actual output for a matched one, and neither evaluation is right
+    // for the rows the other one covers. The gate looks at the output column
+    // alone because the map also holds aggregates that appear only in the
+    // HAVING, whose NULL defaults need no CASE; an output whose own default
+    // is NULL (the subquery projects `max`, say) keeps filtering in the ON as
+    // before, which is correct there because an unmatched row is NULL either
+    // way. Rather than guess, reject the query.
+    let output_name = subquery_plan.schema().field(0).name();
+    let output_needs_compensation = match collected_count_expr_map
+        .as_ref()
+        .and_then(|expr_map| expr_map.get(output_name))
+    {
+        Some(default_expr) => {
+            !evaluates_to_null(default_expr.clone(), default_expr.column_refs())?
+        }
+        None => false,
+    };
+    // A pulled up `HAVING` is only applied through the count bug compensation
+    // below, which skips the expressions that are NULL on empty input. Keep
+    // the subquery correlated rather than drop the `HAVING` for its output.
+    // <https://github.com/apache/datafusion/issues/26505>
+    if pull_up.pull_up_having_expr.is_some() && !output_needs_compensation {
+        return Ok(None);
+    }
+    if output_needs_compensation && !pull_up.having_like_join_filters.is_empty() {
+        return plan_err!(
+            "Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns, and this rewrite cannot evaluate it against both the group and the empty input without risking wrong results. Move the condition outside the subquery"
+        );
+    }
+
     let aliased_subquery = LogicalPlanBuilder::from(decorrelated_subquery)
         .alias(subquery_alias.to_string())?
         .build()?;
-
-    let all_correlated_cols: BTreeSet<Column> = pull_up
-        .correlated_subquery_cols_map
-        .values()
-        .flatten()
-        .cloned()
-        .collect();
-
-    // Correlated columns now live in the decorrelated subquery's output,
-    // so re-qualify them with the subquery alias.
-    let join_filter_opt =
-        conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, subquery_alias).map(Some)
-        })?;
 
     // When pull-up did not extract any usable join keys (a correlated subquery
     // whose predicate references only outer columns), fall back to `ON true`:
@@ -402,7 +419,7 @@ fn build_join(
         let having_arm = pull_up
             .pull_up_having_expr
             .as_ref()
-            .map(|f| (not(f.clone()), lit(ScalarValue::Null)));
+            .map(|f| (f.clone().is_not_true(), lit(ScalarValue::Null)));
         for (name, result) in expr_map {
             if evaluates_to_null(result.clone(), result.column_refs())? {
                 // Aggregates whose empty-input value is NULL (max/min/sum/…)
@@ -1282,5 +1299,47 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn correlated_scalar_subquery_filter_above_correlated_derived_table() -> Result<()> {
+        let derived = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                col("orders.o_custkey")
+                    .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+            )?
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![max(col("orders.o_custkey")).alias("n")],
+            )?
+            .project(vec![col("n")])?
+            .alias("t")?
+            .build()?;
+
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(derived)
+                .filter(out_ref_col(DataType::Int64, "customer.c_custkey").gt(lit(0i64)))?
+                .project(vec![col("t.n")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .project(vec![col("customer.c_custkey"), scalar_subquery(sq)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: customer.c_custkey, __scalar_sq_1.n AS n [c_custkey:Int64, n:Int64;N]
+          Left Join:  Filter: __scalar_sq_1.o_custkey = customer.c_custkey AND customer.c_custkey > Int64(0) [c_custkey:Int64, c_name:Utf8, n:Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+            SubqueryAlias: __scalar_sq_1 [n:Int64;N, o_custkey:Int64, __always_true:Boolean]
+              Projection: t.n, t.o_custkey, t.__always_true [n:Int64;N, o_custkey:Int64, __always_true:Boolean]
+                SubqueryAlias: t [n:Int64;N, o_custkey:Int64, __always_true:Boolean]
+                  Projection: n, orders.o_custkey, __always_true [n:Int64;N, o_custkey:Int64, __always_true:Boolean]
+                    Aggregate: groupBy=[[orders.o_custkey, Boolean(true) AS __always_true]], aggr=[[max(orders.o_custkey) AS n]] [o_custkey:Int64, __always_true:Boolean, n:Int64;N]
+                      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        "
+        )
     }
 }

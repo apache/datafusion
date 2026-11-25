@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`EliminateDuplicatedExpr`] Removes redundant expressions
 
@@ -22,6 +9,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, get_required_sort_exprs_indices, internal_err};
 use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::utils::passthrough_field_index;
 use datafusion_expr::{Aggregate, Expr, Sort, SortExpr};
 use std::hash::{Hash, Hasher};
 
@@ -72,13 +60,15 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     .map(|wrapper| wrapper.0)
                     .collect();
 
-                let sort_expr_names = unique_exprs
+                let sort_input_indices = unique_exprs
                     .iter()
-                    .map(|sort_expr| sort_expr.expr.schema_name().to_string())
+                    .map(|sort_expr| {
+                        passthrough_field_index(&sort_expr.expr, sort.input.schema())
+                    })
                     .collect::<Vec<_>>();
                 let required_indices = get_required_sort_exprs_indices(
                     sort.input.schema().as_ref(),
-                    &sort_expr_names,
+                    &sort_input_indices,
                 );
 
                 let unique_exprs = if required_indices.len() < unique_exprs.len() {

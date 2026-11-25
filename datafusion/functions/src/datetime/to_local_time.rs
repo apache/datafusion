@@ -1,21 +1,7 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use std::ops::Add;
 use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
@@ -30,8 +16,8 @@ use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{
-    Result, ScalarValue, exec_err, internal_datafusion_err, internal_err,
-    utils::take_function_args,
+    Result, ScalarValue, exec_datafusion_err, exec_err, internal_datafusion_err,
+    internal_err, utils::take_function_args,
 };
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -44,7 +30,11 @@ use datafusion_macros::user_doc;
 /// while keep the display value of the timestamp the same.
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
-    description = "Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.",
+    description = r#"Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.
+
+A timestamp that already has no timezone is returned unchanged.
+
+`to_local_time` uses the timezone that the value already has. To get the wall-clock time in a timezone that you name in the query, use [`timezone(zone, expression)`](#timezone) or `expression AT TIME ZONE zone`: for a timestamp with a timezone, both return the wall-clock time in `zone`, without a timezone."#,
     syntax_example = "to_local_time(expression)",
     sql_example = r#"```sql
 > SELECT to_local_time('2024-04-01T00:00:20Z'::timestamp);
@@ -158,7 +148,7 @@ fn transform_array<T: ArrowTimestampType>(
     Ok(ColumnarValue::Array(Arc::new(result)))
 }
 
-fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue> {
+pub(crate) fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue> {
     let arg_type = time_value.data_type();
 
     let tz: Tz = match &arg_type {
@@ -307,7 +297,10 @@ fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue> {
 /// ```
 ///
 /// See `test_adjust_to_local_time()` for example
-pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
+pub fn adjust_to_local_time<T: ArrowTimestampType>(
+    ts: i64,
+    tz: impl TimeZone + Copy,
+) -> Result<i64> {
     fn convert_timestamp<F>(ts: i64, converter: F) -> Result<DateTime<Utc>>
     where
         F: Fn(i64) -> MappedLocalTime<DateTime<Utc>>,
@@ -337,12 +330,18 @@ pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i6
         .fix()
         .local_minus_utc() as i64;
 
-    let adjusted_date_time = date_time.add(
-        // This should not fail under normal circumstances as the
-        // maximum possible offset is 26 hours (93,600 seconds)
-        TimeDelta::try_seconds(offset_seconds)
-            .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
-    );
+    let adjusted_date_time = date_time
+        .checked_add_signed(
+            // This should not fail under normal circumstances as the
+            // maximum possible offset is 26 hours (93,600 seconds)
+            TimeDelta::try_seconds(offset_seconds)
+                .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
+        )
+        .ok_or_else(|| {
+            exec_datafusion_err!(
+                "Timezone adjustment of timestamp {ts} by {offset_seconds} seconds exceeds Chrono's calendar range"
+            )
+        })?;
 
     // convert the naive datetime back to i64
     match T::UNIT {

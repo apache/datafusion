@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ProjectionExpr`] and [`ProjectionExprs`] for representing projections.
 
@@ -21,7 +8,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
-use crate::expressions::{CastExpr, Column, Literal};
+use crate::expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr};
+use crate::intervals::utils::{is_datatype_supported, is_operator_supported};
 use crate::scalar_function::ScalarFunctionExpr;
 use crate::utils::collect_columns;
 
@@ -34,6 +22,7 @@ use datafusion_common::{
     plan_err,
 };
 
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr_common::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_expr_common::metrics::ExpressionEvaluatorMetrics;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -736,7 +725,7 @@ impl ProjectionExprs {
     ) -> Result<Statistics> {
         let mut column_statistics = Vec::with_capacity(self.exprs.len());
 
-        for proj_expr in self.exprs.iter() {
+        for (index, proj_expr) in self.exprs.iter().enumerate() {
             let expr = &proj_expr.expr;
             let col_stats = if let Some(col) = expr.downcast_ref::<Column>() {
                 column_statistics_at(&stats.column_statistics, col.index())
@@ -753,14 +742,20 @@ impl ProjectionExprs {
                     ColumnStatistics {
                         min_value: Precision::Exact(literal.value().clone()),
                         max_value: Precision::Exact(literal.value().clone()),
-                        distinct_count: Precision::Exact(1),
+                        distinct_count: Precision::Exact(0),
                         null_count,
                         sum_value: Precision::Exact(literal.value().clone()),
                         byte_size: Precision::Exact(0),
                     }
                 } else {
                     let value = literal.value();
-                    let distinct_count = Precision::Exact(1);
+                    let distinct_count = match stats.num_rows {
+                        Precision::Exact(0) | Precision::Inexact(0) => stats.num_rows,
+                        Precision::Exact(_) => Precision::Exact(1),
+                        Precision::Inexact(_) | Precision::Absent => {
+                            Precision::Inexact(1)
+                        }
+                    };
                     let null_count = Precision::Exact(0);
 
                     let byte_size = if let Some(byte_width) = data_type.primitive_width()
@@ -792,11 +787,15 @@ impl ProjectionExprs {
                     }
                 }
             } else {
-                project_column_statistics_through_expr(
-                    expr.as_ref(),
-                    &stats.column_statistics,
-                    input_schema,
-                )
+                match output_schema.fields().get(index) {
+                    Some(field) => expr_column_statistics(
+                        expr.as_ref(),
+                        &stats.column_statistics,
+                        input_schema,
+                        field.data_type(),
+                    ),
+                    None => ColumnStatistics::new_unknown(),
+                }
             };
             column_statistics.push(col_stats);
         }
@@ -860,10 +859,45 @@ impl ProjectionExprs {
     }
 }
 
-/// Propagate column statistics through CAST projections. Other expressions
-/// return unknown — generalizing via [`PhysicalExpr::evaluate_bounds`] is
-/// unsafe for aggregate folding since many impls (e.g. `sin`) return a fixed
-/// envelope rather than tight bounds on the actual inputs.
+/// Returns the statistics of the values of `expr`, computed from
+/// `column_stats`, the statistics of its input columns. `input_schema` supplies
+/// types for casts when their input bounds are absent. `data_type` is the
+/// output type of `expr`.
+///
+/// Columns and value-preserving casts keep their input statistics. Other
+/// expressions get only the inexact bounds from [`PhysicalExpr::evaluate_bounds`]
+/// when all their inputs have bounds. Bounds that do not have the type
+/// `data_type` are discarded.
+///
+/// # Public Only for Internal Use:
+///
+/// DataFusion uses this function internally. See [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub fn expr_column_statistics(
+    expr: &dyn PhysicalExpr,
+    column_stats: &[ColumnStatistics],
+    input_schema: Option<&Schema>,
+    data_type: &DataType,
+) -> ColumnStatistics {
+    let mut stats =
+        project_column_statistics_through_expr(expr, column_stats, input_schema);
+    let has_type = |bound: &Precision<ScalarValue>| {
+        bound
+            .get_value()
+            .is_none_or(|value| value.data_type() == *data_type)
+    };
+    if !has_type(&stats.min_value) || !has_type(&stats.max_value) {
+        stats.min_value = Precision::Absent;
+        stats.max_value = Precision::Absent;
+    }
+    stats
+}
+
+/// Propagate column statistics through CAST projections. Literals report
+/// their value, and other expressions report bounds as described in
+/// [`expression_bounds_statistics`].
 fn project_column_statistics_through_expr(
     expr: &dyn PhysicalExpr,
     column_stats: &[ColumnStatistics],
@@ -872,8 +906,17 @@ fn project_column_statistics_through_expr(
     if let Some(col) = expr.downcast_ref::<Column>() {
         return column_statistics_at(column_stats, col.index());
     }
+    if let Some(literal) = expr.downcast_ref::<Literal>() {
+        let value = literal.value();
+        if value.is_null() {
+            return ColumnStatistics::new_unknown();
+        }
+        return ColumnStatistics::new_unknown()
+            .with_min_value(Precision::Exact(value.clone()))
+            .with_max_value(Precision::Exact(value.clone()));
+    }
     let Some(cast_expr) = expr.downcast_ref::<CastExpr>() else {
-        return ColumnStatistics::new_unknown();
+        return expression_bounds_statistics(expr, column_stats, input_schema);
     };
     let inner_stats = project_column_statistics_through_expr(
         cast_expr.expr.as_ref(),
@@ -941,6 +984,73 @@ fn project_column_statistics_through_expr(
         distinct_count: inner_stats.distinct_count,
         sum_value: Precision::Absent,
         byte_size: Precision::Absent,
+    }
+}
+
+/// Bounds `expr` by [`PhysicalExpr::evaluate_bounds`] over the bounds of its
+/// inputs. The bounds are inexact, so that they never answer `MIN` or `MAX`
+/// queries. Floating-point intervals cannot represent NaN, which can match
+/// in SQL comparisons, so they are excluded from derived statistics here.
+fn expression_bounds_statistics(
+    expr: &dyn PhysicalExpr,
+    column_stats: &[ColumnStatistics],
+    input_schema: Option<&Schema>,
+) -> ColumnStatistics {
+    let input_bounds = expr
+        .children()
+        .into_iter()
+        .map(|child| {
+            let stats = project_column_statistics_through_expr(
+                child.as_ref(),
+                column_stats,
+                input_schema,
+            );
+            match (stats.min_value.get_value(), stats.max_value.get_value()) {
+                (Some(min), Some(max))
+                    if !min.is_null()
+                        && !max.is_null()
+                        && !min.data_type().is_floating() =>
+                {
+                    Interval::try_new(min.clone(), max.clone()).ok()
+                }
+                _ => None,
+            }
+        })
+        .collect::<Option<Vec<_>>>();
+    let bounds = input_bounds
+        .filter(|input_bounds| has_interval_support(expr, input_bounds))
+        .and_then(|input_bounds| {
+            let input_bounds = input_bounds.iter().collect::<Vec<_>>();
+            expr.evaluate_bounds(&input_bounds).ok()
+        });
+    match bounds {
+        Some(bounds) if !bounds.is_unbounded() && !bounds.data_type().is_floating() => {
+            let (min, max) = bounds.into_bounds();
+            ColumnStatistics::new_unknown()
+                .with_min_value(Precision::Inexact(min))
+                .with_max_value(Precision::Inexact(max))
+        }
+        _ => ColumnStatistics::new_unknown(),
+    }
+}
+
+/// Whether `expr` can compute bounds from `input_bounds`. Arithmetic follows
+/// the rules of interval analysis in [`check_support`]. Scalar functions
+/// decide in their own [`PhysicalExpr::evaluate_bounds`].
+///
+/// [`check_support`]: crate::intervals::utils::check_support
+fn has_interval_support(expr: &dyn PhysicalExpr, input_bounds: &[Interval]) -> bool {
+    let supported_inputs = || {
+        input_bounds
+            .iter()
+            .all(|bounds| is_datatype_supported(&bounds.data_type()))
+    };
+    if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+        is_operator_supported(binary.op()) && supported_inputs()
+    } else if expr.is::<NegativeExpr>() {
+        supported_inputs()
+    } else {
+        expr.is::<ScalarFunctionExpr>()
     }
 }
 
@@ -1268,10 +1378,21 @@ impl From<Vec<(Arc<dyn PhysicalExpr>, usize)>> for ProjectionTargets {
 
 /// Stores the mapping between source expressions and target expressions for a
 /// projection.
+///
+/// # Example
+///
+/// Given input columns `[a, b, c]` and the projection
+/// `c AS x, a + b AS total, c AS y`, the mapping is:
+///
+/// ```txt
+/// c@2       -> [(x@0, 0), (y@2, 2)]
+/// a@0 + b@1 -> [(total@1, 1)]
+/// ```
+///
+/// Here, `name@index` identifies a column in the input or output schema.
 #[derive(Clone, Debug)]
 pub struct ProjectionMapping {
-    /// Mapping between source expressions and target expressions.
-    /// Vector indices correspond to the indices after projection.
+    /// Maps each source expression to its targets and their output column indices.
     map: IndexMap<Arc<dyn PhysicalExpr>, ProjectionTargets>,
 }
 
@@ -1279,16 +1400,7 @@ impl ProjectionMapping {
     /// Constructs the mapping between a projection's input and output
     /// expressions.
     ///
-    /// For example, given the input projection expressions (`a + b`, `c + d`)
-    /// and an output schema with two columns `"c + d"` and `"a + b"`, the
-    /// projection mapping would be:
-    ///
-    /// ```text
-    ///  [0]: (c + d, [(col("c + d"), 0)])
-    ///  [1]: (a + b, [(col("a + b"), 1)])
-    /// ```
-    ///
-    /// where `col("c + d")` means the column named `"c + d"`.
+    /// See [`ProjectionMapping`] for an example.
     pub fn try_new(
         expr: impl IntoIterator<Item = (Arc<dyn PhysicalExpr>, String)>,
         input_schema: &SchemaRef,
@@ -3310,14 +3422,12 @@ pub(crate) mod tests {
         // Should have 2 column statistics
         assert_eq!(output_stats.column_statistics.len(), 2);
 
-        // First column (expression) should have unknown statistics
+        // First column (expression) has only inexact bounds
         assert_eq!(
-            output_stats.column_statistics[0].distinct_count,
-            Precision::Absent
-        );
-        assert_eq!(
-            output_stats.column_statistics[0].max_value,
-            Precision::Absent
+            output_stats.column_statistics[0],
+            ColumnStatistics::new_unknown()
+                .with_min_value(Precision::Inexact(ScalarValue::Int64(Some(-3))))
+                .with_max_value(Precision::Inexact(ScalarValue::Int64(Some(22))))
         );
 
         // Second column (col1) should preserve statistics
@@ -3327,6 +3437,45 @@ pub(crate) mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_expr_column_statistics_drops_bounds_of_other_type() {
+        let col0_plus_one = BinaryExpr::new(
+            Arc::new(Column::new("col0", 0)),
+            Operator::Plus,
+            Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+        );
+        let stats = expr_column_statistics(
+            &col0_plus_one,
+            &get_stats().column_statistics,
+            None,
+            &DataType::Int32,
+        );
+        assert_eq!(stats, ColumnStatistics::new_unknown());
+    }
+
+    #[test]
+    fn test_expr_column_statistics_needs_interval_support() {
+        let decimal =
+            |value| Precision::Exact(ScalarValue::Decimal128(Some(value), 10, 2));
+        let column_stats = vec![
+            ColumnStatistics::new_unknown()
+                .with_min_value(decimal(1))
+                .with_max_value(decimal(9)),
+        ];
+        let sum = BinaryExpr::new(
+            Arc::new(Column::new("d", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("d", 0)),
+        );
+        let stats = expr_column_statistics(
+            &sum,
+            &column_stats,
+            None,
+            &DataType::Decimal128(11, 2),
+        );
+        assert_eq!(stats, ColumnStatistics::new_unknown());
     }
 
     #[test]
@@ -3689,7 +3838,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             output_stats.column_statistics[0].distinct_count,
-            Precision::Exact(1) // All NULLs are considered the same
+            Precision::Exact(0) // NULLs are not counted as distinct values
         );
         assert_eq!(
             output_stats.column_statistics[0].null_count,
@@ -3713,6 +3862,53 @@ pub(crate) mod tests {
             output_stats.column_statistics[1].max_value,
             Precision::Exact(ScalarValue::Int64(Some(21)))
         );
+
+        Ok(())
+    }
+
+    // A literal's distinct count depends on whether any row is present: an
+    // estimated row count cannot prove the value appears. NULLs are not
+    // counted as distinct values, matching `COUNT(DISTINCT)`.
+    #[test]
+    fn test_project_statistics_literal_distinct_count_by_row_count() -> Result<()> {
+        let input_schema = get_schema();
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Literal::new(ScalarValue::Int64(Some(42)))),
+                alias: "constant".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Literal::new(ScalarValue::Int64(None))),
+                alias: "null_col".to_string(),
+            },
+        ]);
+        let output_schema = projection.project_schema(&input_schema)?;
+
+        let cases = [
+            (Precision::Exact(0), Precision::Exact(0)),
+            (Precision::Exact(5), Precision::Exact(1)),
+            (Precision::Inexact(0), Precision::Inexact(0)),
+            (Precision::Inexact(5), Precision::Inexact(1)),
+            (Precision::Absent, Precision::Inexact(1)),
+        ];
+        for (num_rows, expected) in cases {
+            let input_stats = Statistics {
+                num_rows,
+                total_byte_size: Precision::Absent,
+                column_statistics: Statistics::unknown_column(&input_schema),
+            };
+            let output_stats =
+                projection.project_statistics(input_stats, &output_schema)?;
+            assert_eq!(
+                output_stats.column_statistics[0].distinct_count, expected,
+                "non-null literal, num_rows={num_rows:?}"
+            );
+            assert_eq!(
+                output_stats.column_statistics[1].distinct_count,
+                Precision::Exact(0),
+                "NULL literal, num_rows={num_rows:?}"
+            );
+        }
 
         Ok(())
     }

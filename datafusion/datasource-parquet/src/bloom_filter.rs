@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Loaded Parquet Split Block Bloom Filter (SBBF) data, with a
 //! [`PruningStatistics`] adapter so the predicate-pruning machinery in
@@ -83,6 +70,25 @@ impl BloomFilterStatistics {
                 type_length,
             },
         );
+    }
+
+    /// Returns `true` if the Bloom filter definitely does not contain any of the given values.
+    ///
+    /// If all values are confirmed absent by the Bloom filter, returns `true`.
+    /// If any value might be present (or checking is unsupported), returns `false`.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
+    fn is_known_not_present(
+        sbbf: &Sbbf,
+        values: &HashSet<ScalarValue>,
+        parquet_type: &Type,
+        type_length: i32,
+    ) -> bool {
+        if values.is_empty() {
+            return false;
+        }
+        values
+            .iter()
+            .all(|value| !Self::check_scalar(sbbf, value, parquet_type, type_length))
     }
 
     /// Helper function for checking if [`Sbbf`] filter contains [`ScalarValue`].
@@ -209,20 +215,12 @@ impl PruningStatistics for BloomFilterStatistics {
         // positives (i.e. it might return true even if the value is not
         // present) however, the bloom filter will return `false` if the value is
         // definitely not present.
-
-        let known_not_present = values
-            .iter()
-            .map(|value| {
-                BloomFilterStatistics::check_scalar(
-                    &column_bloom_filter.sbbf,
-                    value,
-                    &column_bloom_filter.physical_type,
-                    column_bloom_filter.type_length,
-                )
-            })
-            // The row group doesn't contain any of the values if
-            // all the checks are false
-            .all(|v| !v);
+        let known_not_present = Self::is_known_not_present(
+            &column_bloom_filter.sbbf,
+            values,
+            &column_bloom_filter.physical_type,
+            column_bloom_filter.type_length,
+        );
 
         let contains = if known_not_present {
             Some(false)
@@ -630,6 +628,7 @@ mod tests {
     }
 
     /// Evaluates the pruning predicate on the specified row groups and returns the row groups that are left
+    #[expect(deprecated)]
     async fn test_row_group_bloom_filter_pruning_predicate(
         file_name: &str,
         data: bytes::Bytes,

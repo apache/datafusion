@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -36,9 +23,9 @@ use datafusion_physical_expr::{
 use datafusion_physical_plan::{ExecutionPlan, Partitioning};
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
-    create_ffi_abs_func, create_ffi_first_value_func, create_ffi_random_func,
-    create_ffi_rank_func, create_ffi_stddev_func, create_ffi_sum_func,
-    create_ffi_table_func,
+    create_ffi_abs_func, create_ffi_first_value_func, create_ffi_min_func,
+    create_ffi_random_func, create_ffi_rank_func, create_ffi_stddev_func,
+    create_ffi_sum_func, create_ffi_table_func,
 };
 
 use crate::catalog_provider::FFI_CatalogProvider;
@@ -142,6 +129,9 @@ pub struct ForeignLibraryModule {
 
     /// Create an aggregate UDAF using first_value
     pub create_first_value_udaf: extern "C" fn() -> FFI_AggregateUDF,
+
+    /// Create an aggregate UDAF using min
+    pub create_min_udaf: extern "C" fn() -> FFI_AggregateUDF,
 }
 
 pub fn create_test_schema() -> Arc<Schema> {
@@ -291,6 +281,71 @@ pub extern "C" fn datafusion_ffi_test_create_exec_with_byte_metrics() -> FFI_Exe
     FFI_ExecutionPlan::new(plan, None)
 }
 
+/// A plan whose top node requires its input hash-partitioned (or, with
+/// `hard_ordering`, sorted) on `a`, and whose child already provides it.
+///
+/// Exported as its own symbol, like
+/// `datafusion_ffi_test_create_exec_with_byte_metrics`, so it does not change
+/// the layout of [`ForeignLibraryModule`].
+#[unsafe(no_mangle)]
+pub extern "C" fn datafusion_ffi_test_create_exec_with_requirements(
+    hard_ordering: bool,
+) -> FFI_ExecutionPlan {
+    use crate::execution_plan::tests::TestInputRequirements;
+    use datafusion_physical_expr::Distribution;
+    use datafusion_physical_expr_common::sort_expr::{
+        LexRequirement, OrderingRequirements, PhysicalSortRequirement,
+    };
+    use datafusion_physical_plan::InputDistributionRequirements;
+    use datafusion_physical_plan::repartition::RepartitionExec;
+    use datafusion_physical_plan::sorts::sort::SortExec;
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+    let leaf = Arc::new(EmptyExec::new(Arc::clone(&schema))) as Arc<dyn ExecutionPlan>;
+    let (child, reqs): (Arc<dyn ExecutionPlan>, _) = if hard_ordering {
+        let ord =
+            LexOrdering::new([PhysicalSortExpr::new_default(Arc::clone(&a))]).unwrap();
+        let req = OrderingRequirements::new(
+            LexRequirement::new([PhysicalSortRequirement::new(Arc::clone(&a), None)])
+                .unwrap(),
+        );
+        (
+            Arc::new(SortExec::new(ord, leaf).with_preserve_partitioning(true)),
+            TestInputRequirements {
+                distribution: InputDistributionRequirements::new(vec![
+                    Distribution::UnspecifiedDistribution,
+                ]),
+                ordering: vec![Some(req)],
+                maintains_input_order: vec![true],
+                benefits_from_input_partitioning: vec![false],
+            },
+        )
+    } else {
+        (
+            Arc::new(
+                RepartitionExec::try_new(
+                    leaf,
+                    Partitioning::Hash(vec![Arc::clone(&a)], 4),
+                )
+                .unwrap(),
+            ),
+            TestInputRequirements {
+                distribution: InputDistributionRequirements::new(vec![
+                    Distribution::KeyPartitioned(vec![Arc::clone(&a)]),
+                ]),
+                ordering: vec![None],
+                maintains_input_order: vec![false],
+                benefits_from_input_partitioning: vec![true],
+            },
+        )
+    };
+    let plan = EmptyExec::new(schema)
+        .with_children(vec![child])
+        .with_input_requirements(reqs);
+    FFI_ExecutionPlan::new(Arc::new(plan), None)
+}
+
 /// Thin wrapper that attaches a fixed [`Statistics`] snapshot to any inner
 /// [`TableProvider`] without changing its scan behaviour.
 #[derive(Debug)]
@@ -429,5 +484,6 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_query_planner: query_planner::create_query_planner,
         version: super::version,
         create_first_value_udaf: create_ffi_first_value_func,
+        create_min_udaf: create_ffi_min_func,
     }
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Code to convert Arrow schemas and DataFusion logical plans to protocol buffer format, allowing
 //! DataFusion logical plans to be serialized and transmitted between
@@ -156,13 +143,14 @@ pub fn serialize_expr(
             expr,
             pattern,
             escape_char,
-            case_insensitive: _,
+            case_insensitive,
         }) => {
             let pb = Box::new(protobuf::SimilarToNode {
                 negated: *negated,
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
                 pattern: Some(Box::new(serialize_expr(pattern.as_ref(), codec)?)),
                 escape_char: escape_char.map(|ch| ch.to_string()).unwrap_or_default(),
+                case_insensitive: *case_insensitive,
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::SimilarTo(pb)),
@@ -450,12 +438,6 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::InList(expr)),
             }
         }
-        #[expect(deprecated)]
-        Expr::Wildcard { qualifier, .. } => protobuf::LogicalExprNode {
-            expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
-                qualifier: qualifier.to_owned().map(protobuf::TableReference::from),
-            })),
-        },
         Expr::ScalarSubquery(subquery) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::ScalarSubqueryExpr(Box::new(
                 protobuf::ScalarSubqueryExprNode {

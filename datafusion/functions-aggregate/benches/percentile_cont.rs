@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -24,7 +11,7 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::groups_accumulator::GroupsAccumulator;
 use datafusion_expr::{Accumulator, AggregateUDFImpl};
-use datafusion_functions_aggregate::approx_percentile_cont::ApproxPercentileAccumulator;
+use datafusion_functions_aggregate::approx_percentile_cont::ApproxPercentileCont;
 use datafusion_functions_aggregate::percentile_cont::PercentileCont;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::GroupsAccumulatorAdapter;
 use datafusion_physical_expr::expressions::{col, lit};
@@ -52,6 +39,28 @@ fn prepare_accumulator() -> Box<dyn Accumulator> {
         exprs: &[value_expr, percentile_expr],
     };
     PercentileCont::new().accumulator(accumulator_args).unwrap()
+}
+
+fn prepare_approx_accumulator() -> Box<dyn Accumulator> {
+    let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Float64, true)]));
+    let value_expr = col("f", &schema).unwrap();
+    let percentile_expr = lit(0.5_f64);
+    let value_field = value_expr.return_field(&schema).unwrap();
+    let percentile_field = percentile_expr.return_field(&schema).unwrap();
+    let accumulator_args = AccumulatorArgs {
+        return_field: Field::new("f", DataType::Float64, true).into(),
+        schema: &schema,
+        expr_fields: &[value_field, percentile_field],
+        ignore_nulls: false,
+        order_bys: &[],
+        is_reversed: false,
+        name: "approx_percentile_cont(f, 0.5)",
+        is_distinct: false,
+        exprs: &[value_expr, percentile_expr],
+    };
+    ApproxPercentileCont::new()
+        .accumulator(accumulator_args)
+        .unwrap()
 }
 
 fn stream_array(len: usize, null_stride: Option<usize>) -> ArrayRef {
@@ -111,14 +120,7 @@ fn grouped_adapter_benchmark(c: &mut Criterion) {
         "approx_percentile_cont/groups_accumulator_adapter/8192_groups",
         |b| {
             b.iter_batched(
-                || {
-                    GroupsAccumulatorAdapter::new(|| {
-                        Ok(Box::new(ApproxPercentileAccumulator::new(
-                            0.5,
-                            DataType::Float64,
-                        )) as Box<dyn Accumulator>)
-                    })
-                },
+                || GroupsAccumulatorAdapter::new(|| Ok(prepare_approx_accumulator())),
                 |mut accumulator| {
                     accumulator
                         .update_batch(

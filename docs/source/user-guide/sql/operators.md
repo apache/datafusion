@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Operators and Literals
@@ -423,7 +410,7 @@ Logical Or
 
 - [& (bitwise and)](#op_bit_and)
 - [| (bitwise or)](#op_bit_or)
-- [# (bitwise xor)](#op_bit_xor)
+- [^ (bitwise xor)](#op_bit_xor)
 - [>> (bitwise shift right)](#op_shift_r)
 - [<< (bitwise shift left)](#op_shift_l)
 
@@ -459,17 +446,17 @@ Bitwise Or
 
 (op_bit_xor)=
 
-### `#`
+### `^`
 
-Bitwise Xor (interchangeable with `^`)
+Bitwise Xor
 
 ```sql
-> SELECT 5 # 3;
-+---------------------+
-| Int64(5) # Int64(3) |
-+---------------------+
-| 6                   |
-+---------------------+
+> SELECT 5 ^ 3;
++---------------------------+
+| Int64(5) BIT_XOR Int64(3) |
++---------------------------+
+| 6                         |
++---------------------------+
 ```
 
 (op_shift_r)=
@@ -507,6 +494,9 @@ Bitwise Shift Left
 - [|| (string concatenation)](#op_str_cat)
 - [@> (array contains)](#op_arr_contains)
 - [<@ (array is contained by)](#op_arr_contained_by)
+- [AT TIME ZONE](#op_at_time_zone)
+- [LIKE ANY (like any of a list of patterns)](#op_like_any)
+- [ILIKE ANY (case-insensitive like any of a list of patterns)](#op_ilike_any)
 
 (op_str_cat)=
 
@@ -551,6 +541,158 @@ Array Is Contained By
 +-------------------------------------------------------------------------+
 | true                                                                    |
 +-------------------------------------------------------------------------+
+```
+
+(op_at_time_zone)=
+
+### `AT TIME ZONE`
+
+Converts between timezone-naive and timezone-aware timestamps, following
+PostgreSQL. `AT TIME ZONE` always returns the _other_ kind of timestamp from
+the one it is given:
+
+| Input type                               | Result type                              | Meaning                                                             |
+| ---------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------- |
+| `Timestamp(unit, None)` (timezone-naive) | `Timestamp(unit, Some(tz))` (tz-aware)   | Read the value as a wall clock in `tz`; the result is that instant. |
+| `Timestamp(unit, Some(_))` (tz-aware)    | `Timestamp(unit, None)` (timezone-naive) | Return the wall clock that instant has in `tz`.                     |
+
+A timezone-naive timestamp is a wall clock with no instant attached, so
+`AT TIME ZONE` pins it to one:
+
+```sql
+> SET datafusion.execution.time_zone = 'UTC';
+> SELECT
+  '2024-01-01 12:00:00'::timestamp AT TIME ZONE 'America/Denver' AS instant,
+  arrow_typeof('2024-01-01 12:00:00'::timestamp AT TIME ZONE 'America/Denver') AS type;
++---------------------------+---------------------------------+
+| instant                   | type                            |
++---------------------------+---------------------------------+
+| 2024-01-01T12:00:00-07:00 | Timestamp(ns, "America/Denver") |
++---------------------------+---------------------------------+
+```
+
+A timezone-aware timestamp already is an instant, so `AT TIME ZONE` reads off
+its wall clock in `tz` and drops the timezone. Daylight saving time is taken
+into account:
+
+```sql
+> SELECT
+  '2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'America/Denver' AS wall_clock,
+  arrow_typeof('2024-01-01T12:00:00Z'::timestamptz AT TIME ZONE 'America/Denver') AS type;
++---------------------+---------------+
+| wall_clock          | type          |
++---------------------+---------------+
+| 2024-01-01T05:00:00 | Timestamp(ns) |
++---------------------+---------------+
+```
+
+`expression AT TIME ZONE tz` is the same as the function call
+[`timezone(tz, expression)`], as in PostgreSQL and DuckDB. The planner uses the
+input type _after_ type coercion. For example, `CASE WHEN c THEN naive ELSE aware END` has a timezone-aware type, so `AT TIME ZONE` returns a
+timezone-naive timestamp for it, whatever the order of the arms.
+
+Because the two forms return different types, applying `AT TIME ZONE` twice
+returns a timezone-aware timestamp again: the wall clock produced by the first
+application is re-read as a local time in the second timezone.
+
+`AT TIME ZONE` never changes the precision (`TimeUnit`) of its input. A
+dictionary-encoded timestamp follows its value type. Inputs that are not
+timestamps at all (a string literal, for example) are cast to
+`Timestamp(Nanosecond, Some(tz))`.
+
+Note that a timezone written as a fixed offset string follows the ISO 8601
+convention, so `'+05:30'` is 5 hours 30 minutes _east_ of UTC. PostgreSQL
+applies the opposite (POSIX) convention to offsets spelled this way.
+
+[`timezone(tz, expression)`]: scalar_functions.md#timezone
+
+(op_like_any)=
+
+### `LIKE ANY`
+
+Like Any: `expression LIKE ANY (pattern1, ..., patternN)` is true when
+`expression` matches at least one pattern. It is the same as
+`expression LIKE pattern1 OR ... OR expression LIKE patternN`, following Spark.
+
+```sql
+> SELECT 'datafusion' LIKE ANY ('dat%', '%sql') AS like_any;
++----------+
+| like_any |
++----------+
+| true     |
++----------+
+```
+
+`NOT` before `LIKE` applies to each pattern, so `expression NOT LIKE ANY (...)`
+is true when `expression` fails to match at least one pattern. `NOT` before the
+expression negates the whole match:
+
+```sql
+> SELECT
+  'datafusion' NOT LIKE ANY ('dat%', '%sql') AS per_pattern,
+  NOT 'datafusion' LIKE ANY ('dat%', '%sql') AS whole_match;
++-------------+-------------+
+| per_pattern | whole_match |
++-------------+-------------+
+| true        | false       |
++-------------+-------------+
+```
+
+An `ESCAPE` character applies to every pattern:
+
+```sql
+> SELECT 'data_fusion' LIKE ANY ('data\_%', '%sql') ESCAPE '\' AS escaped;
++---------+
+| escaped |
++---------+
+| true    |
++---------+
+```
+
+A NULL pattern gives NULL only when no other pattern matches. A NULL
+expression gives NULL:
+
+```sql
+> SELECT
+  'datafusion' LIKE ANY ('dat%', NULL) AS one_match,
+  'datafusion' LIKE ANY ('%sql', NULL) AS no_match,
+  NULL LIKE ANY ('dat%', '%sql') AS null_subject;
++-----------+----------+--------------+
+| one_match | no_match | null_subject |
++-----------+----------+--------------+
+| true      | NULL     | NULL         |
++-----------+----------+--------------+
+```
+
+Snowflake differs here: its `LIKE ANY` returns NULL when any argument is NULL,
+so `'datafusion' LIKE ANY ('dat%', NULL)` is NULL in Snowflake.
+
+The patterns must be a parenthesized list. An array of patterns, such as
+`ARRAY['dat%', '%sql']` or `make_array('dat%', '%sql')`, is not supported.
+Neither is a subquery that supplies the pattern list, such as
+`LIKE ANY (SELECT 'dat%')`.
+
+`expression` must not be volatile, because each pattern could see a different
+value. For example, `CAST(random() AS VARCHAR) LIKE ANY ('0%', '%')` is
+rejected. Volatile patterns are allowed. A scalar subquery without volatile
+functions, such as `(SELECT max(s) FROM t)`, can be `expression`.
+
+`LIKE ALL` and `LIKE SOME` are not supported.
+
+(op_ilike_any)=
+
+### `ILIKE ANY`
+
+Case-Insensitive Like Any: the same as [`LIKE ANY`](#op_like_any), using
+`ILIKE` for each pattern.
+
+```sql
+> SELECT 'DataFusion' ILIKE ANY ('dat%', '%sql') AS ilike_any;
++-----------+
+| ilike_any |
++-----------+
+| true      |
++-----------+
 ```
 
 ## Literals

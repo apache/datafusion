@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Command within CLI
 
@@ -51,6 +38,8 @@ pub enum Command {
 
 pub enum OutputFormat {
     ChangeFormat(String),
+    /// Set or display the target output width.
+    ChangeTargetWidth(Option<String>),
 }
 
 impl Command {
@@ -161,9 +150,10 @@ impl Command {
             Self::ListFunctions => ("\\h", "function list"),
             Self::SearchFunctions(_) => ("\\h function", "search function"),
             Self::QuietMode(_) => ("\\quiet (true|false)?", "print or set quiet mode"),
-            Self::OutputFormat(_) => {
-                ("\\pset [NAME [VALUE]]", "set table output option\n(format)")
-            }
+            Self::OutputFormat(_) => (
+                "\\pset [NAME [VALUE]]",
+                "set table output option\n(format, target_width)",
+            ),
             Self::ObjectStoreProfileMode(_) => (
                 "\\object_store_profiling (disabled|summary|trace)",
                 "print or set object store profile mode",
@@ -253,6 +243,7 @@ impl FromStr for OutputFormat {
         };
         Ok(match (c, arg) {
             ("format", Some(format)) => Self::ChangeFormat(format.to_string()),
+            ("target_width", width) => Self::ChangeTargetWidth(width.map(str::to_owned)),
             _ => return Err(()),
         })
     }
@@ -261,6 +252,15 @@ impl FromStr for OutputFormat {
 impl OutputFormat {
     pub fn execute(&self, print_options: &mut PrintOptions) -> Result<()> {
         match self {
+            Self::ChangeTargetWidth(width) => {
+                if let Some(width) = width {
+                    print_options.target_width = width
+                        .parse()
+                        .map_err(|error: String| exec_datafusion_err!("{error}"))?;
+                }
+                println!("Target output width is {}.", print_options.target_width);
+                Ok(())
+            }
             Self::ChangeFormat(format) => {
                 if let Ok(format) = format.parse::<PrintFormat>() {
                     print_options.format = format;
@@ -299,6 +299,7 @@ mod tests {
             format: PrintFormat::Automatic,
             quiet: false,
             maxrows: MaxRows::Unlimited,
+            target_width: crate::print_options::TargetWidth::Auto,
             color: true,
             instrumented_registry: Arc::new(InstrumentedObjectStoreRegistry::new()),
         };

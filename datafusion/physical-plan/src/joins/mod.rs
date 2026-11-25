@@ -1,28 +1,19 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! DataFusion Join implementations
 
 use core::fmt;
 use std::fmt::{Display, Formatter};
+use std::ops::Deref;
+use std::sync::Arc;
 
 use arrow::array::BooleanBufferBuilder;
 pub use asof_join::{AsOfJoinExec, AsOfMatchExpr};
 pub use cross_join::CrossJoinExec;
+use datafusion_common::{Result, internal_err};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::PhysicalExprRef;
 /// # Public Only for Internal Use:
 ///
@@ -44,10 +35,10 @@ mod asof_join;
 mod chain;
 mod cross_join;
 mod hash_join;
-mod integer_prefilter;
 mod logical_batch;
 mod nested_loop_join;
 mod piecewise_merge_join;
+mod probe_completion;
 #[cfg(feature = "proto")]
 mod proto;
 mod sort_merge_join;
@@ -107,7 +98,55 @@ impl Map {
     }
 }
 
-pub(crate) type MapOffset = (usize, Option<u64>);
+/// A [`Map`] and the reservation for its memory, which the dynamic filter
+/// shares for as long as the plan lives. Held together, the memory stays
+/// reserved until the last holder drops the map.
+pub(crate) struct ReservedMap {
+    /// Shared, as [`HashTableLookupExpr::new`] takes one and compares by it.
+    map: Arc<Map>,
+    /// Also charged for data kept with the map, such as the pruning bitmap.
+    /// `None` for a map built outside a join; see [`HashTableLookupExpr::new`].
+    // Keep the reservation after the map it accounts for.
+    reservation: Option<MemoryReservation>,
+}
+
+impl ReservedMap {
+    /// Wraps `map` with the reservation it was charged to.
+    pub(crate) fn new(map: Map, reservation: MemoryReservation) -> Self {
+        Self {
+            map: Arc::new(map),
+            reservation: Some(reservation),
+        }
+    }
+
+    /// Wraps a map that was not charged to a pool.
+    pub(crate) fn unreserved(map: Arc<Map>) -> Self {
+        Self {
+            map,
+            reservation: None,
+        }
+    }
+
+    /// Charges `bytes` for data kept with the map.
+    pub(crate) fn try_grow(&self, bytes: usize) -> Result<()> {
+        match &self.reservation {
+            Some(reservation) => reservation.try_grow(bytes),
+            None => internal_err!("ReservedMap has no reservation to grow"),
+        }
+    }
+
+    pub(crate) fn reserved_bytes(&self) -> usize {
+        self.reservation.as_ref().map_or(0, MemoryReservation::size)
+    }
+}
+
+impl Deref for ReservedMap {
+    type Target = Map;
+
+    fn deref(&self) -> &Map {
+        &self.map
+    }
+}
 
 #[cfg(test)]
 pub mod test_utils;

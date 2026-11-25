@@ -711,6 +711,9 @@ pub struct CsvOptions {
     /// Whether to ignore trailing whitespace in string values
     #[prost(bytes = "vec", tag = "22")]
     pub ignore_trailing_whitespace: ::prost::alloc::vec::Vec<u8>,
+    /// Whether to map file columns to the table schema by header name
+    #[prost(bytes = "vec", tag = "23")]
+    pub match_columns_by_header: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -834,6 +837,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "34")]
     pub force_filter_selections: bool,
+    /// default = false
+    #[prost(bool, tag = "42")]
+    pub enable_exact_reverse_scan: bool,
     /// default = 1024 * 1024
     #[prost(uint64, tag = "7")]
     pub data_pagesize_limit: u64,
@@ -885,6 +891,8 @@ pub struct ParquetOptions {
     pub row_group_range_assignment: ::prost::alloc::string::String,
     #[prost(bool, tag = "40")]
     pub enable_rle_to_dictionary: bool,
+    #[prost(uint64, optional, tag = "43")]
+    pub dictionary_read_max_distinct_values: ::core::option::Option<u64>,
     #[prost(string, tag = "16")]
     pub created_by: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "35")]

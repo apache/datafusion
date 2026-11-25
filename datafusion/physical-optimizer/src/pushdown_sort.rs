@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Sort Pushdown Optimization
 //!
@@ -104,6 +91,9 @@ impl PhysicalOptimizerRule for PushdownSort {
                 && sort_child.preserve_partitioning()
             {
                 let sort_input = Arc::clone(sort_child.input());
+                if input_has_fetch(&sort_input)? {
+                    return Ok(Transformed::no(plan));
+                }
                 let required_ordering = sort_child.expr();
                 match sort_input.try_pushdown_sort(required_ordering)? {
                     SortOrderPushdownResult::Exact { inner } => {
@@ -157,6 +147,9 @@ impl PhysicalOptimizerRule for PushdownSort {
             };
 
             let sort_input = Arc::clone(sort_exec.input());
+            if input_has_fetch(&sort_input)? {
+                return Ok(Transformed::no(plan));
+            }
             let required_ordering = sort_exec.expr();
 
             // Try to push the sort requirement down through the plan tree
@@ -167,11 +160,15 @@ impl PhysicalOptimizerRule for PushdownSort {
                     //
                     // If the SortExec carried a fetch (LIMIT), we must preserve it.
                     // First try pushing the limit into the source via `with_fetch()`.
-                    // If the source doesn't support `with_fetch`, fall back to
-                    // wrapping with GlobalLimitExec.
+                    // If the source doesn't support `with_fetch`, preserve whether
+                    // the limit applies to each partition or to the entire input.
                     if let Some(fetch) = sort_exec.fetch() {
                         let inner = inner.with_fetch(Some(fetch)).unwrap_or_else(|| {
-                            Arc::new(GlobalLimitExec::new(inner, 0, Some(fetch)))
+                            if sort_exec.preserve_partitioning() {
+                                Arc::new(LocalLimitExec::new(inner, fetch))
+                            } else {
+                                Arc::new(GlobalLimitExec::new(inner, 0, Some(fetch)))
+                            }
                         });
                         Ok(Transformed::yes(inner))
                     } else {
@@ -228,4 +225,10 @@ impl PhysicalOptimizerRule for PushdownSort {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// Whether a node below this sort has a fetch. A fetch keeps the first rows in the
+/// input's current order, so changing that order would change which rows it keeps.
+fn input_has_fetch(input: &Arc<dyn ExecutionPlan>) -> Result<bool> {
+    input.exists(|node| Ok(node.fetch().is_some()))
 }

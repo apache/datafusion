@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Module containing helper methods/traits related to enabling
 //! dividing input stream into multiple output files at execution time
@@ -339,7 +326,11 @@ async fn hive_style_partitions_demuxer(
 
     while let Some(rb) = input.next().await.transpose()? {
         // First compute partition key for each row of batch, e.g. (col1=val1, col2=val2, ...)
-        let all_partition_values = compute_partition_keys_by_row(&rb, &partition_by)?;
+        let all_partition_values = compute_partition_keys_by_row(
+            &rb,
+            &partition_by,
+            &exec_options.listing_table_hive_default_partition_name,
+        )?;
 
         // Next compute how the batch should be split up to take each distinct key to its own batch
         let take_map = compute_take_arrays(&rb, &all_partition_values);
@@ -407,6 +398,7 @@ pub struct FileMetadata {
 fn compute_partition_keys_by_row<'a>(
     rb: &'a RecordBatch,
     partition_by: &'a [(String, DataType)],
+    null_partition_name: &str,
 ) -> Result<Vec<Vec<Cow<'a, str>>>> {
     let mut all_partition_values = Vec::with_capacity(partition_by.len());
 
@@ -573,6 +565,15 @@ fn compute_partition_keys_by_row<'a>(
             }
         }
 
+        if !null_partition_name.is_empty()
+            && partition_values.iter().any(|v| v == null_partition_name)
+        {
+            return exec_err!(
+                "Cannot write value '{null_partition_name}' for partition column '{col}': \
+                 it is the null partition name and would be read back as NULL"
+            );
+        }
+
         all_partition_values.push(partition_values);
     }
 
@@ -644,6 +645,7 @@ mod tests {
     use super::*;
     use arrow::array::{Array, ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::Int32Type;
+    use datafusion_common::config::HIVE_DEFAULT_PARTITION_NAME;
 
     fn partition_batch(column: ArrayRef) -> RecordBatch {
         RecordBatch::try_from_iter_with_nullable([("p", column, true)]).unwrap()
@@ -658,7 +660,12 @@ mod tests {
         for column in columns {
             let partition_by = vec![("p".to_string(), column.data_type().clone())];
             let batch = partition_batch(column);
-            let err = compute_partition_keys_by_row(&batch, &partition_by).unwrap_err();
+            let err = compute_partition_keys_by_row(
+                &batch,
+                &partition_by,
+                HIVE_DEFAULT_PARTITION_NAME,
+            )
+            .unwrap_err();
             assert_eq!(
                 err.strip_backtrace(),
                 "Execution error: NULL values are not supported for partition column 'p'"
@@ -671,7 +678,12 @@ mod tests {
         let column = Int32Array::from(vec![None, Some(0), Some(1)]).slice(1, 2);
         let batch = partition_batch(Arc::new(column));
         let partition_by = vec![("p".to_string(), DataType::Int32)];
-        let keys = compute_partition_keys_by_row(&batch, &partition_by).unwrap();
+        let keys = compute_partition_keys_by_row(
+            &batch,
+            &partition_by,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap();
         assert_eq!(keys, vec![vec![Cow::Borrowed("0"), Cow::Borrowed("1")]]);
     }
 
@@ -688,7 +700,12 @@ mod tests {
         let column = dictionary_with_null_value();
         let partition_by = vec![("p".to_string(), column.data_type().clone())];
         let batch = partition_batch(Arc::new(column));
-        let err = compute_partition_keys_by_row(&batch, &partition_by).unwrap_err();
+        let err = compute_partition_keys_by_row(
+            &batch,
+            &partition_by,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap_err();
         assert_eq!(
             err.strip_backtrace(),
             "Execution error: NULL values are not supported for partition column 'p'"
@@ -704,7 +721,12 @@ mod tests {
         .unwrap();
         let partition_by = vec![("p".to_string(), column.data_type().clone())];
         let batch = partition_batch(Arc::new(column));
-        let err = compute_partition_keys_by_row(&batch, &partition_by).unwrap_err();
+        let err = compute_partition_keys_by_row(
+            &batch,
+            &partition_by,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap_err();
         assert_eq!(
             err.strip_backtrace(),
             "Execution error: NULL values are not supported for partition column 'p'"
@@ -716,7 +738,46 @@ mod tests {
         let column = dictionary_with_null_value().slice(0, 1);
         let partition_by = vec![("p".to_string(), column.data_type().clone())];
         let batch = partition_batch(Arc::new(column));
-        let keys = compute_partition_keys_by_row(&batch, &partition_by).unwrap();
+        let keys = compute_partition_keys_by_row(
+            &batch,
+            &partition_by,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap();
         assert_eq!(keys, vec![vec![Cow::Borrowed("a")]]);
+    }
+
+    #[test]
+    fn partition_keys_reject_null_partition_name() {
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec!["a", HIVE_DEFAULT_PARTITION_NAME])),
+            Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(vec![0, 1]),
+                Arc::new(StringArray::from(vec!["a", HIVE_DEFAULT_PARTITION_NAME])),
+            )),
+        ];
+        for column in columns {
+            let partition_by = vec![("p".to_string(), column.data_type().clone())];
+            let batch = partition_batch(column);
+            let err = compute_partition_keys_by_row(
+                &batch,
+                &partition_by,
+                HIVE_DEFAULT_PARTITION_NAME,
+            )
+            .unwrap_err();
+            assert_eq!(
+                err.strip_backtrace(),
+                "Execution error: Cannot write value '__HIVE_DEFAULT_PARTITION__' for partition column 'p': it is the null partition name and would be read back as NULL"
+            );
+        }
+    }
+
+    #[test]
+    fn partition_keys_accept_null_partition_name_when_disabled() {
+        let column = StringArray::from(vec![HIVE_DEFAULT_PARTITION_NAME]);
+        let batch = partition_batch(Arc::new(column));
+        let partition_by = vec![("p".to_string(), DataType::Utf8)];
+        let keys = compute_partition_keys_by_row(&batch, &partition_by, "").unwrap();
+        assert_eq!(keys, vec![vec![Cow::Borrowed(HIVE_DEFAULT_PARTITION_NAME)]]);
     }
 }

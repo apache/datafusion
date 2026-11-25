@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Interval arithmetic library
 
@@ -27,8 +14,10 @@ use crate::type_coercion::binary::{BinaryTypeCoercer, comparison_coercion};
 use arrow::compute::{CastOptions, cast_with_options};
 use arrow::datatypes::{
     DataType, IntervalDayTime, IntervalMonthDayNano, IntervalUnit,
+    MAX_DECIMAL32_FOR_EACH_PRECISION, MAX_DECIMAL64_FOR_EACH_PRECISION,
     MAX_DECIMAL128_FOR_EACH_PRECISION, MAX_DECIMAL256_FOR_EACH_PRECISION,
-    MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL256_FOR_EACH_PRECISION, TimeUnit,
+    MIN_DECIMAL32_FOR_EACH_PRECISION, MIN_DECIMAL64_FOR_EACH_PRECISION,
+    MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL256_FOR_EACH_PRECISION, TimeUnit, i256,
 };
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
 use datafusion_common::{
@@ -37,7 +26,14 @@ use datafusion_common::{
 };
 
 macro_rules! get_extreme_value {
-    ($extreme:ident, $DECIMAL128_ARRAY:ident, $DECIMAL256_ARRAY:ident, $value:expr) => {
+    (
+        $extreme:ident,
+        $DECIMAL32_ARRAY:ident,
+        $DECIMAL64_ARRAY:ident,
+        $DECIMAL128_ARRAY:ident,
+        $DECIMAL256_ARRAY:ident,
+        $value:expr
+    ) => {
         match $value {
             DataType::UInt8 => ScalarValue::UInt8(Some(u8::$extreme)),
             DataType::UInt16 => ScalarValue::UInt16(Some(u16::$extreme)),
@@ -84,6 +80,16 @@ macro_rules! get_extreme_value {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::$extreme))
             }
+            DataType::Decimal32(precision, scale) => ScalarValue::Decimal32(
+                Some($DECIMAL32_ARRAY[*precision as usize]),
+                *precision,
+                *scale,
+            ),
+            DataType::Decimal64(precision, scale) => ScalarValue::Decimal64(
+                Some($DECIMAL64_ARRAY[*precision as usize]),
+                *precision,
+                *scale,
+            ),
             DataType::Decimal128(precision, scale) => ScalarValue::Decimal128(
                 Some($DECIMAL128_ARRAY[*precision as usize]),
                 *precision,
@@ -100,7 +106,15 @@ macro_rules! get_extreme_value {
 }
 
 macro_rules! value_transition {
-    ($bound:ident, $direction:expr, $value:expr) => {
+    (
+        $bound:ident,
+        $direction:expr,
+        $DECIMAL32_ARRAY:ident,
+        $DECIMAL64_ARRAY:ident,
+        $DECIMAL128_ARRAY:ident,
+        $DECIMAL256_ARRAY:ident,
+        $value:expr
+    ) => {
         match $value {
             UInt8(Some(value)) if value == u8::$bound => UInt8(None),
             UInt16(Some(value)) if value == u16::$bound => UInt16(None),
@@ -146,6 +160,28 @@ macro_rules! value_transition {
                 if value == arrow::datatypes::IntervalMonthDayNano::$bound =>
             {
                 IntervalMonthDayNano(None)
+            }
+            // Decimals saturate at the extreme value of their precision, not of
+            // the underlying integer type:
+            Decimal32(Some(value), precision, scale)
+                if value == $DECIMAL32_ARRAY[precision as usize] =>
+            {
+                Decimal32(None, precision, scale)
+            }
+            Decimal64(Some(value), precision, scale)
+                if value == $DECIMAL64_ARRAY[precision as usize] =>
+            {
+                Decimal64(None, precision, scale)
+            }
+            Decimal128(Some(value), precision, scale)
+                if value == $DECIMAL128_ARRAY[precision as usize] =>
+            {
+                Decimal128(None, precision, scale)
+            }
+            Decimal256(Some(value), precision, scale)
+                if value == $DECIMAL256_ARRAY[precision as usize] =>
+            {
+                Decimal256(None, precision, scale)
             }
             _ => next_value_helper::<$direction>($value),
         }
@@ -1208,6 +1244,8 @@ fn handle_overflow<const UPPER: bool>(
         (true, false) => {
             get_extreme_value!(
                 MIN,
+                MIN_DECIMAL32_FOR_EACH_PRECISION,
+                MIN_DECIMAL64_FOR_EACH_PRECISION,
                 MIN_DECIMAL128_FOR_EACH_PRECISION,
                 MIN_DECIMAL256_FOR_EACH_PRECISION,
                 dt
@@ -1216,6 +1254,8 @@ fn handle_overflow<const UPPER: bool>(
         (false, true) => {
             get_extreme_value!(
                 MAX,
+                MAX_DECIMAL32_FOR_EACH_PRECISION,
+                MAX_DECIMAL64_FOR_EACH_PRECISION,
                 MAX_DECIMAL128_FOR_EACH_PRECISION,
                 MAX_DECIMAL256_FOR_EACH_PRECISION,
                 dt
@@ -1228,14 +1268,30 @@ fn handle_overflow<const UPPER: bool>(
 // used without caution.
 fn next_value(value: ScalarValue) -> ScalarValue {
     use ScalarValue::*;
-    value_transition!(MAX, true, value)
+    value_transition!(
+        MAX,
+        true,
+        MAX_DECIMAL32_FOR_EACH_PRECISION,
+        MAX_DECIMAL64_FOR_EACH_PRECISION,
+        MAX_DECIMAL128_FOR_EACH_PRECISION,
+        MAX_DECIMAL256_FOR_EACH_PRECISION,
+        value
+    )
 }
 
 // This function should remain private since it may corrupt the an interval if
 // used without caution.
 fn prev_value(value: ScalarValue) -> ScalarValue {
     use ScalarValue::*;
-    value_transition!(MIN, false, value)
+    value_transition!(
+        MIN,
+        false,
+        MIN_DECIMAL32_FOR_EACH_PRECISION,
+        MIN_DECIMAL64_FOR_EACH_PRECISION,
+        MIN_DECIMAL128_FOR_EACH_PRECISION,
+        MIN_DECIMAL256_FOR_EACH_PRECISION,
+        value
+    )
 }
 
 trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
@@ -1245,6 +1301,12 @@ macro_rules! impl_OneTrait{
     ($($m:ty),*) => {$( impl OneTrait for $m  { fn one() -> Self { 1 as $m } })*}
 }
 impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64, i128}
+
+impl OneTrait for i256 {
+    fn one() -> Self {
+        i256::ONE
+    }
+}
 
 impl OneTrait for IntervalDayTime {
     fn one() -> Self {
@@ -1300,6 +1362,23 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
         UInt16(Some(val)) => UInt16(Some(increment_decrement::<INC, u16>(val))),
         UInt32(Some(val)) => UInt32(Some(increment_decrement::<INC, u32>(val))),
         UInt64(Some(val)) => UInt64(Some(increment_decrement::<INC, u64>(val))),
+        // Decimals step by one unit in the last place, keeping precision and scale:
+        Decimal32(Some(val), precision, scale) => {
+            Decimal32(Some(increment_decrement::<INC, i32>(val)), precision, scale)
+        }
+        Decimal64(Some(val), precision, scale) => {
+            Decimal64(Some(increment_decrement::<INC, i64>(val)), precision, scale)
+        }
+        Decimal128(Some(val), precision, scale) => Decimal128(
+            Some(increment_decrement::<INC, i128>(val)),
+            precision,
+            scale,
+        ),
+        Decimal256(Some(val), precision, scale) => Decimal256(
+            Some(increment_decrement::<INC, i256>(val)),
+            precision,
+            scale,
+        ),
         DurationSecond(Some(val)) => {
             DurationSecond(Some(increment_decrement::<INC, i64>(val)))
         }
@@ -1743,6 +1822,104 @@ pub fn cardinality_ratio(initial_interval: &Interval, final_interval: &Interval)
             (final_interval as f64) / (initial_interval as f64)
         }
         _ => 1.0,
+    }
+}
+
+/// Estimates the selectivity of a comparison between two independent, uniformly
+/// distributed discrete intervals.
+///
+/// The estimate is the fraction of pairs from the Cartesian product of the two
+/// inclusive intervals that satisfy `op`. Currently, only ordered comparisons
+/// between intervals of the same primitive integer type are supported. Returns
+/// `None` when the assumptions do not apply or the calculation cannot be
+/// performed safely.
+pub fn comparison_selectivity(
+    op: &Operator,
+    left: &Interval,
+    right: &Interval,
+) -> Result<Option<f64>> {
+    let probability = match op {
+        Operator::Lt => strict_less_selectivity(left, right),
+        Operator::LtEq => strict_less_selectivity(right, left).map(|p| 1.0 - p),
+        Operator::Gt => strict_less_selectivity(right, left),
+        Operator::GtEq => strict_less_selectivity(left, right).map(|p| 1.0 - p),
+        _ => None,
+    };
+    Ok(probability.map(|p| p.clamp(0.0, 1.0)))
+}
+
+fn strict_less_selectivity(left: &Interval, right: &Interval) -> Option<f64> {
+    if left.data_type() != right.data_type() {
+        return None;
+    }
+
+    let left_lower = integer_value(left.lower())?;
+    let left_upper = integer_value(left.upper())?;
+    let right_lower = integer_value(right.lower())?;
+    let right_upper = integer_value(right.upper())?;
+
+    if left_upper < right_lower {
+        return Some(1.0);
+    }
+    if left_lower >= right_upper {
+        return Some(0.0);
+    }
+
+    let left_count = inclusive_integer_count(left_lower, left_upper)?;
+    let right_count = inclusive_integer_count(right_lower, right_upper)?;
+    let total_pairs = left_count.checked_mul(right_count)?;
+
+    // For each right value y, the number of matching left values is
+    // clamp(y - left_lower, 0, left_count). Sum the linear and constant
+    // portions separately without enumerating the intervals.
+    let partial_lower = right_lower.max(left_lower.checked_add(1)?);
+    let partial_upper = right_upper.min(left_upper);
+    let partial_pairs = if partial_lower <= partial_upper {
+        let count = inclusive_integer_count(partial_lower, partial_upper)?;
+        let first = u128::try_from(partial_lower.checked_sub(left_lower)?).ok()?;
+        let last = u128::try_from(partial_upper.checked_sub(left_lower)?).ok()?;
+        arithmetic_series_sum(first, last, count)?
+    } else {
+        0
+    };
+
+    let full_lower = right_lower.max(left_upper.checked_add(1)?);
+    let full_values = if full_lower <= right_upper {
+        inclusive_integer_count(full_lower, right_upper)?
+    } else {
+        0
+    };
+    let full_pairs = full_values.checked_mul(left_count)?;
+    let matching_pairs = partial_pairs.checked_add(full_pairs)?;
+
+    Some((matching_pairs as f64) / (total_pairs as f64))
+}
+
+fn inclusive_integer_count(lower: i128, upper: i128) -> Option<u128> {
+    let distance = upper.checked_sub(lower)?;
+    u128::try_from(distance).ok()?.checked_add(1)
+}
+
+fn arithmetic_series_sum(first: u128, last: u128, count: u128) -> Option<u128> {
+    let endpoints = first.checked_add(last)?;
+    if count.is_multiple_of(2) {
+        (count / 2).checked_mul(endpoints)
+    } else {
+        count.checked_mul(endpoints / 2)
+    }
+}
+
+fn integer_value(value: &ScalarValue) -> Option<i128> {
+    match value {
+        ScalarValue::Int8(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::Int16(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::Int32(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::Int64(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::UInt8(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::UInt16(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::UInt32(Some(value)) => Some(i128::from(*value)),
+        ScalarValue::UInt64(Some(value)) => Some(i128::from(*value)),
+        _ => None,
     }
 }
 
@@ -2273,15 +2450,18 @@ impl NullableInterval {
 mod tests {
     use crate::{
         interval_arithmetic::{
-            Interval, cast_scalar_value, handle_overflow, next_value, prev_value,
-            satisfy_greater,
+            Interval, cast_scalar_value, comparison_selectivity, handle_overflow,
+            next_value, prev_value, satisfy_greater,
         },
         operator::Operator,
     };
 
     use crate::interval_arithmetic::NullableInterval;
     use arrow::compute::CastOptions;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{
+        DataType, MAX_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL128_FOR_EACH_PRECISION,
+        i256,
+    };
     use datafusion_common::rounding::{next_down, next_up};
     use datafusion_common::{Result, ScalarValue};
 
@@ -2508,6 +2688,113 @@ mod tests {
     }
 
     #[test]
+    fn test_comparison_selectivity_overlapping_integer_intervals() -> Result<()> {
+        let interval = Interval::make(Some(1_i32), Some(50_i32))?;
+
+        let cases = [
+            (Operator::Lt, 0.49),
+            (Operator::LtEq, 0.51),
+            (Operator::Gt, 0.49),
+            (Operator::GtEq, 0.51),
+        ];
+        for (op, expected) in cases {
+            let actual = comparison_selectivity(&op, &interval, &interval)?.unwrap();
+            assert!((actual - expected).abs() < f64::EPSILON);
+            assert!((0.0..=1.0).contains(&actual));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_comparison_selectivity_disjoint_and_single_value_intervals() -> Result<()> {
+        let low = Interval::make(Some(1_i32), Some(10_i32))?;
+        let high = Interval::make(Some(20_i32), Some(30_i32))?;
+        assert_eq!(
+            comparison_selectivity(&Operator::Lt, &low, &high)?,
+            Some(1.0)
+        );
+        assert_eq!(
+            comparison_selectivity(&Operator::Gt, &low, &high)?,
+            Some(0.0)
+        );
+
+        let one = Interval::make(Some(7_i32), Some(7_i32))?;
+        assert_eq!(
+            comparison_selectivity(&Operator::Lt, &one, &one)?,
+            Some(0.0)
+        );
+        assert_eq!(
+            comparison_selectivity(&Operator::LtEq, &one, &one)?,
+            Some(1.0)
+        );
+        assert_eq!(
+            comparison_selectivity(&Operator::Gt, &one, &one)?,
+            Some(0.0)
+        );
+        assert_eq!(
+            comparison_selectivity(&Operator::GtEq, &one, &one)?,
+            Some(1.0)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_comparison_selectivity_unsupported_inputs() -> Result<()> {
+        let bounded = Interval::make(Some(1_i32), Some(50_i32))?;
+        assert_eq!(
+            comparison_selectivity(&Operator::Eq, &bounded, &bounded)?,
+            None
+        );
+
+        let unbounded = Interval::make(None, Some(50_i32))?;
+        assert_eq!(
+            comparison_selectivity(&Operator::Lt, &unbounded, &bounded)?,
+            None
+        );
+
+        let strings = Interval::try_new(
+            ScalarValue::Utf8(Some("a".to_owned())),
+            ScalarValue::Utf8(Some("z".to_owned())),
+        )?;
+        assert_eq!(
+            comparison_selectivity(&Operator::Lt, &strings, &strings)?,
+            None
+        );
+
+        let unsigned = Interval::make(Some(1_u32), Some(50_u32))?;
+        assert_eq!(
+            comparison_selectivity(&Operator::Lt, &bounded, &unsigned)?,
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_comparison_selectivity_probability_bounds() -> Result<()> {
+        for left_lower in -3_i32..=3 {
+            for left_upper in left_lower..=3 {
+                for right_lower in -3_i32..=3 {
+                    for right_upper in right_lower..=3 {
+                        let left = Interval::make(Some(left_lower), Some(left_upper))?;
+                        let right = Interval::make(Some(right_lower), Some(right_upper))?;
+                        for op in
+                            [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq]
+                        {
+                            let probability =
+                                comparison_selectivity(&op, &left, &right)?.unwrap();
+                            assert!(
+                                (0.0..=1.0).contains(&probability),
+                                "{left:?} {op} {right:?} produced {probability}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_next_prev_value() -> Result<()> {
         let zeros = vec![
             ScalarValue::new_zero(&DataType::UInt8)?,
@@ -2590,6 +2877,124 @@ mod tests {
             assert_eq!(next_value(inf.clone()), inf);
             assert_eq!(prev_value(inf.clone()), inf);
         });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_next_prev_value_decimal() {
+        use ScalarValue::*;
+
+        // Decimals step by one unit in the last place, keeping precision and scale:
+        let cases = vec![
+            (Decimal32(Some(2400), 9, 2), Decimal32(Some(2401), 9, 2)),
+            (Decimal64(Some(2400), 18, 2), Decimal64(Some(2401), 18, 2)),
+            (Decimal128(Some(2400), 15, 2), Decimal128(Some(2401), 15, 2)),
+            (
+                Decimal256(Some(i256::from(2400)), 40, 2),
+                Decimal256(Some(i256::from(2401)), 40, 2),
+            ),
+            (Decimal128(Some(-1), 3, 2), Decimal128(Some(0), 3, 2)),
+        ];
+        for (value, next) in cases {
+            assert_eq!(next_value(value.clone()), next);
+            assert_eq!(prev_value(next), value);
+        }
+
+        // Values at the extremes of their precision (e.g. -9.99 and 9.99 for
+        // precision 3, scale 2) become unbounded:
+        let d128_max = MAX_DECIMAL128_FOR_EACH_PRECISION[38];
+        let d128_min = MIN_DECIMAL128_FOR_EACH_PRECISION[38];
+        let cases = vec![
+            (
+                Decimal32(Some(-999), 3, 2),
+                Decimal32(Some(999), 3, 2),
+                Decimal32(Some(-998), 3, 2),
+                Decimal32(Some(998), 3, 2),
+                Decimal32(None, 3, 2),
+            ),
+            (
+                Decimal64(Some(-999), 3, 2),
+                Decimal64(Some(999), 3, 2),
+                Decimal64(Some(-998), 3, 2),
+                Decimal64(Some(998), 3, 2),
+                Decimal64(None, 3, 2),
+            ),
+            (
+                Decimal128(Some(-999), 3, 2),
+                Decimal128(Some(999), 3, 2),
+                Decimal128(Some(-998), 3, 2),
+                Decimal128(Some(998), 3, 2),
+                Decimal128(None, 3, 2),
+            ),
+            (
+                Decimal256(Some(i256::from(-999)), 3, 2),
+                Decimal256(Some(i256::from(999)), 3, 2),
+                Decimal256(Some(i256::from(-998)), 3, 2),
+                Decimal256(Some(i256::from(998)), 3, 2),
+                Decimal256(None, 3, 2),
+            ),
+            (
+                Decimal128(Some(d128_min), 38, 0),
+                Decimal128(Some(d128_max), 38, 0),
+                Decimal128(Some(d128_min + 1), 38, 0),
+                Decimal128(Some(d128_max - 1), 38, 0),
+                Decimal128(None, 38, 0),
+            ),
+        ];
+        for (min, max, after_min, before_max, inf) in cases {
+            assert_eq!(next_value(max.clone()), inf);
+            assert_eq!(prev_value(max), before_max);
+
+            assert_eq!(prev_value(min.clone()), inf);
+            assert_eq!(next_value(min), after_min);
+
+            assert_eq!(next_value(inf.clone()), inf);
+            assert_eq!(prev_value(inf.clone()), inf);
+        }
+    }
+
+    #[test]
+    fn test_satisfy_strict_comparison_decimal() -> Result<()> {
+        use ScalarValue::*;
+
+        // x in [0.00, 50.00], constraint 24.00 > x tightens x to [0.00, 23.99]:
+        let x =
+            Interval::try_new(Decimal128(Some(0), 15, 2), Decimal128(Some(5000), 15, 2))?;
+        let literal = Interval::try_new(
+            Decimal128(Some(2400), 15, 2),
+            Decimal128(Some(2400), 15, 2),
+        )?;
+        let (_, x_lt) = satisfy_greater(&literal, &x, true)?.unwrap();
+        assert_eq!(
+            x_lt,
+            Interval::try_new(Decimal128(Some(0), 15, 2), Decimal128(Some(2399), 15, 2))?
+        );
+
+        // Constraint x > 24.00 tightens x to [24.01, 50.00]:
+        let (x_gt, _) = satisfy_greater(&x, &literal, true)?.unwrap();
+        assert_eq!(
+            x_gt,
+            Interval::try_new(
+                Decimal128(Some(2401), 15, 2),
+                Decimal128(Some(5000), 15, 2),
+            )?
+        );
+
+        // Non-strict comparisons keep the closed bound:
+        let (_, x_le) = satisfy_greater(&literal, &x, false)?.unwrap();
+        assert_eq!(
+            x_le,
+            Interval::try_new(Decimal128(Some(0), 15, 2), Decimal128(Some(2400), 15, 2))?
+        );
+
+        // A strict bound at the precision's extreme conservatively becomes
+        // unbounded instead of stepping past it (x > 9.99 for Decimal128(3, 2)):
+        let x = Interval::make_unbounded(&DataType::Decimal128(3, 2))?;
+        let max =
+            Interval::try_new(Decimal128(Some(999), 3, 2), Decimal128(Some(999), 3, 2))?;
+        let (x_gt, _) = satisfy_greater(&x, &max, true)?.unwrap();
+        assert_eq!(x_gt, Interval::make_unbounded(&DataType::Decimal128(3, 2))?);
 
         Ok(())
     }
@@ -4406,6 +4811,24 @@ mod tests {
             result,
             ScalarValue::Decimal128(Some(99999999999999999999999999999999999999), 38, 35)
         );
+
+        // Test Decimal32/Decimal64 underflow handling:
+        let op = Operator::Minus;
+        let dt = DataType::Decimal32(3, 2);
+        let lhs = ScalarValue::Decimal32(Some(-999), 3, 2);
+        let rhs = ScalarValue::Decimal32(Some(1), 3, 2);
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Decimal32(Some(-999), 3, 2));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Decimal32(None, 3, 2));
+
+        let dt = DataType::Decimal64(3, 2);
+        let lhs = ScalarValue::Decimal64(Some(-999), 3, 2);
+        let rhs = ScalarValue::Decimal64(Some(1), 3, 2);
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Decimal64(Some(-999), 3, 2));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Decimal64(None, 3, 2));
 
         Ok(())
     }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Utility functions leveraged by the query optimizer rules
 
@@ -31,7 +18,8 @@ use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
-    ColumnarValue, DistinctHandling, Expr, WriteOp, logical_plan::LogicalPlan,
+    ColumnarValue, DistinctHandling, Expr, GroupingSet, WriteOp,
+    logical_plan::LogicalPlan,
 };
 use datafusion_physical_expr::create_physical_expr;
 use log::{debug, trace};
@@ -57,6 +45,19 @@ pub(crate) fn is_repeatable(expr: &Expr) -> bool {
                 ))
         })
         .expect("expression traversal is infallible")
+}
+
+/// A global aggregate or an empty grouping set produces a grand total even on empty input.
+pub(crate) fn aggregate_emits_on_empty_input(group_expr: &[Expr]) -> bool {
+    match group_expr.first() {
+        None | Some(Expr::GroupingSet(GroupingSet::Rollup(_) | GroupingSet::Cube(_))) => {
+            true
+        }
+        Some(Expr::GroupingSet(GroupingSet::GroupingSets(groups))) => {
+            groups.iter().any(Vec::is_empty)
+        }
+        _ => false,
+    }
 }
 
 /// Whether an aggregate can safely ignore repeated input rows. This holds when

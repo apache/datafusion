@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #[cfg(test)]
 mod test {
@@ -900,14 +887,16 @@ mod test {
             total_byte_size: Precision::Inexact(16),
             column_statistics: vec![
                 ColumnStatistics {
-                    null_count: Precision::Absent,
+                    null_count: Precision::Exact(0),
                     max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
                     min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
                 },
-                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Inexact(ScalarValue::Int32(Some(4))))
+                    .with_max_value(Precision::Inexact(ScalarValue::Int32(Some(5)))),
                 ColumnStatistics::new_unknown(),
             ],
         };
@@ -919,14 +908,16 @@ mod test {
             total_byte_size: Precision::Inexact(16),
             column_statistics: vec![
                 ColumnStatistics {
-                    null_count: Precision::Absent,
+                    null_count: Precision::Exact(0),
                     max_value: Precision::Exact(ScalarValue::Int32(Some(2))),
                     min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
                 },
-                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Inexact(ScalarValue::Int32(Some(2))))
+                    .with_max_value(Precision::Inexact(ScalarValue::Int32(Some(3)))),
                 ColumnStatistics::new_unknown(),
             ],
         };
@@ -1003,6 +994,7 @@ mod test {
             column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Precision::Exact(0),
+                    null_count: Precision::Exact(0),
                     ..ColumnStatistics::new_unknown()
                 },
                 ColumnStatistics::new_unknown(),
