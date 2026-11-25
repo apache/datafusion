@@ -65,6 +65,7 @@ use parquet::file::metadata::ParquetMetaData;
 use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::TreeNode;
+use datafusion_physical_expr::expressions::{Column, IsNotNullExpr};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
@@ -461,6 +462,22 @@ impl PrebuiltRowFilterCandidate {
     }
 }
 
+fn has_sparse_nulls(projection: &ProjectionMask, metadata: &ParquetMetaData) -> bool {
+    metadata.row_groups().iter().all(|group| {
+        // The sum bounds how many rows early predicates could skip.
+        let null_budget = group.num_rows().cast_unsigned() / 4;
+        group
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| projection.leaf_included(*index))
+            .try_fold(null_budget, |remaining, (_, column)| {
+                remaining.checked_sub(column.statistics()?.null_count_opt()?)
+            })
+            .is_some()
+    })
+}
+
 /// Precompute the list of [`PrebuiltRowFilterCandidate`]s for a predicate.
 ///
 /// This is the expensive part of [`build_row_filter`]: split into conjuncts,
@@ -480,16 +497,35 @@ pub(crate) fn prebuild_row_filter_candidates(
     // Split into conjuncts:
     // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
     let predicates = split_conjunction(expr);
-    let candidates: Vec<FilterCandidate> = predicates
-        .into_iter()
-        .map(|expr| {
-            FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
-                .build(metadata)
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect();
+    let combined = if predicates.len() > 1
+        && predicates.iter().all(|predicate| {
+            predicate
+                .downcast_ref::<IsNotNullExpr>()
+                .and_then(|check| check.arg().downcast_ref::<Column>())
+                .and_then(|column| file_schema.fields().get(column.index()))
+                .is_some_and(|field| field.data_type().is_integer())
+        }) {
+        FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
+            .build(metadata)?
+            .filter(|candidate| {
+                has_sparse_nulls(&candidate.read_plan.projection_mask, metadata)
+            })
+    } else {
+        None
+    };
+    let candidates: Vec<FilterCandidate> = match combined {
+        Some(candidate) => vec![candidate],
+        None => predicates
+            .into_iter()
+            .map(|expr| {
+                FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
+                    .build(metadata)
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect(),
+    };
 
     if candidates.is_empty() {
         return Ok(None);
@@ -585,8 +621,78 @@ mod test {
     use parquet::arrow::ArrowWriter;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::parquet_to_arrow_schema;
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_combined_integer_null_checks() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let expr = logical2physical(
+            &col("a").is_not_null().and(col("b").is_not_null()),
+            &schema,
+        );
+        for (nulls_a, nulls_b, statistics, predicate_count) in [
+            (1, 1, EnabledStatistics::Chunk, 1),
+            (50, 1, EnabledStatistics::Chunk, 2),
+            (9, 9, EnabledStatistics::Chunk, 2),
+            (1, 1, EnabledStatistics::None, 2),
+        ] {
+            let input = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from_iter(
+                        (0..64).map(|i| (i >= nulls_a).then_some(i)),
+                    )),
+                    Arc::new(Int32Array::from_iter(
+                        (0..64).map(|i| (i < 64 - nulls_b).then_some(i)),
+                    )),
+                ],
+            )?;
+            let file = NamedTempFile::new()?;
+            let properties = WriterProperties::builder()
+                .set_statistics_enabled(statistics)
+                .build();
+            let mut writer = ArrowWriter::try_new(
+                file.reopen()?,
+                Arc::clone(&schema),
+                Some(properties),
+            )?;
+            writer.write(&input)?;
+            writer.close()?;
+
+            let builder = ParquetRecordBatchReaderBuilder::try_new(file.reopen()?)?;
+            let metrics = ParquetFileMetrics::new(
+                0,
+                "null_checks.parquet",
+                &ExecutionPlanMetricsSet::new(),
+            );
+            let filter =
+                build_row_filter(&expr, &schema, builder.metadata(), false, &metrics)?
+                    .expect("integer null checks should be pushed down");
+            assert_eq!(filter.predicates().len(), predicate_count);
+
+            let actual = builder
+                .with_row_filter(filter)
+                .build()?
+                .collect::<ArrowResult<Vec<_>>>()?;
+            let surviving = Int32Array::from_iter_values(nulls_a..64 - nulls_b);
+            let expected = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(surviving.clone()), Arc::new(surviving)],
+            )?;
+            assert_eq!(
+                metrics.pushdown_rows_pruned.value(),
+                64 - expected.num_rows()
+            );
+            assert_eq!(metrics.pushdown_rows_matched.value(), expected.num_rows());
+            assert_eq!(actual, vec![expected]);
+        }
+        Ok(())
+    }
 
     // List predicates used by the decoder should be accepted for pushdown
     #[test]
