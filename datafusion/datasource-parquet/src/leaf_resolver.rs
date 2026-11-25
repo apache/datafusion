@@ -4,7 +4,7 @@
 
 //! O(1) resolution of an Arrow field name to its Parquet leaf column index.
 
-use arrow::datatypes::Schema;
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::HashMap;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::schema::types::SchemaDescriptor;
@@ -97,6 +97,37 @@ impl<'a> LeafResolver<'a> {
         let leaf = self.root_to_first_leaf.get(root).copied().flatten()?;
         Some((root, leaf))
     }
+}
+
+/// The Parquet leaf column index and Arrow field of the struct field reached
+/// from the root column `column` by `path`.
+///
+/// Returns `None` unless every step is a struct field, the leaf is a
+/// primitive, and no ancestor is repeated. A field below a list or map has
+/// statistics per element, not per row.
+pub(crate) fn struct_field_leaf<'a>(
+    arrow_schema: &'a Schema,
+    parquet_schema: &SchemaDescriptor,
+    column: &str,
+    path: &[String],
+) -> Option<(usize, &'a Field)> {
+    let mut field = arrow_schema.field_with_name(column).ok()?;
+    for name in path {
+        let DataType::Struct(fields) = field.data_type() else {
+            return None;
+        };
+        field = fields.iter().find(|f| f.name() == name)?;
+    }
+    if field.data_type().is_nested() {
+        return None;
+    }
+    let leaf = parquet_schema.columns().iter().position(|descr| {
+        let parts = descr.path().parts();
+        parts.len() == path.len() + 1
+            && parts[0] == column
+            && parts[1..].iter().zip(path).all(|(a, b)| a == b)
+    })?;
+    (parquet_schema.column(leaf).max_rep_level() == 0).then_some((leaf, field))
 }
 
 #[cfg(test)]

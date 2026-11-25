@@ -7,11 +7,12 @@ use std::sync::Arc;
 
 use super::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccess};
 use crate::bloom_filter::BloomFilterStatistics;
+use crate::leaf_resolver::struct_field_leaf;
 use crate::metadata::{has_untrusted_byte_array_stats, has_untrusted_min_max_order};
 use crate::pruning::build_inverted_predicate;
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::compute::nullif;
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::Schema;
 use datafusion_common::parquet_config::RowGroupRangeAssignment;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
@@ -545,34 +546,18 @@ impl<'a> RowGroupPruningStatistics<'a> {
     }
 
     /// A converter for the Parquet leaf below `column` at struct field `path`.
-    ///
-    /// Returns `None` unless every step is a struct field, the leaf is a
-    /// primitive, and no ancestor is repeated. A field below a list or map
-    /// has statistics per element, not per row.
+    /// See [`struct_field_leaf`] for which paths resolve.
     fn field_statistics_converter(
         &self,
         column: &Column,
         path: &[String],
     ) -> Option<StatisticsConverter<'a>> {
-        let mut field = self.arrow_schema.field_with_name(&column.name).ok()?;
-        for name in path {
-            let DataType::Struct(fields) = field.data_type() else {
-                return None;
-            };
-            field = fields.iter().find(|f| f.name() == name)?;
-        }
-        if field.data_type().is_nested() {
-            return None;
-        }
-        let leaf = self.parquet_schema.columns().iter().position(|descr| {
-            let parts = descr.path().parts();
-            parts.len() == path.len() + 1
-                && parts[0] == column.name
-                && parts[1..].iter().zip(path).all(|(a, b)| a == b)
-        })?;
-        if self.parquet_schema.column(leaf).max_rep_level() > 0 {
-            return None;
-        }
+        let (leaf, field) = struct_field_leaf(
+            self.arrow_schema,
+            self.parquet_schema,
+            &column.name,
+            path,
+        )?;
         Some(
             StatisticsConverter::from_column_index(leaf, field, self.parquet_schema)
                 .ok()?
