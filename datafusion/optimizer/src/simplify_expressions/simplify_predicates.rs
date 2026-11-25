@@ -160,9 +160,10 @@ fn simplify_conjunction(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
         return Ok(predicates);
     }
 
-    // Group predicates by their column reference
+    // Group predicates by their column reference. A column's simplified predicates
+    // take the place of its first one, so no predicate moves ahead of one before it.
     let mut column_predicates: BTreeMap<Column, Vec<Expr>> = BTreeMap::new();
-    let mut other_predicates = Vec::with_capacity(predicates.len());
+    let mut slots = Vec::with_capacity(predicates.len());
 
     for pred in predicates {
         match pred {
@@ -187,10 +188,12 @@ fn simplify_conjunction(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
                 {
                     let mut right = right;
                     normalize_literal(right.as_mut());
-                    column_predicates
-                        .entry(col)
-                        .or_default()
-                        .push(Expr::BinaryExpr(BinaryExpr { left, op, right }));
+                    push_column_predicate(
+                        &mut column_predicates,
+                        &mut slots,
+                        col,
+                        Expr::BinaryExpr(BinaryExpr { left, op, right }),
+                    );
                 } else if let (Some(_), Some(col), Some(swapped_op)) = (
                     left.as_literal(),
                     extract_column_from_expr(&right),
@@ -200,29 +203,41 @@ fn simplify_conjunction(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
                     // operand order compare equal below
                     let mut left = left;
                     normalize_literal(left.as_mut());
-                    column_predicates
-                        .entry(col)
-                        .or_default()
-                        .push(Expr::BinaryExpr(BinaryExpr {
+                    push_column_predicate(
+                        &mut column_predicates,
+                        &mut slots,
+                        col,
+                        Expr::BinaryExpr(BinaryExpr {
                             left: right,
                             op: swapped_op,
                             right: left,
-                        }));
+                        }),
+                    );
                 } else {
-                    other_predicates.push(Expr::BinaryExpr(BinaryExpr {
+                    slots.push(Slot::Other(Expr::BinaryExpr(BinaryExpr {
                         left,
                         op,
                         right,
-                    }));
+                    })));
                 }
             }
-            _ => other_predicates.push(pred),
+            _ => slots.push(Slot::Other(pred)),
         }
     }
 
     // Process each column's predicates to remove redundancies
-    let mut result = other_predicates;
-    for (_, preds) in column_predicates {
+    let mut result = Vec::with_capacity(slots.len());
+    for slot in slots {
+        let col = match slot {
+            Slot::Other(pred) => {
+                result.push(pred);
+                continue;
+            }
+            Slot::Column(col) => col,
+        };
+        let preds = column_predicates
+            .remove(&col)
+            .expect("each column has one slot and its predicates");
         // Literals of one column that cannot be ordered against each other carry no
         // information we can use, so keep the predicates as they were written
         let simplified = match simplify_column_predicates(preds.clone()) {
@@ -236,6 +251,24 @@ fn simplify_conjunction(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
     }
 
     Ok(result)
+}
+
+/// A predicate kept as is, or the place of a column's simplified predicates.
+enum Slot {
+    Other(Expr),
+    Column(Column),
+}
+
+fn push_column_predicate(
+    column_predicates: &mut BTreeMap<Column, Vec<Expr>>,
+    slots: &mut Vec<Slot>,
+    col: Column,
+    predicate: Expr,
+) {
+    if !column_predicates.contains_key(&col) {
+        slots.push(Slot::Column(col.clone()));
+    }
+    column_predicates.entry(col).or_default().push(predicate);
 }
 
 /// Simplifies predicates related to a single column.
