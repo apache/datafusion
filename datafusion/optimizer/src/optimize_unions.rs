@@ -363,7 +363,8 @@ mod tests {
             TableScan: table
           Projection: id AS table_id, key, value
             TableScan: table
-          TableScan: table
+          Projection: table.id AS table_id, table.key, table.value
+            TableScan: table
         ")
     }
 

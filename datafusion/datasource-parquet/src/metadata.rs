@@ -7,15 +7,16 @@
 
 use crate::file_format::ObjectStoreFetch;
 use crate::leaf_resolver::LeafResolver;
+use crate::schema_coercion::{dictionary_reads_enabled, promote_dictionary_columns};
 use crate::{Int96Coercer, apply_file_schema_type_coercions};
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::{and, sum};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, HashMap, HashSet, Result, ScalarValue, Statistics,
+    ColumnStatistics, DataFusionError, HashMap, Result, ScalarValue, Statistics,
     internal_datafusion_err,
 };
 use datafusion_execution::cache::cache_manager::{
@@ -39,12 +40,73 @@ use parquet::file::metadata::{
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use std::any::Any;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Minimum fraction of row groups that must report NDV statistics for the
 /// merged result to be `Inexact` rather than `Absent`, as the estimate
 /// would be too unreliable otherwise.
 const PARTIAL_NDV_THRESHOLD: f64 = 0.75;
+
+fn dictionary_promotion_candidates(
+    metadata: &ParquetMetaData,
+    schema_descr: &SchemaDescriptor,
+    max_distinct_values: Option<usize>,
+) -> HashSet<String> {
+    (0..schema_descr.num_columns())
+        .filter_map(|col_idx| {
+            let column = schema_descr.column(col_idx);
+            let parts = column.path().parts();
+            if parts.len() != 1 {
+                return None;
+            }
+
+            let row_groups = metadata.row_groups();
+            let eligible = match max_distinct_values {
+                None => row_groups
+                    .iter()
+                    .any(|rg| rg.column(col_idx).dictionary_page_offset().is_some()),
+                Some(max) => row_groups
+                    .iter()
+                    .try_fold(0_u128, |upper_bound, row_group| {
+                        let row_count = u64::try_from(row_group.num_rows()).ok()?;
+                        let column = row_group.column(col_idx);
+                        // A chunk whose dictionary outgrew the writer's page limit
+                        // continues in PLAIN pages, and reads slower as a dictionary
+                        // than as plain values.
+                        let all_dictionary_pages = column
+                            .dictionary_page_offset()
+                            .is_some()
+                            && column.page_encoding_stats_mask().is_some_and(|mask| {
+                                mask.is_only(parquet::basic::Encoding::RLE_DICTIONARY)
+                                    || mask.is_only(
+                                        parquet::basic::Encoding::PLAIN_DICTIONARY,
+                                    )
+                            });
+                        if row_count > 0 && !all_dictionary_pages {
+                            return None;
+                        }
+                        // Non-null row counts bound missing NDVs when available,
+                        // and summing deliberately counts values repeated across
+                        // row groups more than once.
+                        let estimate = column
+                            .statistics()
+                            .and_then(|stats| {
+                                stats.distinct_count_opt().or_else(|| {
+                                    stats
+                                        .null_count_opt()
+                                        .and_then(|nulls| row_count.checked_sub(nulls))
+                                })
+                            })
+                            .unwrap_or(row_count);
+                        Some(upper_bound.saturating_add(estimate as u128))
+                    })
+                    .is_some_and(|upper_bound| upper_bound <= max as u128),
+            };
+            eligible.then(|| parts[0].clone())
+        })
+        .collect()
+}
 
 fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
     matches!(
@@ -169,6 +231,8 @@ pub struct DFParquetMetadata<'a> {
     pub coerce_int96_tz: Option<Arc<str>>,
     /// If true, promote string/binary columns with dictionary pages to `Dictionary(Int32, ...)`.
     enable_rle_to_dictionary: bool,
+    /// Optional upper estimate for dictionary column cardinality.
+    dictionary_read_max_distinct_values: Option<usize>,
 }
 
 impl<'a> DFParquetMetadata<'a> {
@@ -187,12 +251,22 @@ impl<'a> DFParquetMetadata<'a> {
             coerce_int96: None,
             coerce_int96_tz: None,
             enable_rle_to_dictionary: false,
+            dictionary_read_max_distinct_values: None,
         }
     }
 
     /// Promote string/binary columns with dictionary pages to `Dictionary(Int32, ...)`.
     pub fn with_enable_rle_to_dictionary(mut self, enable: bool) -> Self {
         self.enable_rle_to_dictionary = enable;
+        self
+    }
+
+    /// Set the estimated dictionary cardinality cap; `None` preserves legacy behavior.
+    pub fn with_dictionary_read_max_distinct_values(
+        mut self,
+        max_distinct_values: Option<usize>,
+    ) -> Self {
+        self.dictionary_read_max_distinct_values = max_distinct_values;
         self
     }
 
@@ -474,63 +548,17 @@ impl<'a> DFParquetMetadata<'a> {
             })
             .unwrap_or(schema);
 
-        let schema = if self.enable_rle_to_dictionary {
+        let schema = if dictionary_reads_enabled(
+            self.enable_rle_to_dictionary,
+            self.dictionary_read_max_distinct_values,
+        ) {
             let schema_descr = file_metadata.schema_descr();
-            // Top-level columns that have a dictionary page in at least one row group.
-            let dict_cols: HashSet<String> = metadata
-                .row_groups()
-                .iter()
-                .flat_map(|rg| {
-                    rg.columns()
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(col_idx, col)| {
-                            col.dictionary_page_offset()?;
-                            let col_desc = schema_descr.column(col_idx);
-                            let parts = col_desc.path().parts();
-                            // Skip nested columns: their leaf name doesn't match the
-                            // Arrow top-level field name.
-                            (parts.len() == 1).then(|| parts[0].clone())
-                        })
-                })
-                .collect();
-            if dict_cols.is_empty() {
-                schema
-            } else {
-                let promoted: Vec<_> = schema
-                    .fields()
-                    .iter()
-                    .map(|field| {
-                        if !dict_cols.contains(field.name()) {
-                            return Arc::clone(field);
-                        }
-                        let dict_value_type = match field.data_type() {
-                            DataType::Utf8 => Some(DataType::Utf8),
-                            DataType::LargeUtf8 => Some(DataType::LargeUtf8),
-                            DataType::Binary => Some(DataType::Binary),
-                            DataType::LargeBinary => Some(DataType::LargeBinary),
-                            _ => None,
-                        };
-                        dict_value_type.map_or_else(
-                            || Arc::clone(field),
-                            |value_type| {
-                                Arc::new(
-                                    Field::new(
-                                        field.name(),
-                                        DataType::Dictionary(
-                                            Box::new(DataType::Int32),
-                                            Box::new(value_type),
-                                        ),
-                                        field.is_nullable(),
-                                    )
-                                    .with_metadata(field.metadata().clone()),
-                                )
-                            },
-                        )
-                    })
-                    .collect();
-                Schema::new_with_metadata(promoted, schema.metadata().clone())
-            }
+            let dict_cols = dictionary_promotion_candidates(
+                &metadata,
+                schema_descr,
+                self.dictionary_read_max_distinct_values,
+            );
+            promote_dictionary_columns(&schema, &dict_cols).unwrap_or(schema)
         } else {
             schema
         };
@@ -1450,6 +1478,20 @@ mod tests {
             column_stats: Vec<Option<ParquetStatistics>>,
             num_rows: i64,
         ) -> RowGroupMetaData {
+            create_row_group_with_stats_and_dictionary_page(
+                schema_descr,
+                column_stats,
+                num_rows,
+                None,
+            )
+        }
+
+        fn create_row_group_with_stats_and_dictionary_page(
+            schema_descr: &Arc<SchemaDescriptor>,
+            column_stats: Vec<Option<ParquetStatistics>>,
+            num_rows: i64,
+            dictionary_page_offset: Option<i64>,
+        ) -> RowGroupMetaData {
             let columns: Vec<ColumnChunkMetaData> = column_stats
                 .into_iter()
                 .enumerate()
@@ -1459,7 +1501,18 @@ mod tests {
                     if let Some(s) = stats {
                         builder = builder.set_statistics(s);
                     }
-                    builder.set_num_values(num_rows).build().unwrap()
+                    if dictionary_page_offset.is_some() {
+                        builder = builder.set_page_encoding_stats_mask(
+                            parquet::basic::EncodingMask::new_from_encodings(
+                                [parquet::basic::Encoding::RLE_DICTIONARY].iter(),
+                            ),
+                        );
+                    }
+                    builder
+                        .set_num_values(num_rows)
+                        .set_dictionary_page_offset(dictionary_page_offset)
+                        .build()
+                        .unwrap()
                 })
                 .collect();
 
@@ -1494,6 +1547,43 @@ mod tests {
             );
 
             ParquetMetaData::new(file_meta, row_groups)
+        }
+
+        #[test]
+        fn dictionary_promotion_uses_non_null_count_for_missing_ndv() {
+            let schema_descr = create_schema_descr(1);
+            let row_groups = vec![
+                create_row_group_with_stats_and_dictionary_page(
+                    &schema_descr,
+                    vec![Some(ParquetStatistics::int32(
+                        Some(1),
+                        Some(2),
+                        Some(2),
+                        Some(0),
+                        false,
+                    ))],
+                    2,
+                    Some(0),
+                ),
+                create_row_group_with_stats_and_dictionary_page(
+                    &schema_descr,
+                    vec![Some(ParquetStatistics::int32(
+                        None,
+                        None,
+                        None,
+                        Some(2),
+                        false,
+                    ))],
+                    2,
+                    Some(0),
+                ),
+            ];
+            let metadata = create_parquet_metadata(Arc::clone(&schema_descr), row_groups);
+
+            assert_eq!(
+                dictionary_promotion_candidates(&metadata, &schema_descr, Some(2)),
+                HashSet::from(["col_0".to_string()])
+            );
         }
 
         #[test]
