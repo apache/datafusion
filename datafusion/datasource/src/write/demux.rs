@@ -824,10 +824,18 @@ mod tests {
     }
 
     #[test]
-    fn partition_keys_date64_negative_millis_use_previous_day() {
-        // -1ms is 1969-12-31T23:59:59.999Z. Truncating division would place it on
-        // 1970-01-01, so this guards the floor-division behaviour of the conversion.
-        let column = Date64Array::from(vec![-1]);
+    fn partition_keys_date64_uses_calendar_day_of_millis() {
+        // Day boundaries on both sides of the epoch. Truncating division would put
+        // -1ms and -86_400_001ms on 1970-01-01 and 1969-12-31 respectively.
+        let column = Date64Array::from(vec![
+            -86_400_001,
+            -86_400_000,
+            -1,
+            0,
+            86_399_999,
+            86_400_000,
+            86_400_001,
+        ]);
         let batch = partition_batch(Arc::new(column));
         let partition_by = vec![("p".to_string(), DataType::Date64)];
         let keys = compute_partition_keys_by_row(
@@ -836,7 +844,38 @@ mod tests {
             HIVE_DEFAULT_PARTITION_NAME,
         )
         .unwrap();
-        assert_eq!(keys, vec![vec![Cow::Borrowed("1969-12-31")]]);
+        assert_eq!(
+            keys,
+            vec![vec![
+                Cow::Borrowed("1969-12-30"),
+                Cow::Borrowed("1969-12-31"),
+                Cow::Borrowed("1969-12-31"),
+                Cow::Borrowed("1970-01-01"),
+                Cow::Borrowed("1970-01-01"),
+                Cow::Borrowed("1970-01-02"),
+                Cow::Borrowed("1970-01-02"),
+            ]]
+        );
+    }
+
+    #[test]
+    fn partition_keys_date32_negative_day_uses_previous_day() {
+        let column = Date32Array::from(vec![-1, -2]);
+        let batch = partition_batch(Arc::new(column));
+        let partition_by = vec![("p".to_string(), DataType::Date32)];
+        let keys = compute_partition_keys_by_row(
+            &batch,
+            &partition_by,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap();
+        assert_eq!(
+            keys,
+            vec![vec![
+                Cow::Borrowed("1969-12-31"),
+                Cow::Borrowed("1969-12-30")
+            ]]
+        );
     }
 
     #[test]

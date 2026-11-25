@@ -36,6 +36,28 @@ CREATE TABLE nullable_partition_source (id INT, p INT) AS VALUES (1, NULL), (2, 
 statement error DataFusion error: Execution error: NULL values are not supported for partition column 'p'
 COPY nullable_partition_source TO 'test_files/scratch/copy/null_partition/' STORED AS PARQUET PARTITIONED BY (p);
 
+# Reject date partition values that cannot be rendered as a date instead of panicking.
+statement error Partition column 'column1' value 2147483647 \(Date32 days since epoch\) cannot be rendered as a date: out of range
+COPY (VALUES (arrow_cast(2147483647, 'Date32'))) TO 'test_files/scratch/copy/date32_out_of_range/' STORED AS PARQUET PARTITIONED BY (column1);
+
+statement error Partition column 'column1' value 9223372036854775807 \(Date64 milliseconds since epoch\) cannot be rendered as a date: out of range
+COPY (VALUES (arrow_cast(9223372036854775807, 'Date64'))) TO 'test_files/scratch/copy/date64_out_of_range/' STORED AS PARQUET PARTITIONED BY (column1);
+
+# Date64 values before the epoch are written to the previous day's partition.
+query I
+COPY (VALUES (1, arrow_cast(-1, 'Date64'))) TO 'test_files/scratch/copy/date64_pre_epoch/' STORED AS PARQUET PARTITIONED BY (column2);
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE validate_date64_pre_epoch (column1 BIGINT, column2 DATE) STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/date64_pre_epoch/' PARTITIONED BY (column2);
+
+query ID
+SELECT column1, column2 FROM validate_date64_pre_epoch;
+----
+1 1969-12-31
+
 # Nullable partition columns still work when the copied rows contain no NULLs.
 query I
 COPY (SELECT * FROM nullable_partition_source WHERE p IS NOT NULL) TO 'test_files/scratch/copy/non_null_partition/' STORED AS PARQUET PARTITIONED BY (p);
