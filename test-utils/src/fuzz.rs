@@ -5,10 +5,12 @@
 //! Shared execution and replay for [`FuzzTest`] experiments.
 
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, resume_unwind};
 use std::time::Duration;
 
 use datafusion_common::instant::Instant;
 use datafusion_common::{Result, exec_err};
+use futures::FutureExt;
 
 /// Implement this trait to add a fuzzing unit test to DataFusion.
 ///
@@ -177,9 +179,7 @@ pub async fn run<T: FuzzTest>(test: &T, config: RunConfig) -> Result<RunStats> {
     Ok(stats)
 }
 
-/// Print before invoking the operation so libtest captures context even for
-/// assertion panics. Returned errors retain their original source; panics unwind
-/// normally with their original payload and hook, without process-global changes.
+/// Prepare a dataset or run a test case, reporting how to reproduce failures.
 async fn with_context<T, F: Future<Output = Result<T>>>(
     name: &str,
     run_seed: Option<u64>,
@@ -209,6 +209,16 @@ async fn with_context<T, F: Future<Output = Result<T>>>(
     let context = format!(
         "Fuzz test: {name}\nPhase: {phase}\n{run_context}Dataset seed: {dataset_seed}\n{instruction}"
     );
-    eprintln!("{context}");
-    operation().await.map_err(|error| error.context(context))
+
+    // Print reproduction steps if an assertion fails or the test panics.
+    match AssertUnwindSafe(async { operation().await })
+        .catch_unwind()
+        .await
+    {
+        Ok(result) => result.map_err(|error| error.context(context)),
+        Err(payload) => {
+            eprintln!("{context}");
+            resume_unwind(payload)
+        }
+    }
 }

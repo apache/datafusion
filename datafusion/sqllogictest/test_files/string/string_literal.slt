@@ -414,6 +414,36 @@ SELECT character_length(lpad('x', 16385, 'a'));
 ----
 16385
 
+# a length above i32::MAX is an error only on a row whose string and fill are
+# non-NULL, whether the length is a literal or a column
+query T
+SELECT lpad(s, 2147483648) FROM (VALUES (NULL::text)) AS t(s);
+----
+NULL
+
+query T
+SELECT lpad(s, n) FROM (VALUES (NULL::text, 2147483648)) AS t(s, n);
+----
+NULL
+
+query T
+SELECT lpad(s, 2147483648, f) FROM (VALUES ('a', NULL::text)) AS t(s, f);
+----
+NULL
+
+query T
+SELECT lpad(s, n, f) FROM (VALUES ('a', 2147483648, NULL::text)) AS t(s, n, f);
+----
+NULL
+
+query TT
+SELECT lpad(NULL, 2147483648), lpad('a', 2147483648, NULL);
+----
+NULL NULL
+
+query error lpad requested length 2147483648 too large
+SELECT lpad(s, 2147483648) FROM (VALUES (NULL::text), ('a')) AS t(s);
+
 # invalid argument count/type and excessive target length
 query error 'lpad' does not support zero arguments
 SELECT lpad();
@@ -844,6 +874,36 @@ query I
 SELECT character_length(rpad('x', 16385, 'a'));
 ----
 16385
+
+# a length above i32::MAX is an error only on a row whose string and fill are
+# non-NULL, whether the length is a literal or a column
+query T
+SELECT rpad(s, 2147483648) FROM (VALUES (NULL::text)) AS t(s);
+----
+NULL
+
+query T
+SELECT rpad(s, n) FROM (VALUES (NULL::text, 2147483648)) AS t(s, n);
+----
+NULL
+
+query T
+SELECT rpad(s, 2147483648, f) FROM (VALUES ('a', NULL::text)) AS t(s, f);
+----
+NULL
+
+query T
+SELECT rpad(s, n, f) FROM (VALUES ('a', 2147483648, NULL::text)) AS t(s, n, f);
+----
+NULL
+
+query TT
+SELECT rpad(NULL, 2147483648), rpad('a', 2147483648, NULL);
+----
+NULL NULL
+
+query error rpad requested length 2147483648 too large
+SELECT rpad(s, 2147483648) FROM (VALUES (NULL::text), ('a')) AS t(s);
 
 # invalid argument count/type and excessive target length
 query error 'rpad' does not support zero arguments
