@@ -857,6 +857,10 @@ pub struct RequiredColumns {
     /// * The field the statistics value should be placed in for
     ///   pruning predicate evaluation (e.g. `min_value` or `max_value`)
     columns: Vec<(phys_expr::Column, StatisticsType, Field)>,
+    /// The struct field path of each entry in `columns`, at the same index.
+    /// An empty path means the statistics are for the column itself. A
+    /// non-empty path means `get_field(column, path...)`.
+    field_paths: Vec<Vec<String>>,
 }
 
 impl RequiredColumns {
@@ -908,9 +912,16 @@ impl RequiredColumns {
         self.columns.iter()
     }
 
+    /// Drops entries appended after the first `len`.
+    fn truncate(&mut self, len: usize) {
+        self.columns.truncate(len);
+        self.field_paths.truncate(len);
+    }
+
     fn find_stat_column(
         &self,
         column: &phys_expr::Column,
+        path: &[String],
         statistics_type: StatisticsType,
     ) -> Option<usize> {
         match statistics_type {
@@ -926,7 +937,9 @@ impl RequiredColumns {
                 .columns
                 .iter()
                 .enumerate()
-                .find(|(_i, (c, t, _f))| c == column && t == &statistics_type)
+                .find(|(i, (c, t, _f))| {
+                    c == column && t == &statistics_type && self.field_paths[*i] == path
+                })
                 .map(|(i, (_c, _t, _f))| i),
         }
     }
@@ -946,12 +959,29 @@ impl RequiredColumns {
         field: &Field,
         stat_type: StatisticsType,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        let (idx, need_to_insert) = match self.find_stat_column(column, stat_type) {
+        self.stat_field_expr(column, &[], column_expr, field, stat_type)
+    }
+
+    /// Like [`Self::stat_column_expr`], but for the struct field reached
+    /// from `column` by `path`.
+    fn stat_field_expr(
+        &mut self,
+        column: &phys_expr::Column,
+        path: &[String],
+        column_expr: &Arc<dyn PhysicalExpr>,
+        field: &Field,
+        stat_type: StatisticsType,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let (idx, need_to_insert) = match self.find_stat_column(column, path, stat_type) {
             Some(idx) => (idx, false),
             None => (self.columns.len(), true),
         };
 
-        let column_name = column.name();
+        let column_name = if path.is_empty() {
+            column.name().to_string()
+        } else {
+            format!("{}.{}", column.name(), path.join("."))
+        };
         let stat_column_name = match stat_type {
             StatisticsType::Min => format!("{column_name}_min"),
             StatisticsType::Max => format!("{column_name}_max"),
@@ -968,6 +998,7 @@ impl RequiredColumns {
             let stat_field =
                 Field::new(stat_column.name(), field.data_type().clone(), nullable);
             self.columns.push((column.clone(), stat_type, stat_field));
+            self.field_paths.push(path.to_vec());
         }
         rewrite_column_expr(Arc::clone(column_expr), column, &stat_column)
     }
@@ -1015,7 +1046,11 @@ impl RequiredColumns {
 
 impl From<Vec<(phys_expr::Column, StatisticsType, Field)>> for RequiredColumns {
     fn from(columns: Vec<(phys_expr::Column, StatisticsType, Field)>) -> Self {
-        Self { columns }
+        let field_paths = vec![vec![]; columns.len()];
+        Self {
+            columns,
+            field_paths,
+        }
     }
 }
 
@@ -1093,10 +1128,15 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 
 struct PruningExpressionBuilder<'a> {
     column: phys_expr::Column,
+    /// The struct field path below `column`. Empty for a plain column.
+    path: Vec<String>,
+    /// The expression whose statistics are read: `column` itself, or the
+    /// `get_field(column, path...)` access.
+    key_expr: Arc<dyn PhysicalExpr>,
     column_expr: Arc<dyn PhysicalExpr>,
     op: Operator,
     scalar_expr: Arc<dyn PhysicalExpr>,
-    field: &'a Field,
+    field: Field,
     required_columns: &'a mut RequiredColumns,
 }
 
@@ -1111,15 +1151,15 @@ impl<'a> PruningExpressionBuilder<'a> {
         required_columns: &'a mut RequiredColumns,
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
-        let (column_expr, scalar_expr, column, correct_operator) = match (
+        let (column_expr, scalar_expr, key, correct_operator) = match (
             left_columns,
             right_columns,
         ) {
-            (ColumnReferenceCount::One(column), ColumnReferenceCount::Zero) => {
-                (left, right, column, op)
+            (ColumnReferenceCount::One(key), ColumnReferenceCount::Zero) => {
+                (left, right, key, op)
             }
-            (ColumnReferenceCount::Zero, ColumnReferenceCount::One(column)) => {
-                (right, left, column, reverse_operator(op)?)
+            (ColumnReferenceCount::Zero, ColumnReferenceCount::One(key)) => {
+                (right, left, key, reverse_operator(op)?)
             }
             (ColumnReferenceCount::One(_), ColumnReferenceCount::One(_)) => {
                 // both sides have one column - not supported
@@ -1142,12 +1182,24 @@ impl<'a> PruningExpressionBuilder<'a> {
 
         let (column_expr, correct_operator, scalar_expr) =
             rewrite_expr_to_prunable(column_expr, correct_operator, scalar_expr, schema)?;
-        let Some((_, field)) = schema.column_with_name(column.name()) else {
-            return plan_err!("Field not found in schema");
+        let StatsKey {
+            column,
+            path,
+            expr: key_expr,
+        } = key;
+        let field = if path.is_empty() {
+            let Some((_, field)) = schema.column_with_name(column.name()) else {
+                return plan_err!("Field not found in schema");
+            };
+            field.clone()
+        } else {
+            return plan_err!("Struct field paths are not prunable");
         };
 
         Ok(Self {
             column,
+            path,
+            key_expr,
             column_expr,
             op: correct_operator,
             scalar_expr,
@@ -1164,14 +1216,29 @@ impl<'a> PruningExpressionBuilder<'a> {
         &self.scalar_expr
     }
 
+    fn stat_expr(
+        &mut self,
+        column_expr: &Arc<dyn PhysicalExpr>,
+        field: &Field,
+        stat_type: StatisticsType,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        self.required_columns.stat_field_expr(
+            &self.column,
+            &self.path,
+            column_expr,
+            field,
+            stat_type,
+        )
+    }
+
     fn min_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
-        self.required_columns
-            .min_column_expr(&self.column, &self.column_expr, self.field)
+        let (expr, field) = (Arc::clone(&self.column_expr), self.field.clone());
+        self.stat_expr(&expr, &field, StatisticsType::Min)
     }
 
     fn max_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
-        self.required_columns
-            .max_column_expr(&self.column, &self.column_expr, self.field)
+        let (expr, field) = (Arc::clone(&self.column_expr), self.field.clone());
+        self.stat_expr(&expr, &field, StatisticsType::Max)
     }
 
     /// This function is to simply retune the `null_count` physical expression no matter what the
@@ -1181,17 +1248,12 @@ impl<'a> PruningExpressionBuilder<'a> {
     ///       cast(x as int) < 10 => x_null_count,
     ///       try_cast(x as float) < 10.0 => x_null_count
     fn null_count_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
-        // Retune to [`phys_expr::Column`]
-        let column_expr = Arc::new(self.column.clone()) as _;
+        let key_expr = Arc::clone(&self.key_expr);
 
         // null_count is DataType::UInt64, which is different from the column's data type (i.e. self.field)
-        let null_count_field = &Field::new(self.field.name(), DataType::UInt64, true);
+        let null_count_field = Field::new(self.field.name(), DataType::UInt64, true);
 
-        self.required_columns.null_count_column_expr(
-            &self.column,
-            &column_expr,
-            null_count_field,
-        )
+        self.stat_expr(&key_expr, &null_count_field, StatisticsType::NullCount)
     }
 
     /// This function is to simply retune the `row_count` physical expression no matter what the
@@ -1201,17 +1263,12 @@ impl<'a> PruningExpressionBuilder<'a> {
     ///       cast(x as int) < 10 => x_row_count,
     ///       try_cast(x as float) < 10.0 => x_row_count
     fn row_count_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
-        // Retune to [`phys_expr::Column`]
-        let column_expr = Arc::new(self.column.clone()) as _;
+        let key_expr = Arc::clone(&self.key_expr);
 
         // row_count is DataType::UInt64, which is different from the column's data type (i.e. self.field)
-        let row_count_field = &Field::new(self.field.name(), DataType::UInt64, true);
+        let row_count_field = Field::new(self.field.name(), DataType::UInt64, true);
 
-        self.required_columns.row_count_column_expr(
-            &self.column,
-            &column_expr,
-            row_count_field,
-        )
+        self.stat_expr(&key_expr, &row_count_field, StatisticsType::RowCount)
     }
 }
 
@@ -1254,10 +1311,6 @@ fn rewrite_expr_to_prunable(
             Arc::clone(cast.target_field()),
             None,
         ));
-        // PruningPredicate does not support pruning on nested fields yet.
-        // End-to-end nested-field pruning also requires Parquet statistics
-        // extraction to agree with PruningPredicate on a stats representation
-        // for nested field expressions.
         Ok((left, op, right))
     } else if let Some(try_cast) = column_expr.downcast_ref::<phys_expr::TryCastExpr>() {
         // `try_cast(col) op lit()`
@@ -1525,7 +1578,7 @@ fn min_max_non_null_exprs(
         Some((min, max, non_null))
     })();
     if statistics.is_none() {
-        required_columns.columns.truncate(appended);
+        required_columns.truncate(appended);
     }
     statistics
 }
@@ -1988,12 +2041,37 @@ fn build_predicate_expression(
 /// In expression `5 + 10`, the count is `Zero`.
 ///
 /// [`collect_columns`]: datafusion_physical_expr::utils::collect_columns
+/// A column, or a struct field below a column, that has its own statistics.
+#[derive(Debug, Clone)]
+struct StatsKey {
+    column: phys_expr::Column,
+    /// Empty for the column itself.
+    path: Vec<String>,
+    /// The expression that refers to the key. Not part of equality.
+    expr: Arc<dyn PhysicalExpr>,
+}
+
+impl PartialEq for StatsKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.column == other.column && self.path == other.path
+    }
+}
+
+impl Eq for StatsKey {}
+
+impl std::hash::Hash for StatsKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.column.hash(state);
+        self.path.hash(state);
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum ColumnReferenceCount {
     /// no column references
     Zero,
-    /// Only one column reference
-    One(phys_expr::Column),
+    /// Only one column or struct field reference
+    One(StatsKey),
     /// More than one column reference
     Many,
 }
@@ -2001,10 +2079,14 @@ enum ColumnReferenceCount {
 impl ColumnReferenceCount {
     /// Count the number of distinct column references in an expression
     fn from_expression(expr: &Arc<dyn PhysicalExpr>) -> Self {
-        let mut seen = HashSet::<phys_expr::Column>::new();
+        let mut seen = HashSet::<StatsKey>::new();
         expr.apply(|expr| {
             if let Some(column) = expr.downcast_ref::<phys_expr::Column>() {
-                seen.insert(column.clone());
+                seen.insert(StatsKey {
+                    column: column.clone(),
+                    path: vec![],
+                    expr: Arc::clone(expr),
+                });
                 if seen.len() > 1 {
                     return Ok(TreeNodeRecursion::Stop);
                 }
