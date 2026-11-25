@@ -150,8 +150,8 @@ fn payload_filter(op: Operator) -> JoinFilter {
     )
 }
 
-// Construct a prepared build with `enable_migration_hash_join = X`, then use it
-// with the opposite setting to verify compatibility.
+// A prepared index can only be probed by the executor it was built for, even
+// when the consumer requests the opposite migration setting.
 //
 // Temporary test for the refactor; see the comments on
 // `enable_migration_hash_join` for details.
@@ -193,7 +193,7 @@ async fn prepared_build_uses_consumer_executor_setting() -> Result<()> {
 
             // Both executors return the same rows; check which one was initialized.
             let mut initialized_by_check = false;
-            if consume_regular {
+            if prepare_regular {
                 task.regular_left_fut.try_once(|| {
                     initialized_by_check = true;
                     Ok(std::future::pending())
@@ -507,7 +507,7 @@ async fn prepared_build_shares_single_batch_but_owns_output() -> Result<()> {
             let single_batch = sources.len() == 1;
             let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
             let prepared = prepare(&base, sources, Arc::clone(&pool)).await?;
-            let addresses = buffer_addresses(prepared.build.batch.columns());
+            let addresses = buffer_addresses(prepared.build.batch().columns());
             if single_batch {
                 assert_eq!(addresses, buffer_addresses(build.columns()));
             }
@@ -749,9 +749,9 @@ async fn prepared_concat_admission_with_small_batches() -> Result<()> {
             .step_by(batch_rows)
             .map(|offset| build.slice(offset, batch_rows))
             .collect();
-        // Small input batches should not multiply concatenation's alignment charge.
-        let pool: Arc<dyn MemoryPool> =
-            Arc::new(GreedyMemoryPool::new(9 * 1024 * 1024 / 2));
+        // Admit the input, concat copy, index, and build scratch, but not
+        // alignment padding multiplied by the number of small input batches.
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(6 * 1024 * 1024));
         let prepared = prepare(&base, batches, Arc::clone(&pool)).await?;
         assert_eq!(prepared.num_rows(), rows);
         assert_eq!(pool.reserved(), prepared.reserved_bytes());
@@ -814,10 +814,10 @@ async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
         ] {
             let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
             let prepared = prepare(&base, batches.clone(), Arc::clone(&pool)).await?;
-            let PushdownStrategy::InList(values) = &prepared.build.membership else {
+            let PushdownStrategy::InList(values) = prepared.build.membership() else {
                 panic!("expected IN-list membership");
             };
-            let columns = prepared.build.batch.columns();
+            let columns = prepared.build.batch().columns();
             if keys == 1 {
                 assert!(Arc::ptr_eq(values, &columns[0]));
             } else {
@@ -828,7 +828,7 @@ async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
             }
             let bytes = prepared.reserved_bytes();
             let mut counter = RecordBatchMemoryCounter::new();
-            let batch_bytes = counter.count_batch(&prepared.build.batch);
+            let batch_bytes = counter.count_batch(prepared.build.batch());
             assert!(bytes > batch_bytes, "hash storage must also be reserved");
             let membership_batch =
                 RecordBatch::try_from_iter([("membership", Arc::clone(values))])?;
@@ -847,7 +847,7 @@ async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
                     Arc::new(config),
                 )
                 .await?;
-            let PushdownStrategy::Map(_, bitmap) = &map.build.membership else {
+            let PushdownStrategy::Map(_, bitmap) = map.build.membership() else {
                 panic!("expected hash-map membership");
             };
             let bitmap_bytes = bitmap.as_ref().map_or(0, |bitmap| bitmap.size());
@@ -940,20 +940,26 @@ async fn prepared_byte_keys_use_hash_membership() -> Result<()> {
                 Arc::new(options),
             )
             .await?;
-        assert!(prepared.build.bounds.is_none());
+        assert!(prepared.build.bounds().is_none());
         assert!(matches!(
-            &prepared.build.membership,
+            prepared.build.membership(),
             PushdownStrategy::Map(_, _)
         ));
+        let map_bytes = prepared.build.map_reserved_bytes();
+        assert!(map_bytes > 0);
         let task = with_probe_filter(base)?
             .builder()
             .with_prepared_build(prepared)
             .build()?;
         let output = run(&task).await?;
         assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
-        let filter = &task.dynamic_filter.as_ref().unwrap().filter;
+        let filter = Arc::clone(&task.dynamic_filter.as_ref().unwrap().filter);
         assert!(futures::poll!(Box::pin(filter.wait_complete())).is_ready());
         drop(task);
+        // The published membership filter retains only the map's reservation,
+        // independently of the prepared payload and its typed build variant.
+        assert_eq!(pool.reserved(), map_bytes);
+        drop(filter);
         assert_eq!(pool.reserved(), 0);
     }
     Ok(())
