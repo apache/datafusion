@@ -4,6 +4,7 @@
 
 //! Implementation for fuzz test cases.
 
+pub(crate) mod float_zero;
 pub(crate) mod key_range_bitmap;
 pub(crate) mod limit;
 pub(crate) mod lru_queue;
