@@ -33,11 +33,9 @@ use crate::{
     PlanProperties, ReplaceChildrenOptions, Statistics, validate_child_count,
 };
 
-use arrow::array::{
-    PrimitiveArray, RecordBatch, RecordBatchOptions, UInt32Array, UInt64Array,
-};
+use arrow::array::{RecordBatch, RecordBatchOptions, UInt32Array, UInt64Array};
 use arrow::compute::take_arrays;
-use arrow::datatypes::{DataType, Schema, SchemaRef, UInt32Type};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow_schema::SortOptions;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
@@ -1496,7 +1494,7 @@ impl BatchPartitioner {
             return Ok(PartitioningOutput::Batch { partition, batch });
         }
 
-        let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.into();
+        let indices_array = UInt32Array::from(reordered_indices);
         Ok(PartitioningOutput::Grouped {
             batch,
             indices: indices_array,
