@@ -7434,7 +7434,7 @@ async fn test_insert_into_casting_support() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_dataframe_from_columns() -> Result<()> {
+async fn test_dataframe_from_arrays() -> Result<()> {
     let bools: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
     let i8s: ArrayRef = Arc::new(Int8Array::from(vec![-1, 0, 1]));
     let i16s: ArrayRef = Arc::new(Int16Array::from(vec![-1, 0, 1]));
@@ -7474,9 +7474,10 @@ async fn test_dataframe_from_columns() -> Result<()> {
     ];
 
     // any `IntoIterator<Item = (&str, ArrayRef)>` is accepted
-    let df1 = DataFrame::from_columns(columns.clone())?;
-    let df2 = DataFrame::from_columns(columns.to_vec())?;
-    let df3 = DataFrame::from_columns(columns.into_iter())?;
+    let empty = dataframe!()?;
+    let df1 = empty.from_arrays(columns.clone())?;
+    let df2 = empty.from_arrays(columns.to_vec())?;
+    let df3 = empty.from_arrays(columns.into_iter())?;
 
     let expected_types = [
         ("bool", DataType::Boolean),
@@ -7524,20 +7525,22 @@ async fn test_dataframe_from_columns() -> Result<()> {
 }
 
 #[test]
-fn test_dataframe_from_columns_invalid_input() {
+fn test_dataframe_from_arrays_invalid_input() {
+    let empty = dataframe!().unwrap();
+
     // no columns
-    assert!(DataFrame::from_columns(vec![]).is_err());
-    assert!(DataFrame::from_columns([]).is_err());
+    assert!(empty.from_arrays(vec![]).is_err());
+    assert!(empty.from_arrays([]).is_err());
 
     // columns of different lengths
     let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
     let b: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
-    let err = DataFrame::from_columns([("a", a), ("b", b)]).unwrap_err();
+    let err = empty.from_arrays([("a", a), ("b", b)]).unwrap_err();
     assert_contains!(err.to_string(), "must have the same length");
 }
 
 #[tokio::test]
-async fn test_dataframe_from_columns_nullability_follows_arrays() -> Result<()> {
+async fn test_dataframe_from_arrays_nullability_follows_arrays() -> Result<()> {
     let no_nulls: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
     let with_nulls: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
     // `null_count()` is 0 because the nulls live in the dictionary values, but
@@ -7548,7 +7551,8 @@ async fn test_dataframe_from_columns_nullability_follows_arrays() -> Result<()> 
     let dict: ArrayRef = Arc::new(DictionaryArray::new(keys, Arc::new(values)));
     assert_eq!(dict.null_count(), 0);
 
-    let df = DataFrame::from_columns([("a", no_nulls), ("b", with_nulls), ("d", dict)])?;
+    let df =
+        dataframe!()?.from_arrays([("a", no_nulls), ("b", with_nulls), ("d", dict)])?;
 
     let schema = df.schema();
     assert!(!schema.field_with_unqualified_name("a")?.is_nullable());
@@ -7607,6 +7611,19 @@ async fn test_dataframe_from_arrays_uses_session() -> Result<()> {
     "
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+#[expect(
+    deprecated,
+    reason = "`DataFrame::from_columns` is a deprecated wrapper"
+)]
+async fn test_dataframe_from_columns_deprecated() -> Result<()> {
+    let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let df = DataFrame::from_columns([("id", id)])?;
+    assert_eq!(df.schema().fields().len(), 1);
+    assert_eq!(df.count().await?, 3);
     Ok(())
 }
 
