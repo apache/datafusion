@@ -347,7 +347,13 @@ impl PartitionedTopKExec {
             }
         };
         let partition_exprs = sort_exprs[..partition_prefix_len].to_vec();
-        eq_properties.reorder(sort_exprs)?;
+
+        // Not `reorder`: that keeps a longer input ordering when `sort_exprs`
+        // is already satisfied, but rows that tie on `sort_exprs` leave the
+        // heap in any order, so only `sort_exprs` holds (#27459).
+        eq_properties.clear_groupings();
+        eq_properties.clear_orderings();
+        eq_properties.add_ordering(sort_exprs);
 
         if let Some(field) = ranking_field {
             // The ranking column is the last one, appended by
@@ -364,8 +370,7 @@ impl PartitionedTopKExec {
             );
             // Mirrors `add_new_ordering_expr_with_partition_by`: the ranking
             // value only ascends *within* a partition, so the ordering has to
-            // be prefixed by the partition keys. `reorder` above already
-            // established that prefix.
+            // be prefixed by the partition keys.
             eq_properties.add_ordering(partition_exprs.into_iter().chain([ranking_sort]));
         }
 

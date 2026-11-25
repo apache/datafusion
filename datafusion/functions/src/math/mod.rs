@@ -562,7 +562,7 @@ mod tests {
                     (
                         super::radians(),
                         unbounded_interval(data_type),
-                        Interval::make_symmetric_pi_interval(data_type).unwrap(),
+                        unbounded_interval(data_type),
                     ),
                     (
                         super::sqrt(),
@@ -578,5 +578,20 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_radians_bounds() {
+        assert_udf_evaluates_to_bounds(
+            &super::radians(),
+            Interval::make(Some(-180.0_f64), Some(720.0)).unwrap(),
+            Interval::make(Some(-180.0_f64.to_radians()), Some(720.0_f64.to_radians()))
+                .unwrap(),
+        );
+        assert_udf_evaluates_to_bounds(
+            &super::radians(),
+            Interval::make(Some(90.0_f32), None).unwrap(),
+            Interval::make(Some(90.0_f32.to_radians()), None).unwrap(),
+        );
     }
 }
