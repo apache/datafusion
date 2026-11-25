@@ -687,7 +687,8 @@ mod tests {
         .await?;
 
         assert_eq!(rows, 16);
-        assert!(peak > 0);
+        // one array object per batch, no buffers
+        assert_eq!(peak, 16 * size_of::<NullArray>());
         Ok(())
     }
 }

@@ -1996,6 +1996,10 @@ statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
 
 # Shared Utf8View buffers in a recursive CollectLeft join must not exhaust the pool.
+# The fixture is shaped for that: 10,000 chains of 8 spans give 8 recursion levels; span ids
+# longer than 12 bytes are stored out of line in Utf8View data buffers; and with a batch size
+# of 1024 each level spans several batches that share those buffers, which the reservation
+# used to count once per batch.
 statement ok
 SET datafusion.execution.target_partitions = 2;
 
