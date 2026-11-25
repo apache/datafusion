@@ -8,6 +8,7 @@ use arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::physical_expr::PhysicalExpr;
 use datafusion_common::error::DataFusionError;
 use datafusion_common::stats::Precision;
 use datafusion_common::{Column, Statistics};
@@ -127,6 +128,58 @@ pub trait PruningStatistics {
         column: &Column,
         values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray>;
+
+    /// Return the minimum values of the expression `expr`, if known.
+    ///
+    /// `expr` is an expression that the pruning predicate treats as having
+    /// its own statistics instead of being computed from column statistics.
+    /// Examples are a struct field access `get_field(s, 'a')`, or a shredded
+    /// variant access `variant_get(v, 'a')`. Columns in `expr` refer to the
+    /// schema the pruning predicate was built with.
+    ///
+    /// The contract matches [`Self::min_values`]: each non-null entry must
+    /// be a lower bound for every non-null value of `expr` in its container.
+    ///
+    /// The default returns `None`, so pruning keeps every container.
+    fn min_values_for_expr(&self, _expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+        None
+    }
+
+    /// Return the maximum values of the expression `expr`, if known.
+    ///
+    /// See [`Self::min_values_for_expr`].
+    fn max_values_for_expr(&self, _expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+        None
+    }
+
+    /// Return the number of rows where `expr` evaluates to null, if known.
+    ///
+    /// See [`Self::min_values_for_expr`].
+    fn null_counts_for_expr(&self, _expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+        None
+    }
+
+    /// Returns what is known about the literal `values` in the expression
+    /// `expr`, as [`Self::contained`] does for a column.
+    ///
+    /// For each container:
+    /// * `true` if every value of `expr` is one of `values`
+    /// * `false` if no value of `expr` is any of `values`
+    /// * `null` if neither is known
+    ///
+    /// Return `null`, never `false` or `true`, for a container that the
+    /// source cannot answer. Pruning negates the result for `NOT IN`, so a
+    /// guessed `false` would prune wrongly there.
+    ///
+    /// The default returns `None`.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
+    fn contained_for_expr(
+        &self,
+        _expr: &Arc<dyn PhysicalExpr>,
+        _values: &HashSet<ScalarValue>,
+    ) -> Option<BooleanArray> {
+        None
+    }
 }
 
 /// Prune files based on their partition values.
@@ -518,6 +571,35 @@ impl PruningStatistics for CompositePruningStatistics {
             }
         }
         None
+    }
+
+    fn min_values_for_expr(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+        self.statistics
+            .iter()
+            .find_map(|stats| stats.min_values_for_expr(expr))
+    }
+
+    fn max_values_for_expr(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+        self.statistics
+            .iter()
+            .find_map(|stats| stats.max_values_for_expr(expr))
+    }
+
+    fn null_counts_for_expr(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+        self.statistics
+            .iter()
+            .find_map(|stats| stats.null_counts_for_expr(expr))
+    }
+
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
+    fn contained_for_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        values: &HashSet<ScalarValue>,
+    ) -> Option<BooleanArray> {
+        self.statistics
+            .iter()
+            .find_map(|stats| stats.contained_for_expr(expr, values))
     }
 }
 
