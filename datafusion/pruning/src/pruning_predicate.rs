@@ -7716,6 +7716,87 @@ mod tests {
         )
     }
 
+    fn struct_schema() -> Schema {
+        let s = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+            ]
+            .into(),
+        );
+        let m = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Int32, true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        );
+        Schema::new(vec![
+            Field::new("s", s, true),
+            Field::new("m", m, true),
+            Field::new("c", DataType::Int32, true),
+        ])
+    }
+
+    #[test]
+    fn struct_field_predicate_reads_field_statistics() {
+        use datafusion_functions::core::expr_fn::get_field;
+        let schema = struct_schema();
+        let mut required_columns = RequiredColumns::new();
+        let expr = get_field(col("s"), "a").gt(lit(5));
+        let res = test_build_predicate_expression(&expr, &schema, &mut required_columns);
+        assert_eq!(
+            res.to_string(),
+            "s.a_null_count@1 != row_count@2 AND s.a_max@0 > 5"
+        );
+        assert_eq!(required_columns.field_paths[0], vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn struct_field_predicate_not_prunable() {
+        use datafusion_functions::core::expr_fn::get_field;
+        let schema = struct_schema();
+        let a = || get_field(col("s"), "a");
+        let b = || get_field(col("s"), "b");
+        let cases = [
+            // Two different fields of the same struct.
+            a().gt(b()),
+            (a() + b()).gt(lit(5)),
+            // A struct field and a plain column.
+            (a() + col("c")).gt(lit(5)),
+            // A map key lookup, not a struct field.
+            get_field(col("m"), "k").gt(lit(5)),
+        ];
+        for expr in cases {
+            let mut required_columns = RequiredColumns::new();
+            let res =
+                test_build_predicate_expression(&expr, &schema, &mut required_columns);
+            assert_eq!(res.to_string(), "true", "{expr}");
+            assert!(required_columns.columns.is_empty(), "{expr}");
+        }
+    }
+
+    #[test]
+    fn struct_field_predicate_is_not_single_column() {
+        use datafusion_functions::core::expr_fn::get_field;
+        let schema = Arc::new(struct_schema());
+        // Without the field path check, this would report `c` as the only
+        // column and the page index would prune on `c` alone.
+        let expr = col("c").gt(lit(1)).or(get_field(col("s"), "a").gt(lit(2)));
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .build(logical2physical(&expr, &schema))
+            .unwrap();
+        assert!(predicate.required_columns().single_column().is_none());
+    }
+
     #[test]
     fn test_build_predicate_expression_with_false() {
         let expr = lit(ScalarValue::Boolean(Some(false)));
