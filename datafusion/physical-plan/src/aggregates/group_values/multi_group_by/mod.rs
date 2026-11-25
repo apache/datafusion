@@ -2405,6 +2405,44 @@ mod tests {
     }
 
     #[test]
+    fn lookup_single_dictionary_column() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema)?;
+        let dict = |keys: Vec<Option<i32>>, values: &ArrayRef| -> Vec<ArrayRef> {
+            vec![Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(keys),
+                Arc::clone(values),
+            ))]
+        };
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let mut groups = vec![];
+        group_values
+            .intern(&dict(vec![Some(0), Some(1), Some(0)], &values), &mut groups)?;
+        assert_eq!(groups, vec![0, 1, 0]);
+
+        // Every key is cached for this values array, so this takes
+        // `try_map_dictionary_groups`, which returns before the `INSERT` dispatch.
+        group_values.lookup(&dict(vec![Some(1), Some(0)], &values), &mut groups)?;
+        assert_eq!(groups, vec![1, 0]);
+
+        // An unstored value and a null key fall back to the vectorized path.
+        let keys = vec![Some(0), Some(2), None, Some(1)];
+        group_values.lookup(&dict(keys, &values), &mut groups)?;
+        assert_eq!(groups, vec![0, MISSING_GROUP, MISSING_GROUP, 1]);
+
+        // A new values array is hashed again and compared uncached.
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["c", "a"]));
+        group_values.lookup(&dict(vec![Some(0), Some(1)], &values), &mut groups)?;
+        assert_eq!(groups, vec![MISSING_GROUP, 0]);
+        assert_eq!(group_values.len(), 2);
+        Ok(())
+    }
+
+    #[test]
     fn single_dictionary_direct_mapping_after_emit_first_with_null_group() {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "d",
