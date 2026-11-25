@@ -11,13 +11,14 @@ use arrow::datatypes::SchemaRef;
 use bytes::Bytes;
 use datafusion_common::HashMap;
 use datafusion_datasource::PartitionedFile;
+use datafusion_execution::cache::cache_manager::CachedFileMetadataEntry;
 use datafusion_execution::cache::cache_manager::FileMetadata;
 use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::FutureExt;
 use futures::TryFutureExt;
 use futures::future::BoxFuture;
-use object_store::{ObjectStore, ObjectStoreExt};
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::errors::ParquetError;
@@ -154,6 +155,22 @@ impl CachedParquetFileReaderFactory {
             store,
             metadata_cache,
         }
+    }
+
+    /// Replaces the cached metadata of `object_meta` with `metadata`, which
+    /// was read after [`ParquetFileReader::get_metadata`] (for example a page
+    /// index loaded only once pruning needed it).
+    pub(crate) fn cache_metadata(
+        &self,
+        object_meta: &ObjectMeta,
+        metadata: Arc<ParquetMetaData>,
+    ) {
+        // `DFParquetMetadata::fetch_metadata` only reuses entries of this type
+        let file_metadata = crate::metadata::CachedParquetMetaData::new(metadata);
+        self.metadata_cache.put(
+            &object_meta.location,
+            CachedFileMetadataEntry::new(object_meta.clone(), Arc::new(file_metadata)),
+        );
     }
 }
 
