@@ -1410,20 +1410,15 @@ impl OptimizerRule for PushDownFilter {
                     LogicalPlan::TableScan(scan),
                 )))
             }
-            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(mut cte)) => {
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
                 // The output is the output of the continuation, so the filter
                 // moves onto the continuation. The body is shared by every scan
                 // of the CTE and is never filtered for one of them.
-                cte.try_map_inputs_mut(|_, continuation| {
-                    *continuation = Arc::new(LogicalPlan::Filter(Filter::new(
-                        filter.predicate,
-                        Arc::clone(continuation),
-                    )));
-                    Ok(())
+                let cte = cte.map_continuation(|continuation| {
+                    Filter::try_new(filter.predicate, Arc::new(continuation))
+                        .map(|filter| Transformed::yes(LogicalPlan::Filter(filter)))
                 })?;
-                Ok(Transformed::yes(LogicalPlan::MaterializedCte(
-                    MaterializedCtePlan::Cte(cte),
-                )))
+                Ok(Transformed::yes(cte.data.into()))
             }
             // A scan reads the shared body, so the filter stays above it.
             scan @ LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => {

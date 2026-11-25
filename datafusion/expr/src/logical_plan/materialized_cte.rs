@@ -25,12 +25,12 @@ use std::hash::Hash;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{
-    DFSchema, DFSchemaRef, Result, internal_datafusion_err, internal_err,
+    Column, DFSchema, DFSchemaRef, Result, internal_datafusion_err, internal_err,
 };
 
-use crate::LogicalPlan;
+use crate::{Expr, LogicalPlan, Projection};
 
 /// Identifies one materialized CTE and binds its scans to it.
 ///
@@ -248,6 +248,142 @@ impl MaterializedCte {
         (self.id, self.name, self.cte, self.continuation)
     }
 
+    /// Replace the continuation with the result of `f`.
+    ///
+    /// Returns an error if a scan of this CTE in the new continuation does
+    /// not have the names and types of the columns of the body that it reads.
+    pub fn map_continuation(
+        self,
+        f: impl FnOnce(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
+    ) -> Result<Transformed<Self>> {
+        let Self {
+            id,
+            name,
+            cte,
+            continuation,
+        } = self;
+        f(Arc::unwrap_or_clone(continuation))?
+            .map_data(|continuation| Self::try_new(id, name, cte, Arc::new(continuation)))
+    }
+
+    /// Replace the body with the result of `f`. The scans do not change.
+    ///
+    /// Returns an error if a scan of this CTE does not have the names and
+    /// types of the columns of the new body that it reads.
+    pub fn map_body(
+        self,
+        f: impl FnOnce(LogicalPlan) -> Result<Transformed<LogicalPlan>>,
+    ) -> Result<Transformed<Self>> {
+        let Self {
+            id,
+            name,
+            cte,
+            continuation,
+        } = self;
+        f(Arc::unwrap_or_clone(cte))?
+            .map_data(|cte| Self::try_new(id, name, Arc::new(cte), continuation))
+    }
+
+    /// Replace the body with `body`, which has the column names of the
+    /// current body and maybe other types, for example after type coercion.
+    /// Each scan gets the new types of the columns that it reads, and keeps
+    /// its qualifiers.
+    ///
+    /// Returns an error if `body` does not have the column names of the
+    /// current body that the scans read.
+    pub fn with_coerced_body(self, body: LogicalPlan) -> Result<Self> {
+        let body_schema = Arc::clone(body.schema());
+        let continuation = Self::map_scans(self.id, self.continuation, |scan| {
+            let new_scan = scan.with_body_schema(&body_schema)?;
+            Ok(if new_scan.schema().inner() == scan.schema().inner() {
+                Transformed::no(scan)
+            } else {
+                Transformed::yes(new_scan)
+            })
+        })?;
+        Self::try_new(self.id, self.name, Arc::new(body), continuation)
+    }
+
+    /// Remove from the body the columns that no scan of this CTE reads. The
+    /// body becomes a [`Projection`] of the other columns, and each scan
+    /// reads the new positions of its columns. The output of each scan does
+    /// not change.
+    ///
+    /// The body keeps one column if no scan reads a column, as
+    /// `SELECT count(*) FROM c` does, so that it still has its rows. The node
+    /// does not change if nothing reads the CTE or if every column is read.
+    pub fn prune_body_columns(self) -> Result<Transformed<Self>> {
+        let body_len = self.cte.schema().fields().len();
+        let scans = self.scans()?;
+        let mut is_read = vec![false; body_len];
+        for scan in &scans {
+            match scan.projection() {
+                None => is_read.fill(true),
+                Some(projection) => {
+                    for index in projection {
+                        let Some(is_read) = is_read.get_mut(*index) else {
+                            return internal_err!(
+                                "A scan of the materialized CTE {} reads the column {index}, but the CTE has {body_len} columns",
+                                self.name
+                            );
+                        };
+                        *is_read = true;
+                    }
+                }
+            }
+        }
+        if !is_read.contains(&true)
+            && let Some(first) = is_read.first_mut()
+        {
+            *first = true;
+        }
+        let kept: Vec<usize> = (0..body_len).filter(|index| is_read[*index]).collect();
+        // A CTE that nothing reads is not planned, so its body is left as it is.
+        if scans.is_empty() || kept.len() == body_len {
+            return Ok(Transformed::no(self));
+        }
+
+        let schema = self.cte.schema();
+        let exprs = kept
+            .iter()
+            .map(|index| Expr::Column(Column::from(schema.qualified_field(*index))))
+            .collect();
+        let body = Projection::try_new(exprs, Arc::clone(&self.cte))
+            .map(LogicalPlan::Projection)?;
+        let continuation = Self::map_scans(self.id, self.continuation, |scan| {
+            scan.with_body_columns(&kept).map(Transformed::yes)
+        })?;
+        Self::try_new(self.id, self.name, Arc::new(body), continuation)
+            .map(Transformed::yes)
+    }
+
+    /// Apply `f` to each scan of the CTE `id` in `continuation`, also in
+    /// subquery expressions, and return the new continuation.
+    ///
+    /// The traversal does not go below a [`MaterializedCte`] with the same id.
+    /// Such a node is a separate occurrence of the CTE and owns its scans.
+    fn map_scans(
+        id: MaterializedCteId,
+        continuation: Arc<LogicalPlan>,
+        mut f: impl FnMut(MaterializedCteScan) -> Result<Transformed<MaterializedCteScan>>,
+    ) -> Result<Arc<LogicalPlan>> {
+        Arc::unwrap_or_clone(continuation)
+            .transform_down_with_subqueries(|node| match node {
+                LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref nested))
+                    if nested.id == id =>
+                {
+                    Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
+                }
+                LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+                    if scan.id == id =>
+                {
+                    f(scan).map(|scan| scan.update_data(LogicalPlan::from))
+                }
+                _ => Ok(Transformed::no(node)),
+            })
+            .map(|t| Arc::new(t.data))
+    }
+
     /// Return a new node with the same id and name, and new inputs.
     ///
     /// The schemas of the scans are not checked again. The signature lets a
@@ -280,6 +416,52 @@ impl PartialOrd for MaterializedCte {
             ord => Some(ord),
         }
     }
+}
+
+/// Give each occurrence of a [`MaterializedCte`] in `plan` a new id, and
+/// update the scans in its continuation, including the scans in subqueries.
+///
+/// The id is copied when a logical plan is cloned, so one CTE can occur more
+/// than once, for example when a view that declares it is referenced two
+/// times, or when a DataFrame is joined to itself. Each occurrence is a
+/// separate CTE, as in PostgreSQL.
+///
+/// The new ids are also unique across calls. A physical planner can thus
+/// call this function for each planning run of the same saved plan, and put
+/// the results in one physical plan.
+///
+/// A new id does not change a schema, so the scans are not checked again.
+pub fn renumber_materialized_ctes(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    let mut has_cte = false;
+    plan.apply_with_subqueries(|node| {
+        if matches!(
+            node,
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(_))
+        ) {
+            has_cte = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    if !has_cte {
+        return Ok(Transformed::no(plan));
+    }
+    plan.transform_down_with_subqueries(|node| {
+        let LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) = node else {
+            return Ok(Transformed::no(node));
+        };
+        let id = MaterializedCteId::next();
+        let continuation =
+            MaterializedCte::map_scans(cte.id, cte.continuation, |mut scan| {
+                scan.id = id;
+                Ok(Transformed::yes(scan))
+            })?;
+        Ok(Transformed::yes(LogicalPlan::from(MaterializedCte {
+            id,
+            continuation,
+            ..cte
+        })))
+    })
 }
 
 /// Reads the buffered output of the [`MaterializedCte`] with the same `id`.

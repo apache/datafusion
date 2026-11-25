@@ -28,8 +28,8 @@ use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{collect_subquery_cols, conjunction, split_conjunction};
 use datafusion_expr::{
     Aggregate, BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, FetchType,
-    LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCtePlan, Operator,
-    SkipType, Window, expr, lit,
+    LogicalPlan, LogicalPlanBuilder, MaterializedCtePlan, Operator, SkipType, Window,
+    expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -241,18 +241,11 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
                 // Only the continuation can hold correlated expressions. Rewrite
                 // it alone, so that the body shared by every scan keeps its schema.
-                let (id, name, body, continuation) = cte.into_parts();
-                let continuation = Arc::unwrap_or_clone(continuation).rewrite(self)?;
+                let cte =
+                    cte.map_continuation(|continuation| continuation.rewrite(self))?;
                 Ok(Transformed::new(
-                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-                        MaterializedCte::try_new(
-                            id,
-                            name,
-                            body,
-                            Arc::new(continuation.data),
-                        )?,
-                    )),
-                    continuation.transformed,
+                    cte.data.into(),
+                    cte.transformed,
                     TreeNodeRecursion::Jump,
                 ))
             }
