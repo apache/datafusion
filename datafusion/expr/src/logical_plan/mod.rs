@@ -50,5 +50,6 @@ pub use display::display_schema;
 
 pub use extension::{UserDefinedLogicalNode, UserDefinedLogicalNodeCore};
 pub use materialized_cte::{
-    MaterializedCte, MaterializedCteId, MaterializedCtePlan, MaterializedCteScan,
+    MaterializedCte, MaterializedCteBuilder, MaterializedCteId, MaterializedCtePlan,
+    MaterializedCteScan,
 };
