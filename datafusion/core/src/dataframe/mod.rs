@@ -2855,52 +2855,47 @@ impl DataFrame {
 
     /// Create a `DataFrame` from named Arrow arrays.
     ///
-    /// Each `(name, array)` pair becomes one column. A field is nullable only
-    /// when its array may contain nulls (see [`Array::is_nullable`]).
+    /// # Deprecated
     ///
-    /// Returns an error if `columns` is empty or the arrays have different
-    /// lengths.
-    ///
-    /// The returned `DataFrame` has its own session. To create one in the
-    /// session of an existing `DataFrame`, use [`Self::from_arrays`].
-    ///
-    /// See also the [`dataframe!`] macro for building a `DataFrame` from
-    /// literal values.
-    ///
-    /// [`dataframe!`]: macro@crate::dataframe
-    ///
-    /// # Example
+    /// Use [`Self::from_arrays`] on an existing `DataFrame` instead:
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use arrow::array::{ArrayRef, Int32Array, StringArray};
-    /// use datafusion::prelude::DataFrame;
+    /// use arrow::array::{ArrayRef, Int32Array};
+    /// use datafusion::prelude::*;
     /// # use datafusion::error::Result;
     /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-    /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
-    /// let df = DataFrame::from_columns([("id", id), ("name", name)])?;
+    /// // before: DataFrame::from_columns([("id", id)])?
+    ///
+    /// // after, in a new session
+    /// let df1 = dataframe!()?.from_arrays([("id", id.clone())])?;
+    ///
+    /// // after, in the session of an existing `ctx`
+    /// let ctx = SessionContext::new();
+    /// let df2 = ctx.read_empty()?.from_arrays([("id", id)])?;
     /// let expected = vec![
-    ///     "+----+------+",
-    ///     "| id | name |",
-    ///     "+----+------+",
-    ///     "| 1  | foo  |",
-    ///     "| 2  | bar  |",
-    ///     "| 3  | baz  |",
-    ///     "+----+------+",
+    ///     "+----+",
+    ///     "| id |",
+    ///     "+----+",
+    ///     "| 1  |",
+    ///     "| 2  |",
+    ///     "| 3  |",
+    ///     "+----+",
     /// ];
-    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # assert_batches_sorted_eq!(expected, &df1.collect().await?);
+    /// # assert_batches_sorted_eq!(expected, &df2.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
+    #[deprecated(since = "56.0.0", note = "use `DataFrame::from_arrays` instead")]
     pub fn from_columns<'a, I>(columns: I) -> Result<Self>
     where
         I: IntoIterator<Item = (&'a str, ArrayRef)>,
     {
-        let batch = record_batch_from_columns(columns)?;
-        SessionContext::new().read_batch(batch)
+        SessionContext::new().read_empty()?.from_arrays(columns)
     }
 
     /// Create a new `DataFrame` from named Arrow arrays, in the same session
