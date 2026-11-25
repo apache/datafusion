@@ -15,8 +15,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow::array::{
-    ArrayAccessor, RecordBatch, StringArray, StructArray, builder::UInt64Builder,
-    cast::AsArray, downcast_dictionary_array,
+    ArrayAccessor, RecordBatch, StringArray, StructArray,
+    builder::UInt64Builder,
+    cast::AsArray,
+    downcast_dictionary_array,
+    temporal_conversions::{date32_to_datetime, date64_to_datetime},
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::{
@@ -30,7 +33,6 @@ use datafusion_common::{
 };
 use datafusion_common_runtime::SpawnedTask;
 
-use chrono::NaiveDate;
 use datafusion_execution::TaskContext;
 use futures::StreamExt;
 use object_store::path::Path;
@@ -402,8 +404,6 @@ fn compute_partition_keys_by_row<'a>(
 ) -> Result<Vec<Vec<Cow<'a, str>>>> {
     let mut all_partition_values = Vec::with_capacity(partition_by.len());
 
-    const EPOCH_DAYS_FROM_CE: i32 = 719_163;
-
     // For the purposes of writing partitioned data, we can rely on schema inference
     // to determine the type of the partition cols in order to provide a more ergonomic
     // UI which does not require specifying DataTypes manually. So, we ignore the
@@ -452,13 +452,11 @@ fn compute_partition_keys_by_row<'a>(
             DataType::Date32 => {
                 let array = as_date32_array(col_array)?;
                 // ISO-8601/RFC3339 format - yyyy-mm-dd
-                let format = "%Y-%m-%d";
                 for i in 0..rb.num_rows() {
-                    let date = NaiveDate::from_num_days_from_ce_opt(
-                        EPOCH_DAYS_FROM_CE + array.value(i),
-                    )
-                    .unwrap()
-                    .format(format)
+                    let v = array.value(i);
+                    let date = date32_to_datetime(v).ok_or_else(|| exec_datafusion_err!(
+                        "Partition column '{col}' value {v} (Date32 days since epoch) cannot be rendered as a date: out of range"))?
+                    .format("%Y-%m-%d")
                     .to_string();
                     partition_values.push(Cow::from(date));
                 }
@@ -466,13 +464,11 @@ fn compute_partition_keys_by_row<'a>(
             DataType::Date64 => {
                 let array = as_date64_array(col_array)?;
                 // ISO-8601/RFC3339 format - yyyy-mm-dd
-                let format = "%Y-%m-%d";
                 for i in 0..rb.num_rows() {
-                    let date = NaiveDate::from_num_days_from_ce_opt(
-                        EPOCH_DAYS_FROM_CE + (array.value(i) / 86_400_000) as i32,
-                    )
-                    .unwrap()
-                    .format(format)
+                    let v = array.value(i);
+                    let date = date64_to_datetime(v).ok_or_else(|| exec_datafusion_err!(
+                        "Partition column '{col}' value {v} (Date64 milliseconds since epoch) cannot be rendered as a date: out of range"))?
+                    .format("%Y-%m-%d")
                     .to_string();
                     partition_values.push(Cow::from(date));
                 }
@@ -643,7 +639,9 @@ fn compute_hive_style_file_path(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, ArrayRef, DictionaryArray, Int32Array};
+    use arrow::array::{
+        Array, ArrayRef, Date32Array, Date64Array, DictionaryArray, Int32Array,
+    };
     use arrow::datatypes::Int32Type;
     use datafusion_common::config::HIVE_DEFAULT_PARTITION_NAME;
 
@@ -779,5 +777,85 @@ mod tests {
         let partition_by = vec![("p".to_string(), DataType::Utf8)];
         let keys = compute_partition_keys_by_row(&batch, &partition_by, "").unwrap();
         assert_eq!(keys, vec![vec![Cow::Borrowed(HIVE_DEFAULT_PARTITION_NAME)]]);
+    }
+
+    #[test]
+    fn partition_keys_error_on_out_of_range_date32() {
+        for v in [i32::MIN, i32::MAX] {
+            let column = Date32Array::from(vec![v]);
+            let batch = partition_batch(Arc::new(column));
+            let partition_by = vec![("p".to_string(), DataType::Date32)];
+            let err = compute_partition_keys_by_row(
+                &batch,
+                &partition_by,
+                HIVE_DEFAULT_PARTITION_NAME,
+            )
+            .unwrap_err();
+            assert_eq!(
+                err.strip_backtrace(),
+                format!(
+                    "Execution error: Partition column 'p' value {v} (Date32 days since epoch) \
+                     cannot be rendered as a date: out of range"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn partition_keys_error_on_out_of_range_date64() {
+        for v in [i64::MIN, i64::MAX] {
+            let column = Date64Array::from(vec![v]);
+            let batch = partition_batch(Arc::new(column));
+            let partition_by = vec![("p".to_string(), DataType::Date64)];
+            let err = compute_partition_keys_by_row(
+                &batch,
+                &partition_by,
+                HIVE_DEFAULT_PARTITION_NAME,
+            )
+            .unwrap_err();
+            assert_eq!(
+                err.strip_backtrace(),
+                format!(
+                    "Execution error: Partition column 'p' value {v} (Date64 milliseconds since epoch) \
+                     cannot be rendered as a date: out of range"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn partition_keys_date64_negative_millis_use_previous_day() {
+        // -1ms is 1969-12-31T23:59:59.999Z. Truncating division would place it on
+        // 1970-01-01, so this guards the floor-division behaviour of the conversion.
+        let column = Date64Array::from(vec![-1]);
+        let batch = partition_batch(Arc::new(column));
+        let partition_by = vec![("p".to_string(), DataType::Date64)];
+        let keys = compute_partition_keys_by_row(
+            &batch,
+            &partition_by,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap();
+        assert_eq!(keys, vec![vec![Cow::Borrowed("1969-12-31")]]);
+    }
+
+    #[test]
+    fn partition_keys_date32_epoch_and_next_day() {
+        let column = Date32Array::from(vec![0, 1]);
+        let batch = partition_batch(Arc::new(column));
+        let partition_by = vec![("p".to_string(), DataType::Date32)];
+        let keys = compute_partition_keys_by_row(
+            &batch,
+            &partition_by,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap();
+        assert_eq!(
+            keys,
+            vec![vec![
+                Cow::Borrowed("1970-01-01"),
+                Cow::Borrowed("1970-01-02")
+            ]]
+        );
     }
 }
