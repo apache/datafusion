@@ -100,6 +100,7 @@ Here are some active projects using DataFusion:
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
 - [Apache Comet](https://github.com/apache/datafusion-comet) Apache Spark native query execution plugin
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust) Cube’s universal semantic layer platform is the next evolution of OLAP technology for AI, BI, spreadsheets, and embedded analytics
+- [Databasin](https://www.databasin.ai/) Data and AI platform whose default lakehouse engine, Databasin Sail, builds on Sail and runs Spark SQL and PySpark on DataFusion ([DataFusion use](https://www.databasin.ai/docs/sail/how-it-works/))
 - [datafusion-dft](https://github.com/datafusion-contrib/datafusion-dft) Batteries included CLI, TUI, and server implementations for DataFusion.
 - [dbt Fusion engine](https://github.com/dbt-labs/dbt-fusion) The dbt Fusion engine, written in Rust, designed for speed and correctness with a native SQL understanding across DWH SQL dialects.
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
