@@ -1117,7 +1117,9 @@ impl AggregateFunctionExpr {
         self.fun.inner().set_monotonicity(data_type)
     }
 
-    /// Returns `PhysicalSortExpr` based on the set monotonicity of the function.
+    /// Returns the result ordering for an ever-expanding window frame.
+    ///
+    /// NULL results precede the first non-NULL input to the aggregate.
     pub fn get_result_ordering(&self, aggr_func_idx: usize) -> Option<PhysicalSortExpr> {
         // If the aggregate expressions are set-monotonic, the output data is
         // naturally ordered with it per group or partition.
@@ -1126,8 +1128,7 @@ impl AggregateFunctionExpr {
             return None;
         }
         let expr = Arc::new(Column::new(self.name(), aggr_func_idx));
-        let options =
-            SortOptions::new(monotonicity == SetMonotonicity::Decreasing, false);
+        let options = SortOptions::new(monotonicity == SetMonotonicity::Decreasing, true);
         Some(PhysicalSortExpr { expr, options })
     }
 }

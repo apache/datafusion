@@ -29,6 +29,7 @@ name = "datafusion_expr_common"
 
 [dependencies]
 arrow = { workspace = true }
+arrow-schema = { workspace = true }
 datafusion-common = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }

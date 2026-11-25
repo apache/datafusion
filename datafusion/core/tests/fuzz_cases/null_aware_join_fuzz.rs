@@ -15,6 +15,7 @@
 //! `JoinSelection` also swaps `NOT IN` into a null-aware `RightAnti` that
 //! builds on the subquery side; the test checks that both plan shapes ran.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::{Int32Array, RecordBatch};
@@ -27,12 +28,18 @@ use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rstest::rstest;
 
-#[tokio::test(flavor = "multi_thread")]
-async fn null_aware_join_matches_reference() {
+#[rstest]
+#[case::p0(0..5)]
+#[case::p1(5..10)]
+#[case::p2(10..15)]
+#[case::p3(15..20)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn null_aware_join_matches_reference(#[case] seeds: Range<u64>) {
     let mut plans = NullAwarePlans::default();
     let cases = cases();
-    for seed in 0..20 {
+    for seed in seeds {
         let mut rng = StdRng::seed_from_u64(seed);
         let outer = random_table(&mut rng, &["id", "k", "a", "b", "c"], &["n", "m"], 6);
         // Alternate between a subquery table of similar size and a much

@@ -143,13 +143,14 @@ pub fn serialize_expr(
             expr,
             pattern,
             escape_char,
-            case_insensitive: _,
+            case_insensitive,
         }) => {
             let pb = Box::new(protobuf::SimilarToNode {
                 negated: *negated,
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
                 pattern: Some(Box::new(serialize_expr(pattern.as_ref(), codec)?)),
                 escape_char: escape_char.map(|ch| ch.to_string()).unwrap_or_default(),
+                case_insensitive: *case_insensitive,
             });
             protobuf::LogicalExprNode {
                 expr_type: Some(ExprType::SimilarTo(pb)),
@@ -437,12 +438,6 @@ pub fn serialize_expr(
                 expr_type: Some(ExprType::InList(expr)),
             }
         }
-        #[expect(deprecated)]
-        Expr::Wildcard { qualifier, .. } => protobuf::LogicalExprNode {
-            expr_type: Some(ExprType::Wildcard(protobuf::Wildcard {
-                qualifier: qualifier.to_owned().map(protobuf::TableReference::from),
-            })),
-        },
         Expr::ScalarSubquery(subquery) => protobuf::LogicalExprNode {
             expr_type: Some(ExprType::ScalarSubqueryExpr(Box::new(
                 protobuf::ScalarSubqueryExprNode {
