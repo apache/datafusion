@@ -2,11 +2,12 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Exact-key directory layouts, construction, and lookup.
+//! Exact-key directory layouts, construction, and typed integer lookup.
 //!
 //! Dense integers use an array slot: keys `[10, 11, 12]` live at `key - 10`.
-//! Other keys use SwissTable with a cached hash and a representative build row
-//! whose Arrow values establish equality. Both layouts identify exact keys and
+//! Sparse integers such as `[10, 1_000_000]` use SwissTable with the actual key
+//! in each entry. General keys use a cached hash and a representative build row
+//! whose Arrow values establish equality. All three identify exact keys and
 //! return the same singleton/group representation; only row IDs are grouped.
 
 use std::mem::size_of;
@@ -27,9 +28,11 @@ use crate::joins::utils::matchable_join_keys;
 
 mod dense;
 mod general;
+mod integer;
 
 use dense::DenseIntegerDirectory;
 use general::GeneralDirectory;
+use integer::{IntegerDirectory, integer_hasher};
 
 /// See [`JoinHashIndex`] for the design overview.
 struct Probe<'a> {
@@ -80,6 +83,7 @@ impl IndexWidth {
                 null_equality,
                 dense_range,
                 reservation,
+                random_state,
             )
             .map(IndexWidth::U32)
         } else {
@@ -89,6 +93,7 @@ impl IndexWidth {
                 null_equality,
                 dense_range,
                 reservation,
+                random_state,
             )
             .map(IndexWidth::U64)
         };
@@ -170,10 +175,14 @@ impl IndexWidth {
         }
     }
 
-    pub(super) fn contain_hashes(&self, hashes: &[u64]) -> BooleanArray {
+    pub(super) fn contain_hashes(
+        &self,
+        hashes: &[u64],
+        random_state: &RandomState,
+    ) -> BooleanArray {
         let values = BooleanBuffer::collect_bool(hashes.len(), |row| match self {
-            IndexWidth::U32(index) => index.contains_hash(hashes[row]),
-            IndexWidth::U64(index) => index.contains_hash(hashes[row]),
+            IndexWidth::U32(index) => index.contains_hash(hashes[row], random_state),
+            IndexWidth::U64(index) => index.contains_hash(hashes[row], random_state),
         });
         BooleanArray::new(values, None)
     }
@@ -200,6 +209,7 @@ impl IndexWidth {
 #[derive(Debug)]
 enum KeyDirectory<T> {
     General(GeneralDirectory<T>),
+    Integer(IntegerDirectory<T>),
     Dense(DenseIntegerDirectory<T>),
 }
 
@@ -211,6 +221,7 @@ impl<T: RowId> KeyDirectory<T> {
     ) -> Result<JoinHashLookup<T>> {
         match self {
             Self::General(index) => index.lookup_batch(probe, scratch),
+            Self::Integer(index) => index.lookup_batch(probe, scratch),
             Self::Dense(index) => index.lookup_batch(probe, scratch),
         }
     }
@@ -238,12 +249,17 @@ impl<T: RowId> KeyDirectory<T> {
 ///
 /// ## Hash directory specializations
 ///
-/// For a single integer join key, [`DenseIntegerDirectory`] maps a compact key
-/// range directly to array slots, avoiding hashing. For example, build keys
-/// in the range `[1, 100]` use an array of length 100 to store matches directly.
+/// For a single integer join key:
 ///
-/// Other keys use [`GeneralDirectory`]. Both reuse the same row/group handles
-/// and contiguous [`MatchedGroups`].
+/// - [`DenseIntegerDirectory`]: Map a compact key range directly to array slots,
+///   avoiding hashing.
+///   e.g. if build keys only have the range `[1,100]`, it builds an array of length 100 to store
+///   matches directly.
+/// - [`IntegerDirectory`]: Keep keys inside hash entries, so equality needs no
+///   build-array lookup.
+///
+/// Both reuse the same row/group handles and contiguous [`MatchedGroups`].
+/// Other key types and multiple key columns use [`GeneralDirectory`].
 ///
 /// ## Example
 ///
@@ -286,6 +302,7 @@ impl<T: RowId> JoinHashIndex<T> {
         null_equality: NullEquality,
         dense_range: Option<(u64, u64)>,
         reservation: &MemoryReservation,
+        random_state: &RandomState,
     ) -> Result<Self> {
         let mut groups = MatchedGroupsBuilder::new(keys[0].len(), reservation)?;
         let valid = matchable_join_keys(keys, null_equality);
@@ -302,6 +319,20 @@ impl<T: RowId> JoinHashIndex<T> {
                 &mut groups,
             )
             .map(KeyDirectory::Dense)?
+        } else if let Some(hash_key) = (keys.len() == 1)
+            .then(|| integer_hasher(keys[0].data_type()))
+            .flatten()
+        {
+            IntegerDirectory::build(
+                &keys[0],
+                hashes,
+                null_equality,
+                hash_key,
+                random_state,
+                reservation,
+                &mut groups,
+            )
+            .map(KeyDirectory::Integer)?
         } else {
             GeneralDirectory::build(
                 keys,
@@ -321,13 +352,15 @@ impl<T: RowId> JoinHashIndex<T> {
     fn len(&self) -> usize {
         match &self.directory {
             KeyDirectory::General(general) => general.len(),
+            KeyDirectory::Integer(integer) => integer.len(),
             KeyDirectory::Dense(dense) => dense.len(),
         }
     }
 
-    fn contains_hash(&self, hash: u64) -> bool {
+    fn contains_hash(&self, hash: u64, random_state: &RandomState) -> bool {
         match &self.directory {
             KeyDirectory::General(general) => general.contains_hash(hash),
+            KeyDirectory::Integer(integer) => integer.contains_hash(hash, random_state),
             // A hash-only filter cannot reject values from an integer directory.
             KeyDirectory::Dense(_) => true,
         }

@@ -91,6 +91,8 @@ impl JoinIndexMap {
     ///   inclusive `(min, max)` bounds must cover all non-NULL build keys.
     ///   Use one array slot per value in that range, including gaps:
     ///   `Some((10, 12))` allocates three slots; key `12` maps to slot `2`.
+    /// - Otherwise, if `keys` contains a single integer column, keep a hash table
+    ///   but store each join key inline instead of its cached hash.
     pub(crate) fn try_new(
         keys: &[ArrayRef],
         random_state: &RandomState,
@@ -151,7 +153,7 @@ impl JoinIndexMap {
     /// Hash-based counterpart to [`Self::contain_keys`]; collisions may produce
     /// false positives.
     pub(crate) fn contain_hashes(&self, hashes: &[u64]) -> BooleanArray {
-        self.index.contain_hashes(hashes)
+        self.index.contain_hashes(hashes, &self.random_state)
     }
 
     /// Return a mask indicating which keys exist in the dense integer directory.
