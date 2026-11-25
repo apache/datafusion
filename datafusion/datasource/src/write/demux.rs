@@ -654,6 +654,8 @@ mod tests {
         let columns: Vec<ArrayRef> = vec![
             Arc::new(Int32Array::from(vec![Some(0), None])),
             Arc::new(StringArray::from(vec![Some(""), None])),
+            Arc::new(Date32Array::from(vec![Some(0), None])),
+            Arc::new(Date64Array::from(vec![Some(0), None])),
         ];
         for column in columns {
             let partition_by = vec![("p".to_string(), column.data_type().clone())];
