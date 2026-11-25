@@ -91,6 +91,78 @@ pub struct MaterializedCte {
     pub(crate) continuation: Arc<LogicalPlan>,
 }
 
+/// Builds a [`MaterializedCte`]: the body first, then one
+/// [`MaterializedCteScan`] for each reference to the CTE, then the
+/// continuation that holds the references.
+///
+/// The builder allocates the id that binds the scans to the node. It is not
+/// `Clone`, so two nodes built from it cannot share an id.
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use datafusion_common::{DFSchema, Result};
+/// # use datafusion_expr::{EmptyRelation, LogicalPlan, MaterializedCteBuilder};
+/// # fn main() -> Result<()> {
+/// let body = LogicalPlan::EmptyRelation(EmptyRelation {
+///     produce_one_row: true,
+///     schema: Arc::new(DFSchema::empty()),
+/// });
+/// let builder = MaterializedCteBuilder::new("c", body);
+/// let continuation = LogicalPlan::from(builder.scan());
+/// let cte = builder.build(continuation)?;
+/// assert_eq!(cte.name(), "c");
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug)]
+pub struct MaterializedCteBuilder {
+    id: MaterializedCteId,
+    name: String,
+    body: Arc<LogicalPlan>,
+}
+
+impl MaterializedCteBuilder {
+    /// Start a materialized CTE with the name `name` and the body `body`.
+    pub fn new(name: impl Into<String>, body: LogicalPlan) -> Self {
+        Self {
+            id: MaterializedCteId::next(),
+            name: name.into(),
+            body: Arc::new(body),
+        }
+    }
+
+    /// A scan of all the columns of the body. Call this once for each
+    /// reference to the CTE in the continuation.
+    pub fn scan(&self) -> MaterializedCteScan {
+        MaterializedCteScan::new(
+            self.id,
+            self.name.clone(),
+            Arc::clone(self.body.schema()),
+        )
+    }
+
+    /// Build the node that computes the body once and evaluates
+    /// `continuation`.
+    ///
+    /// Returns an error if a scan of this CTE in `continuation` does not have
+    /// the names and types of the columns of the body that it reads.
+    pub fn build(self, continuation: LogicalPlan) -> Result<MaterializedCte> {
+        MaterializedCte::try_new(self.id, self.name, self.body, Arc::new(continuation))
+    }
+}
+
+impl From<MaterializedCte> for LogicalPlan {
+    fn from(cte: MaterializedCte) -> Self {
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte))
+    }
+}
+
+impl From<MaterializedCteScan> for LogicalPlan {
+    fn from(scan: MaterializedCteScan) -> Self {
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+    }
+}
+
 impl MaterializedCte {
     /// Create a new node.
     ///

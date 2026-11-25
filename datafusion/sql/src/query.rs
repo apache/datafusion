@@ -92,7 +92,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         materialized_ctes
             .into_iter()
             .rev()
-            .try_fold(plan, |plan, cte| cte.wrap(plan))
+            .try_fold(plan, |plan, cte| cte.build(plan).map(LogicalPlan::from))
     }
 
     /// Apply pipe operators to a plan
