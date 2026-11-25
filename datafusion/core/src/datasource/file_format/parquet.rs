@@ -140,6 +140,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use async_trait::async_trait;
     use datafusion_datasource::file_groups::FileGroup;
+    use datafusion_datasource::sink::DataSinkExec;
     use datafusion_datasource_parquet::metadata::DFParquetMetadata;
     use futures::StreamExt;
     use futures::stream::BoxStream;
@@ -1691,6 +1692,64 @@ mod tests {
                 "output file metadata should contain col b"
             );
         }
+
+        Ok(())
+    }
+
+    /// The `ParquetSink` that `COPY` plans through
+    /// `ParquetFormat::create_writer_physical_plan` must not retain the metadata
+    /// of the files it writes, or memory grows with the number of files (#27026).
+    #[tokio::test]
+    async fn parquet_sink_planned_by_copy_does_not_retain_metadata() -> Result<()> {
+        let tmp_dir = tempfile::TempDir::new()?;
+        let out_dir = tmp_dir.path().join("out");
+        let ctx = SessionContext::new();
+
+        // Partitioning by `column2` writes one file per distinct value.
+        let plan = ctx
+            .sql(&format!(
+                "COPY (VALUES (1, 'a'), (2, 'b'), (3, 'a'), (4, 'c')) \
+                 TO '{}' STORED AS PARQUET PARTITIONED BY (column2)",
+                out_dir.display()
+            ))
+            .await?
+            .create_physical_plan()
+            .await?;
+        let parquet_sink = plan
+            .downcast_ref::<DataSinkExec>()
+            .expect("COPY plans a DataSinkExec")
+            .sink()
+            .downcast_ref::<ParquetSink>()
+            .expect("COPY ... STORED AS PARQUET plans a ParquetSink");
+
+        let count = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+        assert_snapshot!(batches_to_string(&count), @r"
+        +-------+
+        | count |
+        +-------+
+        | 4     |
+        +-------+
+        ");
+
+        let mut files = vec![];
+        for partition in std::fs::read_dir(&out_dir)? {
+            for file in std::fs::read_dir(partition?.path())? {
+                files.push(file?.path());
+            }
+        }
+        assert_eq!(files.len(), 3, "one file per partition: {files:?}");
+        let rows_read = ctx
+            .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
+            .await?
+            .count()
+            .await?;
+        assert_eq!(rows_read, 4);
+
+        assert!(
+            parquet_sink.written().is_empty(),
+            "the planned sink retained metadata for {} files",
+            parquet_sink.written().len()
+        );
 
         Ok(())
     }

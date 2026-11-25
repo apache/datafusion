@@ -131,6 +131,10 @@ impl ParquetSink {
     /// files pays for it in memory. Turn it off when nothing reads
     /// [`Self::written`], as the sinks `ParquetFormat` creates for `COPY` and
     /// `INSERT` do.
+    ///
+    /// This setting is not part of the protobuf encoding of the sink: a sink
+    /// decoded with `datafusion-proto`, for example on a remote executor,
+    /// retains metadata even if the encoded sink did not.
     pub fn with_retain_written_metadata(mut self, retain: bool) -> Self {
         self.written = retain.then(Default::default);
         self
@@ -415,7 +419,8 @@ impl FileSink for ParquetSink {
 /// when the sink retains metadata.
 ///
 /// Runs inside the writer task so that, with retention off, the metadata is
-/// dropped as soon as the file is closed and the sink holds no per-file state.
+/// dropped when the file is closed rather than held until every file has been
+/// written.
 fn record_written_file(
     written: Option<WrittenFiles>,
     path: Path,
@@ -471,8 +476,9 @@ impl DataSink for ParquetSink {
         let Self {
             config: _,
             parquet_options: _,
-            // Written-file metadata and its retention switch are runtime
-            // state, not part of the plan.
+            // Written-file metadata is runtime state, not part of the plan.
+            // The retention switch is not encoded either: a decoded sink
+            // retains metadata (see `with_retain_written_metadata`).
             written: _,
             sorting_columns: _,
             // Runtime metrics are recreated on decode.
@@ -504,8 +510,9 @@ impl TryFrom<&ParquetSink> for datafusion_proto_models::protobuf::ParquetSink {
         let ParquetSink {
             config,
             parquet_options,
-            // Written-file metadata and its retention switch are runtime
-            // state, not part of the plan.
+            // Written-file metadata is runtime state, not part of the plan.
+            // The retention switch is not encoded either: a decoded sink
+            // retains metadata (see `with_retain_written_metadata`).
             written: _,
             sorting_columns,
             // Runtime metrics are recreated on decode.
