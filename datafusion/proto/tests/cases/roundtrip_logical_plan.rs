@@ -666,7 +666,19 @@ async fn listing_scan_avro_format_decode() -> Result<()> {
 
     let result = logical_plan_from_bytes(&node.encode_to_vec(), &ctx.task_ctx());
     #[cfg(feature = "avro")]
-    result?;
+    {
+        use datafusion_catalog::default_table_source::source_as_provider;
+        use datafusion_datasource_avro::file_format::AvroFormat;
+
+        let LogicalPlan::TableScan(scan) = result? else {
+            unreachable!("expected a TableScan");
+        };
+        let provider = source_as_provider(&scan.source)?;
+        let listing_table = provider
+            .downcast_ref::<ListingTable>()
+            .expect("expected a ListingTable");
+        assert!(listing_table.options().format.is::<AvroFormat>());
+    }
     #[cfg(not(feature = "avro"))]
     datafusion_common::assert_contains!(
         result.unwrap_err().to_string(),

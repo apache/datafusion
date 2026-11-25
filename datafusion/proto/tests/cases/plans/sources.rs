@@ -48,7 +48,7 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_proto::bytes::{
-    physical_plan_from_bytes_with_proto_converter,
+    physical_plan_from_bytes, physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
 };
 use datafusion_proto::physical_plan::{
@@ -1315,9 +1315,8 @@ fn avro_scan_decode_returns_error() {
         ),
     };
     let ctx = SessionContext::new();
-    let err = node
-        .try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})
-        .unwrap_err();
+    let err =
+        physical_plan_from_bytes(&node.encode_to_vec(), &ctx.task_ctx()).unwrap_err();
 
     #[cfg(feature = "avro")]
     assert_contains!(err.to_string(), "missing required field 'base_conf'");

@@ -305,3 +305,45 @@ pub fn physical_plan_from_bytes_with_proto_converter(
     let decode_ctx = PhysicalPlanDecodeContext::new(ctx, extension_codec);
     proto_converter.proto_to_execution_plan(&protobuf, &decode_ctx)
 }
+
+#[cfg(all(test, not(feature = "parquet")))]
+mod tests {
+    use super::logical_plan_from_bytes;
+    use crate::protobuf;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{DataFusionError, Result, TableReference, assert_contains};
+    use datafusion_execution::TaskContext;
+    use prost::Message;
+    use protobuf::listing_table_scan_node::FileFormatType;
+    use protobuf::logical_plan_node::LogicalPlanType;
+
+    #[test]
+    fn listing_scan_parquet_feature_disabled() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
+        let node = protobuf::LogicalPlanNode {
+            logical_plan_type: Some(LogicalPlanType::ListingScan(
+                protobuf::ListingTableScanNode {
+                    table_name: Some(protobuf::TableReference::from(
+                        TableReference::bare("t"),
+                    )),
+                    paths: vec!["file:///data/t.parquet".to_owned()],
+                    file_extension: ".parquet".to_owned(),
+                    schema: Some((&schema).try_into()?),
+                    file_format_type: Some(FileFormatType::Parquet(
+                        protobuf::ParquetFormat::default(),
+                    )),
+                    ..Default::default()
+                },
+            )),
+        };
+
+        let error =
+            logical_plan_from_bytes(&node.encode_to_vec(), &TaskContext::default())
+                .unwrap_err();
+        let DataFusionError::NotImplemented(message) = error else {
+            panic!("expected NotImplemented, got {error}");
+        };
+        assert_contains!(message, "`parquet` feature is not enabled");
+        Ok(())
+    }
+}
