@@ -535,13 +535,13 @@ impl<'a> TypeCoercionRewriter<'a> {
             BinaryTypeCoercer::new(&left_data_type, &op, &right_data_type)
                 .with_session_time_zone(self.session_time_zone)
                 .get_input_types()?;
-        let left_cast_ok = can_cast_types(&left_data_type, &left_type);
-        let right_cast_ok = can_cast_types(&right_data_type, &right_type);
 
         // handle special cases for
         // * Date +/- int => Date
         // * Date + time => Timestamp
-        let left_expr = if !left_cast_ok {
+        let left_expr = if left_data_type == left_type {
+            left
+        } else if !can_cast_types(&left_data_type, &left_type) {
             Self::coerce_date_time_math_op(
                 left,
                 &op,
@@ -553,7 +553,9 @@ impl<'a> TypeCoercionRewriter<'a> {
             left.cast_to(&left_type, left_schema)?
         };
 
-        let right_expr = if !right_cast_ok {
+        let right_expr = if right_data_type == right_type {
+            right
+        } else if !can_cast_types(&right_data_type, &right_type) {
             Self::coerce_date_time_math_op(
                 right,
                 &op,
