@@ -156,16 +156,6 @@ async fn test_topk_io_dynamic_filter_with_page_pruning() {
     Request 5
         Read data page 0 for column 'id' (rg 2) (offsets 236..265)
         Read data page 1 for column 'id' (rg 2) (offsets 265..294)
-    Request 6
-        Read data page 1 for column 'w' (rg 1) (offsets 207..236)
-    Request 7
-        Read data page 0 for column 'id' (rg 1) (offsets 120..149)
-        Read data page 1 for column 'id' (rg 1) (offsets 149..178)
-    Request 8
-        Read data page 1 for column 'w' (rg 0) (offsets 91..120)
-    Request 9
-        Read data page 0 for column 'id' (rg 0) (offsets 4..33)
-        Read data page 1 for column 'id' (rg 0) (offsets 33..62)
     Produce batch (2 rows)
     ");
 }

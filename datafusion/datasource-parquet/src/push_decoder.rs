@@ -35,7 +35,8 @@ use parquet::DecodeResult;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
-    ArrowReaderMetadata, ParquetRecordBatchReader, RowFilter, RowSelectionPolicy,
+    ArrowReaderMetadata, ParquetRecordBatchReader, RowFilter, RowSelection,
+    RowSelectionPolicy,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{
@@ -109,6 +110,10 @@ pub(crate) struct RgPlanEntry {
     ///
     /// [`ParquetFileMetrics`]: crate::ParquetFileMetrics
     pub(crate) bytes: u64,
+    /// The row-group-local selection the decoder was built with for this RG.
+    /// A runtime-pruning rebuild passes it back, because the decoder does not
+    /// expose the selections of the row groups it has not started.
+    pub(crate) selection: Option<RowSelection>,
 }
 
 /// The initial per-file decoder state the opener builds and hands off to the
@@ -121,9 +126,6 @@ pub(crate) struct InitialDecoderState {
     pub(crate) decoder: ParquetPushDecoder,
     /// The per-row-group plan, in the physical scan order the decoder reads.
     pub(crate) rg_plan: VecDeque<RgPlanEntry>,
-    /// Whether a row selection is live for this scan. Runtime row-group
-    /// pruning is disabled when it is (see the opener for why).
-    pub(crate) has_row_selection: bool,
     /// Whether the freshly built decoder carries a real (non-empty)
     /// [`RowFilter`]. `false` when the first row group is fully matched and
     /// the filter was suppressed at open time.
@@ -690,13 +692,14 @@ impl PushDecoderStreamState {
         let decoder = self.decoder.take().expect("decoder present");
         let mut builder = decoder.into_builder().map_err(DataFusionError::from)?;
         // Filter-only rebuilds preserve the decoder's remaining selections.
-        // Runtime pruning is disabled for scans with selections, so pruned
-        // plans can be rebuilt from row-group indexes alone.
+        // A pruning rebuild replaces the row-group list, so it passes each
+        // survivor's selection back. Rebuilds happen only at a row-group
+        // boundary, so no survivor has started and each selection is intact.
         if pruned_count > 0 {
             let selections = self
                 .rg_plan
                 .iter()
-                .map(|e| RowGroupSelection::new(e.rg_index, None))
+                .map(|e| RowGroupSelection::new(e.rg_index, e.selection.clone()))
                 .collect();
             builder = builder.with_row_group_selections(selections);
         }
@@ -1036,6 +1039,7 @@ mod tests {
                 rg_index,
                 fully_matched: false,
                 bytes: 100 * (rg_index as u64 + 1),
+                selection: None,
             })
             .collect()
     }
