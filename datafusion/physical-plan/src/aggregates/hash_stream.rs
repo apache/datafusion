@@ -2008,7 +2008,7 @@ mod tests {
         )?);
         // Fits the large batch, but not next to the table of 4000 groups.
         let runtime = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::new(GreedyMemoryPool::new(2600 * 1024)))
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(2400 * 1024)))
             .build_arc()?;
         let context =
             Arc::new(
