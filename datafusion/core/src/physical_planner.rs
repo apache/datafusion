@@ -878,8 +878,8 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
                 // Unbound until `bind_materialized_cte_scans` runs on the whole plan.
                 let exec = MaterializedCteScanExec::new(
-                    scan.id.as_u64(),
-                    &scan.name,
+                    scan.id().as_u64(),
+                    scan.name(),
                     Arc::clone(scan.schema().inner()),
                     session.config().target_partitions(),
                 );
@@ -1967,7 +1967,7 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
                 let [body, continuation] = children.two()?;
                 // A CTE that nothing reads is never evaluated.
-                if cte.scans()?.is_empty() {
+                if !cte.is_read()? {
                     return Ok(continuation);
                 }
                 // The body is fully buffered before a scan yields a row, so an
