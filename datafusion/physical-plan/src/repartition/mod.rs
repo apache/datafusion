@@ -33,7 +33,9 @@ use crate::{
     PlanProperties, ReplaceChildrenOptions, Statistics, validate_child_count,
 };
 
-use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array};
+use arrow::array::{
+    PrimitiveArray, RecordBatch, RecordBatchOptions, UInt32Array, UInt64Array,
+};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{DataType, Schema, SchemaRef, UInt32Type};
 use arrow_schema::SortOptions;
@@ -169,6 +171,96 @@ struct OutputChannel {
     shared_coalescer: Option<SharedCoalescer>,
 }
 
+enum PartitionedBatch {
+    Batch(RecordBatch),
+    Indexed {
+        batch: RecordBatch,
+        indices: UInt32Array,
+    },
+}
+
+impl PartitionedBatch {
+    fn materialize(self) -> Result<RecordBatch> {
+        match self {
+            Self::Batch(batch) => Ok(batch),
+            Self::Indexed { batch, indices } => {
+                let columns = take_arrays(batch.columns(), &indices, None)?;
+                let options =
+                    RecordBatchOptions::new().with_row_count(Some(indices.len()));
+                Ok(RecordBatch::try_new_with_options(
+                    batch.schema(),
+                    columns,
+                    &options,
+                )?)
+            }
+        }
+    }
+}
+
+enum PartitioningOutput {
+    Batch {
+        partition: usize,
+        batch: RecordBatch,
+    },
+    Grouped {
+        batch: RecordBatch,
+        indices: UInt32Array,
+        partition_ranges: Vec<(usize, usize, usize)>,
+    },
+    Empty,
+}
+
+impl PartitioningOutput {
+    fn materialize(self) -> Result<Vec<(usize, RecordBatch)>> {
+        match self {
+            Self::Batch { partition, batch } => Ok(vec![(partition, batch)]),
+            Self::Grouped {
+                batch,
+                indices,
+                partition_ranges,
+            } => {
+                let columns = take_arrays(batch.columns(), &indices, None)?;
+                let options =
+                    RecordBatchOptions::new().with_row_count(Some(indices.len()));
+                let reordered_batch =
+                    RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
+                Ok(partition_ranges
+                    .into_iter()
+                    .map(|(partition, start, len)| {
+                        (partition, reordered_batch.slice(start, len))
+                    })
+                    .collect())
+            }
+            Self::Empty => Ok(vec![]),
+        }
+    }
+
+    fn into_partitioned_batches(self) -> Vec<Result<(usize, PartitionedBatch)>> {
+        match self {
+            Self::Batch { partition, batch } => {
+                vec![Ok((partition, PartitionedBatch::Batch(batch)))]
+            }
+            Self::Grouped {
+                batch,
+                indices,
+                partition_ranges,
+            } => partition_ranges
+                .into_iter()
+                .map(|(partition, start, len)| {
+                    Ok((
+                        partition,
+                        PartitionedBatch::Indexed {
+                            batch: batch.clone(),
+                            indices: indices.slice(start, len),
+                        },
+                    ))
+                })
+                .collect(),
+            Self::Empty => vec![],
+        }
+    }
+}
+
 /// The set of spill-pool writers for a single output partition, before they are handed to the
 /// per-input tasks. The variant encodes the repartition mode so the wrong writer topology cannot
 /// be constructed for a given mode.
@@ -201,11 +293,20 @@ impl PartitionSpillWriters {
 
 impl OutputChannel {
     /// Appends the batches that are ready to send to `out`.
-    fn coalesce(&mut self, batch: RecordBatch, out: &mut Vec<RecordBatch>) -> Result<()> {
-        match &self.shared_coalescer {
-            Some(shared) => shared.push_and_drain(batch, out),
-            None => {
-                out.push(batch);
+    fn coalesce(
+        &mut self,
+        batch: PartitionedBatch,
+        out: &mut Vec<RecordBatch>,
+    ) -> Result<()> {
+        match (&self.shared_coalescer, batch) {
+            (Some(shared), PartitionedBatch::Batch(batch)) => {
+                shared.push_and_drain(batch, out)
+            }
+            (Some(shared), PartitionedBatch::Indexed { batch, indices }) => {
+                shared.push_indices_and_drain(batch, &indices, out)
+            }
+            (None, batch) => {
+                out.push(batch.materialize()?);
                 Ok(())
             }
         }
@@ -287,6 +388,20 @@ impl SharedCoalescer {
     ) -> Result<()> {
         let mut c = self.inner.lock();
         c.push_batch(batch)?;
+        while let Some(b) = c.next_completed_batch() {
+            out.push(b);
+        }
+        Ok(())
+    }
+
+    fn push_indices_and_drain(
+        &self,
+        batch: RecordBatch,
+        indices: &UInt32Array,
+        out: &mut Vec<RecordBatch>,
+    ) -> Result<()> {
+        let mut c = self.inner.lock();
+        c.push_batch_with_indices(batch, indices)?;
         while let Some(b) = c.next_completed_batch() {
             out.push(b);
         }
@@ -1236,85 +1351,97 @@ impl BatchPartitioner {
         &mut self,
         batch: RecordBatch,
     ) -> Result<impl Iterator<Item = Result<(usize, RecordBatch)>> + Send + '_> {
-        let it: Box<dyn Iterator<Item = Result<(usize, RecordBatch)>> + Send> =
-            match &mut self.state {
-                BatchPartitionerState::RoundRobin {
-                    num_partitions,
-                    next_idx,
-                } => {
-                    let idx = *next_idx;
-                    *next_idx = (*next_idx + 1) % *num_partitions;
-                    Box::new(std::iter::once(Ok((idx, batch))))
+        let output = self.partition_output(batch)?;
+        let _timer = self.timer.timer();
+        let batches = output.materialize()?;
+        Ok(batches.into_iter().map(Ok))
+    }
+
+    fn partition_iter_with_indices(
+        &mut self,
+        batch: RecordBatch,
+    ) -> Result<Vec<Result<(usize, PartitionedBatch)>>> {
+        Ok(self.partition_output(batch)?.into_partitioned_batches())
+    }
+
+    fn partition_output(&mut self, batch: RecordBatch) -> Result<PartitioningOutput> {
+        let output = match &mut self.state {
+            BatchPartitionerState::RoundRobin {
+                num_partitions,
+                next_idx,
+            } => {
+                let idx = *next_idx;
+                *next_idx = (*next_idx + 1) % *num_partitions;
+                PartitioningOutput::Batch {
+                    partition: idx,
+                    batch,
                 }
-                BatchPartitionerState::Hash {
-                    exprs,
-                    partition_reducer,
+            }
+            BatchPartitionerState::Hash {
+                exprs,
+                partition_reducer,
+                hash_buffer,
+                indices,
+            } => {
+                // Tracking time required for distributing indexes across output partitions
+                let timer = self.timer.timer();
+
+                let arrays = evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
+
+                hash_buffer.clear();
+                hash_buffer.resize(batch.num_rows(), 0);
+
+                create_hashes(
+                    &arrays,
+                    REPARTITION_RANDOM_STATE.random_state(),
                     hash_buffer,
-                    indices,
-                } => {
-                    // Tracking time required for distributing indexes across output partitions
-                    let timer = self.timer.timer();
+                )?;
 
-                    let arrays =
-                        evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
+                for v in indices.iter_mut() {
+                    v.clear();
+                }
 
-                    hash_buffer.clear();
-                    hash_buffer.resize(batch.num_rows(), 0);
+                partition_reducer.partition_indices(hash_buffer, indices);
 
-                    create_hashes(
-                        &arrays,
-                        REPARTITION_RANDOM_STATE.random_state(),
-                        hash_buffer,
+                // Finished building index-arrays for output partitions
+                timer.done();
+
+                Self::partition_grouped_indices(batch, indices)?
+            }
+            BatchPartitionerState::Range {
+                ordering,
+                router,
+                indices,
+            } => {
+                // Tracking time required for distributing indexes across output partitions
+                let timer = self.timer.timer();
+                if router.num_split_points() == 0 {
+                    timer.done();
+                    PartitioningOutput::Batch {
+                        partition: 0,
+                        batch,
+                    }
+                } else {
+                    let arrays = evaluate_expressions_to_arrays(
+                        ordering.iter().map(|e| &e.expr),
+                        &batch,
                     )?;
 
                     for v in indices.iter_mut() {
                         v.clear();
                     }
 
-                    partition_reducer.partition_indices(hash_buffer, indices);
+                    router.route_indices(&arrays, indices)?;
 
                     // Finished building index-arrays for output partitions
                     timer.done();
 
-                    let partitioned_batches =
-                        Self::partition_grouped_take(&batch, indices, &self.timer)?;
-
-                    Box::new(partitioned_batches.into_iter())
+                    Self::partition_grouped_indices(batch, indices)?
                 }
-                BatchPartitionerState::Range {
-                    ordering,
-                    router,
-                    indices,
-                } => {
-                    // Tracking time required for distributing indexes across output partitions
-                    let timer = self.timer.timer();
-                    if router.num_split_points() == 0 {
-                        timer.done();
-                        Box::new(std::iter::once(Ok((0, batch))))
-                    } else {
-                        let arrays = evaluate_expressions_to_arrays(
-                            ordering.iter().map(|e| &e.expr),
-                            &batch,
-                        )?;
+            }
+        };
 
-                        for v in indices.iter_mut() {
-                            v.clear();
-                        }
-
-                        router.route_indices(&arrays, indices)?;
-
-                        // Finished building index-arrays for output partitions
-                        timer.done();
-
-                        let partitioned_batches =
-                            Self::partition_grouped_take(&batch, indices, &self.timer)?;
-
-                        Box::new(partitioned_batches.into_iter())
-                    }
-                }
-            };
-
-        Ok(it)
+        Ok(output)
     }
 
     // return the number of output partitions
@@ -1326,11 +1453,11 @@ impl BatchPartitioner {
         }
     }
 
-    /// Build repartitioned hash/range output batches using one `take` per input batch.
+    /// Build repartitioned hash/range output selections using one index array per input batch.
     ///
     /// The routers first fills one index vector per output partition. This method
-    /// concatenates those index vectors, performs one grouped `take_arrays`, and
-    /// then returns each output partition as a slice of the reordered batch.
+    /// concatenates those index vectors, then returns each output partition as a
+    /// slice of the combined index array.
     ///
     /// For example, given partition indices:
     ///
@@ -1340,13 +1467,12 @@ impl BatchPartitioner {
     /// partition 2: [0, 3, 4]
     /// ```
     ///
-    /// this method takes rows in `[2, 5, 0, 3, 4]` order once, then returns
+    /// this method creates indices in `[2, 5, 0, 3, 4]` order once, then returns
     /// `partition 0 = slice(0, 2)` and `partition 2 = slice(2, 3)`.
-    fn partition_grouped_take(
-        batch: &RecordBatch,
+    fn partition_grouped_indices(
+        batch: RecordBatch,
         indices: &mut [Vec<u32>],
-        timer: &metrics::Time,
-    ) -> Result<Vec<Result<(usize, RecordBatch)>>> {
+    ) -> Result<PartitioningOutput> {
         let mut partition_ranges = Vec::with_capacity(indices.len());
         let mut reordered_indices = Vec::with_capacity(batch.num_rows());
 
@@ -1362,33 +1488,20 @@ impl BatchPartitioner {
         }
 
         if reordered_indices.is_empty() {
-            return Ok(vec![]);
+            return Ok(PartitioningOutput::Empty);
         }
 
         if partition_ranges.len() == 1 && partition_ranges[0].2 == batch.num_rows() {
             let (partition, _, _) = partition_ranges[0];
-            return Ok(vec![Ok((partition, batch.clone()))]);
+            return Ok(PartitioningOutput::Batch { partition, batch });
         }
 
-        let batches = {
-            let _timer = timer.timer();
-            let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.into();
-            let columns = take_arrays(batch.columns(), &indices_array, None)?;
-
-            let mut options = RecordBatchOptions::new();
-            options = options.with_row_count(Some(indices_array.len()));
-            let reordered_batch =
-                RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
-
-            partition_ranges
-                .into_iter()
-                .map(|(partition, start, len)| {
-                    Ok((partition, reordered_batch.slice(start, len)))
-                })
-                .collect()
-        };
-
-        Ok(batches)
+        let indices_array: PrimitiveArray<UInt32Type> = reordered_indices.into();
+        Ok(PartitioningOutput::Grouped {
+            batch,
+            indices: indices_array,
+            partition_ranges,
+        })
     }
 }
 
@@ -2328,7 +2441,7 @@ impl RepartitionExec {
                 continue;
             }
 
-            for res in partitioner.partition_iter(batch)? {
+            for res in partitioner.partition_iter_with_indices(batch)? {
                 let (partition, batch) = res?;
 
                 let timer = metrics.send_time[partition].timer();
