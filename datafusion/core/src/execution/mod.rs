@@ -5,6 +5,7 @@
 //! Shared state for query planning and execution.
 
 pub mod context;
+mod group_slices;
 pub mod session_state;
 pub use session_state::{SessionState, SessionStateBuilder};
 
