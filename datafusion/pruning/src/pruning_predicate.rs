@@ -896,6 +896,25 @@ impl RequiredColumns {
         }
     }
 
+    /// Returns `Some((column, path))` if every statistic of this predicate is
+    /// for the same column or struct field.
+    ///
+    /// Unlike [`Self::single_column`], this accepts a struct field path. The
+    /// path is empty for the column itself.
+    ///
+    /// Examples:
+    /// * `a > 5 OR a < 10` returns `Some((a, []))`
+    /// * `s['x'] > 5` returns `Some((s, ["x"]))`
+    /// * `s['x'] > 5 OR s['y'] < 10` returns `None`
+    pub fn single_field(&self) -> Option<(&phys_expr::Column, &[String])> {
+        let (first, rest) = self.columns.split_first()?;
+        let first_path = &self.field_paths[0];
+        rest.iter()
+            .zip(&self.field_paths[1..])
+            .all(|((c, _, _), p)| c == &first.0 && p == first_path)
+            .then_some((&first.0, first_path.as_slice()))
+    }
+
     /// Returns a schema that describes the columns required to evaluate this
     /// pruning predicate.
     /// The schema contains the fields for each column in `self.columns` with
