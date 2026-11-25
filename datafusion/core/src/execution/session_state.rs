@@ -1743,7 +1743,20 @@ impl SessionStateBuilder {
             relation_planners: relation_planners.unwrap_or_default(),
             #[cfg(feature = "sql")]
             type_planner,
-            optimizer: optimizer.unwrap_or_default(),
+            optimizer: optimizer.unwrap_or_else(|| {
+                let mut optimizer = Optimizer::default();
+                if let Some(i) = optimizer
+                    .rules
+                    .iter()
+                    .position(|r| r.name() == "decorrelate_predicate_subquery")
+                {
+                    optimizer.rules.insert(
+                        i,
+                        Arc::new(super::correlated_partition_avg::CorrelatedPartitionAvg),
+                    );
+                }
+                optimizer
+            }),
             physical_optimizers: physical_optimizers.unwrap_or_default(),
             query_planner: query_planner
                 .unwrap_or_else(|| Arc::new(DefaultQueryPlanner {})),
