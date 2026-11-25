@@ -739,7 +739,7 @@ impl PartialOrd for MaterializedCteScan {
 mod tests {
     use super::*;
     use crate::logical_plan::builder::LogicalPlanBuilder;
-    use crate::{EmptyRelation, exists};
+    use crate::{EmptyRelation, Filter, exists};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Constraint, Constraints, DFSchema, FunctionalDependencies};
     use std::collections::HashMap;
@@ -1098,6 +1098,109 @@ mod tests {
 
         // A scan whose CTE is not in the plan is not checked.
         scan(id, DataType::Utf8).check_invariants(InvariantLevel::Executable)?;
+        Ok(())
+    }
+
+    /// Build a node without the checks of `try_new`.
+    fn unchecked(
+        id: MaterializedCteId,
+        cte: LogicalPlan,
+        continuation: LogicalPlan,
+    ) -> LogicalPlan {
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
+            id,
+            name: "c".to_string(),
+            cte: Arc::new(cte),
+            continuation: Arc::new(continuation),
+        }))
+    }
+
+    fn assert_out_of_scope(plan: &LogicalPlan) {
+        use crate::logical_plan::InvariantLevel;
+        let err = plan
+            .check_invariants(InvariantLevel::Executable)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "A scan of the materialized CTE c is not in the continuation of the CTE"
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn check_invariants_rejects_a_scan_outside_the_continuation() -> Result<()> {
+        use crate::logical_plan::InvariantLevel;
+        let id = MaterializedCteId::next();
+        let valid = || {
+            unchecked(
+                id,
+                (*body(DataType::Int32)).clone(),
+                scan(id, DataType::Int32),
+            )
+        };
+        valid().check_invariants(InvariantLevel::Executable)?;
+
+        // In the body of its own CTE.
+        assert_out_of_scope(&unchecked(
+            id,
+            scan(id, DataType::Int32),
+            scan(id, DataType::Int32),
+        ));
+
+        // Beside its CTE.
+        let beside = LogicalPlanBuilder::from(valid())
+            .union(scan(id, DataType::Int32))?
+            .build()?;
+        assert_out_of_scope(&beside);
+
+        // In a subquery expression above its CTE.
+        let above = LogicalPlan::Filter(Filter::try_new(
+            exists(Arc::new(scan(id, DataType::Int32))),
+            Arc::new(valid()),
+        )?);
+        assert_out_of_scope(&above);
+
+        // In a subquery expression in the continuation, the scan is in scope.
+        let in_subquery = unchecked(
+            id,
+            (*body(DataType::Int32)).clone(),
+            LogicalPlan::Filter(Filter::try_new(
+                exists(Arc::new(scan(id, DataType::Int32))),
+                Arc::new(scan(id, DataType::Int32)),
+            )?),
+        );
+        in_subquery.check_invariants(InvariantLevel::Executable)?;
+        Ok(())
+    }
+
+    #[test]
+    fn check_invariants_binds_a_scan_to_the_innermost_cte_with_its_id() -> Result<()> {
+        use crate::logical_plan::InvariantLevel;
+        let id = MaterializedCteId::next();
+        // Two copies of one CTE, with different body types. Each scan must
+        // match the body of the copy whose continuation holds it.
+        let inner = unchecked(
+            id,
+            (*body(DataType::Utf8)).clone(),
+            scan(id, DataType::Utf8),
+        );
+        unchecked(id, (*body(DataType::Int32)).clone(), inner.clone())
+            .check_invariants(InvariantLevel::Executable)?;
+
+        let wrong = unchecked(
+            id,
+            (*body(DataType::Utf8)).clone(),
+            scan(id, DataType::Int32),
+        );
+        let err = unchecked(id, (*body(DataType::Int32)).clone(), wrong)
+            .check_invariants(InvariantLevel::Executable)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("A scan of the materialized CTE c does not match the CTE"),
+            "{err}"
+        );
         Ok(())
     }
 
