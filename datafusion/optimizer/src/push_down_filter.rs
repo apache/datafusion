@@ -1321,11 +1321,20 @@ impl OptimizerRule for PushDownFilter {
 
                 result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
             }
-            LogicalPlan::TableScan(scan) => push_down_into_table_scan(
-                filter.predicate,
-                scan,
-                predicates_changed || reorder_changed,
-            ),
+            LogicalPlan::TableScan(scan) => {
+                let predicates = split_conjunction_owned(filter.predicate);
+                match push_down_into_table_scan(&scan, predicates.iter().enumerate())? {
+                    Some((scan, exact)) => Ok(Transformed::yes(with_filters(
+                        without_exact(predicates, &exact),
+                        LogicalPlan::TableScan(scan),
+                    ))),
+                    None => Ok(Transformed::new(
+                        with_filters(predicates, LogicalPlan::TableScan(scan)),
+                        predicates_changed || reorder_changed,
+                        TreeNodeRecursion::Continue,
+                    )),
+                }
+            }
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(mut cte)) => {
                 // The output is the output of the continuation, so the filter
                 // moves onto the continuation. The body is shared by every scan
@@ -1525,120 +1534,83 @@ fn rewrite_projection(
     Ok((projection, keep_predicates))
 }
 
-/// Pushes the conjuncts of `predicate` into `scan`, as far as the source of the
-/// scan accepts them, and keeps the rest in a filter above the scan. `changed`
-/// tells whether the caller already changed the predicate, so that a result
-/// without a pushdown still reports the change.
-fn push_down_into_table_scan(
-    predicate: Expr,
-    scan: TableScan,
-    changed: bool,
-) -> Result<Transformed<LogicalPlan>> {
-    let filter_predicates = split_conjunction(&predicate);
-    // Filters containing scalar subqueries cannot be pushed to
-    // providers because the subquery result is not available
-    // until execution time.
-    let (subquery_filters, pushdown_candidates): (Vec<&Expr>, Vec<&Expr>) =
-        filter_predicates
-            .into_iter()
-            .partition(|pred| pred.contains_scalar_subquery());
-
-    let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
-        pushdown_candidates
-            .into_iter()
-            .partition(|pred| pred.is_volatile());
-
-    // Check which non-volatile filters are supported by source
-    let supported_filters = scan
-        .source
-        .supports_filters_pushdown(non_volatile_filters.as_slice())?;
-    assert_eq_or_internal_err!(
-        non_volatile_filters.len(),
-        supported_filters.len(),
-        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
-        supported_filters.len(),
-        non_volatile_filters.len()
-    );
-
-    if supported_filters
-        .iter()
-        .all(|res| res == &TableProviderFilterPushDown::Unsupported)
-    {
-        return Ok(Transformed::new(
-            LogicalPlan::Filter(Filter::new(
-                predicate,
-                Arc::new(LogicalPlan::TableScan(scan)),
-            )),
-            changed,
-            TreeNodeRecursion::Continue,
-        ));
+/// Offers the indexed `candidates` to the source of `scan`.
+///
+/// Returns the scan with every accepted predicate recorded, and the positions
+/// of the predicates the source applies exactly. Returns `None` when nothing
+/// changes: the scan has a fetch or a positive skip (both apply after the scan
+/// filters), no candidate is eligible, or no predicate is applied exactly and
+/// the scan already records every accepted predicate. The source is not asked
+/// in the first two cases.
+fn push_down_into_table_scan<'a>(
+    scan: &TableScan,
+    candidates: impl IntoIterator<Item = (usize, &'a Expr)>,
+) -> Result<Option<(TableScan, HashSet<usize>)>> {
+    if scan.fetch.is_some() || scan.skip.is_some_and(|n| n > 0) {
+        return Ok(None);
     }
 
-    // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
-    let zip = non_volatile_filters.iter().zip(supported_filters.iter());
+    // The result of a scalar subquery is not available until execution, and a
+    // volatile predicate must run once per row of the filter.
+    let (positions, predicates): (Vec<usize>, Vec<&Expr>) = candidates
+        .into_iter()
+        .filter(|(_, p)| !p.contains_scalar_subquery() && !p.is_volatile())
+        .unzip();
+    if predicates.is_empty() {
+        return Ok(None);
+    }
 
-    let new_scan_filters = zip
-        .clone()
-        .filter(|(_, res)| *res != &TableProviderFilterPushDown::Unsupported)
-        .map(|(&pred, _)| pred);
+    let supported = scan.source.supports_filters_pushdown(&predicates)?;
+    assert_eq_or_internal_err!(
+        predicates.len(),
+        supported.len(),
+        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
+        supported.len(),
+        predicates.len()
+    );
 
-    // Add new scan filters
+    let mut exact = HashSet::new();
+    let mut accepted = vec![];
+    for ((position, predicate), support) in
+        positions.into_iter().zip(predicates).zip(supported)
+    {
+        match support {
+            TableProviderFilterPushDown::Exact => {
+                exact.insert(position);
+                accepted.push(predicate);
+            }
+            TableProviderFilterPushDown::Inexact => accepted.push(predicate),
+            TableProviderFilterPushDown::Unsupported => {}
+        }
+    }
+
     let new_scan_filters: Vec<Expr> = scan
         .filters
         .iter()
-        .chain(new_scan_filters)
+        .chain(accepted)
         .unique()
         .cloned()
         .collect();
-
-    // Nothing changes when no predicate leaves the filter and the scan already
-    // records every accepted predicate.
-    if supported_filters
-        .iter()
-        .all(|res| res != &TableProviderFilterPushDown::Exact)
-        && scan.filters == new_scan_filters
-    {
-        return Ok(Transformed::new(
-            LogicalPlan::Filter(Filter::new(
-                predicate,
-                Arc::new(LogicalPlan::TableScan(scan)),
-            )),
-            changed,
-            TreeNodeRecursion::Continue,
-        ));
+    if exact.is_empty() && scan.filters == new_scan_filters {
+        return Ok(None);
     }
-    let scan = match scan.try_with_filters(new_scan_filters) {
-        Ok(scan) => scan,
-        // The scan has a fetch or a skip, which apply after its filters. The
-        // direct path stops at the general guard in `PushDownFilter::rewrite`
-        // before this point, but the pure extraction projection path reaches
-        // the scan without that guard.
-        Err(scan) => {
-            return Ok(Transformed::new(
-                LogicalPlan::Filter(Filter::new(
-                    predicate,
-                    Arc::new(LogicalPlan::TableScan(scan)),
-                )),
-                changed,
-                TreeNodeRecursion::Continue,
-            ));
-        }
-    };
 
-    // Compose predicates to be of `Unsupported` or `Inexact` pushdown type,
-    // and also include volatile and subquery-containing filters
-    let new_predicate: Vec<Expr> = zip
-        .filter(|(_, res)| *res != &TableProviderFilterPushDown::Exact)
-        .map(|(&pred, _)| pred)
-        .chain(volatile_filters)
-        .chain(subquery_filters)
-        .cloned()
-        .collect();
+    // The bounds check above makes this succeed. It stays as a backstop.
+    Ok(scan
+        .clone()
+        .try_with_filters(new_scan_filters)
+        .ok()
+        .map(|scan| (scan, exact)))
+}
 
-    Ok(Transformed::yes(with_filters(
-        new_predicate,
-        LogicalPlan::TableScan(scan),
-    )))
+/// Returns the predicates whose position is not in `exact`, in their order.
+fn without_exact(predicates: Vec<Expr>, exact: &HashSet<usize>) -> Vec<Expr> {
+    predicates
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| !exact.contains(i))
+        .map(|(_, p)| p)
+        .collect()
 }
 
 /// Offers the predicates that read only pass-through columns of a pure
@@ -1674,43 +1646,24 @@ fn push_down_through_extraction_projection_into_scan(
             .all(|column| pass_through.contains(column))
     };
 
-    let Some(scan_predicate) = conjunction(
+    let Some((scan, exact)) = push_down_into_table_scan(
+        scan,
         predicates
             .iter()
-            .filter(|predicate| reads_only_pass_through(predicate))
-            .cloned(),
-    ) else {
+            .enumerate()
+            .filter(|(_, predicate)| reads_only_pass_through(predicate)),
+    )?
+    else {
         return Ok((
             Transformed::no(LogicalPlan::Projection(projection)),
             predicates,
         ));
     };
-    let pushed = push_down_into_table_scan(scan_predicate, scan.clone(), false)?;
-    if !pushed.transformed {
-        return Ok((
-            Transformed::no(LogicalPlan::Projection(projection)),
-            predicates,
-        ));
-    }
 
-    // The predicates the scan does not apply exactly come back in a filter
-    // above it. They stay above the projection.
-    let (scan, residual) = match pushed.data {
-        LogicalPlan::Filter(residual) => (
-            Arc::unwrap_or_clone(residual.input),
-            split_conjunction_owned(residual.predicate),
-        ),
-        scan => (scan, vec![]),
-    };
-    // Keep the predicates in their original order, which `reorder_predicates`
-    // chose by cost.
-    let keep_predicates = predicates
-        .into_iter()
-        .filter(|predicate| {
-            !reads_only_pass_through(predicate) || residual.contains(predicate)
-        })
-        .collect();
-    projection.input = Arc::new(scan);
+    // The predicates the scan does not apply exactly stay above the
+    // projection, in the order that `reorder_predicates` chose by cost.
+    let keep_predicates = without_exact(predicates, &exact);
+    projection.input = Arc::new(LogicalPlan::TableScan(scan));
     Ok((
         Transformed::yes(LogicalPlan::Projection(projection)),
         keep_predicates,
