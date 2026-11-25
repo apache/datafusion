@@ -899,4 +899,30 @@ mod tests {
             ]]
         );
     }
+
+    #[test]
+    fn partition_keys_far_future_dates() {
+        // Large values that are still representable must not be rejected.
+        let column = Date32Array::from(vec![2_932_896]);
+        let batch = partition_batch(Arc::new(column));
+        let partition_by = vec![("p".to_string(), DataType::Date32)];
+        let keys = compute_partition_keys_by_row(
+            &batch,
+            &partition_by,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap();
+        assert_eq!(keys, vec![vec![Cow::Borrowed("9999-12-31")]]);
+
+        let column = Date64Array::from(vec![253_402_214_400_000]);
+        let batch = partition_batch(Arc::new(column));
+        let partition_by = vec![("p".to_string(), DataType::Date64)];
+        let keys = compute_partition_keys_by_row(
+            &batch,
+            &partition_by,
+            HIVE_DEFAULT_PARTITION_NAME,
+        )
+        .unwrap();
+        assert_eq!(keys, vec![vec![Cow::Borrowed("9999-12-31")]]);
+    }
 }
