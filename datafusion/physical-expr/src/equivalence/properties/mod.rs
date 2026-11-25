@@ -1151,15 +1151,16 @@ impl EquivalenceProperties {
     /// Checks if the sort expressions are satisfied by any of the table
     /// constraints (primary key or unique). Returns true if any constraint
     /// fully satisfies the expressions (i.e. constraint indices form a valid
-    /// prefix of an existing ordering that matches the expressions). For
-    /// unique constraints, also verifies nullable columns.
+    /// prefix of an existing ordering that matches the expressions).
     fn satisfied_by_constraints_ordering(
         &self,
         normal_exprs: &[PhysicalSortExpr],
     ) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
-                let check_null = matches!(constraint, Constraint::Unique(_));
+                if !constraint.implies_unique_sort_prefix(&self.schema) {
+                    return false;
+                }
                 let normalized_size = normal_exprs.len();
                 indices.len() <= normalized_size
                     && self.oeq_class.iter().any(|ordering| {
@@ -1167,23 +1168,7 @@ impl EquivalenceProperties {
                         if indices.len() > length || normalized_size < length {
                             return false;
                         }
-                        // Build a map of column positions in the ordering:
-                        let mut col_positions = HashMap::with_capacity(length);
-                        for (pos, req) in ordering.iter().enumerate() {
-                            if let Some(col) = req.expr.downcast_ref::<Column>() {
-                                let nullable = col.nullable(&self.schema).unwrap_or(true);
-                                col_positions.insert(col.index(), (pos, nullable));
-                            }
-                        }
-                        // Check if all constraint indices appear in valid positions:
-                        if !indices.iter().all(|idx| {
-                            col_positions.get(idx).is_some_and(|&(pos, nullable)| {
-                                // For unique constraints, verify column is not nullable if it's first/last:
-                                !check_null
-                                    || !nullable
-                                    || (pos != 0 && pos != length - 1)
-                            })
-                        }) {
+                        if !ordering_contains_columns(ordering, indices) {
                             return false;
                         }
                         // Check if this ordering matches the prefix:
@@ -1198,12 +1183,13 @@ impl EquivalenceProperties {
     /// Checks if the sort requirements are satisfied by any of the table
     /// constraints (primary key or unique). Returns true if any constraint
     /// fully satisfies the requirements (i.e. constraint indices form a valid
-    /// prefix of an existing ordering that matches the requirements). For
-    /// unique constraints, also verifies nullable columns.
+    /// prefix of an existing ordering that matches the requirements).
     fn satisfied_by_constraints(&self, normal_reqs: &[PhysicalSortRequirement]) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
-                let check_null = matches!(constraint, Constraint::Unique(_));
+                if !constraint.implies_unique_sort_prefix(&self.schema) {
+                    return false;
+                }
                 let normalized_size = normal_reqs.len();
                 indices.len() <= normalized_size
                     && self.oeq_class.iter().any(|ordering| {
@@ -1211,23 +1197,7 @@ impl EquivalenceProperties {
                         if indices.len() > length || normalized_size < length {
                             return false;
                         }
-                        // Build a map of column positions in the ordering:
-                        let mut col_positions = HashMap::with_capacity(length);
-                        for (pos, req) in ordering.iter().enumerate() {
-                            if let Some(col) = req.expr.downcast_ref::<Column>() {
-                                let nullable = col.nullable(&self.schema).unwrap_or(true);
-                                col_positions.insert(col.index(), (pos, nullable));
-                            }
-                        }
-                        // Check if all constraint indices appear in valid positions:
-                        if !indices.iter().all(|idx| {
-                            col_positions.get(idx).is_some_and(|&(pos, nullable)| {
-                                // For unique constraints, verify column is not nullable if it's first/last:
-                                !check_null
-                                    || !nullable
-                                    || (pos != 0 && pos != length - 1)
-                            })
-                        }) {
+                        if !ordering_contains_columns(ordering, indices) {
                             return false;
                         }
                         // Check if this ordering matches the prefix:
@@ -2008,6 +1978,18 @@ impl Display for EquivalenceProperties {
             .join("; ");
         f.write_str(&text)
     }
+}
+
+/// Returns `true` if all columns `indices` are columns of `ordering`.
+fn ordering_contains_columns(ordering: &LexOrdering, indices: &[usize]) -> bool {
+    indices.iter().all(|&idx| {
+        ordering.iter().any(|sort_expr| {
+            sort_expr
+                .expr
+                .downcast_ref::<Column>()
+                .is_some_and(|col| col.index() == idx)
+        })
+    })
 }
 
 /// This function examines whether a referring expression directly refers to a
