@@ -77,7 +77,7 @@ EXPLAIN ANALYZE SELECT * FROM t WHERE s['a'] > 15;
 Plan with Metrics
 01)FilterExec: __datafusion_extracted_1@0 > 15, projection=[s@1, id@2], metrics=[output_rows=4, selectivity=33.33% (4/12)]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=12]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/data.parquet]]}, projection=[get_field(s@0, a) as __datafusion_extracted_1, s, id], file_type=parquet, predicate=get_field(s@0, a) > 15, metrics=[output_rows=12, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 4 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=27.52% (926/3.37 K)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/data.parquet]]}, projection=[get_field(s@0, a) as __datafusion_extracted_1, s, id], file_type=parquet, predicate=get_field(s@0, a) > 15, pruning_predicate=s.a_null_count@1 != row_count@2 AND s.a_max@0 > 15, required_guarantees=[], metrics=[output_rows=12, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 4 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=27.52% (926/3.37 K)]
 
 # Only row group 0 matches.
 query TT
@@ -86,7 +86,7 @@ EXPLAIN ANALYZE SELECT * FROM t WHERE s['a'] <= 2;
 Plan with Metrics
 01)FilterExec: __datafusion_extracted_1@0 <= 2, projection=[s@1, id@2], metrics=[output_rows=2, selectivity=16.67% (2/12)]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=12]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/data.parquet]]}, projection=[get_field(s@0, a) as __datafusion_extracted_1, s, id], file_type=parquet, predicate=get_field(s@0, a) <= 2, metrics=[output_rows=12, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 4 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=27.52% (926/3.37 K)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/data.parquet]]}, projection=[get_field(s@0, a) as __datafusion_extracted_1, s, id], file_type=parquet, predicate=get_field(s@0, a) <= 2, pruning_predicate=s.a_null_count@1 != row_count@2 AND s.a_min@0 <= 2, required_guarantees=[], metrics=[output_rows=12, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 4 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=27.52% (926/3.37 K)]
 
 # Equality, with the literal on the left.
 query TT
@@ -95,7 +95,7 @@ EXPLAIN ANALYZE SELECT * FROM t WHERE 11 = s['a'];
 Plan with Metrics
 01)FilterExec: __datafusion_extracted_1@0 = 11, projection=[s@1, id@2], metrics=[output_rows=1, selectivity=8.33% (1/12)]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=12]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/data.parquet]]}, projection=[get_field(s@0, a) as __datafusion_extracted_1, s, id], file_type=parquet, predicate=get_field(s@0, a) = 11, metrics=[output_rows=12, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 4 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=27.52% (926/3.37 K)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/data.parquet]]}, projection=[get_field(s@0, a) as __datafusion_extracted_1, s, id], file_type=parquet, predicate=get_field(s@0, a) = 11, pruning_predicate=s.a_null_count@2 != row_count@3 AND s.a_min@0 <= 11 AND 11 <= s.a_max@1, required_guarantees=[], metrics=[output_rows=12, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 4 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=27.52% (926/3.37 K)]
 
 # Row group 2 holds only one non-null `a`, so `s['a'] = 20` keeps it.
 query TT
@@ -104,7 +104,7 @@ EXPLAIN ANALYZE SELECT * FROM t WHERE s['a'] = 20;
 Plan with Metrics
 01)FilterExec: __datafusion_extracted_1@0 = 20, projection=[s@1, id@2], metrics=[output_rows=1, selectivity=8.33% (1/12)]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=12]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/data.parquet]]}, projection=[get_field(s@0, a) as __datafusion_extracted_1, s, id], file_type=parquet, predicate=get_field(s@0, a) = 20, metrics=[output_rows=12, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 4 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=27.52% (926/3.37 K)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/data.parquet]]}, projection=[get_field(s@0, a) as __datafusion_extracted_1, s, id], file_type=parquet, predicate=get_field(s@0, a) = 20, pruning_predicate=s.a_null_count@2 != row_count@3 AND s.a_min@0 <= 20 AND 20 <= s.a_max@1, required_guarantees=[], metrics=[output_rows=12, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 4 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=27.52% (926/3.37 K)]
 
 # Two different struct fields in one comparison are not prunable.
 query TT
@@ -122,7 +122,7 @@ EXPLAIN ANALYZE SELECT * FROM t WHERE s['a'] > 25 OR id < 2;
 Plan with Metrics
 01)FilterExec: __datafusion_extracted_1@0 > 25 OR id@2 < 2, projection=[s@1, id@2], metrics=[output_rows=5, selectivity=41.67% (5/12)]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=12]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/data.parquet]]}, projection=[get_field(s@0, a) as __datafusion_extracted_1, s, id], file_type=parquet, predicate=get_field(s@0, a) > 25 OR id@1 < 2, metrics=[output_rows=12, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 4 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=27.52% (926/3.37 K)]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/data.parquet]]}, projection=[get_field(s@0, a) as __datafusion_extracted_1, s, id], file_type=parquet, predicate=get_field(s@0, a) > 25 OR id@1 < 2, pruning_predicate=s.a_null_count@1 != row_count@2 AND s.a_max@0 > 25 OR id_null_count@4 != row_count@2 AND id_min@3 < 2, required_guarantees=[], metrics=[output_rows=12, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 4 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=27.52% (926/3.37 K)]
 
 statement ok
 DROP TABLE t;
@@ -159,7 +159,7 @@ EXPLAIN ANALYZE SELECT * FROM two_files WHERE s['a'] < 10;
 Plan with Metrics
 01)FilterExec: __datafusion_extracted_1@0 < 10, projection=[s@1], metrics=[output_rows=3, selectivity=50% (3/6)]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2, metrics=[output_rows=6]
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/two_files/high.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/two_files/low.parquet]]}, projection=[get_field(s@0, a) as __datafusion_extracted_1, s], file_type=parquet, predicate=get_field(s@0, a) < 10, metrics=[output_rows=6, files_ranges_pruned_statistics=2 total → 2 matched, row_groups_pruned_statistics=2 total → 2 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=26.69% (158/592)]
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/two_files/high.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/two_files/low.parquet]]}, projection=[get_field(s@0, a) as __datafusion_extracted_1, s], file_type=parquet, predicate=get_field(s@0, a) < 10, pruning_predicate=s.a_null_count@1 != row_count@2 AND s.a_min@0 < 10, required_guarantees=[], metrics=[output_rows=6, files_ranges_pruned_statistics=2 total → 2 matched, row_groups_pruned_statistics=2 total → 2 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=26.69% (158/592)]
 
 statement ok
 DROP TABLE two_files;

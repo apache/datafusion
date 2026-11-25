@@ -36,7 +36,9 @@ use datafusion_common::{
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
-use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
+use datafusion_physical_expr::{
+    PhysicalExprRef, ScalarFunctionExpr, expressions as phys_expr,
+};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr_opt;
 use datafusion_physical_plan::joins::HashTableLookupExpr;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
@@ -877,6 +879,11 @@ impl RequiredColumns {
     /// * `a > 5 OR b < 10` returns `None`
     /// * `true` returns None
     pub fn single_column(&self) -> Option<&phys_expr::Column> {
+        // A struct field path is not the column itself, so callers that read
+        // per-column statistics (such as the page index) must not treat it as one.
+        if self.field_paths.iter().any(|p| !p.is_empty()) {
+            return None;
+        }
         if self.columns.windows(2).all(|w| {
             // check if all columns are the same (ignoring statistics and field)
             let c1 = &w[0].0;
@@ -963,7 +970,8 @@ impl RequiredColumns {
     }
 
     /// Like [`Self::stat_column_expr`], but for the struct field reached
-    /// from `column` by `path`.
+    /// from `column` by `path`. With a non-empty path, this rewrites every
+    /// `get_field(column, path...)` in `column_expr`, not the bare column.
     fn stat_field_expr(
         &mut self,
         column: &phys_expr::Column,
@@ -1000,7 +1008,11 @@ impl RequiredColumns {
             self.columns.push((column.clone(), stat_type, stat_field));
             self.field_paths.push(path.to_vec());
         }
-        rewrite_column_expr(Arc::clone(column_expr), column, &stat_column)
+        if path.is_empty() {
+            rewrite_column_expr(Arc::clone(column_expr), column, &stat_column)
+        } else {
+            rewrite_field_expr(Arc::clone(column_expr), column, path, &stat_column)
+        }
     }
 
     /// rewrite col --> col_min
@@ -1085,17 +1097,29 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 ) -> Result<RecordBatch> {
     let mut arrays = Vec::<ArrayRef>::with_capacity(required_columns.columns.len());
     // For each needed statistics column:
-    for (column, statistics_type, stat_field) in required_columns.iter() {
+    for ((column, statistics_type, stat_field), path) in required_columns
+        .iter()
+        .zip(required_columns.field_paths.iter())
+    {
         let column = Column::from_name(column.name());
         let data_type = stat_field.data_type();
 
         let num_containers = statistics.num_containers();
 
-        let array = match statistics_type {
-            StatisticsType::Min => statistics.min_values(&column),
-            StatisticsType::Max => statistics.max_values(&column),
-            StatisticsType::NullCount => statistics.null_counts(&column),
-            StatisticsType::RowCount => statistics.row_counts(),
+        let array = match (statistics_type, path.is_empty()) {
+            (StatisticsType::Min, true) => statistics.min_values(&column),
+            (StatisticsType::Max, true) => statistics.max_values(&column),
+            (StatisticsType::NullCount, true) => statistics.null_counts(&column),
+            (StatisticsType::Min, false) => {
+                statistics.min_values_for_field(&column, path)
+            }
+            (StatisticsType::Max, false) => {
+                statistics.max_values_for_field(&column, path)
+            }
+            (StatisticsType::NullCount, false) => {
+                statistics.null_counts_for_field(&column, path)
+            }
+            (StatisticsType::RowCount, _) => statistics.row_counts(),
         };
         let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
@@ -1193,7 +1217,10 @@ impl<'a> PruningExpressionBuilder<'a> {
             };
             field.clone()
         } else {
-            return plan_err!("Struct field paths are not prunable");
+            let Some(field) = resolve_struct_field(schema, &column, &path) else {
+                return plan_err!("Struct field path is not prunable");
+            };
+            field
         };
 
         Ok(Self {
@@ -1294,8 +1321,10 @@ fn rewrite_expr_to_prunable(
         return plan_err!("rewrite_expr_to_prunable only support compare expression");
     }
 
-    if column_expr.downcast_ref::<phys_expr::Column>().is_some() {
-        // `col op lit()`
+    if column_expr.downcast_ref::<phys_expr::Column>().is_some()
+        || struct_field_access(column_expr).is_some()
+    {
+        // `col op lit()` or `get_field(col, ...) op lit()`
         Ok((Arc::clone(column_expr), op, Arc::clone(scalar_expr)))
     } else if let Some(cast) = column_expr.downcast_ref::<phys_expr::CastExpr>() {
         // `cast(col) op lit()`
@@ -1427,6 +1456,83 @@ fn rewrite_column_expr(
         Ok(Transformed::no(expr))
     })
     .data()
+}
+
+/// Replaces every `get_field(column, path...)` in `e` with `column_new`.
+fn rewrite_field_expr(
+    e: Arc<dyn PhysicalExpr>,
+    column: &phys_expr::Column,
+    path: &[String],
+    column_new: &phys_expr::Column,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    e.transform_down(|expr| {
+        if let Some((c, p)) = struct_field_access(&expr)
+            && &c == column
+            && p == path
+        {
+            return Ok(Transformed::new(
+                Arc::new(column_new.clone()),
+                true,
+                TreeNodeRecursion::Jump,
+            ));
+        }
+        Ok(Transformed::no(expr))
+    })
+    .data()
+}
+
+/// Returns the root column and field path of a struct field access
+/// `get_field(column, 'a', 'b', ...)`, including chained calls such as
+/// `get_field(get_field(column, 'a'), 'b')`.
+///
+/// `datafusion-pruning` does not depend on `datafusion-functions`, so this
+/// matches the function by name. A function-agnostic field accessor trait
+/// would also let other accessors (such as `variant_get`) opt in.
+fn struct_field_access(
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Option<(phys_expr::Column, Vec<String>)> {
+    let func = expr.downcast_ref::<ScalarFunctionExpr>()?;
+    if func.name() != "get_field" {
+        return None;
+    }
+    let (base, keys) = func.args().split_first()?;
+    if keys.is_empty() {
+        return None;
+    }
+    let (column, mut path) = match base.downcast_ref::<phys_expr::Column>() {
+        Some(column) => (column.clone(), vec![]),
+        None => struct_field_access(base)?,
+    };
+    for key in keys {
+        let literal = key.downcast_ref::<phys_expr::Literal>()?;
+        match literal.value() {
+            ScalarValue::Utf8(Some(name))
+            | ScalarValue::LargeUtf8(Some(name))
+            | ScalarValue::Utf8View(Some(name)) => path.push(name.clone()),
+            _ => return None,
+        }
+    }
+    Some((column, path))
+}
+
+/// Returns the field reached from `column` by `path`, if every step is a
+/// struct field and the final field is not nested.
+///
+/// Map and list steps are rejected: `get_field` on a map is a runtime key
+/// lookup, and statistics for a field below a list count elements, not rows.
+fn resolve_struct_field(
+    schema: &Schema,
+    column: &phys_expr::Column,
+    path: &[String],
+) -> Option<Field> {
+    let (_, mut field) = schema.column_with_name(column.name())?;
+    for name in path {
+        let DataType::Struct(fields) = field.data_type() else {
+            return None;
+        };
+        field = fields.iter().find(|f| f.name() == name)?;
+    }
+    (!field.data_type().is_nested()).then(|| field.clone())
 }
 
 fn reverse_operator(op: Operator) -> Result<Operator> {
@@ -2081,17 +2187,37 @@ impl ColumnReferenceCount {
     fn from_expression(expr: &Arc<dyn PhysicalExpr>) -> Self {
         let mut seen = HashSet::<StatsKey>::new();
         expr.apply(|expr| {
-            if let Some(column) = expr.downcast_ref::<phys_expr::Column>() {
-                seen.insert(StatsKey {
-                    column: column.clone(),
-                    path: vec![],
-                    expr: Arc::clone(expr),
-                });
+            // A struct field access is one key. Its root column must not
+            // also count as a separate reference, so skip its children.
+            let (key, recursion) = if let Some((column, path)) = struct_field_access(expr)
+            {
+                (
+                    Some(StatsKey {
+                        column,
+                        path,
+                        expr: Arc::clone(expr),
+                    }),
+                    TreeNodeRecursion::Jump,
+                )
+            } else if let Some(column) = expr.downcast_ref::<phys_expr::Column>() {
+                (
+                    Some(StatsKey {
+                        column: column.clone(),
+                        path: vec![],
+                        expr: Arc::clone(expr),
+                    }),
+                    TreeNodeRecursion::Continue,
+                )
+            } else {
+                (None, TreeNodeRecursion::Continue)
+            };
+            if let Some(key) = key {
+                seen.insert(key);
                 if seen.len() > 1 {
                     return Ok(TreeNodeRecursion::Stop);
                 }
             }
-            Ok(TreeNodeRecursion::Continue)
+            Ok(recursion)
         })
         // pre_visit always returns OK, so this will always too
         .expect("no way to return error during recursion");
