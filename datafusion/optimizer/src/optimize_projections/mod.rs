@@ -29,15 +29,13 @@ use datafusion_common::{
 use datafusion_expr::expr::Alias;
 use datafusion_expr::utils::passthrough_field_index;
 use datafusion_expr::{
-    Aggregate, Distinct, EmptyRelation, Expr, MaterializedCte, MaterializedCteScan,
-    Projection, TableScanBuilder, Unnest, Window, logical_plan::LogicalPlan,
+    Aggregate, Distinct, EmptyRelation, Expr, MaterializedCte, Projection,
+    TableScanBuilder, Unnest, Window, logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
 use crate::utils::NamePreserver;
-use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeContainer};
 
 /// Optimizer rule to prune unnecessary columns from intermediate schemas
 /// inside the [`LogicalPlan`]. This rule:
@@ -528,80 +526,20 @@ fn optimize_materialized_cte(
     config: &dyn OptimizerConfig,
     indices: RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
-    let (id, name, body, continuation) = cte.into_parts();
     // The output is the output of the continuation, so the continuation
     // needs what the parent needs.
-    let continuation =
-        optimize_projections(Arc::unwrap_or_clone(continuation), config, indices)?;
-    let mut transformed = continuation.transformed;
-    let mut continuation = continuation.data;
-    let mut body = Arc::unwrap_or_clone(body);
-
-    let body_len = body.schema().fields().len();
-    let scans = MaterializedCteScan::find_in(&continuation, id)?;
-    let mut is_read = vec![false; body_len];
-    for scan in &scans {
-        match scan.projection() {
-            None => is_read.fill(true),
-            Some(projection) => {
-                for index in projection {
-                    let Some(is_read) = is_read.get_mut(*index) else {
-                        return internal_err!(
-                            "A scan of the materialized CTE {name} reads the column {index}, but the CTE has {body_len} columns"
-                        );
-                    };
-                    *is_read = true;
-                }
-            }
-        }
-    }
-    // A reference such as `SELECT count(*) FROM c` reads no column. Keep one
-    // column then, so that the body is never a projection without columns.
-    if !is_read.contains(&true)
-        && let Some(first) = is_read.first_mut()
-    {
-        *first = true;
-    }
-    let kept: Vec<usize> = (0..body_len).filter(|index| is_read[*index]).collect();
-    // A CTE that nothing reads is not planned, so its body is left as it is.
-    if !scans.is_empty() && kept.len() < body_len {
-        let exprs = RequiredIndices::new_from_indices(kept.clone())
-            .get_required_exprs(body.schema());
-        body = Projection::try_new(exprs, Arc::new(body)).map(LogicalPlan::Projection)?;
-        continuation = continuation
-            .transform_down_with_subqueries(|node| match node {
-                // A nested occurrence of the same CTE has its own body and
-                // owns the scans below it.
-                LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref nested))
-                    if nested.id() == id =>
-                {
-                    Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
-                }
-                LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
-                    if scan.id == id =>
-                {
-                    Ok(Transformed::yes(LogicalPlan::MaterializedCte(
-                        MaterializedCtePlan::Scan(scan.with_body_columns(&kept)?),
-                    )))
-                }
-                _ => Ok(Transformed::no(node)),
-            })?
-            .data;
-        transformed = true;
-    }
-
+    let continuation = cte.map_continuation(|continuation| {
+        optimize_projections(continuation, config, indices)
+    })?;
+    let pruned = continuation.data.prune_body_columns()?;
     // All the columns that the body has now are necessary.
-    let body_indices = RequiredIndices::new_for_all_exprs(&body);
-    let body = optimize_projections(body, config, body_indices)?;
-    transformed |= body.transformed;
+    let body = pruned.data.map_body(|body| {
+        let indices = RequiredIndices::new_for_all_exprs(&body);
+        optimize_projections(body, config, indices)
+    })?;
     Ok(Transformed::new_transformed(
-        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte::try_new(
-            id,
-            name,
-            Arc::new(body.data),
-            Arc::new(continuation),
-        )?)),
-        transformed,
+        body.data.into(),
+        continuation.transformed || pruned.transformed || body.transformed,
     ))
 }
 

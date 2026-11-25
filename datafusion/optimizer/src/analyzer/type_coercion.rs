@@ -47,10 +47,9 @@ use datafusion_expr::type_coercion::{
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     AsOfJoin, AsOfMatch, Cast, DmlStatement, Expr, ExprSchemable, Join, Limit,
-    LogicalPlan, MaterializedCte, MaterializedCteId, MaterializedCtePlan, Operator,
-    Projection, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WriteOp, is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
-    lit, not,
+    LogicalPlan, MaterializedCtePlan, Operator, Projection, Union, ValueOrLambda,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp, is_false, is_not_false,
+    is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -128,27 +127,16 @@ fn coerce_plan_and_subqueries(
             // of a `NULL` column of a `UNION`. Coerce the body first, and give
             // its new schema to the scans before the continuation is coerced.
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
-                let (id, name, body, continuation) = cte.into_parts();
                 let body =
-                    coerce_plan_and_subqueries(Arc::unwrap_or_clone(body), config)?;
-                let continuation = with_materialized_cte_scan_schema(
-                    Arc::unwrap_or_clone(continuation),
-                    id,
-                    body.schema(),
-                )?;
-                let continuation = coerce_plan_and_subqueries(continuation, config)?;
-                Ok(Transformed::new(
-                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-                        MaterializedCte::try_new(
-                            id,
-                            name,
-                            Arc::new(body),
-                            Arc::new(continuation),
-                        )?,
-                    )),
-                    true,
-                    TreeNodeRecursion::Jump,
-                ))
+                    coerce_plan_and_subqueries(LogicalPlan::clone(cte.body()), config)?;
+                let cte = cte
+                    .with_coerced_body(body)?
+                    .map_continuation(|continuation| {
+                        coerce_plan_and_subqueries(continuation, config)
+                            .map(Transformed::yes)
+                    })?
+                    .data;
+                Ok(Transformed::new(cte.into(), true, TreeNodeRecursion::Jump))
             }
             _ => Ok(Transformed::no(plan)),
         },
@@ -161,40 +149,6 @@ fn coerce_plan_and_subqueries(
         },
     )
     .map(|t| t.data)
-}
-
-/// Give the fields of `body_schema` to each scan of the materialized CTE `id`
-/// in `continuation`, also in subquery expressions. A scan keeps its
-/// qualifiers and reads only the fields of its projection.
-fn with_materialized_cte_scan_schema(
-    continuation: LogicalPlan,
-    id: MaterializedCteId,
-    body_schema: &DFSchemaRef,
-) -> Result<LogicalPlan> {
-    continuation
-        .transform_down_with_subqueries(|node| match node {
-            // A nested occurrence of the same CTE owns the scans below it.
-            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref nested))
-                if nested.id() == id =>
-            {
-                Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
-            }
-            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
-                if scan.id == id =>
-            {
-                let new_scan = scan.with_body_schema(body_schema)?;
-                if new_scan.schema().inner() == scan.schema().inner() {
-                    return Ok(Transformed::no(LogicalPlan::MaterializedCte(
-                        MaterializedCtePlan::Scan(scan),
-                    )));
-                }
-                Ok(Transformed::yes(LogicalPlan::MaterializedCte(
-                    MaterializedCtePlan::Scan(new_scan),
-                )))
-            }
-            _ => Ok(Transformed::no(node)),
-        })
-        .map(|t| t.data)
 }
 
 /// use the external schema to handle the correlated subqueries case
