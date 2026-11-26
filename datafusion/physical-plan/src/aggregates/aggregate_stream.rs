@@ -4,9 +4,7 @@
 
 //! Aggregate without grouping columns
 
-use crate::aggregates::aggregate_argument::{
-    AggregateArgument, AggregateFilter, AggregateFilterValue,
-};
+use crate::aggregates::aggregate_argument::{AggregateArgument, AggregateFilter};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     aggregate_sub_metrics,
@@ -508,13 +506,10 @@ fn aggregate_batch(
             // 1.2 and 1.3
             let values = aggregate_argument_metrics.time(index, || {
                 let batch = match filter {
-                    Some(filter) => match filter.evaluate(batch)? {
-                        AggregateFilterValue::Scalar(true) => Some(Cow::Borrowed(batch)),
-                        AggregateFilterValue::Scalar(false) => None,
-                        AggregateFilterValue::Array(selection) => {
-                            Some(Cow::Owned(filter.select(batch, &selection)?))
-                        }
-                    },
+                    Some(filter) => {
+                        let selection = filter.evaluate(batch)?;
+                        filter.selected_batch(batch, &selection)?
+                    }
                     None => Some(Cow::Borrowed(batch)),
                 };
                 arguments

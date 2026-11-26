@@ -121,6 +121,28 @@ async fn aggregate_scalar_filter() -> Result<()> {
                     assert!(skipped_rows > 0);
                 }
             }
+            // `array_agg` keeps null arguments, so a group whose rows are all
+            // rejected is NULL only if the rejected rows are filtered out, also
+            // during skip-partial conversion.
+            let result = ctx
+                .sql(
+                    "SELECT count(*) AS g, count(a) AS a FROM (
+                        SELECT array_agg(value) FILTER (WHERE batch_filter(keep)) AS a
+                        FROM scalar_filters GROUP BY key)",
+                )
+                .await?
+                .collect()
+                .await?;
+            assert_batches_eq!(
+                [
+                    "+----+---+",
+                    "| g  | a |",
+                    "+----+---+",
+                    "| 10 | 7 |",
+                    "+----+---+"
+                ],
+                &result
+            );
             for predicate in ["false", "CAST(NULL AS BOOLEAN)"] {
                 let result = ctx.sql(&format!("SELECT
                     count(*) FILTER (WHERE batch_filter({predicate})) AS c,

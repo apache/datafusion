@@ -186,3 +186,95 @@ DROP TABLE aggregate_filter_selection_skip;
 
 statement ok
 DROP TABLE aggregate_filter_selection;
+
+# Literal and constant-folded predicates, and prepared statement parameters,
+# are evaluated as scalars that select or reject every row of a batch. Rejected
+# rows must not evaluate arguments, and aggregates that keep NULL inputs, such
+# as array_agg, must not see them.
+query IIIII?
+SELECT
+  count(*) FILTER (WHERE true),
+  sum(value) FILTER (WHERE true),
+  count(*) FILTER (WHERE 1 = 2),
+  sum(10 / (value - value)) FILTER (WHERE false),
+  count(value) FILTER (WHERE NULL),
+  array_agg(value) FILTER (WHERE CAST(NULL AS BOOLEAN))
+FROM range(16);
+----
+16 120 0 NULL 0 NULL
+
+statement ok
+PREPARE aggregate_filter_scalar(BOOLEAN) AS
+SELECT count(*) FILTER (WHERE $1), sum(10 / (value - value)) FILTER (WHERE NOT $1)
+FROM range(16);
+
+query II
+EXECUTE aggregate_filter_scalar(true);
+----
+16 NULL
+
+statement ok
+DEALLOCATE aggregate_filter_scalar;
+
+statement ok
+SET datafusion.execution.batch_size = 2;
+
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+# Groups without selected rows must remain.
+query IIIIII?
+SELECT
+  value % 4 AS k,
+  count(*) FILTER (WHERE true),
+  sum(value) FILTER (WHERE true),
+  count(*) FILTER (WHERE 1 = 2),
+  sum(10 / (value - value)) FILTER (WHERE false),
+  count(value) FILTER (WHERE NULL),
+  array_agg(value) FILTER (WHERE CAST(NULL AS BOOLEAN))
+FROM range(16)
+GROUP BY k
+ORDER BY k;
+----
+0 4 24 0 NULL 0 NULL
+1 4 28 0 NULL 0 NULL
+2 4 32 0 NULL 0 NULL
+3 4 36 0 NULL 0 NULL
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0;
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
+
+# The same query with skip-partial conversion: every partition reads several
+# batches, and all but the first are converted directly to partial states.
+query IIIIII?
+SELECT
+  value % 4 AS k,
+  count(*) FILTER (WHERE true),
+  sum(value) FILTER (WHERE true),
+  count(*) FILTER (WHERE 1 = 2),
+  sum(10 / (value - value)) FILTER (WHERE false),
+  count(value) FILTER (WHERE NULL),
+  array_agg(value) FILTER (WHERE CAST(NULL AS BOOLEAN))
+FROM range(16)
+GROUP BY k
+ORDER BY k;
+----
+0 4 24 0 NULL 0 NULL
+1 4 28 0 NULL 0 NULL
+2 4 32 0 NULL 0 NULL
+3 4 36 0 NULL 0 NULL
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold;
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_rows_threshold;
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
