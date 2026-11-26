@@ -12,7 +12,7 @@ use crate::joins::join_hash_map::ProbeOffset::{AtRow, MidChain};
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::ArrowNumericType;
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue, internal_err, resources_datafusion_err};
 
 /// A macro to downcast only supported integer types (up to 64-bit) and invoke a generic function.
 ///
@@ -167,7 +167,15 @@ impl ArrayMap {
         }
         let size = (range + 1) as usize;
 
-        let mut data: Vec<u32> = vec![0; size];
+        // Fallible, so a map the allocator cannot provide is an error instead
+        // of an abort (#27727)
+        let mut data: Vec<u32> = Vec::new();
+        data.try_reserve_exact(size).map_err(|e| {
+            resources_datafusion_err!(
+                "Failed to allocate an ArrayMap of {size} slots: {e}"
+            )
+        })?;
+        data.resize(size, 0);
         let mut next: Vec<u32> = vec![];
         let mut num_of_distinct_key = 0;
 
@@ -420,6 +428,21 @@ mod tests {
     use arrow::array::Int64Array;
     use arrow::array::UInt64Array;
     use std::sync::Arc;
+
+    #[test]
+    fn test_array_map_unallocatable_range_is_an_error() {
+        // 2^60 slots of 4 bytes: below `isize::MAX` bytes but more than any
+        // allocator provides, which aborted the process before #27727
+        let build: ArrayRef = Arc::new(UInt64Array::from(vec![0, 1 << 60]));
+        let err = ArrayMap::try_new(&build, 0, 1 << 60).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                datafusion_common::DataFusionError::ResourcesExhausted(_)
+            ),
+            "{err}"
+        );
+    }
 
     #[test]
     fn test_array_map_limit_offset_duplicate_elements() -> Result<()> {
