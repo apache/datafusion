@@ -81,6 +81,9 @@ async fn rerun_after_reset_keeps_aggregate_result() -> Result<()> {
         .await?
         .create_physical_plan()
         .await?;
+    // the scan must have been given the aggregate dynamic filter
+    let shown = displayable(plan.as_ref()).indent(true).to_string();
+    assert!(shown.contains("DynamicFilter"), "{shown}");
 
     let first = run(&ctx, Arc::clone(&plan)).await?;
     let again = run(&ctx, reset_plan_states(Arc::clone(&plan))?).await?;
