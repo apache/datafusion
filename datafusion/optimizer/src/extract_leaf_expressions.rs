@@ -1143,6 +1143,21 @@ fn split_and_push_projection(
         } else if let Expr::Alias(alias) = expr
             && is_extracted_alias(alias)
         {
+            if input_schema.has_column_with_unqualified_name(&alias.name) {
+                let transformed = routing_extract(
+                    alias.expr.as_ref().clone(),
+                    &mut extractors,
+                    &input_column_sets,
+                )?;
+                has_new_extractions |= transformed.transformed;
+                recovery_exprs.push(transformed.data.alias_qualified_with_metadata(
+                    alias.relation.clone(),
+                    &alias.name,
+                    alias.metadata.clone(),
+                ));
+                continue;
+            }
+
             // Insert the full Alias expression as the key so that
             // distinct alias names don't collide in the IndexMap.
             let alias_name = alias.name.clone();
