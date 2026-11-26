@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
+use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
@@ -26,6 +27,8 @@ use datafusion_physical_expr::expressions::{BinaryExpr, Column, col, lit};
 use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::window_topn::WindowTopN;
 use datafusion_physical_plan::collect;
 use datafusion_physical_plan::displayable;
@@ -1328,5 +1331,68 @@ async fn custom_udwf_sibling_with_ranking_name_blocks_rewrite() -> Result<()> {
             .collect::<Vec<_>>();
         assert_eq!(rks, vec![2; 10], "{return_type}");
     }
+    Ok(())
+}
+
+/// A session whose physical optimizer runs [`WindowTopN`] right after
+/// [`EnsureRequirements`] instead of before it.
+fn session_with_window_topn_after_enforcement() -> SessionContext {
+    let mut rules = PhysicalOptimizer::new().rules;
+    let position = |rules: &[Arc<dyn PhysicalOptimizerRule + Send + Sync>],
+                    name: &str| {
+        rules.iter().position(|rule| rule.name() == name).unwrap()
+    };
+    let window_topn = rules.remove(position(&rules, WindowTopN::new().name()));
+    let enforcement = position(&rules, EnsureRequirements::new().name());
+    rules.insert(enforcement + 1, window_topn);
+    let mut config = SessionConfig::new().with_target_partitions(4);
+    config.options_mut().optimizer.enable_window_topn = true;
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_default_features()
+        .with_physical_optimizer_rules(rules)
+        .build();
+    SessionContext::new_with_state(state)
+}
+
+/// `EnsureRequirements` sorts the window's input by `pk ASC NULLS LAST` and
+/// relies on that order for the query's `ORDER BY pk`. `PartitionedTopKExec`
+/// would emit `pk` with `NULLS FIRST`, so after enforcement the window is kept
+/// and the NULL row comes last.
+#[tokio::test]
+async fn window_topn_after_enforcement_keeps_order_relied_on() -> Result<()> {
+    let ctx = session_with_window_topn_after_enforcement();
+    ctx.sql(
+        "CREATE TABLE t (pk INT, v INT, id INT) AS VALUES \
+         (1, 0, 1), (1, 1, 2), (NULL, 0, 3), (NULL, 1, 4), (2, 0, 5), (2, 1, 6)",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let batches = ctx
+        .sql(
+            "SELECT pk, rk, rn, id FROM (
+               SELECT pk, v, id,
+                      rank() OVER (PARTITION BY pk ORDER BY v) AS rk,
+                      row_number() OVER (PARTITION BY pk ORDER BY v) AS rn
+               FROM t
+             ) WHERE rn <= 1 ORDER BY pk",
+        )
+        .await?
+        .collect()
+        .await?;
+    assert_snapshot!(
+        datafusion_common::test_util::batches_to_string(&batches),
+        @r"
+    +----+----+----+----+
+    | pk | rk | rn | id |
+    +----+----+----+----+
+    | 1  | 1  | 1  | 1  |
+    | 2  | 1  | 1  | 5  |
+    |    | 1  | 1  | 3  |
+    +----+----+----+----+
+    "
+    );
     Ok(())
 }
