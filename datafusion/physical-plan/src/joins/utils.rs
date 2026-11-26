@@ -148,11 +148,17 @@ pub fn adjust_right_output_partitioning(
                     "Offsetting range partitioning produced an empty ordering"
                 )
             })?;
-            Partitioning::Range(RangePartitioning::try_new_with_samples(
-                ordering,
-                range.samples().to_vec(),
-                range.partition_count(),
-            )?)
+            Partitioning::Range(
+                RangePartitioning::try_new_with_samples(
+                    ordering,
+                    range.samples().to_vec(),
+                    range.partition_count(),
+                )?
+                .try_with_bounds(
+                    range.start_bound().cloned(),
+                    range.end_bound().cloned(),
+                )?,
+            )
         }
         result => result.clone(),
     };
@@ -5450,6 +5456,8 @@ mod tests {
                 ScalarValue::Int32(Some(20)),
             ]),
         ];
+        let start = split_points.first().cloned();
+        let end = split_points.last().cloned();
         let range = RangePartitioning::try_new_with_samples(
             LexOrdering::new([
                 PhysicalSortExpr::new(
@@ -5464,7 +5472,8 @@ mod tests {
             .unwrap(),
             split_points.clone(),
             3,
-        )?;
+        )?
+        .try_with_bounds(start.clone(), end.clone())?;
 
         let adjusted = adjust_right_output_partitioning(&Partitioning::Range(range), 3)?;
         let Partitioning::Range(adjusted_range) = &adjusted else {
@@ -5472,21 +5481,24 @@ mod tests {
         };
         assert_eq!(adjusted_range.max_partition_count(), 6);
         assert_eq!(adjusted_range.samples(), split_points);
-        let expected = Partitioning::Range(RangePartitioning::try_new_with_samples(
-            LexOrdering::new([
-                PhysicalSortExpr::new(
-                    Arc::new(Column::new("a", 3)),
-                    SortOptions::new(false, true),
-                ),
-                PhysicalSortExpr::new(
-                    Arc::new(Column::new("b", 5)),
-                    SortOptions::new(true, false),
-                ),
-            ])
-            .unwrap(),
-            split_points,
-            3,
-        )?);
+        let expected = Partitioning::Range(
+            RangePartitioning::try_new_with_samples(
+                LexOrdering::new([
+                    PhysicalSortExpr::new(
+                        Arc::new(Column::new("a", 3)),
+                        SortOptions::new(false, true),
+                    ),
+                    PhysicalSortExpr::new(
+                        Arc::new(Column::new("b", 5)),
+                        SortOptions::new(true, false),
+                    ),
+                ])
+                .unwrap(),
+                split_points,
+                3,
+            )?
+            .try_with_bounds(start, end)?,
+        );
 
         assert_eq!(adjusted, expected);
         Ok(())
