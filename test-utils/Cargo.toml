@@ -21,4 +21,5 @@ arrow = { workspace = true }
 chrono-tz = { version = "0.10.4", default-features = false }
 datafusion-common = { workspace = true, default-features = true }
 env_logger = { workspace = true }
+futures = { workspace = true }
 rand = { workspace = true }

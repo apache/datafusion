@@ -115,3 +115,81 @@ fn three_row_group_file() -> Bytes {
     writer.close().unwrap();
     Bytes::from(buffer)
 }
+
+/// TopK dynamic filter pushdown when the page index has also pruned pages
+/// within the row groups.
+///
+/// `w = 1` only matches page 1 of each row group, so the page index creates a
+/// row selection for every row group:
+///
+/// ```text
+///        row group 0        row group 1        row group 2
+///      ┌──────┬───────┐   ┌──────┬───────┐   ┌──────┬───────┐
+///      │  id  │   w   │   │  id  │   w   │   │  id  │   w   │
+///      ├──────┼───────┤   ├──────┼───────┤   ├──────┼───────┤
+/// page │ 1..3 │   0   │   │ 7..9 │   0   │   │13..15│   0   │
+///  0   ├──────┼───────┤   ├──────┼───────┤   ├──────┼───────┤
+/// page │ 4..6 │   1   │   │10..12│   1   │   │16..18│   1   │
+///  1   └──────┴───────┘   └──────┴───────┘   └──────┴───────┘
+/// ```
+///
+/// Row group 2 is read first (sort pushdown). The TopK filter is then
+/// `id > 17`, which proves row groups 1 and 0 cannot contain better rows.
+/// However, runtime row group pruning is disabled when a row selection is
+/// present, so they are fetched anyway. See
+/// <https://github.com/apache/datafusion/issues/24358>.
+#[tokio::test]
+async fn test_topk_io_dynamic_filter_with_page_pruning() {
+    let mut config = SessionConfig::new().with_target_partitions(1);
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    let test = ParquetIoTest::new(three_row_group_two_page_file(), config).await;
+    assert_snapshot!(test.query("SELECT id FROM t WHERE w = 1 ORDER BY id DESC LIMIT 2").await, @r"
+    --- Query: SELECT id FROM t WHERE w = 1 ORDER BY id DESC LIMIT 2 (2 rows) ---
+    Request 1
+        Head (object size and metadata)
+    Request 2
+        Read Parquet footer (offsets 673..1507)
+    Request 3
+        Read ColumnIndex and OffsetIndex for columns 'id', 'w' (rg 0, 1, 2) (offsets 352..673)
+    Request 4
+        Read data page 1 for column 'w' (rg 2) (offsets 323..352)
+    Request 5
+        Read data page 0 for column 'id' (rg 2) (offsets 236..265)
+        Read data page 1 for column 'id' (rg 2) (offsets 265..294)
+    Request 6
+        Read data page 1 for column 'w' (rg 1) (offsets 207..236)
+    Request 7
+        Read data page 0 for column 'id' (rg 1) (offsets 120..149)
+        Read data page 1 for column 'id' (rg 1) (offsets 149..178)
+    Request 8
+        Read data page 1 for column 'w' (rg 0) (offsets 91..120)
+    Request 9
+        Read data page 0 for column 'id' (rg 0) (offsets 4..33)
+        Read data page 1 for column 'id' (rg 0) (offsets 33..62)
+    Produce batch (2 rows)
+    ");
+}
+
+/// Returns a Parquet file with three row groups of six rows, where each
+/// column chunk is written as two data pages of three rows each.
+fn three_row_group_two_page_file() -> Bytes {
+    let id: ArrayRef = Arc::new(Int32Array::from_iter_values(1..=18));
+    let w: ArrayRef = Arc::new(Int32Array::from_iter_values(
+        [0, 0, 0, 1, 1, 1].into_iter().cycle().take(18),
+    ));
+    let batch = RecordBatch::try_from_iter([("id", id), ("w", w)]).unwrap();
+
+    let props = WriterProperties::builder()
+        .set_dictionary_enabled(false)
+        .set_max_row_group_row_count(Some(6))
+        .set_data_page_row_count_limit(3)
+        .set_write_batch_size(3)
+        .build();
+
+    let mut buffer = Vec::new();
+    let mut writer =
+        ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    Bytes::from(buffer)
+}
