@@ -422,14 +422,21 @@ DROP TABLE t_dist_parts;
 statement ok
 DROP TABLE t_dist_int;
 
+statement ok
+CREATE TABLE t_metadata(i INT, x JSON);
+
+statement ok
+INSERT INTO t_metadata VALUES
+  (1, '1'), (2, '1'), (3, NULL), (4, '2');
+
 # Retraction and empty frames keep the list item's metadata.
 query I??TT
-SELECT i, a, d, arrow_field(a)['data_type'], arrow_field(d)['data_type']
+SELECT i, a, d, arrow_typeof(a), arrow_typeof(d)
 FROM (
   SELECT i,
-    array_agg(CAST(x AS JSON)) OVER w AS a,
-    array_agg(DISTINCT CAST(x AS JSON)) OVER w AS d
-  FROM (VALUES (1, '1'), (2, '1'), (3, NULL), (4, '2')) AS t(i, x)
+    array_agg(x) OVER w AS a,
+    array_agg(DISTINCT x) OVER w AS d
+  FROM t_metadata
   WINDOW w AS (ORDER BY i ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)
 ) ORDER BY i;
 ----
@@ -437,3 +444,6 @@ FROM (
 2 [1] [1] List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"}) List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"})
 3 [1] [1] List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"}) List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"})
 4 [NULL] [NULL] List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"}) List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"})
+
+statement ok
+DROP TABLE t_metadata;
