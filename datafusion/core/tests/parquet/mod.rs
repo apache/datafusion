@@ -37,6 +37,7 @@ mod dynamic_row_group_pruning;
 #[cfg(feature = "parquet_encryption")]
 mod encryption;
 mod expr_adapter;
+mod expr_statistics_resolver;
 mod external_access_plan;
 mod file_statistics;
 mod filter_pushdown;
