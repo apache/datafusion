@@ -2269,10 +2269,22 @@ impl ExecutionPlan for AggregateExec {
                 ..Self::clone(&*self)
             })),
             ChildrenPropertiesMode::Recompute => {
+                let aggr_expr = match self.mode.input_mode() {
+                    AggregateInputMode::Partial => find_partial_aggr_exprs(&children[0])
+                        .filter(|partial| {
+                            partial.len() == self.aggr_expr().len()
+                                && partial
+                                    .iter()
+                                    .zip(self.aggr_expr())
+                                    .all(|(p, c)| p.name() == c.name())
+                        }),
+                    AggregateInputMode::Raw => None,
+                }
+                .unwrap_or_else(|| self.aggr_expr().to_vec());
                 let mut me = AggregateExec::try_new_with_schema(
                     self.mode,
                     Arc::clone(self.group_by()),
-                    self.aggr_expr().to_vec(),
+                    aggr_expr,
                     self.clone_filter_exprs(),
                     Arc::clone(&children[0]),
                     Arc::clone(&self.input_schema),
@@ -3078,6 +3090,31 @@ fn determine_finer(
         candidate.partial_cmp(ordering).map(|cmp| cmp.is_gt())
     } else {
         Some(true)
+    }
+}
+
+/// Returns the aggregate expressions of the `Partial` [`AggregateExec`]
+/// whose state `input` carries.
+///
+/// Rebuilding a `Partial` aggregate over a differently ordered input can
+/// reverse an order-sensitive expression, which changes the layout of its
+/// state. The stage that merges that state must use the same expressions.
+fn find_partial_aggr_exprs(
+    input: &Arc<dyn ExecutionPlan>,
+) -> Option<Vec<Arc<AggregateFunctionExpr>>> {
+    let mut plan = input;
+    loop {
+        if let Some(agg_exec) = plan.downcast_ref::<AggregateExec>() {
+            return if *agg_exec.mode() == AggregateMode::Partial {
+                Some(agg_exec.aggr_expr().to_vec())
+            } else {
+                None
+            };
+        }
+        match plan.children().as_slice() {
+            [child] => plan = child,
+            _ => return None,
+        }
     }
 }
 

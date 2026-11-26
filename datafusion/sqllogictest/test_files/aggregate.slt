@@ -10806,3 +10806,52 @@ b 3.000000 1 1
 
 statement ok
 DROP TABLE s_decimal_distinct;
+
+# Start nth_value with a swapped join below the aggregate test.
+# See https://github.com/apache/datafusion/issues/27458
+query I
+COPY (SELECT * FROM (VALUES (1, 'a'), (2, 'b'), (3, 'c')) AS t(ts, x))
+TO 'test_files/scratch/aggregate/nth_r.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY (SELECT * FROM (VALUES (4), (3), (2), (1), (0)) AS t(k))
+TO 'test_files/scratch/aggregate/nth_l.parquet'
+STORED AS PARQUET;
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE r (ts INT, x VARCHAR)
+STORED AS PARQUET
+WITH ORDER (ts ASC)
+LOCATION 'test_files/scratch/aggregate/nth_r.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE l (k INT)
+STORED AS PARQUET
+WITH ORDER (k DESC)
+LOCATION 'test_files/scratch/aggregate/nth_l.parquet';
+
+# Query 1: planned with r as the probe side (ts ASC). JoinSelection then swaps
+# r to the build side, so the join output follows l's k DESC, i.e. ts DESC.
+query T
+SELECT nth_value(r.x, 2 ORDER BY r.ts) FROM l JOIN r ON l.k = r.ts;
+----
+b
+
+# Query 2: same physical plan, but r is already the build side when planned.
+query T
+SELECT nth_value(r.x, 2 ORDER BY r.ts) FROM r JOIN l ON l.k = r.ts;
+----
+b
+
+statement ok
+DROP TABLE r;
+
+statement ok
+DROP TABLE l;
+
+# End nth_value with a swapped join below the aggregate test.
