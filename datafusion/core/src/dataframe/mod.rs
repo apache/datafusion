@@ -177,7 +177,7 @@ impl Default for DataFrameWriteOptions {
 /// # use datafusion::prelude::*;
 /// # use datafusion::error::Result;
 /// # use datafusion::functions_aggregate::expr_fn::min;
-/// # use datafusion::arrow::array::{Int32Array, RecordBatch, StringArray};
+/// # use datafusion::arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 /// # use datafusion::arrow::datatypes::{DataType, Field, Schema};
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
@@ -212,6 +212,16 @@ impl Default for DataFrameWriteOptions {
 ///     "id" => [1, 2, 3],
 ///     "name" => ["foo", "bar", "baz"]
 ///  )?;
+/// df.show().await?;
+///
+/// // Create a new dataframe from Arrow arrays, in a new session
+/// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+/// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
+/// let df = dataframe!()?.from_arrays([("id", id.clone()), ("name", name.clone())])?;
+/// df.show().await?;
+///
+/// // Create a new dataframe from Arrow arrays, in the same session as `ctx`
+/// let df = ctx.read_empty()?.from_arrays([("id", id), ("name", name)])?;
 /// df.show().await?;
 /// # Ok(())
 /// # }
@@ -2853,21 +2863,79 @@ impl DataFrame {
             .collect()
     }
 
-    /// Create a DataFrame from named Arrow arrays.
+    /// Create a `DataFrame` from named Arrow arrays.
     ///
-    /// # Example
+    /// # Deprecated
+    ///
+    /// Use [`Self::from_arrays`] on an existing `DataFrame` instead:
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use arrow::array::{ArrayRef, Int32Array, StringArray};
-    /// use datafusion::prelude::DataFrame;
+    /// use arrow::array::{ArrayRef, Int32Array};
+    /// use datafusion::prelude::*;
     /// # use datafusion::error::Result;
     /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    /// // before: DataFrame::from_columns([("id", id)])?
+    ///
+    /// // after, in a new session
+    /// let df1 = dataframe!()?.from_arrays([("id", id.clone())])?;
+    ///
+    /// // after, in the session of an existing `ctx`
+    /// let ctx = SessionContext::new();
+    /// let df2 = ctx.read_empty()?.from_arrays([("id", id)])?;
+    /// let expected = vec![
+    ///     "+----+",
+    ///     "| id |",
+    ///     "+----+",
+    ///     "| 1  |",
+    ///     "| 2  |",
+    ///     "| 3  |",
+    ///     "+----+",
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &df1.collect().await?);
+    /// # assert_batches_sorted_eq!(expected, &df2.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[deprecated(since = "56.0.0", note = "use `DataFrame::from_arrays` instead")]
+    pub fn from_columns<'a, I>(columns: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = (&'a str, ArrayRef)>,
+    {
+        SessionContext::new().read_empty()?.from_arrays(columns)
+    }
+
+    /// Create a new `DataFrame` from named Arrow arrays, in the same session
+    /// as this `DataFrame`.
+    ///
+    /// Each `(name, array)` pair becomes one column. A field is nullable only
+    /// when its array may contain nulls (see [`Array::is_nullable`]).
+    ///
+    /// Returns an error if `columns` is empty or the arrays have different
+    /// lengths.
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion::arrow::array::{ArrayRef, Int32Array, StringArray};
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
     /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
-    /// let df = DataFrame::from_columns([("id", id), ("name", name)])?;
+    ///
+    /// // in the session of an existing `ctx`
+    /// let ctx = SessionContext::new();
+    /// let empty = ctx.read_empty()?;
+    /// let df1 = empty.from_arrays([("id", id.clone()), ("name", name.clone())])?;
+    ///
+    /// // in a new session
+    /// let df2 = dataframe!()?.from_arrays([("id", id), ("name", name)])?;
     /// let expected = vec![
     ///     "+----+------+",
     ///     "| id | name |",
@@ -2877,29 +2945,41 @@ impl DataFrame {
     ///     "| 3  | baz  |",
     ///     "+----+------+",
     /// ];
-    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # assert_batches_sorted_eq!(expected, &df1.collect().await?);
+    /// # assert_batches_sorted_eq!(expected, &df2.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
-    pub fn from_columns<'a, I>(columns: I) -> Result<Self>
+    pub fn from_arrays<'a, I>(&self, columns: I) -> Result<Self>
     where
         I: IntoIterator<Item = (&'a str, ArrayRef)>,
     {
         let (fields, arrays): (Vec<_>, Vec<_>) = columns
             .into_iter()
             .map(|(name, array)| {
-                (Field::new(name, array.data_type().clone(), true), array)
+                (
+                    Field::new(name, array.data_type().clone(), array.is_nullable()),
+                    array,
+                )
             })
             .unzip();
-        let schema = Arc::new(Schema::new(fields));
-        let batch = RecordBatch::try_new(schema, arrays)?;
-        let ctx = SessionContext::new();
-        let df = ctx.read_batch(batch)?;
-        Ok(df)
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields)), arrays)?;
+        let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+        let plan = LogicalPlanBuilder::scan(
+            UNNAMED_TABLE,
+            provider_as_source(Arc::new(provider)),
+            None,
+        )?
+        .build()?;
+        Ok(DataFrame::new((*self.session_state).clone(), plan))
     }
 }
 
 /// Create a DataFrame from column names and values.
+///
+/// A column is nullable only when its values may contain nulls: `"a" => [1, 2]`
+/// gives a non-nullable column, `"b" => [Some(1), None]` a nullable one. See
+/// [`DataFrame::from_arrays`] for the exact rule.
 ///
 /// # Example
 ///
@@ -2932,20 +3012,17 @@ impl DataFrame {
 #[macro_export]
 macro_rules! dataframe {
     () => {{
-        use std::sync::Arc;
-
-        use datafusion::prelude::SessionContext;
-        use datafusion::arrow::array::RecordBatch;
-        use datafusion::arrow::datatypes::Schema;
-
-        let ctx = SessionContext::new();
-        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
-        ctx.read_batch(batch)
+        // An empty DataFrame: no columns and no rows
+        let batch = $crate::arrow::array::RecordBatch::new_empty(
+            ::std::sync::Arc::new($crate::arrow::datatypes::Schema::empty()),
+        );
+        $crate::prelude::SessionContext::new().read_batch(batch)
     }};
 
     ($($name:expr => $data:expr),+ $(,)?) => {{
-        use datafusion::prelude::DataFrame;
-        use datafusion::common::test_util::IntoArrayRef;
+        // Imported anonymously so the macro does not shadow any name in the
+        // caller's code.
+        use $crate::common::test_util::IntoArrayRef as _;
 
         let columns = [
             $(
@@ -2953,7 +3030,9 @@ macro_rules! dataframe {
             )+
         ];
 
-        DataFrame::from_columns(columns)
+        $crate::prelude::SessionContext::new()
+            .read_empty()
+            .and_then(|df| df.from_arrays(columns))
     }};
 }
 
