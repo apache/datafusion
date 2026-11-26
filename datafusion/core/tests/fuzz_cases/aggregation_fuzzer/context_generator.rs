@@ -56,6 +56,12 @@ impl SessionContextGenerator {
     pub fn new(dataset_ref: Arc<Dataset>, table_name: &str) -> Self {
         let candidate_skip_partial_params = vec![
             SkipPartialParams::ensure_trigger(),
+            SkipPartialParams {
+                // Exercise repeated aggregate/flush/convert cycles as well as
+                // permanent skipping and aggregation without skipping.
+                ratio_threshold: f64::MIN_POSITIVE,
+                rows_threshold: 0,
+            },
             SkipPartialParams::ensure_not_trigger(),
         ];
 
@@ -109,18 +115,24 @@ impl SessionContextGenerator {
         // We will randomly generate following options:
         //   - `batch_size`, from range: [1, `total_rows_num`]
         //   - `target_partitions`, from range: [1, cpu_num]
-        //   - `skip_partial`, trigger or not trigger currently for simplicity
+        //   - `skip_partial`, permanent skipping, re-probing, or disabled
         //   - `enable_migration_aggregate`, true or false
         //   - `sorted`, if found a sorted dataset, will or will not push down this information
         //   - `spilling`(TODO)
-        let batch_size = rng.random_range(1..=self.max_batch_size);
-
         let target_partitions = rng.random_range(1..=self.max_target_partitions);
 
         let skip_partial_params_idx =
             rng.random_range(0..self.candidate_skip_partial_params.len());
         let skip_partial_params =
             self.candidate_skip_partial_params[skip_partial_params_idx];
+
+        // Small batches let the re-probing candidate reach multiple skip windows.
+        let max_batch_size = if skip_partial_params.ratio_threshold == f64::MIN_POSITIVE {
+            self.max_batch_size.min(16)
+        } else {
+            self.max_batch_size
+        };
+        let batch_size = rng.random_range(1..=max_batch_size);
 
         let enable_migration_aggregate = rng.random_bool(0.5);
 

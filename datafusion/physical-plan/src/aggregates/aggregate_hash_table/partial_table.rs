@@ -2,20 +2,15 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
-use crate::aggregates::group_values::{AccumulatorPhase, new_group_values};
-use crate::aggregates::order::GroupClustering;
+use crate::aggregates::group_values::AccumulatorPhase;
 use crate::aggregates::{AggregateExec, evaluate_group_by};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 
-use super::common::{
-    AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState,
-    HashAggregateAccumulator, PartialMarker, PartialSkipMarker,
-};
+use super::common::{AggregateHashTable, HashAggregateAccumulator, PartialMarker};
 
 /// Implementation specific to partial aggregation, where the table stores
 /// partial aggregate states and the input rows are raw rows.
@@ -56,42 +51,6 @@ impl AggregateHashTable<PartialMarker> {
         )
     }
 
-    /// In skip-partial-aggregation optimization, when a decision has been made to skip
-    /// partial stage, build a typed hash table only for aggregation state conversion
-    /// row-by-row.
-    pub(in crate::aggregates) fn partial_skip_table(
-        &self,
-    ) -> Result<AggregateHashTable<PartialSkipMarker>> {
-        let state = self.state.building();
-        let group_schema = state.group_by.group_schema(&self.input_schema)?;
-        let group_values = new_group_values(group_schema, &GroupClustering::None)?;
-        let accumulators = state
-            .accumulators
-            .iter()
-            .map(HashAggregateAccumulator::empty_like)
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(AggregateHashTable {
-            group_by_metrics: self.group_by_metrics.clone(),
-            aggregate_argument_metrics: self.aggregate_argument_metrics.clone(),
-            aggregate_accumulator_metrics: Arc::clone(
-                &self.aggregate_accumulator_metrics,
-            ),
-            aggregate_submetrics: self.aggregate_submetrics.clone(),
-            input_schema: Arc::clone(&self.input_schema),
-            output_schema: Arc::clone(&self.output_schema),
-            state_schema: Arc::clone(&self.state_schema),
-            batch_size: self.batch_size,
-            state: AggregateHashTableState::Building(AggregateHashTableBuffer {
-                group_by: Arc::clone(&state.group_by),
-                group_values,
-                batch_group_indices: Default::default(),
-                accumulators,
-            }),
-            _mode: PhantomData,
-        })
-    }
-
     /// Partial aggregation consumes raw input rows and updates the table's
     /// partial-state accumulators.
     pub(in crate::aggregates) fn aggregate_batch(
@@ -110,14 +69,15 @@ impl AggregateHashTable<PartialMarker> {
         self.start_outputting();
         Ok(())
     }
-}
 
-impl AggregateHashTable<PartialSkipMarker> {
+    /// Converts raw rows to partial states without inserting them into the table.
+    /// All accumulated groups must have been emitted before bypassing aggregation.
     pub(in crate::aggregates) fn convert_batch_to_state(
         &mut self,
         batch: &RecordBatch,
     ) -> Result<RecordBatch> {
         let state = self.state.building_mut();
+        debug_assert!(state.group_values.is_empty());
         let grouping_set_args = self
             .group_by_metrics
             .time_group_key_preparation(|| evaluate_group_by(&state.group_by, batch))?;

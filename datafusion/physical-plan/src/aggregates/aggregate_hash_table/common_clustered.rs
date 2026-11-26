@@ -196,13 +196,7 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
                     .into_iter()
                     .map(|expr| AggregateArgument::try_new(expr, input_schema))
                     .collect::<Result<_>>()?;
-                Ok(AggregateAccumulator::new(
-                    Arc::clone(agg_expr),
-                    arguments,
-                    filter,
-                    accumulator,
-                    Arc::clone(submetrics),
-                ))
+                Ok(AggregateAccumulator::new(arguments, filter, accumulator))
             })
             .collect::<Result<_>>()?;
 

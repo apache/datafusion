@@ -40,8 +40,6 @@ pub(in crate::aggregates) struct PartialMarker;
 pub(in crate::aggregates) struct SingleMarker;
 /// Marker for partial state -> partial state aggregation.
 pub(in crate::aggregates) struct PartialReduceMarker;
-/// Marker for raw rows -> partial state conversion without aggregation.
-pub(in crate::aggregates) struct PartialSkipMarker;
 /// Marker for partial state -> final value aggregation.
 pub(in crate::aggregates) struct FinalMarker;
 
@@ -162,11 +160,9 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                     .map(|expr| AggregateArgument::try_new(expr, &input_schema))
                     .collect::<Result<_>>()?;
                 Ok(HashAggregateAccumulator::new(
-                    Arc::clone(agg_expr),
                     arguments,
                     filter,
                     accumulator,
-                    Arc::clone(submetrics),
                 ))
             })
             .collect::<Result<_>>()?;
@@ -510,10 +506,6 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 /// For example, for `SELECT COUNT(x), SUM(y WHERE z > 10) ...`  there would be two
 /// `HashAggregateAccumulator`, one each for `COUNT(x)` and `SUM(y WHERE z > 10)`
 pub(super) struct HashAggregateAccumulator {
-    /// Aggregate expression used to create a fresh accumulator for related
-    /// hash tables, such as the partial-skip table.
-    aggregate_expr: Arc<AggregateFunctionExpr>,
-
     /// Arguments to pass to this accumulator.
     ///
     /// Example: `CORR(x, y)` stores two arguments here, while `SUM(x)` stores one.
@@ -526,9 +518,6 @@ pub(super) struct HashAggregateAccumulator {
 
     /// Accumulator state for all groups for one aggregate expression.
     accumulator: Box<dyn GroupsAccumulator>,
-
-    /// Optional internal metrics owned by this aggregate expression.
-    submetrics: Arc<dyn AggregateMetrics>,
 }
 
 pub(super) type AggregateAccumulator = HashAggregateAccumulator;
@@ -633,17 +622,17 @@ pub(super) enum AggregateHashTableState {
 /// Final aggregate evaluation consumes accumulator state, and partial terminal
 /// output should not repeatedly renumber group values with `EmitTo::First`.
 /// Materialize once and then slice to honor `batch_size` across output polls.
-pub(super) struct MaterializedAggregateOutput {
+pub(in crate::aggregates) struct MaterializedAggregateOutput {
     batch: RecordBatch,
     offset: usize,
 }
 
 impl MaterializedAggregateOutput {
-    pub(super) fn new(batch: RecordBatch) -> Self {
+    pub(in crate::aggregates) fn new(batch: RecordBatch) -> Self {
         Self { batch, offset: 0 }
     }
 
-    pub(super) fn next_batch(
+    pub(in crate::aggregates) fn next_batch(
         &mut self,
         batch_size: usize,
     ) -> Result<Option<RecordBatch>> {
@@ -658,11 +647,11 @@ impl MaterializedAggregateOutput {
         compact_dictionaries(batch).map(Some)
     }
 
-    pub(super) fn is_exhausted(&self) -> bool {
+    pub(in crate::aggregates) fn is_exhausted(&self) -> bool {
         self.offset >= self.batch.num_rows()
     }
 
-    pub(super) fn memory_size(&self) -> usize {
+    pub(in crate::aggregates) fn memory_size(&self) -> usize {
         self.batch.get_array_memory_size()
     }
 }
@@ -735,39 +724,16 @@ fn compact_group_indices(
 
 impl HashAggregateAccumulator {
     pub(super) fn new(
-        aggregate_expr: Arc<AggregateFunctionExpr>,
         arguments: Vec<AggregateArgument>,
         filter: Option<Arc<dyn PhysicalExpr>>,
         accumulator: Box<dyn GroupsAccumulator>,
-        submetrics: Arc<dyn AggregateMetrics>,
     ) -> Self {
         let filter = filter.map(|predicate| AggregateFilter::new(predicate, &arguments));
         Self {
-            aggregate_expr,
             arguments,
             filter,
             accumulator,
-            submetrics,
         }
-    }
-
-    /// Construct a new accumulator with the same definition, but with empty internal
-    /// state buffers (empty [`GroupsAccumulator`]).
-    pub(super) fn empty_like(&self) -> Result<Self> {
-        let accumulator =
-            create_group_accumulator(&self.aggregate_expr, Arc::clone(&self.submetrics))?;
-        Ok(Self::new(
-            Arc::clone(&self.aggregate_expr),
-            self.arguments
-                .iter()
-                .map(AggregateArgument::empty_like)
-                .collect(),
-            self.filter
-                .as_ref()
-                .map(|filter| Arc::clone(filter.predicate())),
-            accumulator,
-            Arc::clone(&self.submetrics),
-        ))
     }
 
     /// Evaluate aggregate arguments and filter for one input batch.
@@ -1161,11 +1127,9 @@ mod tests {
         let accumulator =
             create_group_accumulator(&aggregate_expr, Arc::clone(&submetrics))?;
         Ok(HashAggregateAccumulator::new(
-            aggregate_expr,
             vec![AggregateArgument::try_new(argument, schema)?],
             Some(Arc::new(Column::new(filter_name, filter_index))),
             accumulator,
-            submetrics,
         ))
     }
 

@@ -8,7 +8,7 @@ use arrow::array::{Array, AsArray};
 use arrow::datatypes::{
     DataType, Int32Type, Int64Type, IntervalUnit, TimeUnit, TimestampNanosecondType,
 };
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use data_utils::create_table_provider;
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
@@ -549,5 +549,62 @@ async fn fully_ordered_context(
     Ok(Arc::new(Mutex::new(ctx)))
 }
 
-criterion_group!(benches, criterion_benchmark, fully_ordered);
+/// Measure complete SQL queries whose partial aggregates can cross the probe
+/// threshold. The smaller fixtures above do not exercise skipping or re-probing.
+fn partial_aggregation_reprobe(c: &mut Criterion) {
+    let cases = [
+        ("unique_short", 2_000_000, Some("value * 104729 % 2000000")),
+        ("unique_long", 10_000_000, Some("value * 104729 % 10000000")),
+        (
+            "changing",
+            2_000_000,
+            Some("CASE WHEN value <= 400000 THEN value ELSE value % 1000 END"),
+        ),
+        (
+            "late_change",
+            12_000_000,
+            Some(
+                "CASE WHEN value <= 8000000 THEN value * 104729 % 8000000 \
+                 ELSE value % 1000 END",
+            ),
+        ),
+        ("repeated", 2_000_000, Some("value % 1000")),
+        ("ungrouped", 2_000_000, None),
+    ];
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("partial_aggregation_reprobe");
+    for (implementation, enable_migration) in [("current", true), ("legacy", false)] {
+        let mut config = SessionConfig::new()
+            .with_target_partitions(2)
+            .with_batch_size(8192);
+        let execution = &mut config.options_mut().execution;
+        execution.enable_migration_aggregate = enable_migration;
+        execution.skip_partial_aggregation_probe_rows_threshold = 100_000;
+        execution.skip_partial_aggregation_probe_ratio_threshold = 0.8;
+        let ctx = Arc::new(Mutex::new(SessionContext::new_with_config(config)));
+
+        for (name, input_rows, key) in cases {
+            let sql = match key {
+                Some(key) => format!(
+                    "SELECT {key} AS k, SUM(value) AS total \
+                     FROM generate_series(1, {input_rows}) GROUP BY k"
+                ),
+                None => format!(
+                    "SELECT SUM(value) AS total FROM generate_series(1, {input_rows})"
+                ),
+            };
+            group.bench_function(BenchmarkId::new(implementation, name), |b| {
+                b.iter(|| query(ctx.clone(), &rt, &sql));
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    criterion_benchmark,
+    fully_ordered,
+    partial_aggregation_reprobe
+);
 criterion_main!(benches);

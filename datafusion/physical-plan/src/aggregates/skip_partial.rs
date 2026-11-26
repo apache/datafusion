@@ -6,9 +6,18 @@ use arrow::record_batch::RecordBatch;
 
 use crate::metrics;
 
+// Retry promptly at first, then limit repeated work on ineffective aggregation
+// without allowing an indefinitely growing delay before conditions are checked.
+const INITIAL_REPROBE_SKIP_MULTIPLIER: usize = 4;
+const MAX_REPROBE_SKIP_MULTIPLIER: usize = 16;
+
 /// Tracks if the aggregate should skip partial aggregations
 ///
-/// Used by [`crate::aggregates::hash_stream::PartialHashAggregateStream`].
+/// After an ineffective probe, skip four times the larger of the row threshold
+/// and the triggering batch. Consecutive ineffective probes double this interval
+/// up to sixteen times; a useful decision resets the multiplier to four.
+/// Probe counters include groups recreated after early emission and remain
+/// cumulative until a skip interval ends.
 pub(super) struct SkipAggregationProbe {
     // ========================================================================
     // PROPERTIES:
@@ -28,19 +37,9 @@ pub(super) struct SkipAggregationProbe {
     // Fields changes during execution. Can be buffer, or state flags that
     // influence the execution in the parent aggregate stream
     // ========================================================================
-    /// Number of processed input rows (updated during probing)
-    input_rows: usize,
-    /// Number of groups created for `input_rows` (updated during probing).
-    /// A key that returns after an early emit is counted again, so this is the
-    /// number of rows the stream outputs for `input_rows`.
-    num_groups: usize,
-
-    /// Flag indicating further data aggregation may be skipped (decision made
-    /// when probing complete)
-    should_skip: bool,
-    /// Flag indicating further updates of `SkipAggregationProbe` state won't
-    /// make any effect (set either while probing or on probing completion)
-    is_locked: bool,
+    state: ProbeState,
+    /// Multiplier for the next skip window; reset after a useful probe.
+    skip_multiplier: usize,
 
     // ========================================================================
     // METRICS:
@@ -54,6 +53,16 @@ pub(super) struct SkipAggregationProbe {
     skipped_aggregation_rows: metrics::Count,
 }
 
+enum ProbeState {
+    Probing {
+        input_rows: usize,
+        num_groups: usize,
+    },
+    Skipping {
+        rows_left: usize,
+    },
+}
+
 impl SkipAggregationProbe {
     pub(super) fn new(
         probe_rows_threshold: usize,
@@ -61,43 +70,69 @@ impl SkipAggregationProbe {
         skipped_aggregation_rows: metrics::Count,
     ) -> Self {
         Self {
-            input_rows: 0,
-            num_groups: 0,
             probe_rows_threshold,
             probe_ratio_threshold,
-            should_skip: false,
-            is_locked: false,
+            state: ProbeState::Probing {
+                input_rows: 0,
+                num_groups: 0,
+            },
+            skip_multiplier: INITIAL_REPROBE_SKIP_MULTIPLIER,
             skipped_aggregation_rows,
         }
     }
 
-    /// Updates `SkipAggregationProbe` state:
-    /// - adds the input rows of a batch and the groups it created
-    /// - on `probe_rows_threshold` exceeded calculates
-    ///   aggregation ratio and sets `should_skip` flag
-    /// - if `should_skip` is set, locks further state updates
+    /// Adds a batch's input rows and newly created groups to the active probe.
     pub(super) fn update_state(&mut self, input_rows: usize, new_groups: usize) {
-        if self.is_locked {
+        let ProbeState::Probing {
+            input_rows: total_rows,
+            num_groups,
+        } = &mut self.state
+        else {
             return;
-        }
-        self.input_rows += input_rows;
-        self.num_groups += new_groups;
-        if self.input_rows >= self.probe_rows_threshold {
-            self.should_skip = self.num_groups as f64 / self.input_rows as f64
-                > self.probe_ratio_threshold;
-            // Set is_locked to true only if we have decided to skip, otherwise we can try to skip
-            // during processing the next record_batch.
-            self.is_locked = self.should_skip;
+        };
+        *total_rows += input_rows;
+        *num_groups += new_groups;
+        if *total_rows > 0 && *total_rows >= self.probe_rows_threshold {
+            if *num_groups as f64 / *total_rows as f64 > self.probe_ratio_threshold {
+                // A long useful phase must not delay recovery after a later skip.
+                // Account for batches larger than the configured probe window.
+                self.state = ProbeState::Skipping {
+                    rows_left: self
+                        .probe_rows_threshold
+                        .max(input_rows)
+                        .saturating_mul(self.skip_multiplier),
+                };
+                self.skip_multiplier = self
+                    .skip_multiplier
+                    .saturating_mul(2)
+                    .min(MAX_REPROBE_SKIP_MULTIPLIER);
+            } else {
+                self.skip_multiplier = INITIAL_REPROBE_SKIP_MULTIPLIER;
+            }
         }
     }
 
     pub(super) fn should_skip(&self) -> bool {
-        self.should_skip
+        matches!(self.state, ProbeState::Skipping { .. })
     }
 
     /// Record the number of rows that were output directly without aggregation
     pub(super) fn record_skipped(&mut self, batch: &RecordBatch) {
         self.skipped_aggregation_rows.add(batch.num_rows());
+        // No non-empty probe can satisfy a non-positive ratio threshold.
+        if self.probe_ratio_threshold <= 0.0 {
+            return;
+        }
+        let ProbeState::Skipping { rows_left } = &mut self.state else {
+            return;
+        };
+        *rows_left = rows_left.saturating_sub(batch.num_rows());
+        if *rows_left == 0 {
+            self.state = ProbeState::Probing {
+                input_rows: 0,
+                num_groups: 0,
+            };
+        }
     }
 }
 
@@ -120,6 +155,63 @@ mod tests {
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
     use futures::StreamExt;
+
+    fn skip_rows(probe: &mut SkipAggregationProbe, rows: usize) {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, false)])),
+            vec![Arc::new(Int32Array::from(vec![0; rows]))],
+        )
+        .unwrap();
+        probe.record_skipped(&batch);
+    }
+
+    #[rstest::rstest]
+    #[case(0)]
+    #[case(8)]
+    fn test_reprobe_backoff_is_bounded(#[case] probe_rows_threshold: usize) {
+        let mut probe =
+            SkipAggregationProbe::new(probe_rows_threshold, 0.8, metrics::Count::new());
+        for multiplier in [4, 8, 16, 16, 16] {
+            probe.update_state(8, 8);
+            assert!(probe.should_skip());
+            skip_rows(&mut probe, 8 * multiplier - 1);
+            assert!(probe.should_skip());
+            skip_rows(&mut probe, 0);
+            assert!(probe.should_skip());
+            skip_rows(&mut probe, 1);
+            assert!(!probe.should_skip());
+            probe.update_state(0, 0);
+            assert!(!probe.should_skip());
+        }
+    }
+
+    #[test]
+    fn test_reprobe_backoff_resets_after_useful_window() {
+        let mut probe = SkipAggregationProbe::new(8, 0.8, metrics::Count::new());
+        for multiplier in [4, 8, 16] {
+            probe.update_state(8, 8);
+            skip_rows(&mut probe, 8 * multiplier);
+            assert!(!probe.should_skip());
+        }
+
+        // A short useful prefix does not establish that the probe is useful.
+        probe.update_state(4, 2);
+        probe.update_state(12, 12);
+        assert!(probe.should_skip());
+        skip_rows(&mut probe, 16 * 12 - 1);
+        assert!(probe.should_skip());
+        skip_rows(&mut probe, 1);
+        assert!(!probe.should_skip());
+
+        probe.update_state(8, 4);
+        assert!(!probe.should_skip());
+        probe.update_state(32, 32);
+        assert!(probe.should_skip());
+        skip_rows(&mut probe, 4 * 32 - 1);
+        assert!(probe.should_skip());
+        skip_rows(&mut probe, 1);
+        assert!(!probe.should_skip());
+    }
 
     // Migrated to PartialHashAggregateStream coverage in hash_stream.rs;
     // kept here for the legacy GroupedHashAggregateStream implementation.

@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 # SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+# configMatrix: datafusion.execution.enable_migration_aggregate=true,false
+
 # The main goal of these tests is to verify correctness of transforming
 # input values to state by accumulators, supporting `convert_to_state`.
 
@@ -43,12 +45,13 @@ SELECT
   CASE WHEN c1='a' OR c1='b' THEN TRUE WHEN c1='c' OR c1='d' THEN FALSE ELSE NULL END as v3
 FROM aggregate_test_100;
 
-# Prepare settings to skip partial aggregation from the beginning
+# A small positive ratio forces skipping and re-probing on these fixtures.
+# Ratio-zero permanent skipping is covered by the other aggregate/filter suites.
 statement ok
 set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0;
 
 statement ok
-set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
+set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.000000001;
 
 statement ok
 set datafusion.execution.target_partitions = 2;
@@ -218,12 +221,12 @@ reset datafusion.execution.skip_partial_aggregation_probe_ratio_threshold;
 statement ok
 reset datafusion.execution.skip_partial_aggregation_probe_rows_threshold;
 
-# Prepare settings to always skip aggregation after couple of batches
+# Re-probe within each partition, including AVG and filtered accumulators below.
 statement ok
-set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 10;
+set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0;
 
 statement ok
-set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
+set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.000000001;
 
 statement ok
 set datafusion.execution.target_partitions = 2;
@@ -756,7 +759,7 @@ statement ok
 set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0;
 
 statement ok
-set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
+set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.000000001;
 
 statement ok
 set datafusion.execution.target_partitions = 1;
@@ -817,7 +820,7 @@ statement ok
 set datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0;
 
 statement ok
-set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
+set datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.000000001;
 
 statement ok
 set datafusion.execution.target_partitions = 2;

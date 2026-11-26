@@ -698,6 +698,9 @@ impl Stream for GroupedHashAggregateStream {
                             let _timer = elapsed_compute.timer();
                             if let Some(probe) = self.skip_aggregation_probe.as_mut() {
                                 probe.record_skipped(&batch);
+                                if !probe.should_skip() {
+                                    self.exec_state = ExecutionState::ReadingInput;
+                                }
                             }
                             let states = self.transform_to_states(&batch)?;
                             return Poll::Ready(Some(Ok(
