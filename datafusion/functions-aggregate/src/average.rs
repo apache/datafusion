@@ -885,8 +885,7 @@ impl Accumulator for DurationAvgAccumulator {
         };
 
         if let Some(x) = sum_value {
-            let v = self.sum.get_or_insert(0);
-            *v += x;
+            self.sum = Some(self.sum.get_or_insert(0).add_wrapping(x));
         }
         Ok(())
     }
@@ -948,8 +947,7 @@ impl Accumulator for DurationAvgAccumulator {
         };
 
         if let Some(x) = sum_value {
-            let v = self.sum.get_or_insert(0);
-            *v += x;
+            self.sum = Some(self.sum.get_or_insert(0).add_wrapping(x));
         }
         Ok(())
     }
@@ -966,7 +964,7 @@ impl Accumulator for DurationAvgAccumulator {
         };
 
         if let Some(x) = sum_value {
-            self.sum = Some(self.sum.unwrap() - x);
+            self.sum = Some(self.sum.get_or_insert(0).sub_wrapping(x));
         }
         Ok(())
     }
@@ -1626,6 +1624,50 @@ mod tests {
                 case.name
             );
         }
+
+        Ok(())
+    }
+
+    // Regression test for https://github.com/apache/datafusion/issues/24894
+    // DurationAvgAccumulator must wrap on overflow like the `sum` aggregate
+    // and the other `avg` accumulators, instead of panicking in debug builds.
+    #[test]
+    fn avg_duration_accumulator_wraps_on_overflow() -> Result<()> {
+        let input_type = DataType::Duration(TimeUnit::Second);
+        let return_type = DataType::Duration(TimeUnit::Second);
+        let mut acc = avg_accumulator(&input_type, &return_type)?;
+
+        // Ingest the two extreme values in separate calls, mirroring how a
+        // sliding window feeds the accumulator row by row: the running sum
+        // i64::MAX + i64::MAX overflows i64.
+        let values: ArrayRef = Arc::new(DurationSecondArray::from(vec![Some(i64::MAX)]));
+        acc.update_batch(std::slice::from_ref(&values))?;
+        acc.update_batch(std::slice::from_ref(&values))?;
+
+        // Wrapping matches `arrow::compute::sum`: i64::MAX + i64::MAX == -2,
+        // and -2 / 2 == -1.
+        assert_eq!(acc.evaluate()?, ScalarValue::DurationSecond(Some(-1)));
+
+        Ok(())
+    }
+
+    // Regression test for https://github.com/apache/datafusion/issues/24894
+    // Same wrapping contract for the merge path of DurationAvgAccumulator.
+    #[test]
+    fn avg_duration_accumulator_merge_wraps_on_overflow() -> Result<()> {
+        let input_type = DataType::Duration(TimeUnit::Second);
+        let return_type = DataType::Duration(TimeUnit::Second);
+        let mut acc = avg_accumulator(&input_type, &return_type)?;
+
+        // Merge two single-value partial sums in separate calls so the
+        // accumulator's own running sum overflows i64.
+        let partial_counts: ArrayRef = Arc::new(UInt64Array::from(vec![1]));
+        let partial_sums: ArrayRef =
+            Arc::new(DurationSecondArray::from(vec![Some(i64::MAX)]));
+        acc.merge_batch(&[Arc::clone(&partial_counts), Arc::clone(&partial_sums)])?;
+        acc.merge_batch(&[Arc::clone(&partial_counts), Arc::clone(&partial_sums)])?;
+
+        assert_eq!(acc.evaluate()?, ScalarValue::DurationSecond(Some(-1)));
 
         Ok(())
     }
