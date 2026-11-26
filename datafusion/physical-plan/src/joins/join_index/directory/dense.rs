@@ -67,12 +67,9 @@ pub(super) struct DenseIntegerDirectory<T> {
     /// `None` means no bitmap: all occupied slots hold row IDs.
     /// Bits cannot be NULL; `slots[i] == 0` marks a miss.
     is_group: Option<BooleanBuffer>,
-    /// Separate handle for build-side NULLs when NULL equals NULL.
-    /// `None` if no build key is NULL or NULLs cannot match.
-    null: Option<MatchHandle<T>>,
-    /// Distinct matchable build keys, counting NULL once if stored.
+    /// Distinct matchable build keys.
     distinct: usize,
-    /// Every matchable build key has at most one row, including NULL.
+    /// Every matchable build key has at most one row.
     build_unique: bool,
 }
 
@@ -201,7 +198,6 @@ impl<T: RowId> DenseIntegerDirectory<T> {
             offset: min,
             slots,
             is_group,
-            null: None,
             distinct,
             build_unique: num_groups == 0,
         };
@@ -260,14 +256,9 @@ impl<T: RowId> DenseIntegerDirectory<T> {
     {
         let has_nulls = array.null_count() > 0;
         if self.build_unique {
-            let null = match self.null {
-                Some(MatchHandle::One(row)) => Some(row),
-                None => None,
-                Some(MatchHandle::Group(_)) => unreachable!("unique index has no groups"),
-            };
             return UniqueMatches::from_lookup(array.len(), reservation, |row| {
                 if has_nulls && array.is_null(row) {
-                    null
+                    None
                 } else {
                     let key: u64 = array.value(row).as_();
                     let position = key.wrapping_sub(self.offset);
@@ -282,7 +273,7 @@ impl<T: RowId> DenseIntegerDirectory<T> {
         }
         MatchHandleArray::from_lookup(array.len(), reservation, |row| {
             if has_nulls && array.is_null(row) {
-                self.null
+                None
             } else {
                 self.get(array.value(row).as_())
             }
@@ -299,7 +290,7 @@ impl<T: RowId> DenseIntegerDirectory<T> {
                 let has_nulls = array.null_count() > 0;
                 let values = BooleanBuffer::collect_bool(array.len(), |row| {
                     if has_nulls && array.is_null(row) {
-                        self.null.is_some()
+                        false
                     } else {
                         self.get(array.value(row).as_()).is_some()
                     }
