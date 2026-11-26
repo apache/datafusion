@@ -10,11 +10,14 @@
 //!   asks the matcher: is `expr` a key? --> FileStatisticsResolvers::matches
 //!                                            -> first resolver whose `bind`
 //!                                               returns a binding (cached)
-//!   min_values_for_expr(expr) ----------> RowGroupPruningStatistics
+//!   min_values_for_expr(expr) ----------> RowGroupPruningStatistics / PagesPruningStatistics
 //!                                            -> the cached binding reads leaf
 //!                                               statistics through
 //!                                               ParquetLeafStatistics
 //! ```
+//!
+//! A resolver works on [`ParquetLeafStatistics`], so the same resolver serves
+//! row group statistics and the page index.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -40,8 +43,8 @@ pub enum ExprStatisticsKind {
     NullCount,
 }
 
-/// Statistics of Parquet leaf columns for a set of containers, such as the
-/// row groups of a file.
+/// Statistics of Parquet leaf columns for a set of containers: the row
+/// groups of a file, or the pages of one row group.
 pub trait ParquetLeafStatistics {
     /// Minimum values of the Parquet leaf column `leaf`, converted to the
     /// type of `field`. Returns `None` when the statistics are unknown or
@@ -108,6 +111,16 @@ pub trait BoundExprStatistics: Debug + Send + Sync {
         kind: ExprStatisticsKind,
         statistics: &dyn ParquetLeafStatistics,
     ) -> Option<ArrayRef>;
+
+    /// The Parquet leaf whose pages hold the values of the expression, if
+    /// page index pruning can use these statistics.
+    ///
+    /// The page index prunes one leaf at a time, because the pages of
+    /// different leaves do not line up. Return `None` (the default) when the
+    /// statistics need more than one leaf.
+    fn page_index_leaf(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// The [`ParquetStatisticsResolver`]s of a Parquet scan.
@@ -153,8 +166,8 @@ type BoundStatistics = Arc<dyn BoundExprStatistics>;
 /// it. The pruning statistics then read the values from the same binding,
 /// so the key and its statistics always agree.
 ///
-/// Each expression is bound once. The binding is cached for the row group
-/// and dynamic filter pruning of the file.
+/// Each expression is bound once. The binding is cached for the row group,
+/// page index and dynamic filter pruning of the file.
 #[derive(Debug)]
 pub(crate) struct FileStatisticsResolvers {
     resolvers: ParquetStatisticsResolvers,
@@ -334,5 +347,9 @@ impl BoundExprStatistics for StructFieldStatistics {
                 statistics.leaf_null_counts(self.leaf, &self.field)
             }
         }
+    }
+
+    fn page_index_leaf(&self) -> Option<usize> {
+        Some(self.leaf)
     }
 }

@@ -396,6 +396,7 @@ fn large_string_in_list_preserves_rows_with_untrusted_page_order() {
             &physical,
             &file.schema,
             max_in_list_size,
+            None,
         );
         assert_eq!(page_filter.filter_number(), 1);
         let all = ParquetAccessPlan::new_all(file.metadata.num_row_groups());
