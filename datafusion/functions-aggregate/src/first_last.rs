@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, BooleanArray, BooleanBufferBuilder,
-    PrimitiveArray, downcast_primitive,
+    PrimitiveArray, UInt64Array, downcast_primitive, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{self, LexicographicalComparator, SortColumn, SortOptions};
@@ -23,6 +23,7 @@ use arrow::datatypes::{
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
+use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_boolean_array, as_primitive_array};
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, get_row_at_idx};
 use datafusion_common::{
@@ -407,19 +408,11 @@ impl AggregateUDFImpl for FirstValue {
 struct FirstLastGroupsAccumulator<S: ValueState> {
     // ================ state ===========
     state: S,
-    // Stores ordering values, of the aggregator requirement corresponding to first value
-    // of the aggregator.
-    // The `orderings` are stored row-wise, meaning that `orderings[group_idx]`
-    // represents the ordering values corresponding to the `group_idx`-th group.
-    orderings: Vec<Vec<ScalarValue>>,
+    // Ordering values of each group's winner.
+    orderings: GroupOrderings,
     // At the beginning, `is_sets[group_idx]` is false, which means `first` is not seen yet.
     // Once we see the first value, we set the `is_sets[group_idx]` flag
     is_sets: BooleanBufferBuilder,
-    // size of `self.orderings`
-    // Calculating the memory usage of `self.orderings` using `ScalarValue::size_of_vec` is quite costly.
-    // Therefore, we cache it and compute `size_of` only after each update
-    // to avoid calling `ScalarValue::size_of_vec` by Self.size.
-    size_of_orderings: usize,
 
     // Per-batch scoreboard shared by `get_filtered_extreme_of_each_group`
     // and the pre-ordered fast path:
@@ -448,8 +441,6 @@ struct FirstLastGroupsAccumulator<S: ValueState> {
     // true: take first element in an aggregation group according to the requested ordering.
     // false: take last element in an aggregation group according to the requested ordering.
     pick_first_in_group: bool,
-    // derived from `ordering_req`.
-    sort_options: Vec<SortOptions>,
     // Ignore null values.
     ignore_nulls: bool,
     // When `true` (set through `with_beneficial_ordering` by the
@@ -457,7 +448,6 @@ struct FirstLastGroupsAccumulator<S: ValueState> {
     // proven that every group's rows already arrive in `ordering_req` order,
     // and `update_batch` takes the comparison-free fast path.
     is_input_pre_ordered: bool,
-    default_orderings: Vec<ScalarValue>,
 }
 
 impl<S: ValueState> FirstLastGroupsAccumulator<S> {
@@ -469,22 +459,15 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         pick_first_in_group: bool,
         is_input_pre_ordered: bool,
     ) -> Result<Self> {
-        let default_orderings = ordering_dtypes
-            .iter()
-            .map(ScalarValue::try_from)
-            .collect::<Result<_>>()?;
-
         let sort_options = get_sort_options(&ordering_req);
+        let orderings = GroupOrderings::try_new(ordering_dtypes, &sort_options)?;
 
         Ok(Self {
             ordering_req,
-            sort_options,
             ignore_nulls,
-            default_orderings,
             state,
-            orderings: Vec::new(),
+            orderings,
             is_sets: BooleanBufferBuilder::new(0),
-            size_of_orderings: 0,
             extreme_of_each_group_buf: (Vec::new(), BooleanBufferBuilder::new(0)),
             extreme_buf_dirty: false,
             touched_groups_buf: Vec::new(),
@@ -493,87 +476,81 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         })
     }
 
-    fn should_update_state(
-        &self,
-        group_idx: usize,
-        new_ordering_values: &[ScalarValue],
-    ) -> Result<bool> {
-        if !self.is_sets.get_bit(group_idx) {
-            return Ok(true);
-        }
-
-        debug_assert_eq!(new_ordering_values.len(), self.ordering_req.len());
-        let current_ordering = &self.orderings[group_idx];
-        compare_rows(current_ordering, new_ordering_values, &self.sort_options).map(|x| {
-            if self.pick_first_in_group {
-                x.is_gt()
-            } else {
-                x.is_lt()
-            }
-        })
-    }
-
-    fn take_orderings(&mut self, emit_to: EmitTo) -> Vec<Vec<ScalarValue>> {
-        let result = emit_to.take_needed(&mut self.orderings);
-
-        match emit_to {
-            EmitTo::All => self.size_of_orderings = 0,
-            EmitTo::First(_) => {
-                self.size_of_orderings -=
-                    result.iter().map(ScalarValue::size_of_vec).sum::<usize>()
-            }
-        }
-
-        result
-    }
-
     fn resize_states(&mut self, new_size: usize) {
         self.state.resize(new_size);
-
-        if self.orderings.len() < new_size {
-            let current_len = self.orderings.len();
-
-            self.orderings
-                .resize(new_size, self.default_orderings.clone());
-
-            self.size_of_orderings += (new_size - current_len)
-                * ScalarValue::size_of_vec(
-                    // Note: In some cases (such as in the unit test below)
-                    // ScalarValue::size_of_vec(&self.default_orderings) != ScalarValue::size_of_vec(&self.default_orderings.clone())
-                    // This may be caused by the different vec.capacity() values?
-                    self.orderings.last().unwrap(),
-                );
-        }
-
+        self.orderings.resize(new_size);
         self.is_sets.resize(new_size);
 
         self.extreme_of_each_group_buf.0.resize(new_size, 0);
         self.extreme_of_each_group_buf.1.resize(new_size);
     }
 
-    fn update_state(
+    /// Makes each batch row of `winners` (`(group_idx, idx_in_batch)`, at most
+    /// one per group) the group's winner when it beats the stored one (strictly,
+    /// so ties keep the stored winner), or always when `replace`.
+    fn update_winners(
         &mut self,
-        group_idx: usize,
-        orderings: &[ScalarValue],
-        array: &ArrayRef,
-        idx: usize,
+        ordering_cols: &[ArrayRef],
+        vals: &ArrayRef,
+        winners: &[(usize, usize)],
+        replace: bool,
     ) -> Result<()> {
-        self.state.update(group_idx, array, idx)?;
-        self.is_sets.set_bit(group_idx, true);
-
-        debug_assert_eq!(orderings.len(), self.ordering_req.len());
-        let old_size = ScalarValue::size_of_vec(&self.orderings[group_idx]);
-        self.orderings[group_idx].clear();
-        self.orderings[group_idx].extend_from_slice(orderings);
-        let new_size = ScalarValue::size_of_vec(&self.orderings[group_idx]);
-        self.size_of_orderings = self.size_of_orderings - old_size + new_size;
+        if winners.is_empty() {
+            return Ok(());
+        }
+        let pick_first = self.pick_first_in_group;
+        let beats = |current_vs_new: std::cmp::Ordering| {
+            if pick_first {
+                current_vs_new.is_gt()
+            } else {
+                current_vs_new.is_lt()
+            }
+        };
+        match &mut self.orderings {
+            GroupOrderings::Rows(r) => {
+                let rows = r.encode(ordering_cols, winners)?;
+                for (i, &(group_idx, idx)) in winners.iter().enumerate() {
+                    let new = rows.row(i);
+                    let new = new.as_ref();
+                    if replace
+                        || !self.is_sets.get_bit(group_idx)
+                        || beats(r.get(group_idx).cmp(new))
+                    {
+                        self.state.update(group_idx, vals, idx)?;
+                        self.is_sets.set_bit(group_idx, true);
+                        r.set(group_idx, new)?;
+                    }
+                }
+            }
+            GroupOrderings::Scalars(sc) => {
+                let mut buf = Vec::with_capacity(ordering_cols.len());
+                for &(group_idx, idx) in winners {
+                    extract_row_at_idx_to_buf(ordering_cols, idx, &mut buf)?;
+                    if replace
+                        || !self.is_sets.get_bit(group_idx)
+                        || beats(compare_rows(
+                            &sc.rows[group_idx],
+                            &buf,
+                            &sc.sort_options,
+                        )?)
+                    {
+                        self.state.update(group_idx, vals, idx)?;
+                        self.is_sets.set_bit(group_idx, true);
+                        sc.set(group_idx, &buf);
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
+    /// Removes the emitted groups; their orderings are returned (one array
+    /// per ORDER BY expression) only when `orderings` is set.
     fn take_state(
         &mut self,
         emit_to: EmitTo,
-    ) -> Result<(ArrayRef, Vec<Vec<ScalarValue>>, BooleanBuffer)> {
+        orderings: bool,
+    ) -> Result<(ArrayRef, Vec<ArrayRef>, BooleanBuffer)> {
         emit_to.take_needed(&mut self.extreme_of_each_group_buf.0);
         self.extreme_of_each_group_buf
             .1
@@ -581,19 +558,11 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
 
         Ok((
             self.state.take(emit_to)?,
-            self.take_orderings(emit_to),
+            self.orderings.take(emit_to, orderings)?,
             state::take_need(&mut self.is_sets, emit_to),
         ))
     }
 
-    // should be used in test only
-    #[cfg(test)]
-    fn compute_size_of_orderings(&self) -> usize {
-        self.orderings
-            .iter()
-            .map(ScalarValue::size_of_vec)
-            .sum::<usize>()
-    }
     /// Returns a vector of tuples `(group_idx, idx_in_val)` representing the index of the
     /// minimum value in `orderings` for each group, using lexicographical comparison.
     /// Values are filtered using `opt_filter` and `is_set_arr` if provided.
@@ -760,19 +729,14 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
             self.extreme_of_each_group_buf.0[group_idx] = idx_in_val;
         }
 
-        let mut ordering_buf = Vec::with_capacity(self.ordering_req.len());
-        // Take the buffer to appease the borrow checker; `update_state`
+        // Take the buffer to appease the borrow checker; `update_winners`
         // needs `&mut self`.
         let touched = std::mem::take(&mut self.touched_groups_buf);
-        for &group_idx in &touched {
-            let idx = self.extreme_of_each_group_buf.0[group_idx];
-            extract_row_at_idx_to_buf(
-                &values_and_order_cols[1..],
-                idx,
-                &mut ordering_buf,
-            )?;
-            self.update_state(group_idx, &ordering_buf, vals, idx)?;
-        }
+        let winners: Vec<(usize, usize)> = touched
+            .iter()
+            .map(|&g| (g, self.extreme_of_each_group_buf.0[g]))
+            .collect();
+        self.update_winners(&values_and_order_cols[1..], vals, &winners, true)?;
         // Restore the all-false invariant by clearing only the touched bits.
         for &group_idx in &touched {
             self.extreme_of_each_group_buf.1.set_bit(group_idx, false);
@@ -805,60 +769,28 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
 
         let vals = &values_and_order_cols[0];
 
-        let mut ordering_buf = Vec::with_capacity(self.ordering_req.len());
-
-        // The overhead of calling `extract_row_at_idx_to_buf` is somewhat high, so we need to minimize its calls as much as possible.
-        for (group_idx, idx) in self
-            .get_filtered_extreme_of_each_group(
-                &values_and_order_cols[1..],
-                group_indices,
-                opt_filter,
-                vals,
-                None,
-            )?
-            .into_iter()
-        {
-            extract_row_at_idx_to_buf(
-                &values_and_order_cols[1..],
-                idx,
-                &mut ordering_buf,
-            )?;
-
-            if self.should_update_state(group_idx, &ordering_buf)? {
-                self.update_state(group_idx, &ordering_buf, vals, idx)?;
-            }
-        }
-
-        Ok(())
+        // Only each group's best row of the batch is encoded and compared
+        // with the stored winner.
+        let winners = self.get_filtered_extreme_of_each_group(
+            &values_and_order_cols[1..],
+            group_indices,
+            opt_filter,
+            vals,
+            None,
+        )?;
+        self.update_winners(&values_and_order_cols[1..], vals, &winners, false)
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        Ok(self.take_state(emit_to)?.0)
+        Ok(self.take_state(emit_to, false)?.0)
     }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let (val_arr, orderings, is_sets) = self.take_state(emit_to)?;
+        let (val_arr, orderings, is_sets) = self.take_state(emit_to, true)?;
         let mut result = Vec::with_capacity(self.ordering_req.len() + 2);
 
         result.push(val_arr);
-
-        let ordering_cols = {
-            let mut ordering_cols = Vec::with_capacity(self.ordering_req.len());
-            for _ in 0..self.ordering_req.len() {
-                ordering_cols.push(Vec::with_capacity(orderings.len()));
-            }
-            for row in orderings.into_iter() {
-                debug_assert_eq!(row.len(), self.ordering_req.len());
-                for (col_idx, ordering) in row.into_iter().enumerate() {
-                    ordering_cols[col_idx].push(ordering);
-                }
-            }
-
-            ordering_cols
-        };
-        for ordering_col in ordering_cols {
-            result.push(ScalarValue::iter_to_array(ordering_col)?);
-        }
+        result.extend(orderings);
 
         result.push(Arc::new(BooleanArray::new(is_sets, None)));
 
@@ -873,8 +805,6 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
     ) -> Result<()> {
         self.resize_states(total_num_groups);
 
-        let mut ordering_buf = Vec::with_capacity(self.ordering_req.len());
-
         let Some((is_set_arr, val_and_order_cols)) = values.split_last() else {
             return internal_err!("Empty row in FIRST_VALUE");
         };
@@ -882,30 +812,20 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         let is_set_arr = as_boolean_array(is_set_arr)?;
 
         let vals = &values[0];
-        // The overhead of calling `extract_row_at_idx_to_buf` is somewhat high, so we need to minimize its calls as much as possible.
-        let groups = self.get_filtered_extreme_of_each_group(
+        let winners = self.get_filtered_extreme_of_each_group(
             &val_and_order_cols[1..],
             group_indices,
             None,
             vals,
             Some(is_set_arr),
         )?;
-
-        for (group_idx, idx) in groups.into_iter() {
-            extract_row_at_idx_to_buf(&val_and_order_cols[1..], idx, &mut ordering_buf)?;
-
-            if self.should_update_state(group_idx, &ordering_buf)? {
-                self.update_state(group_idx, &ordering_buf, vals, idx)?;
-            }
-        }
-
-        Ok(())
+        self.update_winners(&val_and_order_cols[1..], vals, &winners, false)
     }
 
     fn size(&self) -> usize {
         self.state.size()
             + self.is_sets.capacity() / 8 // capacity is in bits, so convert to bytes
-            + self.size_of_orderings
+            + self.orderings.size()
             + self.extreme_of_each_group_buf.0.capacity() * size_of::<usize>()
             + self.extreme_of_each_group_buf.1.capacity() / 8
     }
@@ -928,6 +848,369 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
     ) -> Result<Vec<ArrayRef>> {
         Ok(ordered_convert_to_state(values, opt_filter))
     }
+}
+
+/// The ordering values of each group's winner.
+enum GroupOrderings {
+    /// Arrow row format: comparing two orderings is a byte comparison and no
+    /// [`ScalarValue`] is built per group.
+    Rows(OrderingRows),
+    /// [`ScalarValue`]s compared with `compare_rows`, for ordering types whose
+    /// row encoding does not order like `compare_rows` (nested and union
+    /// types) or does not decode back to the planned type.
+    Scalars(ScalarOrderings),
+}
+
+/// Whether the arrow row encoding of `t` orders exactly like
+/// `compare_rows` over [`ScalarValue`]s: flat types, and dictionaries of them.
+fn row_comparable(t: &DataType) -> bool {
+    use DataType::*;
+    match t {
+        Boolean | Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView
+        | FixedSizeBinary(_) => true,
+        Dictionary(_, v) => !matches!(v.as_ref(), Dictionary(_, _)) && row_comparable(v),
+        t => t.is_primitive(),
+    }
+}
+
+impl GroupOrderings {
+    fn try_new(dtypes: &[DataType], sort_options: &[SortOptions]) -> Result<Self> {
+        if dtypes.iter().all(row_comparable)
+            && let Some(rows) = OrderingRows::try_new(dtypes, sort_options)?
+        {
+            return Ok(Self::Rows(rows));
+        }
+        Ok(Self::Scalars(ScalarOrderings::try_new(
+            dtypes,
+            sort_options,
+        )?))
+    }
+
+    fn resize(&mut self, n: usize) {
+        match self {
+            Self::Rows(r) => r.resize(n),
+            Self::Scalars(s) => s.resize(n),
+        }
+    }
+
+    fn take(&mut self, emit_to: EmitTo, decode: bool) -> Result<Vec<ArrayRef>> {
+        match self {
+            Self::Rows(r) => r.take(emit_to, decode),
+            Self::Scalars(s) => s.take(emit_to, decode),
+        }
+    }
+
+    fn size(&self) -> usize {
+        match self {
+            Self::Rows(r) => r.size(),
+            Self::Scalars(s) => s.size,
+        }
+    }
+
+    /// `size` recomputed from scratch (tests).
+    #[cfg(test)]
+    fn compute_size(&self) -> usize {
+        match self {
+            Self::Rows(r) => r.compute_size(),
+            Self::Scalars(s) => s.compute_size(),
+        }
+    }
+}
+
+struct ScalarOrderings {
+    rows: Vec<Vec<ScalarValue>>,
+    /// Typed nulls, the orderings of groups without a winner.
+    default: Vec<ScalarValue>,
+    sort_options: Vec<SortOptions>,
+    /// Cached `ScalarValue::size_of_vec` sum over `rows` (costly to recompute).
+    size: usize,
+}
+
+impl ScalarOrderings {
+    fn try_new(dtypes: &[DataType], sort_options: &[SortOptions]) -> Result<Self> {
+        Ok(Self {
+            rows: Vec::new(),
+            default: dtypes
+                .iter()
+                .map(ScalarValue::try_from)
+                .collect::<Result<_>>()?,
+            sort_options: sort_options.to_vec(),
+            size: 0,
+        })
+    }
+
+    fn resize(&mut self, n: usize) {
+        let len = self.rows.len();
+        if n > len {
+            self.rows.resize(n, self.default.clone());
+            // Measured on a stored copy: a clone's capacity can differ from
+            // `default`'s.
+            self.size += (n - len) * ScalarValue::size_of_vec(&self.rows[n - 1]);
+        }
+    }
+
+    fn set(&mut self, group_idx: usize, ordering: &[ScalarValue]) {
+        let row = &mut self.rows[group_idx];
+        let old = ScalarValue::size_of_vec(row);
+        row.clear();
+        row.extend_from_slice(ordering);
+        self.size = self.size - old + ScalarValue::size_of_vec(row);
+    }
+
+    fn take(&mut self, emit_to: EmitTo, decode: bool) -> Result<Vec<ArrayRef>> {
+        let taken = emit_to.take_needed(&mut self.rows);
+        // `size_of_vec` is costly (nested values), so it is not summed over
+        // the taken rows when nothing is left.
+        match emit_to {
+            EmitTo::All => self.size = 0,
+            EmitTo::First(_) => {
+                self.size -= taken.iter().map(ScalarValue::size_of_vec).sum::<usize>()
+            }
+        }
+        if !decode {
+            return Ok(Vec::new());
+        }
+        let mut cols: Vec<Vec<ScalarValue>> = (0..self.default.len())
+            .map(|_| Vec::with_capacity(taken.len()))
+            .collect();
+        for row in taken {
+            for (col, v) in cols.iter_mut().zip(row) {
+                col.push(v);
+            }
+        }
+        cols.into_iter().map(ScalarValue::iter_to_array).collect()
+    }
+
+    #[cfg(test)]
+    fn compute_size(&self) -> usize {
+        self.rows.iter().map(ScalarValue::size_of_vec).sum()
+    }
+}
+
+/// Orderings in the arrow row format.
+struct OrderingRows {
+    converter: RowConverter,
+    /// Ordering types as planned; decoding hydrates dictionaries, which are
+    /// cast back so the state schema does not change.
+    dtypes: Vec<DataType>,
+    /// Encoding of all-null orderings, stored for groups without a winner.
+    null_row: Vec<u8>,
+    storage: RowStorage,
+}
+
+enum RowStorage {
+    /// Every encoded row has the same width (fixed-width ordering types):
+    /// the rows lie back to back.
+    Fixed { width: usize, data: Vec<u8> },
+    /// One reusable buffer per group; `heap` is the sum of their capacities.
+    Var { rows: Vec<Vec<u8>>, heap: usize },
+}
+
+impl OrderingRows {
+    /// `None` when the encoding does not decode back to `dtypes` (for example
+    /// a dictionary whose values cannot be packed again by `cast`).
+    fn try_new(
+        dtypes: &[DataType],
+        sort_options: &[SortOptions],
+    ) -> Result<Option<Self>> {
+        let fields: Vec<SortField> = dtypes
+            .iter()
+            .zip(sort_options)
+            .map(|(t, o)| SortField::new_with_options(t.clone(), *o))
+            .collect();
+        if !RowConverter::supports_fields(&fields) {
+            return Ok(None);
+        }
+        let converter = RowConverter::new(fields)?;
+        let nulls: Vec<ArrayRef> = dtypes.iter().map(|t| new_null_array(t, 1)).collect();
+        let null_row = converter.convert_columns(&nulls)?.row(0).as_ref().to_vec();
+        let fixed = dtypes
+            .iter()
+            .all(|t| t.is_primitive() || matches!(t, DataType::Boolean));
+        let storage = if fixed {
+            RowStorage::Fixed {
+                width: null_row.len(),
+                data: Vec::new(),
+            }
+        } else {
+            RowStorage::Var {
+                rows: Vec::new(),
+                heap: 0,
+            }
+        };
+        let rows = Self {
+            converter,
+            dtypes: dtypes.to_vec(),
+            null_row,
+            storage,
+        };
+        // Probe the round trip once, so `state` cannot fail on a type later.
+        if rows
+            .decode(std::iter::once(rows.null_row.as_slice()))
+            .is_err()
+        {
+            return Ok(None);
+        }
+        Ok(Some(rows))
+    }
+
+    fn len(&self) -> usize {
+        match &self.storage {
+            RowStorage::Fixed { width, data } => data.len() / width,
+            RowStorage::Var { rows, .. } => rows.len(),
+        }
+    }
+
+    fn resize(&mut self, n: usize) {
+        let len = self.len();
+        if n <= len {
+            return;
+        }
+        match &mut self.storage {
+            RowStorage::Fixed { data, .. } => {
+                for _ in len..n {
+                    data.extend_from_slice(&self.null_row);
+                }
+            }
+            RowStorage::Var { rows, heap } => {
+                rows.resize_with(n, || self.null_row.clone());
+                *heap += (n - len) * self.null_row.len();
+            }
+        }
+    }
+
+    fn get(&self, group_idx: usize) -> &[u8] {
+        match &self.storage {
+            RowStorage::Fixed { width, data } => {
+                &data[group_idx * width..(group_idx + 1) * width]
+            }
+            RowStorage::Var { rows, .. } => &rows[group_idx],
+        }
+    }
+
+    fn set(&mut self, group_idx: usize, row: &[u8]) -> Result<()> {
+        match &mut self.storage {
+            RowStorage::Fixed { width, data } => {
+                if row.len() != *width {
+                    return internal_err!(
+                        "FIRST_VALUE/LAST_VALUE: ordering row of {} bytes, expected {width}",
+                        row.len()
+                    );
+                }
+                data[group_idx * *width..(group_idx + 1) * *width].copy_from_slice(row);
+            }
+            RowStorage::Var { rows, heap } => {
+                let buf = &mut rows[group_idx];
+                let old = buf.capacity();
+                buf.clear();
+                buf.extend_from_slice(row);
+                *heap = *heap - old + buf.capacity();
+            }
+        }
+        Ok(())
+    }
+
+    /// Encodes the orderings of the rows `winners[..].1` of a batch.
+    fn encode(
+        &self,
+        ordering_cols: &[ArrayRef],
+        winners: &[(usize, usize)],
+    ) -> Result<arrow::row::Rows> {
+        let indices = UInt64Array::from_iter_values(winners.iter().map(|w| w.1 as u64));
+        let cols = ordering_cols
+            .iter()
+            .map(|c| compute::take(c.as_ref(), &indices, None))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(self.converter.convert_columns(&cols)?)
+    }
+
+    /// Decodes encoded rows, one array per ORDER BY expression.
+    fn decode<'a>(&self, rows: impl Iterator<Item = &'a [u8]>) -> Result<Vec<ArrayRef>> {
+        decode_rows(&self.converter, &self.dtypes, rows)
+    }
+
+    /// Removes the emitted groups; decodes their orderings when `decode`.
+    fn take(&mut self, emit_to: EmitTo, decode: bool) -> Result<Vec<ArrayRef>> {
+        let n = match emit_to {
+            EmitTo::All => self.len(),
+            EmitTo::First(n) => n,
+        };
+        let (converter, dtypes) = (&self.converter, &self.dtypes);
+        let mut out = Vec::new();
+        match &mut self.storage {
+            RowStorage::Fixed { width, data } => {
+                let w = *width;
+                if decode {
+                    out = decode_rows(converter, dtypes, data[..n * w].chunks_exact(w))?;
+                }
+                match emit_to {
+                    EmitTo::All => *data = Vec::new(),
+                    // Shift the kept rows down in place, without a new buffer.
+                    EmitTo::First(_) => {
+                        data.drain(..n * w);
+                    }
+                }
+            }
+            RowStorage::Var { rows, heap } => {
+                let taken = emit_to.take_needed(rows);
+                *heap -= taken.iter().map(Vec::capacity).sum::<usize>();
+                if decode {
+                    out =
+                        decode_rows(converter, dtypes, taken.iter().map(Vec::as_slice))?;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn size(&self) -> usize {
+        self.converter.size()
+            + self.null_row.capacity()
+            + self.dtypes.capacity() * size_of::<DataType>()
+            + match &self.storage {
+                RowStorage::Fixed { data, .. } => data.capacity(),
+                RowStorage::Var { rows, heap } => {
+                    rows.capacity() * size_of::<Vec<u8>>() + heap
+                }
+            }
+    }
+
+    /// `size` recomputed from scratch (tests).
+    #[cfg(test)]
+    fn compute_size(&self) -> usize {
+        self.converter.size()
+            + self.null_row.capacity()
+            + self.dtypes.capacity() * size_of::<DataType>()
+            + match &self.storage {
+                RowStorage::Fixed { data, .. } => data.capacity(),
+                RowStorage::Var { rows, .. } => {
+                    rows.capacity() * size_of::<Vec<u8>>()
+                        + rows.iter().map(Vec::capacity).sum::<usize>()
+                }
+            }
+    }
+}
+
+/// Decodes rows of `converter`, casting each column back to its planned type
+/// (decoding hydrates dictionaries).
+fn decode_rows<'a>(
+    converter: &RowConverter,
+    dtypes: &[DataType],
+    rows: impl Iterator<Item = &'a [u8]>,
+) -> Result<Vec<ArrayRef>> {
+    let parser = converter.parser();
+    let arrays = converter.convert_rows(rows.map(|r| parser.parse(r)))?;
+    arrays
+        .into_iter()
+        .zip(dtypes)
+        .map(|(a, t)| {
+            if a.data_type() == t {
+                Ok(a)
+            } else {
+                Ok(compute::cast(&a, t)?)
+            }
+        })
+        .collect()
 }
 
 /// State `[value, orderings.., is_set]` with one row per input row, where
@@ -2190,8 +2473,8 @@ mod tests {
             3,
         )?;
         assert_eq!(
-            group_acc.size_of_orderings,
-            group_acc.compute_size_of_orderings()
+            group_acc.orderings.size(),
+            group_acc.orderings.compute_size()
         );
 
         let state = group_acc.state(EmitTo::All)?;
@@ -2204,15 +2487,15 @@ mod tests {
         assert_eq!(state, expected_state);
 
         assert_eq!(
-            group_acc.size_of_orderings,
-            group_acc.compute_size_of_orderings()
+            group_acc.orderings.size(),
+            group_acc.orderings.compute_size()
         );
 
         group_acc.merge_batch(&state, &[0, 1, 2], 3)?;
 
         assert_eq!(
-            group_acc.size_of_orderings,
-            group_acc.compute_size_of_orderings()
+            group_acc.orderings.size(),
+            group_acc.orderings.compute_size()
         );
 
         val_with_orderings.clear();
@@ -2233,8 +2516,8 @@ mod tests {
         assert_eq!(eval_result, &expect);
 
         assert_eq!(
-            group_acc.size_of_orderings,
-            group_acc.compute_size_of_orderings()
+            group_acc.orderings.size(),
+            group_acc.orderings.compute_size()
         );
 
         Ok(())
@@ -2284,38 +2567,38 @@ mod tests {
                 100,
             )?;
             assert_eq!(
-                group_acc.size_of_orderings,
-                group_acc.compute_size_of_orderings()
+                group_acc.orderings.size(),
+                group_acc.orderings.compute_size()
             );
 
             group_acc.state(EmitTo::First(2))?;
             assert_eq!(
-                group_acc.size_of_orderings,
-                group_acc.compute_size_of_orderings()
+                group_acc.orderings.size(),
+                group_acc.orderings.compute_size()
             );
 
             let s = group_acc.state(EmitTo::All)?;
             assert_eq!(
-                group_acc.size_of_orderings,
-                group_acc.compute_size_of_orderings()
+                group_acc.orderings.size(),
+                group_acc.orderings.compute_size()
             );
 
             group_acc.merge_batch(&s, &Vec::from_iter(0..s[0].len()), 100)?;
             assert_eq!(
-                group_acc.size_of_orderings,
-                group_acc.compute_size_of_orderings()
+                group_acc.orderings.size(),
+                group_acc.orderings.compute_size()
             );
 
             group_acc.evaluate(EmitTo::First(2))?;
             assert_eq!(
-                group_acc.size_of_orderings,
-                group_acc.compute_size_of_orderings()
+                group_acc.orderings.size(),
+                group_acc.orderings.compute_size()
             );
 
             group_acc.evaluate(EmitTo::All)?;
             assert_eq!(
-                group_acc.size_of_orderings,
-                group_acc.compute_size_of_orderings()
+                group_acc.orderings.size(),
+                group_acc.orderings.compute_size()
             );
         }
 
@@ -3824,6 +4107,200 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn sort_exprs(schema: &Schema, names: &[(&str, SortOptions)]) -> LexOrdering {
+        LexOrdering::new(names.iter().map(|(n, options)| PhysicalSortExpr {
+            expr: col(n, schema).unwrap(),
+            options: *options,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn test_group_orderings_storage_by_type() -> Result<()> {
+        use arrow::datatypes::{Fields, UnionFields, UnionMode};
+        let rows = |dtypes: &[DataType]| -> Result<bool> {
+            let opts = vec![SortOptions::default(); dtypes.len()];
+            Ok(matches!(
+                GroupOrderings::try_new(dtypes, &opts)?,
+                GroupOrderings::Rows(_)
+            ))
+        };
+        let dict =
+            |v: DataType| DataType::Dictionary(Box::new(DataType::Int32), Box::new(v));
+        let tz = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        // Flat types and dictionaries of them use the row format.
+        assert!(rows(&[tz, DataType::Int64])?);
+        assert!(rows(&[DataType::Utf8, DataType::Float64])?);
+        assert!(rows(&[DataType::Utf8View, DataType::Boolean])?);
+        assert!(rows(&[dict(DataType::Utf8)])?);
+        assert!(rows(&[DataType::Decimal128(20, 2)])?);
+        // Types whose encoding orders unlike `compare_rows` keep ScalarValues.
+        let struct_t =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int64, true)]));
+        assert!(!rows(&[struct_t, DataType::Int64])?);
+        assert!(!rows(&[DataType::new_list(DataType::Int64, true)])?);
+        let union_t = DataType::Union(
+            UnionFields::try_new(vec![0], vec![Field::new("a", DataType::Int32, true)])?,
+            UnionMode::Dense,
+        );
+        assert!(!rows(&[union_t])?);
+        // Encodes, but `cast` cannot pack Boolean values into a dictionary again.
+        assert!(!rows(&[dict(DataType::Boolean)])?);
+        Ok(())
+    }
+
+    /// Two ORDER BY keys with a time zone: the row-format path, ties keep the
+    /// stored winner, partial emission, and the state keeps the time zone.
+    #[test]
+    fn test_group_acc_row_orderings_time_zone() -> Result<()> {
+        let tz = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        let schema = Schema::new(vec![
+            Field::new("v", DataType::Int64, true),
+            Field::new("ts", tz.clone(), true),
+            Field::new("o", DataType::Int64, true),
+        ]);
+        let ordering = sort_exprs(
+            &schema,
+            &[
+                ("ts", SortOptions::default()),
+                ("o", SortOptions::default()),
+            ],
+        );
+        let mut acc = FirstLastGroupsAccumulator::try_new(
+            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+            ordering,
+            false,
+            &[tz.clone(), DataType::Int64],
+            true,
+            false,
+        )?;
+        assert!(matches!(acc.orderings, GroupOrderings::Rows(_)));
+        let ts = |v: Vec<i64>| -> ArrayRef {
+            Arc::new(
+                PrimitiveArray::<TimestampMicrosecondType>::from(v).with_timezone("UTC"),
+            )
+        };
+        let i64s = |v: Vec<i64>| -> ArrayRef { Arc::new(Int64Array::from(v)) };
+
+        acc.update_batch(
+            &[
+                i64s(vec![1, 2, 3]),
+                ts(vec![30, 10, 20]),
+                i64s(vec![0, 0, 0]),
+            ],
+            &[0, 1, 0],
+            None,
+            3,
+        )?;
+        // Group 0: ts 5 beats 20; group 1: (10, 0) ties and keeps value 2.
+        acc.update_batch(
+            &[i64s(vec![4, 5]), ts(vec![5, 10]), i64s(vec![0, 0])],
+            &[0, 1],
+            None,
+            3,
+        )?;
+        assert_eq!(acc.orderings.size(), acc.orderings.compute_size());
+
+        let state = acc.state(EmitTo::First(2))?;
+        assert_eq!(
+            state[0].as_ref(),
+            &Int64Array::from(vec![4, 2]) as &dyn Array
+        );
+        assert_eq!(state[1].data_type(), &tz);
+        assert_eq!(&state[1], &ts(vec![5, 10]));
+        assert_eq!(&state[2], &i64s(vec![0, 0]));
+        assert_eq!(
+            state[3].as_ref(),
+            &BooleanArray::from(vec![true, true]) as &dyn Array
+        );
+        assert_eq!(acc.orderings.size(), acc.orderings.compute_size());
+
+        // The group that had no winner is now group 0.
+        acc.update_batch(&[i64s(vec![7]), ts(vec![1]), i64s(vec![0])], &[0], None, 2)?;
+        let result = acc.evaluate(EmitTo::All)?;
+        assert_eq!(
+            result.as_ref(),
+            &Int64Array::from(vec![Some(7), None]) as &dyn Array
+        );
+        assert_eq!(acc.orderings.size(), acc.orderings.compute_size());
+        Ok(())
+    }
+
+    /// Variable-width orderings (strings, DESC NULLS LAST) in LAST_VALUE, and a
+    /// dictionary type that falls back to ScalarValues and still round-trips.
+    #[test]
+    fn test_group_acc_string_and_dictionary_orderings() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("v", DataType::Int64, true),
+            Field::new("s", DataType::Utf8, true),
+        ]);
+        let desc = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let mut acc = FirstLastGroupsAccumulator::try_new(
+            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+            sort_exprs(&schema, &[("s", desc)]),
+            false,
+            &[DataType::Utf8],
+            false,
+            false,
+        )?;
+        assert!(matches!(acc.orderings, GroupOrderings::Rows(_)));
+        let strs = |v: Vec<Option<&str>>| -> ArrayRef { Arc::new(StringArray::from(v)) };
+        let i64s = |v: Vec<i64>| -> ArrayRef { Arc::new(Int64Array::from(v)) };
+        // LAST_VALUE under DESC NULLS LAST: the smallest string, NULL last of all.
+        acc.update_batch(
+            &[
+                i64s(vec![1, 2, 3]),
+                strs(vec![Some("b"), None, Some("a long string")]),
+            ],
+            &[0, 1, 1],
+            None,
+            2,
+        )?;
+        acc.update_batch(
+            &[i64s(vec![4, 5]), strs(vec![Some("a"), Some("c")])],
+            &[0, 1],
+            None,
+            2,
+        )?;
+        assert_eq!(acc.orderings.size(), acc.orderings.compute_size());
+        let state = acc.state(EmitTo::All)?;
+        assert_eq!(
+            state[0].as_ref(),
+            &Int64Array::from(vec![4, 2]) as &dyn Array
+        );
+        assert_eq!(&state[1], &strs(vec![Some("a"), None]));
+        assert_eq!(acc.orderings.size(), acc.orderings.compute_size());
+
+        let dict_t =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Boolean));
+        let schema = Schema::new(vec![
+            Field::new("v", DataType::Int64, true),
+            Field::new("d", dict_t.clone(), true),
+        ]);
+        let mut acc = FirstLastGroupsAccumulator::try_new(
+            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+            sort_exprs(&schema, &[("d", SortOptions::default())]),
+            false,
+            std::slice::from_ref(&dict_t),
+            true,
+            false,
+        )?;
+        assert!(matches!(acc.orderings, GroupOrderings::Scalars(_)));
+        let dict: ArrayRef =
+            Arc::new(arrow::array::DictionaryArray::<Int32Type>::try_new(
+                arrow::array::Int32Array::from(vec![1, 0]),
+                Arc::new(BooleanArray::from(vec![false, true])),
+            )?);
+        acc.update_batch(&[i64s(vec![1, 2]), dict], &[0, 0], None, 1)?;
+        let state = acc.state(EmitTo::All)?;
+        assert_eq!(state[0].as_ref(), &Int64Array::from(vec![2]) as &dyn Array);
+        assert_eq!(state[1].data_type(), &dict_t);
         Ok(())
     }
 }
