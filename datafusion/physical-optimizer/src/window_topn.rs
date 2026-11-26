@@ -40,9 +40,10 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use crate::sanity_checker::input_requirements_hold;
 use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
@@ -317,7 +318,7 @@ impl PhysicalOptimizerRule for WindowTopN {
             return Ok(plan);
         }
 
-        plan.transform_down(|node| {
+        let rewritten = Arc::clone(&plan).transform_down(|node| {
             Ok(
                 if let Some(transformed) = WindowTopN::try_transform(&node) {
                     Transformed::yes(transformed)
@@ -325,8 +326,19 @@ impl PhysicalOptimizerRule for WindowTopN {
                     Transformed::no(node)
                 },
             )
-        })
-        .data()
+        })?;
+        // `PartitionedTopKExec` emits its rows ordered by the partition keys in
+        // the default sort options, whatever order its input had. Once
+        // `EnsureRequirements` has made the plan's requirements hold, an
+        // operator above may rely on the order the window had, and nothing
+        // would restore it.
+        if rewritten.transformed
+            && input_requirements_hold(&plan)
+            && !input_requirements_hold(&rewritten.data)
+        {
+            return Ok(plan);
+        }
+        Ok(rewritten.data)
     }
 
     fn name(&self) -> &str {
