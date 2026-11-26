@@ -702,3 +702,153 @@ order by g;
 
 statement ok
 drop table array_agg_distinct_groups;
+
+# The aggregate retains source metadata on the list item, including NULL results.
+statement ok
+CREATE VIEW array_agg_metadata AS
+SELECT g, with_metadata(x, 'source', 'input') AS x
+FROM (VALUES (0, NULL), (0, NULL), (1, 2), (1, 1), (1, 1)) AS t(g, x);
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+query ?T?
+SELECT array_sort(a), arrow_field(a)['data_type'], arrow_metadata(a)
+FROM (SELECT array_agg(x) AS a FROM array_agg_metadata);
+----
+[NULL, NULL, 1, 1, 2] List(Int64, metadata: {"source": "input"}) {}
+
+query ?T?
+SELECT array_sort(a), arrow_field(a)['data_type'], arrow_metadata(a)
+FROM (SELECT array_agg(DISTINCT x) AS a FROM array_agg_metadata);
+----
+[NULL, 1, 2] List(Int64, metadata: {"source": "input"}) {}
+
+query ?T?
+SELECT array_sort(a), arrow_field(a)['data_type'], arrow_metadata(a)
+FROM (SELECT array_agg(x ORDER BY x) AS a FROM array_agg_metadata);
+----
+[NULL, NULL, 1, 1, 2] List(Int64, metadata: {"source": "input"}) {}
+
+query ?T?
+SELECT array_sort(a), arrow_field(a)['data_type'], arrow_metadata(a)
+FROM (SELECT array_agg(DISTINCT x ORDER BY x) AS a FROM array_agg_metadata);
+----
+[NULL, 1, 2] List(Int64, metadata: {"source": "input"}) {}
+
+query I?T rowsort
+SELECT g, array_sort(a), arrow_field(a)['data_type']
+FROM (SELECT g, array_agg(x) AS a FROM array_agg_metadata GROUP BY g);
+----
+0 [NULL, NULL] List(Int64, metadata: {"source": "input"})
+1 [1, 1, 2] List(Int64, metadata: {"source": "input"})
+
+query I?T rowsort
+SELECT g, array_sort(a), arrow_field(a)['data_type']
+FROM (SELECT g, array_agg(DISTINCT x) AS a FROM array_agg_metadata GROUP BY g);
+----
+0 [NULL] List(Int64, metadata: {"source": "input"})
+1 [1, 2] List(Int64, metadata: {"source": "input"})
+
+query I?T rowsort
+SELECT g, array_sort(a), arrow_field(a)['data_type']
+FROM (SELECT g, array_agg(x ORDER BY x) AS a FROM array_agg_metadata GROUP BY g);
+----
+0 [NULL, NULL] List(Int64, metadata: {"source": "input"})
+1 [1, 1, 2] List(Int64, metadata: {"source": "input"})
+
+query I?T rowsort
+SELECT g, array_sort(a), arrow_field(a)['data_type']
+FROM (SELECT g, array_agg(DISTINCT x ORDER BY x) AS a FROM array_agg_metadata GROUP BY g);
+----
+0 [NULL] List(Int64, metadata: {"source": "input"})
+1 [1, 2] List(Int64, metadata: {"source": "input"})
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+query ?T?
+SELECT array_sort(a), arrow_field(a)['data_type'], arrow_metadata(a)
+FROM (SELECT array_agg(x) AS a FROM array_agg_metadata);
+----
+[NULL, NULL, 1, 1, 2] List(Int64, metadata: {"source": "input"}) {}
+
+query ?T?
+SELECT array_sort(a), arrow_field(a)['data_type'], arrow_metadata(a)
+FROM (SELECT array_agg(DISTINCT x) AS a FROM array_agg_metadata);
+----
+[NULL, 1, 2] List(Int64, metadata: {"source": "input"}) {}
+
+query ?T?
+SELECT array_sort(a), arrow_field(a)['data_type'], arrow_metadata(a)
+FROM (SELECT array_agg(x ORDER BY x) AS a FROM array_agg_metadata);
+----
+[NULL, NULL, 1, 1, 2] List(Int64, metadata: {"source": "input"}) {}
+
+query ?T?
+SELECT array_sort(a), arrow_field(a)['data_type'], arrow_metadata(a)
+FROM (SELECT array_agg(DISTINCT x ORDER BY x) AS a FROM array_agg_metadata);
+----
+[NULL, 1, 2] List(Int64, metadata: {"source": "input"}) {}
+
+query I?T rowsort
+SELECT g, array_sort(a), arrow_field(a)['data_type']
+FROM (SELECT g, array_agg(x) AS a FROM array_agg_metadata GROUP BY g);
+----
+0 [NULL, NULL] List(Int64, metadata: {"source": "input"})
+1 [1, 1, 2] List(Int64, metadata: {"source": "input"})
+
+query I?T rowsort
+SELECT g, array_sort(a), arrow_field(a)['data_type']
+FROM (SELECT g, array_agg(DISTINCT x) AS a FROM array_agg_metadata GROUP BY g);
+----
+0 [NULL] List(Int64, metadata: {"source": "input"})
+1 [1, 2] List(Int64, metadata: {"source": "input"})
+
+query I?T rowsort
+SELECT g, array_sort(a), arrow_field(a)['data_type']
+FROM (SELECT g, array_agg(x ORDER BY x) AS a FROM array_agg_metadata GROUP BY g);
+----
+0 [NULL, NULL] List(Int64, metadata: {"source": "input"})
+1 [1, 1, 2] List(Int64, metadata: {"source": "input"})
+
+query I?T rowsort
+SELECT g, array_sort(a), arrow_field(a)['data_type']
+FROM (SELECT g, array_agg(DISTINCT x ORDER BY x) AS a FROM array_agg_metadata GROUP BY g);
+----
+0 [NULL] List(Int64, metadata: {"source": "input"})
+1 [1, 2] List(Int64, metadata: {"source": "input"})
+
+query ???TTT
+SELECT a, d, o, arrow_field(a)['data_type'], arrow_field(d)['data_type'], arrow_field(o)['data_type']
+FROM (SELECT array_agg(x) AS a, array_agg(DISTINCT x) AS d,
+             array_agg(x ORDER BY x) AS o
+      FROM array_agg_metadata WHERE g = 99);
+----
+NULL NULL NULL List(Int64, metadata: {"source": "input"}) List(Int64, metadata: {"source": "input"}) List(Int64, metadata: {"source": "input"})
+
+query I???TTT rowsort
+SELECT g, array_sort(a), array_sort(d), o,
+       arrow_field(a)['data_type'], arrow_field(d)['data_type'], arrow_field(o)['data_type']
+FROM (SELECT g, array_agg(x) IGNORE NULLS AS a,
+             array_agg(DISTINCT x) IGNORE NULLS AS d,
+             array_agg(x ORDER BY x) IGNORE NULLS AS o
+      FROM array_agg_metadata GROUP BY g);
+----
+0 NULL NULL NULL List(Int64, metadata: {"source": "input"}) List(Int64, metadata: {"source": "input"}) List(Int64, metadata: {"source": "input"})
+1 [1, 1, 2] [1, 2] [1, 1, 2] List(Int64, metadata: {"source": "input"}) List(Int64, metadata: {"source": "input"}) List(Int64, metadata: {"source": "input"})
+
+# Both extension keys belong to the item, not the outer list.
+query ?T
+SELECT a, arrow_field(a)['data_type']
+FROM (SELECT array_agg(with_metadata(with_metadata(x,
+    'ARROW:extension:name', 'arrow.json'), 'ARROW:extension:metadata', '{}') ORDER BY x) AS a
+    FROM (VALUES ('1'), ('2')) AS t(x));
+----
+[1, 2] List(Utf8, metadata: {"ARROW:extension:metadata": "{}", "ARROW:extension:name": "arrow.json"})
+
+query ?T
+SELECT a, arrow_field(a)['data_type']
+FROM (SELECT array_agg(with_metadata(NULL, 'source', 'input')) AS a);
+----
+[NULL] List(Null, metadata: {"source": "input"})
