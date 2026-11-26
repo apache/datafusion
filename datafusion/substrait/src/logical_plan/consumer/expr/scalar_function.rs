@@ -658,7 +658,13 @@ mod tests {
                 arguments: vec![int32_arg(8), int32_arg(1)],
                 ..Default::default()
             };
-            let expr = consumer.consume_scalar_function(&func, &df_schema).await?;
+            let expr = consumer
+                .consume_scalar_function(
+                    &func,
+                    &df_schema,
+                    &SubstraitConsumerContext::default(),
+                )
+                .await?;
             assert_eq!(expr.to_string(), expected, "function name {name}");
         }
         Ok(())
