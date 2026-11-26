@@ -22,7 +22,10 @@ use crate::coalesce::LimitedBatchCoalescer;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::hash_utils::create_hashes;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
-use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};
+use crate::projection::{
+    ProjectionExec, ProjectionExpr, ProjectionExprs, all_columns, make_with_child,
+    update_expr,
+};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolSink, SpillPoolWriter};
@@ -1951,6 +1954,41 @@ impl ExecutionPlan for RepartitionExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if !all_columns(projection.expr())
+            && matches!(self.partitioning(), Partitioning::RoundRobinBatch(_))
+        {
+            let indices = projection.projection_expr().column_indices();
+            if indices.len() >= self.input().schema().fields().len() {
+                return Ok(None);
+            }
+
+            // Keep computations above repartitioning so they retain its parallelism.
+            let columns = ProjectionExprs::from_indices(&indices, &self.input().schema());
+            let mut exprs = Vec::with_capacity(projection.expr().len());
+            for expr in projection.expr() {
+                let Some(rewritten) = update_expr(&expr.expr, columns.as_ref(), false)?
+                else {
+                    return Ok(None);
+                };
+                exprs.push(ProjectionExpr::new(rewritten, expr.alias.clone()));
+            }
+            let input = Arc::new(ProjectionExec::try_new(
+                columns.iter().cloned(),
+                Arc::clone(self.input()),
+            )?);
+            let repartition = Arc::new(self.clone()).replace_children(
+                vec![input],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )?;
+            return Ok(Some(Arc::new(
+                ProjectionExec::try_new_with_schema_metadata(
+                    exprs,
+                    repartition,
+                    projection.schema().as_ref(),
+                )?,
+            )));
+        }
+
         // If the projection does not narrow the schema, we should not try to push it down.
         if projection.expr().len() >= projection.input().schema().fields().len() {
             return Ok(None);
