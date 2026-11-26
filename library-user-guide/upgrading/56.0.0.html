@@ -1204,6 +1204,17 @@ instead of specifically accepting a <code class="docutils literal notranslate"><
 the exact non-generic function signature of <code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> may need
 to be updated to account for the new generic API.</p>
 </section>
+<section id="dataframes-built-from-arrays-derive-field-nullability-from-the-data">
+<h3><code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>s built from arrays derive field nullability from the data<a class="headerlink" href="#dataframes-built-from-arrays-derive-field-nullability-from-the-data" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> and the <code class="docutils literal notranslate"><span class="pre">dataframe!</span></code> macro used to mark every field
+as nullable. They now mark a field as nullable only when its array may contain
+nulls (<code class="docutils literal notranslate"><span class="pre">Array::is_nullable</span></code>); the new <code class="docutils literal notranslate"><span class="pre">DataFrame::from_arrays</span></code> follows the same
+rule. Columns without nulls get a non-nullable schema, which lets the optimizer
+simplify expressions such as <code class="docutils literal notranslate"><span class="pre">col</span> <span class="pre">IS</span> <span class="pre">NULL</span></code> on them.</p>
+<p>Row values are unchanged, but schema inspection can differ: code that compares
+the resulting schema against a hand-written one with <code class="docutils literal notranslate"><span class="pre">nullable:</span> <span class="pre">true</span></code> for
+every field needs to be updated.</p>
+</section>
 <section id="aggregate-ordering-state-field-names-are-now-namespaced">
 <h3>Aggregate ordering state field names are now namespaced<a class="headerlink" href="#aggregate-ordering-state-field-names-are-now-namespaced" title="Link to this heading">#</a></h3>
 <p>Ordering expressions exposed as top-level aggregate state fields now use names
@@ -2081,6 +2092,7 @@ the field or use <code class="docutils literal notranslate"><span class="pre">..
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#date-bin-rejects-strides-that-are-not-positive"><code class="docutils literal notranslate"><span class="pre">date_bin</span></code> rejects strides that are not positive</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#log-base-value-widens-float-arguments-to-the-wider-type"><code class="docutils literal notranslate"><span class="pre">log(base,</span> <span class="pre">value)</span></code> widens float arguments to the wider type</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframe-from-columns-accepts-intoiterator"><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframes-built-from-arrays-derive-field-nullability-from-the-data"><code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>s built from arrays derive field nullability from the data</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregate-ordering-state-field-names-are-now-namespaced">Aggregate ordering state field names are now namespaced</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-filter-pushdown-resolves-columns-by-position">Physical filter pushdown resolves columns by position</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#default-datafusion-sql-parser-recursion-limit-raised-from-50-to-51">Default <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.recursion_limit</span></code> raised from 50 to 51</a></li>

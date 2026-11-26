@@ -819,6 +819,18 @@ Most existing call sites using `Vec` require no changes. Code that relies on
 the exact non-generic function signature of `DataFrame::from_columns` may need
 to be updated to account for the new generic API.
 
+### `DataFrame`s built from arrays derive field nullability from the data
+
+`DataFrame::from_columns` and the `dataframe!` macro used to mark every field
+as nullable. They now mark a field as nullable only when its array may contain
+nulls (`Array::is_nullable`); the new `DataFrame::from_arrays` follows the same
+rule. Columns without nulls get a non-nullable schema, which lets the optimizer
+simplify expressions such as `col IS NULL` on them.
+
+Row values are unchanged, but schema inspection can differ: code that compares
+the resulting schema against a hand-written one with `nullable: true` for
+every field needs to be updated.
+
 ### Aggregate ordering state field names are now namespaced
 
 Ordering expressions exposed as top-level aggregate state fields now use names
