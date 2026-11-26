@@ -9,11 +9,14 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
+use datafusion_physical_plan::materialized_cte::MaterializedCteExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use itertools::Itertools;
@@ -117,7 +120,7 @@ impl TopKAggregation {
         let order = order.iter().exactly_one().ok()?;
         let sort_options = order.options;
         let order = order.expr.downcast_ref::<Column>()?;
-        let mut sort_col_name = order.name().to_string();
+        let mut sort_col = order.clone();
         let limit = sort.fetch()?;
 
         let mut cardinality_preserved = true;
@@ -128,21 +131,30 @@ impl TopKAggregation {
             if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
                 match aggr
                     .clone()
-                    .try_optimize_topk(limit, &sort_col_name, sort_options)
+                    .try_optimize_topk(limit, sort_col.name(), sort_options)
                 {
                     None => cardinality_preserved = false,
                     Some(aggr) => return Ok(Transformed::yes(Arc::new(aggr.data))),
                 }
             } else if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
-                // track renames due to successive projections
-                for proj_expr in proj.expr() {
-                    let Some(src_col) = proj_expr.expr.downcast_ref::<Column>() else {
-                        continue;
-                    };
-                    if proj_expr.alias == sort_col_name {
-                        sort_col_name = src_col.name().to_string();
-                    }
-                }
+                let Some(src_col) = proj
+                    .expr()
+                    .get(sort_col.index())
+                    .and_then(|e| e.expr.downcast_ref::<Column>())
+                else {
+                    // The sort orders by the computed value, whose order can differ
+                    // from the aggregate's (e.g. `-min(x)` reverses it).
+                    cardinality_preserved = false;
+                    return Ok(Transformed::no(plan));
+                };
+                sort_col = src_col.clone();
+            } else if plan.downcast_ref::<MaterializedCteExec>().is_some() {
+                // The output is the continuation, but the first child is the
+                // CTE body, which every reference to the CTE reads in full.
+                // A limit in the body would drop rows that they need. Skip
+                // both children; the flag also keeps later siblings unchanged.
+                cardinality_preserved = false;
+                return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump));
             } else {
                 // or we continue down through types that don't reduce cardinality
                 match plan.cardinality_effect() {

@@ -670,6 +670,51 @@ fn dispatch_dictionary_scatter<K: ArrowDictionaryKeyType>(
     }
 }
 
+/// Scatters precomputed dictionary value hashes through `array`'s keys.
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+#[cfg(not(feature = "force_hash_collisions"))]
+pub fn scatter_dictionary_hashes<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+    dict_hashes: &[u64],
+    hashes_buffer: &mut [u64],
+    multi_col: bool,
+) -> Result<()> {
+    if dict_hashes.len() != array.values().len() {
+        return _internal_err!(
+            "Expected {} dictionary hashes, got {}",
+            array.values().len(),
+            dict_hashes.len()
+        );
+    }
+    dispatch_dictionary_scatter(array, dict_hashes, hashes_buffer, multi_col);
+    Ok(())
+}
+
+/// Hashes one column into `hashes_buffer` exactly as [`create_hashes`] does
+/// for that column; `rehash` is `true` for every column after the first.
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+#[cfg(not(feature = "force_hash_collisions"))]
+pub fn hash_column(
+    array: &dyn Array,
+    random_state: &impl HashState,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) -> Result<()> {
+    hash_single_array(array, random_state, hashes_buffer, rehash)
+}
+
 /// Hash the values in a dictionary array.
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_dictionary<K: ArrowDictionaryKeyType>(

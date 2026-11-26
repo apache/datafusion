@@ -140,68 +140,8 @@ enum OutOfMemoryMode {
 /// This is the legacy implementation. See the [module documentation](self) for
 /// the deprecation schedule.
 ///
-/// # Design Goals
-///
-/// This structure is designed so that updating the aggregates can be
-/// vectorized (done in a tight loop) without allocations. The
-/// accumulator state is *not* managed by this operator (e.g in the
-/// hash table) and instead is delegated to the individual
-/// accumulators which have type specialized inner loops that perform
-/// the aggregation.
-///
-/// # Architecture
-///
-/// ```text
-///
-///     Assigns a consecutive group           internally stores aggregate values
-///     index for each unique set                     for all groups
-///         of group values
-///
-///         ┌────────────┐              ┌──────────────┐       ┌──────────────┐
-///         │ ┌────────┐ │              │┌────────────┐│       │┌────────────┐│
-///         │ │  "A"   │ │              ││accumulator ││       ││accumulator ││
-///         │ ├────────┤ │              ││     0      ││       ││     N      ││
-///         │ │  "Z"   │ │              ││ ┌────────┐ ││       ││ ┌────────┐ ││
-///         │ └────────┘ │              ││ │ state  │ ││       ││ │ state  │ ││
-///         │            │              ││ │┌─────┐ │ ││  ...  ││ │┌─────┐ │ ││
-///         │    ...     │              ││ │├─────┤ │ ││       ││ │├─────┤ │ ││
-///         │            │              ││ │└─────┘ │ ││       ││ │└─────┘ │ ││
-///         │            │              ││ │        │ ││       ││ │        │ ││
-///         │ ┌────────┐ │              ││ │  ...   │ ││       ││ │  ...   │ ││
-///         │ │  "Q"   │ │              ││ │        │ ││       ││ │        │ ││
-///         │ └────────┘ │              ││ │┌─────┐ │ ││       ││ │┌─────┐ │ ││
-///         │            │              ││ │└─────┘ │ ││       ││ │└─────┘ │ ││
-///         └────────────┘              ││ └────────┘ ││       ││ └────────┘ ││
-///                                     │└────────────┘│       │└────────────┘│
-///                                     └──────────────┘       └──────────────┘
-///
-///         group_values                             accumulators
-///
-/// ```
-///
-/// For example, given a query like `COUNT(x), SUM(y) ... GROUP BY z`,
-/// [`group_values`] will store the distinct values of `z`. There will
-/// be one accumulator for `COUNT(x)`, specialized for the data type
-/// of `x` and one accumulator for `SUM(y)`, specialized for the data
-/// type of `y`.
-///
-/// # Discussion
-///
-/// [`group_values`] does not store any aggregate state inline. It only
-/// assigns "group indices", one for each (distinct) group value. The
-/// accumulators manage the in-progress aggregate state for each
-/// group, with the group values themselves are stored in
-/// [`group_values`] at the corresponding group index.
-///
-/// The accumulator state (e.g partial sums) is managed by and stored
-/// by a [`GroupsAccumulator`] accumulator. There is one accumulator
-/// per aggregate expression (COUNT, AVG, etc) in the
-/// stream. Internally, each `GroupsAccumulator` manages the state for
-/// multiple groups, and is passed `group_indexes` during update. Note
-/// The accumulator state is not managed by this operator (e.g in the
-/// hash table).
-///
-/// [`group_values`]: Self::group_values
+/// See [`super::aggregate_hash_table`] for the physical design of group-key and
+/// accumulator storage.
 ///
 /// # Partial Aggregate and multi-phase grouping
 ///
@@ -675,6 +615,7 @@ impl Stream for GroupedHashAggregateStream {
                             // `group_aggregate_batch` will _not_ have updated the memory reservation yet.
                             // The rest of the code will first try to reduce memory usage by
                             // already emitting results.
+                            let groups_before = self.group_values.len();
                             self.group_aggregate_batch(&batch)?;
 
                             assert!(!self.input_done);
@@ -711,7 +652,10 @@ impl Stream for GroupedHashAggregateStream {
                                 // Check if we should switch to skip aggregation mode
                                 // It's important that we do this before we early emit since we've
                                 // already updated the probe.
-                                self.update_skip_aggregation_probe(input_rows);
+                                let new_groups = self.group_values.len() - groups_before;
+                                self.update_skip_aggregation_probe(
+                                    input_rows, new_groups,
+                                );
                                 if let Some(new_state) =
                                     self.switch_to_skip_aggregation()?
                                 {
@@ -1391,12 +1335,12 @@ impl GroupedHashAggregateStream {
     /// Updates skip aggregation probe state.
     ///
     /// Notice: It should only be called in Partial aggregation
-    fn update_skip_aggregation_probe(&mut self, input_rows: usize) {
+    fn update_skip_aggregation_probe(&mut self, input_rows: usize, new_groups: usize) {
         if let Some(probe) = self.skip_aggregation_probe.as_mut() {
             // Skip aggregation probe is not supported if stream has any spills,
             // currently spilling is not supported for Partial aggregation
             assert!(self.spill_state.spills.is_empty());
-            probe.update_state(input_rows, self.group_values.len());
+            probe.update_state(input_rows, new_groups);
         }
     }
 

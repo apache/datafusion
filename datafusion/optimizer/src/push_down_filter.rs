@@ -58,7 +58,8 @@ use crate::extract_leaf_expressions::is_pure_extraction_projection;
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::{reorder_predicates, simplify_predicates};
 use crate::utils::{
-    ColumnReference, has_all_column_refs, is_restrict_null_predicate, schema_columns,
+    ColumnReference, aggregate_emits_on_empty_input, has_all_column_refs,
+    is_restrict_null_predicate, schema_columns,
 };
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_expr::ExpressionPlacement;
@@ -278,12 +279,9 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::HigherOrderFunction(_)
         | Expr::Lambda(_)
         | Expr::LambdaVariable(_) => Ok(false),
-        // TODO: remove the next line after `Expr::Wildcard` is removed
-        #[expect(deprecated)]
-        Expr::AggregateFunction(_)
-        | Expr::WindowFunction(_)
-        | Expr::Wildcard { .. }
-        | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
+        Expr::AggregateFunction(_) | Expr::WindowFunction(_) | Expr::GroupingSet(_) => {
+            internal_err!("Unsupported predicate type")
+        }
     })?)
 }
 
@@ -1112,6 +1110,7 @@ impl OptimizerRule for PushDownFilter {
                     .cloned()
                     .collect();
                 let group_expr_columns = expr_columns(&non_volatile_group_exprs);
+                let emits_on_empty = aggregate_emits_on_empty_input(&agg.group_expr);
 
                 // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
                 // After push, we need to replace `a+b` with Column(a)+Column(b)
@@ -1132,7 +1131,9 @@ impl OptimizerRule for PushDownFilter {
                 let mut push_predicates = vec![];
                 for expr in predicates {
                     let cols = expr.column_refs();
+                    // A grand total emits a row even when the predicate empties its input.
                     if !expr.is_volatile()
+                        && !emits_on_empty
                         && cols.iter().all(|c| group_expr_columns.contains(c))
                     {
                         push_predicates.push(replace_cols_by_column(expr, &replace_map)?);
@@ -1312,7 +1313,7 @@ impl OptimizerRule for PushDownFilter {
 
                 result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
             }
-            LogicalPlan::TableScan(mut scan) => {
+            LogicalPlan::TableScan(scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
                 // Filters containing scalar subqueries cannot be pushed to
                 // providers because the subquery result is not available
@@ -1379,9 +1380,20 @@ impl OptimizerRule for PushDownFilter {
                         predicates_changed || reorder_changed,
                         TreeNodeRecursion::Continue,
                     ));
-                } else {
-                    scan.filters = new_scan_filters;
                 }
+                let scan = match scan.try_with_filters(new_scan_filters) {
+                    Ok(scan) => scan,
+                    // The fetch and skip guard above returns before this point
+                    // today. This arm keeps the plan correct if that guard moves.
+                    Err(scan) => {
+                        filter.input = Arc::new(LogicalPlan::TableScan(scan));
+                        return Ok(Transformed::new(
+                            LogicalPlan::Filter(filter),
+                            predicates_changed || reorder_changed,
+                            TreeNodeRecursion::Continue,
+                        ));
+                    }
+                };
 
                 // Compose predicates to be of `Unsupported` or `Inexact` pushdown type,
                 // and also include volatile and subquery-containing filters
@@ -4919,7 +4931,7 @@ mod tests {
             .aggregate(vec![col("user")], vec![count(lit(1))])?
             .project(vec![
                 leaf_udf_expr(col("user")).is_not_null().alias("has_name"),
-                col("COUNT(Int32(1))"),
+                col("count(Int32(1))"),
             ])?
             .build()?;
 
@@ -4980,6 +4992,27 @@ mod tests {
             @r"
         Filter: test.a > Int64(10)
           TableScan: test, fetch=10
+        "
+        )
+    }
+
+    #[test]
+    fn filter_not_pushed_down_through_table_scan_with_skip() -> Result<()> {
+        let LogicalPlan::TableScan(scan) = test_table_scan()? else {
+            unreachable!()
+        };
+        let scan_with_skip = LogicalPlan::TableScan(TableScan {
+            skip: Some(3),
+            ..scan
+        });
+        let plan = LogicalPlanBuilder::from(scan_with_skip)
+            .filter(col("a").gt(lit(10i64)))?
+            .build()?;
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a > Int64(10)
+          TableScan: test, skip=3
         "
         )
     }

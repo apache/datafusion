@@ -6,17 +6,20 @@ mod literal_lookup_table;
 
 use super::{Column, Literal};
 use crate::expressions::{
-    BinaryExpr, CastExpr, LambdaVariable, NegativeExpr, NotExpr, lit, try_cast,
+    BinaryExpr, CastExpr, LambdaExpr, LambdaVariable, NegativeExpr, NotExpr, lit,
+    try_cast,
 };
+use crate::utils::collect_columns;
 use crate::{PhysicalExpr, ScalarFunctionExpr};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
     FilterBuilder, FilterPredicate, is_not_null, not, nullif, prep_null_mask_filter,
 };
-use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_or_internal_err, exec_err,
     internal_datafusion_err, internal_err,
@@ -24,35 +27,37 @@ use datafusion_common::{
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::NullableInterval;
 use datafusion_expr_common::operator::Operator;
-use indexmap::IndexMap;
+use datafusion_expr_common::placement::ExpressionPlacement;
+use indexmap::{IndexMap, IndexSet};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
-use std::hash::Hash;
-use std::sync::Arc;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, OnceLock};
 
 use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
 use arrow::compute::kernels::merge::{MergeIndex, merge, merge_n};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_physical_expr_common::datum::compare_with_eq;
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_expr_common::utils::scatter;
 use itertools::Itertools;
 use std::fmt::{Debug, Formatter};
 
 pub(super) type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug)]
 enum EvalMethod {
     /// CASE WHEN condition THEN result
     ///      [WHEN ...]
     ///      [ELSE result]
     /// END
-    NoExpression(ProjectedCaseBody),
+    NoExpression(LazyProjectedBody),
     /// CASE expression
     ///     WHEN value THEN result
     ///     [WHEN ...]
     ///     [ELSE result]
     /// END
-    WithExpression(ProjectedCaseBody),
+    WithExpression(LazyProjectedBody),
     /// This is a specialization for a specific use case where we can take a fast path
     /// for expressions that are infallible and can be cheaply computed for the entire
     /// record batch rather than just for the rows where the predicate is true.
@@ -72,7 +77,7 @@ enum EvalMethod {
     /// `then` expressions.
     ///
     /// CASE WHEN condition THEN expression [ELSE expression] END
-    ExpressionOrExpression(ProjectedCaseBody),
+    ExpressionOrExpression(LazyProjectedBody),
 
     /// This is a specialization for [`EvalMethod::WithExpression`] when the value and results are literals
     ///
@@ -87,7 +92,7 @@ enum EvalMethod {
 ///
 /// So implementing empty hash is still valid as the data is derived from `PhysicalExpr` s which are already hashed
 impl Hash for LiteralLookupTable {
-    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
 }
 
 /// Implementing Equal so we can use `derive` on [`EvalMethod`].
@@ -104,6 +109,54 @@ impl PartialEq for LiteralLookupTable {
 
 impl Eq for LiteralLookupTable {}
 
+/// A [`ProjectedCaseBody`] derived from the [`CaseBody`] on first evaluation.
+///
+/// Deriving it in [`CaseExpr::try_new`] would make rewrites of nested `CASE` expressions
+/// exponential in the nesting depth: [`CaseBody::project`] rebuilds the nested expressions,
+/// each of which would project its own body again.
+#[derive(Debug, Default)]
+struct LazyProjectedBody {
+    projected: OnceLock<ProjectedCaseBody>,
+    /// Whether the single `WHEN` is evaluated against the full input batch before the
+    /// derived body is used, so that the derived body only needs its `THEN` and `ELSE`.
+    when_evaluated: bool,
+}
+
+impl LazyProjectedBody {
+    /// For bodies with a single `WHEN` that is evaluated against the full input batch.
+    fn when_evaluated() -> Self {
+        Self {
+            projected: OnceLock::new(),
+            when_evaluated: true,
+        }
+    }
+
+    fn project(&self, body: &CaseBody, schema: &Schema) -> Result<&ProjectedCaseBody> {
+        if let Some(projected) = self.projected.get() {
+            return Ok(projected);
+        }
+        // Concurrent first evaluations may each derive the body; one of them is kept.
+        let projected = if self.when_evaluated {
+            // The derived `WHEN` is never evaluated, so a placeholder keeps it from
+            // affecting the projection and the precomputed expressions.
+            let placeholder: Arc<dyn PhysicalExpr> =
+                Arc::new(Literal::new(ScalarValue::Boolean(Some(true))));
+            CaseBody {
+                expr: None,
+                when_then_expr: vec![(
+                    placeholder,
+                    Arc::clone(&body.when_then_expr[0].1),
+                )],
+                else_expr: body.else_expr.clone(),
+            }
+            .project(schema)?
+        } else {
+            body.project(schema)?
+        };
+        Ok(self.projected.get_or_init(|| projected))
+    }
+}
+
 /// The body of a CASE expression which consists of an optional base expression, the "when/then"
 /// branches and an optional "else" branch.
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -118,41 +171,60 @@ struct CaseBody {
 
 impl CaseBody {
     /// Derives a [ProjectedCaseBody] from this [CaseBody].
-    fn project(&self) -> Result<ProjectedCaseBody> {
-        // Determine the set of columns that are used in all the expressions of the case body.
+    fn project(&self, schema: &Schema) -> Result<ProjectedCaseBody> {
+        // Lambda bodies are evaluated against batches of a different shape, so
+        // expressions are only precomputed when the body contains no lambdas.
+        let can_precompute = !self.exprs().any(|e| {
+            e.exists(|e| Ok(e.is::<LambdaExpr>() || e.is::<LambdaVariable>()))
+                .expect("Closure cannot fail")
+        });
+
+        // Unknown leaves may read input columns without exposing a Column child.
+        // This is checked over all the nodes, independently of precomputation.
+        let supports_projection = !self.exprs().any(|e| {
+            e.exists(|e| {
+                Ok(e.children().is_empty()
+                    && !e.is::<Column>()
+                    && !e.is::<LambdaVariable>()
+                    && !e.is::<Literal>()
+                    && !e.is::<ScalarFunctionExpr>())
+            })
+            .expect("Closure cannot fail")
+        });
+
+        // Find the candidates for precomputation and the columns used outside of them.
         // Use an ordered set so lambda variables continue to be positioned after columns
         let mut used_column_indices = BTreeSet::<usize>::new();
-        let mut supports_projection = true;
-        let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
+        let mut precompute_candidates = IndexSet::<Arc<dyn PhysicalExpr>>::new();
+        self.exprs().for_each(|expr| {
             expr.apply(|expr| {
+                if can_precompute && is_precomputable(expr, schema) {
+                    precompute_candidates.insert(Arc::clone(expr));
+                    return Ok(TreeNodeRecursion::Jump);
+                }
                 if let Some(column) = expr.downcast_ref::<Column>() {
                     used_column_indices.insert(column.index());
                 } else if let Some(lambda_variable) =
                     expr.downcast_ref::<LambdaVariable>()
                 {
                     used_column_indices.insert(lambda_variable.index());
-                } else if expr.downcast_ref::<Literal>().is_none()
-                    && expr.downcast_ref::<ScalarFunctionExpr>().is_none()
-                    && expr.children().is_empty()
-                {
-                    // Unknown leaves may read input columns without exposing a Column child.
-                    supports_projection = false;
                 }
                 Ok(TreeNodeRecursion::Continue)
             })
             .expect("Closure cannot fail");
-        };
-
-        if let Some(e) = &self.expr {
-            collect_column_indices(e);
-        }
-        self.when_then_expr.iter().for_each(|(w, t)| {
-            collect_column_indices(w);
-            collect_column_indices(t);
         });
-        if let Some(e) = &self.else_expr {
-            collect_column_indices(e);
-        }
+
+        // Precomputing only pays off when it spares filtering a column that is not
+        // otherwise used. Candidates referring only to used columns are evaluated in place,
+        // so they add no columns to the used ones.
+        let precomputed = precompute_candidates
+            .into_iter()
+            .filter(|expr| {
+                collect_columns(expr)
+                    .iter()
+                    .any(|column| !used_column_indices.contains(&column.index()))
+            })
+            .collect::<IndexSet<_>>();
 
         // Construct a mapping from the original column index to the projected column index.
         let column_index_map = used_column_indices
@@ -162,10 +234,25 @@ impl CaseBody {
             .collect::<IndexMap<usize, usize>>();
 
         // Construct the projected body by rewriting each expression from the original body
-        // using the column index mapping.
+        // using the column index mapping. Precomputed expressions are replaced with
+        // references to the columns appended after the projected ones.
         let project = |expr: &Arc<dyn PhysicalExpr>| -> Result<Arc<dyn PhysicalExpr>> {
             Arc::clone(expr)
                 .transform_down(|e| {
+                    if !precomputed.is_empty()
+                        && e.placement() == ExpressionPlacement::MoveTowardsLeafNodes
+                        && let Some(k) = precomputed.get_index_of(&e)
+                    {
+                        let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(
+                            &e.to_string(),
+                            column_index_map.len() + k,
+                        ));
+                        return Ok(Transformed::new(
+                            column,
+                            true,
+                            TreeNodeRecursion::Jump,
+                        ));
+                    }
                     if let Some(column) = e.downcast_ref::<Column>() {
                         let original = column.index();
                         let projected = *column_index_map.get(&original).unwrap();
@@ -211,10 +298,80 @@ impl CaseBody {
 
         Ok(ProjectedCaseBody {
             projection,
+            precomputed: precomputed.into_iter().collect(),
             body: projected_body,
             supports_projection,
         })
     }
+
+    /// Iterates over all the top-level expressions of this case body.
+    fn exprs(&self) -> impl Iterator<Item = &Arc<dyn PhysicalExpr>> {
+        self.expr
+            .iter()
+            .chain(self.when_then_expr.iter().flat_map(|(w, t)| [w, t]))
+            .chain(self.else_expr.iter())
+    }
+}
+
+/// Returns true if `expr` is a cheap, non-volatile expression over columns and literals,
+/// such as a struct field access, that can be evaluated for the whole input batch ahead of
+/// the `CASE` branches.
+///
+/// Expressions with [`ExpressionPlacement::MoveTowardsLeafNodes`] placement may be pushed
+/// below filters by the optimizer, so evaluating them for rows a branch does not select is
+/// expected to be safe. Map lookups are excluded: they scan the entries of every row
+/// and can fail for rows that no branch selects.
+fn is_precomputable(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
+    if expr.placement() != ExpressionPlacement::MoveTowardsLeafNodes
+        || is_volatile(expr)
+        || may_cross_map(expr, schema)
+    {
+        return false;
+    }
+    let mut has_column = false;
+    let mut only_supported_leaves = true;
+    expr.apply(|e| {
+        if e.is::<Column>() {
+            has_column = true;
+        } else if e.children().is_empty() && !e.is::<Literal>() {
+            only_supported_leaves = false;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("Closure cannot fail");
+    has_column && only_supported_leaves
+}
+
+/// Returns true if `expr` may contain a field access path that reaches into a `Map`
+/// value, including when the types along the path cannot be determined.
+fn may_cross_map(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
+    expr.exists(|e| {
+        let Some(func) = e.downcast_ref::<ScalarFunctionExpr>() else {
+            return Ok(false);
+        };
+        let [base, path @ ..] = func.args() else {
+            return Ok(false);
+        };
+        let mut data_type = base.data_type(schema)?;
+        for key in path {
+            let name = key
+                .downcast_ref::<Literal>()
+                .and_then(|l| l.value().try_as_str().flatten().map(str::to_string));
+            data_type = match (&data_type, name) {
+                (DataType::Map(..), _) => return Ok(true),
+                (DataType::Struct(fields), Some(name)) => {
+                    match fields.iter().find(|f| *f.name() == name) {
+                        Some(f) => f.data_type().clone(),
+                        None => return Ok(true),
+                    }
+                }
+                _ => return Ok(false),
+            };
+        }
+        Ok(false)
+    })
+    .unwrap_or(true)
 }
 
 /// A derived case body that can be used to evaluate a case expression after projecting
@@ -245,11 +402,20 @@ impl CaseBody {
 /// The projection vector and the rewritten expression (which only differs from the original in
 /// column reference indices) are held in a `ProjectedCaseBody`.
 ///
+/// Cheap expressions over columns that are not otherwise referenced, such as struct field
+/// accesses, are evaluated once for the whole batch and appended to the projected batch as
+/// extra columns. For `CASE WHEN S['a'] > 10 THEN S['b'] END`, filtering the two field arrays
+/// is much cheaper than filtering every child array of the struct `S`. These expressions are
+/// held in `precomputed`, and the rewritten body refers to their results as columns
+/// following the projected ones.
+///
 /// When `supports_projection` is false, evaluation uses the original body and full batch because
 /// the expression may depend on input columns that are not visible in its children.
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug)]
 struct ProjectedCaseBody {
     projection: Vec<usize>,
+    /// Expressions over the input batch whose results are appended after the projected columns
+    precomputed: Vec<Arc<dyn PhysicalExpr>>,
     body: CaseBody,
     /// Whether `body` is safe to evaluate against a projected batch.
     ///
@@ -259,16 +425,54 @@ struct ProjectedCaseBody {
 }
 
 impl ProjectedCaseBody {
-    /// Returns a projection when evaluating the derived body can avoid unused input columns.
-    fn projection_for(&self, batch: &RecordBatch) -> Option<Vec<usize>> {
+    /// Returns the batch to evaluate the derived body against, when doing so can avoid
+    /// filtering unused input columns.
+    fn project_batch(&self, batch: &RecordBatch) -> Result<Option<RecordBatch>> {
+        if !self.supports_projection {
+            return Ok(None);
+        }
         let projection = self
             .projection
             .iter()
             .copied()
             .filter(|index| *index < batch.num_columns())
             .collect::<Vec<_>>();
-        (self.supports_projection && projection.len() < batch.num_columns())
-            .then_some(projection)
+        if self.precomputed.is_empty() {
+            return if projection.len() < batch.num_columns() {
+                Ok(Some(batch.project(&projection)?))
+            } else {
+                Ok(None)
+            };
+        }
+
+        let schema = batch.schema();
+        let mut fields = Vec::with_capacity(projection.len() + self.precomputed.len());
+        let mut columns = Vec::with_capacity(fields.capacity());
+        for index in projection {
+            fields.push(Arc::clone(&schema.fields()[index]));
+            columns.push(Arc::clone(batch.column(index)));
+        }
+        for expr in &self.precomputed {
+            let column = expr.evaluate(batch)?.into_array(batch.num_rows())?;
+            // The array may not match the plan-time field exactly (nested nullability or
+            // metadata); only the expressions in the body read this schema.
+            let field = expr.return_field(&schema)?;
+            let nullable = field.is_nullable() || column.null_count() > 0;
+            fields.push(Arc::new(
+                field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(column.data_type().clone())
+                    .with_nullable(nullable),
+            ));
+            columns.push(column);
+        }
+        let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+        Ok(Some(RecordBatch::try_new_with_options(
+            Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
+            columns,
+            &options,
+        )?))
     }
 }
 
@@ -301,7 +505,7 @@ pub struct CaseExpr {
 // Hash/Eq avoids redundantly hashing the expression tree twice. For
 // nested CASE chains this prevents exponential blowup (see #22173).
 impl Hash for CaseExpr {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.body.hash(state);
     }
 }
@@ -337,6 +541,12 @@ impl std::fmt::Display for CaseExpr {
 /// expressions in the future
 fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.is::<Column>()
+}
+
+/// Whether `expr` is a NULL literal
+fn is_null_literal(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.downcast_ref::<Literal>()
+        .is_some_and(|literal| literal.value().is_null())
 }
 
 /// Creates a [FilterPredicate] from a boolean array.
@@ -674,10 +884,17 @@ impl CaseExpr {
         else_expr: Option<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
         // normalize null literals to None in the else_expr (this already happens
-        // during SQL planning, but not necessarily for other use cases)
+        // during SQL planning, but not necessarily for other use cases). A typed
+        // NULL with metadata is kept, since its metadata is part of the result field.
         let else_expr = match &else_expr {
             Some(e) => match e.downcast_ref::<Literal>() {
-                Some(lit) if lit.value().is_null() => None,
+                Some(lit)
+                    if lit.value().is_null()
+                        && (lit.metadata().is_empty()
+                            || lit.value().data_type().is_null()) =>
+                {
+                    None
+                }
                 _ => else_expr,
             },
             _ => else_expr,
@@ -693,38 +910,38 @@ impl CaseExpr {
             else_expr,
         };
 
-        let eval_method = Self::find_best_eval_method(&body)?;
+        let eval_method = Self::find_best_eval_method(&body);
 
         Ok(Self { body, eval_method })
     }
 
-    fn find_best_eval_method(body: &CaseBody) -> Result<EvalMethod> {
+    fn find_best_eval_method(body: &CaseBody) -> EvalMethod {
         if body.expr.is_some() {
             if let Some(mapping) = LiteralLookupTable::maybe_new(body) {
-                return Ok(EvalMethod::WithExprScalarLookupTable(mapping));
+                return EvalMethod::WithExprScalarLookupTable(mapping);
             }
 
-            return Ok(EvalMethod::WithExpression(body.project()?));
+            return EvalMethod::WithExpression(LazyProjectedBody::default());
         }
 
-        Ok(
-            if body.when_then_expr.len() == 1
-                && is_cheap_and_infallible(&(body.when_then_expr[0].1))
-                && body.else_expr.is_none()
-            {
-                EvalMethod::InfallibleExprOrNull
-            } else if body.when_then_expr.len() == 1
-                && body.when_then_expr[0].1.is::<Literal>()
-                && body.else_expr.is_some()
-                && body.else_expr.as_ref().unwrap().is::<Literal>()
-            {
-                EvalMethod::ScalarOrScalar
-            } else if body.when_then_expr.len() == 1 {
-                EvalMethod::ExpressionOrExpression(body.project()?)
-            } else {
-                EvalMethod::NoExpression(body.project()?)
-            },
-        )
+        // A NULL literal ELSE evaluates like no ELSE
+        let null_else = body.else_expr.as_ref().is_none_or(is_null_literal);
+        if body.when_then_expr.len() == 1
+            && is_cheap_and_infallible(&(body.when_then_expr[0].1))
+            && null_else
+        {
+            EvalMethod::InfallibleExprOrNull
+        } else if body.when_then_expr.len() == 1
+            && body.when_then_expr[0].1.is::<Literal>()
+            && !null_else
+            && body.else_expr.as_ref().unwrap().is::<Literal>()
+        {
+            EvalMethod::ScalarOrScalar
+        } else if body.when_then_expr.len() == 1 {
+            EvalMethod::ExpressionOrExpression(LazyProjectedBody::when_evaluated())
+        } else {
+            EvalMethod::NoExpression(LazyProjectedBody::default())
+        }
     }
 
     /// Optional base expression that can be compared to literal values in the "when" expressions
@@ -741,24 +958,127 @@ impl CaseExpr {
     pub fn else_expr(&self) -> Option<&Arc<dyn PhysicalExpr>> {
         self.body.else_expr.as_ref()
     }
+
+    /// [`PhysicalExpr::return_field`] without the name, from one visit of each value
+    /// branch. A nested CASE branch is visited the same way, since its name would
+    /// format its whole subtree again at every level.
+    fn unnamed_field(&self, input_schema: &Schema) -> Result<Field> {
+        let fields = self
+            .body
+            .when_then_expr
+            .iter()
+            .map(|(_, then)| then)
+            .chain(self.body.else_expr.iter())
+            .map(|expr| match expr.downcast_ref::<CaseExpr>() {
+                Some(case) => case.unnamed_field(input_schema).map(Arc::new),
+                None => expr.return_field(input_schema),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let data_type = self
+            .body
+            .data_type_from(|i| Ok(fields[i].data_type().clone()))?;
+        let nullable =
+            self.nullable_from(input_schema, |i| Ok(fields[i].is_nullable()))?;
+        let metadata = coerced_fields_metadata(fields.iter().map(|f| f.as_ref()))?;
+        Ok(metadata.add_to_field(Field::new("", data_type, nullable)))
+    }
+
+    /// The nullability of this CASE, given the nullability of each value branch:
+    /// the THEN expressions in order, then the ELSE.
+    fn nullable_from(
+        &self,
+        input_schema: &Schema,
+        mut branch_nullable: impl FnMut(usize) -> Result<bool>,
+    ) -> Result<bool> {
+        let mut branches = self.body.when_then_expr.iter().enumerate();
+        let nullable_then = branches.find_map(|(i, (w, t))| {
+            let is_nullable = match branch_nullable(i) {
+                // Pass on error determining nullability verbatim
+                Err(e) => return Some(Err(e)),
+                Ok(n) => n,
+            };
+
+            // Branches with a then expression that is not nullable do not impact the
+            // nullability of the case expression.
+            if !is_nullable {
+                return None;
+            }
+
+            // For case-with-expression assume all 'then' expressions are reachable
+            if self.body.expr.is_some() {
+                return Some(Ok(()));
+            }
+
+            // For branches with a nullable 'then' expression, try to determine
+            // if the 'then' expression is ever reachable in the situation where
+            // it would evaluate to null.
+
+            // Replace the `then` expression with `NULL` in the `when` expression
+            let with_null = match replace_with_null(
+                w,
+                unwrap_certainly_null_expr(t.as_ref()),
+                input_schema,
+            ) {
+                Err(e) => return Some(Err(e)),
+                Ok(e) => e,
+            };
+
+            let can_be_true = match evaluate_predicate(&with_null).and_then(|bounds| {
+                bounds.contains_value(ScalarValue::Boolean(Some(true)))
+            }) {
+                Err(e) => return Some(Err(e)),
+                Ok(b) => b,
+            };
+
+            if can_be_true { Some(Ok(())) } else { None }
+        });
+
+        if let Some(nullable_then) = nullable_then {
+            // There is at least one reachable nullable 'then' expression, so the case
+            // expression itself is nullable.
+            // Use `Result::map` to propagate the error from `nullable_then` if there is one.
+            nullable_then.map(|_| true)
+        } else if self.body.else_expr.is_some() {
+            // There are no reachable nullable 'then' expressions, so all we still need to
+            // check is the 'else' expression's nullability.
+            branch_nullable(self.body.when_then_expr.len())
+        } else {
+            // CASE produces NULL if there is no `else` expr
+            // (aka when none of the `when_then_exprs` match)
+            Ok(true)
+        }
+    }
 }
 
 impl CaseBody {
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+        self.data_type_from(|i| match self.when_then_expr.get(i) {
+            Some((_, then)) => then.data_type(input_schema),
+            None => self
+                .else_expr
+                .as_ref()
+                .map_or(Ok(DataType::Null), |e| e.data_type(input_schema)),
+        })
+    }
+
+    /// The type of this CASE, given the type of each value branch: the THEN
+    /// expressions in order, then the ELSE.
+    fn data_type_from(
+        &self,
+        mut branch_type: impl FnMut(usize) -> Result<DataType>,
+    ) -> Result<DataType> {
         // since all then results have the same data type, we can choose any one as the
         // return data type except for the null.
         let mut data_type = DataType::Null;
         for i in 0..self.when_then_expr.len() {
-            data_type = self.when_then_expr[i].1.data_type(input_schema)?;
+            data_type = branch_type(i)?;
             if !data_type.equals_datatype(&DataType::Null) {
                 break;
             }
         }
         // if all then results are null, we use data type of else expr instead if possible.
-        if data_type.equals_datatype(&DataType::Null)
-            && let Some(e) = &self.else_expr
-        {
-            data_type = e.data_type(input_schema)?;
+        if data_type.equals_datatype(&DataType::Null) && self.else_expr.is_some() {
+            data_type = branch_type(self.when_then_expr.len())?;
         }
 
         Ok(data_type)
@@ -1068,8 +1388,7 @@ impl CaseExpr {
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
-        if let Some(projection) = projected.projection_for(batch) {
-            let projected_batch = batch.project(&projection)?;
+        if let Some(projected_batch) = projected.project_batch(batch)? {
             projected
                 .body
                 .case_when_with_expr(&projected_batch, &return_type)
@@ -1091,8 +1410,7 @@ impl CaseExpr {
         projected: &ProjectedCaseBody,
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
-        if let Some(projection) = projected.projection_for(batch) {
-            let projected_batch = batch.project(&projection)?;
+        if let Some(projected_batch) = projected.project_batch(batch)? {
             projected
                 .body
                 .case_when_no_expr(&projected_batch, &return_type)
@@ -1201,18 +1519,19 @@ impl CaseExpr {
         } else if !when_value.has_true() {
             // All input rows are false/null, just call the 'else' expression
             match &self.body.else_expr {
-                Some(else_expr) => else_expr.evaluate(batch),
-                None => {
+                Some(else_expr) if !is_null_literal(else_expr) => {
+                    else_expr.evaluate(batch)
+                }
+                _ => {
                     let return_type = self.data_type(&batch.schema())?;
                     Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
                         &return_type,
                     )?))
                 }
             }
-        } else if let Some(projection) = projected.projection_for(batch) {
+        } else if let Some(projected_batch) = projected.project_batch(batch)? {
             // The case expressions do not use all the columns of the input batch.
             // Project first to reduce time spent filtering.
-            let projected_batch = batch.project(&projection)?;
             projected.body.expr_or_expr(&projected_batch, when_value)
         } else {
             // All columns are used in the case expressions, so there is no need to project.
@@ -1249,62 +1568,21 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        let nullable_then = self.body.when_then_expr.iter().find_map(|(w, t)| {
-            let is_nullable = match t.nullable(input_schema) {
-                // Pass on error determining nullability verbatim
-                Err(e) => return Some(Err(e)),
-                Ok(n) => n,
-            };
+        self.nullable_from(input_schema, |i| match self.body.when_then_expr.get(i) {
+            Some((_, then)) => then.nullable(input_schema),
+            None => self
+                .body
+                .else_expr
+                .as_ref()
+                .map_or(Ok(true), |e| e.nullable(input_schema)),
+        })
+    }
 
-            // Branches with a then expression that is not nullable do not impact the
-            // nullability of the case expression.
-            if !is_nullable {
-                return None;
-            }
-
-            // For case-with-expression assume all 'then' expressions are reachable
-            if self.body.expr.is_some() {
-                return Some(Ok(()));
-            }
-
-            // For branches with a nullable 'then' expression, try to determine
-            // if the 'then' expression is ever reachable in the situation where
-            // it would evaluate to null.
-
-            // Replace the `then` expression with `NULL` in the `when` expression
-            let with_null = match replace_with_null(
-                w,
-                unwrap_certainly_null_expr(t.as_ref()),
-                input_schema,
-            ) {
-                Err(e) => return Some(Err(e)),
-                Ok(e) => e,
-            };
-
-            let can_be_true = match evaluate_predicate(&with_null).and_then(|bounds| {
-                bounds.contains_value(ScalarValue::Boolean(Some(true)))
-            }) {
-                Err(e) => return Some(Err(e)),
-                Ok(b) => b,
-            };
-
-            if can_be_true { Some(Ok(())) } else { None }
-        });
-
-        if let Some(nullable_then) = nullable_then {
-            // There is at least one reachable nullable 'then' expression, so the case
-            // expression itself is nullable.
-            // Use `Result::map` to propagate the error from `nullable_then` if there is one.
-            nullable_then.map(|_| true)
-        } else if let Some(e) = &self.body.else_expr {
-            // There are no reachable nullable 'then' expressions, so all we still need to
-            // check is the 'else' expression's nullability.
-            e.nullable(input_schema)
-        } else {
-            // CASE produces NULL if there is no `else` expr
-            // (aka when none of the `when_then_exprs` match)
-            Ok(true)
-        }
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        Ok(Arc::new(
+            self.unnamed_field(input_schema)?
+                .with_name(format!("{self}")),
+        ))
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -1312,19 +1590,24 @@ impl PhysicalExpr for CaseExpr {
             EvalMethod::WithExpression(p) => {
                 // this use case evaluates "expr" and then compares the values with the "when"
                 // values
-                self.case_when_with_expr(batch, p)
+                self.case_when_with_expr(
+                    batch,
+                    p.project(&self.body, batch.schema_ref())?,
+                )
             }
             EvalMethod::NoExpression(p) => {
                 // The "when" conditions all evaluate to boolean in this use case and can be
                 // arbitrary expressions
-                self.case_when_no_expr(batch, p)
+                self.case_when_no_expr(batch, p.project(&self.body, batch.schema_ref())?)
             }
             EvalMethod::InfallibleExprOrNull => {
                 // Specialization for CASE WHEN expr THEN column [ELSE NULL] END
                 self.case_column_or_null(batch)
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
-            EvalMethod::ExpressionOrExpression(p) => self.expr_or_expr(batch, p),
+            EvalMethod::ExpressionOrExpression(p) => {
+                self.expr_or_expr(batch, p.project(&self.body, batch.schema_ref())?)
+            }
             EvalMethod::WithExprScalarLookupTable(lookup_table) => {
                 self.with_lookup_table(batch, lookup_table)
             }
@@ -1401,6 +1684,10 @@ impl PhysicalExpr for CaseExpr {
             write!(f, " ")?;
         }
         write!(f, "END")
+    }
+
+    fn short_circuits(&self) -> bool {
+        true
     }
 
     #[cfg(feature = "proto")]
@@ -1583,10 +1870,10 @@ mod tests {
     use super::*;
 
     use crate::expressions;
-    use crate::expressions::{binary, cast, col, is_not_null};
+    use crate::expressions::{binary, cast, col, is_not_null, lambda};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
-    use arrow::datatypes::Field;
+    use arrow::datatypes::{Field, i256};
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::plan_err;
@@ -1594,6 +1881,8 @@ mod tests {
     use datafusion_expr::type_coercion::binary::type_union_coercion;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use half::f16;
+
+    use std::assert_matches;
 
     #[derive(Debug, Hash, PartialEq, Eq)]
     struct CustomColumn {
@@ -1984,6 +2273,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::WithExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
                 assert!(!projected.supports_projection);
             }
             method => panic!("expected WithExpression, got {method:?}"),
@@ -2001,21 +2291,17 @@ mod tests {
     fn case_expr_or_expr_with_custom_column() -> Result<()> {
         let batch = case_test_batch_with_extra_columns()?;
         let schema = batch.schema();
-        let when = binary(
-            Arc::new(CustomColumn::new("a", 0)),
-            Operator::Eq,
-            lit("foo"),
-            &schema,
-        )?;
+        let when = binary(col("a", &schema)?, Operator::Eq, lit("foo"), &schema)?;
 
         let expr = CaseExpr::try_new(
             None,
-            vec![(when, col("b", &schema)?)],
+            vec![(when, Arc::new(CustomColumn::new("b", 1)))],
             Some(col("c", &schema)?),
         )?;
 
         match &expr.eval_method {
             EvalMethod::ExpressionOrExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
                 assert!(!projected.supports_projection);
             }
             method => panic!("expected ExpressionOrExpression, got {method:?}"),
@@ -2039,24 +2325,605 @@ mod tests {
             &schema,
             Arc::new(ConfigOptions::default()),
         )?);
-        let when = binary(random, Operator::Gt, lit(0.5f64), &schema)?;
+        let when = binary(col("a", &schema)?, Operator::Gt, lit(0i32), &schema)?;
 
         let expr = CaseExpr::try_new(
             None,
-            vec![(when, col("b", &schema)?)],
-            Some(col("c", &schema)?),
+            vec![(when, random)],
+            Some(cast(col("c", &schema)?, &schema, Float64)?),
         )?;
 
         match &expr.eval_method {
             EvalMethod::ExpressionOrExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
                 assert!(projected.supports_projection);
-                assert_eq!(projected.projection, vec![1, 2]);
+                assert_eq!(projected.projection, vec![2]);
             }
             method => panic!("expected ExpressionOrExpression, got {method:?}"),
         }
 
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_float64_array(&result)?;
         assert_eq!(result.len(), batch.num_rows());
+        // Rows 0 and 3 take `random()`, rows 1 and 2 take the `ELSE`
+        for row in [0, 3] {
+            assert!(result.is_valid(row));
+            assert!((0.0..1.0).contains(&result.value(row)));
+        }
+        assert_eq!(result.value(1), -3.0);
+        assert_eq!(result.value(2), 777.0);
+        Ok(())
+    }
+
+    /// A batch with columns `x: Int32` and `s: Struct<a: Int32, b: Int32, c: Utf8>`.
+    fn case_test_batch_with_struct() -> Result<RecordBatch> {
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(4)]))
+                    as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("b", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![10, 20, 30, 40])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Utf8, true)),
+                Arc::new(StringArray::from(vec!["p", "q", "r", "s"])) as ArrayRef,
+            ),
+        ]);
+        let schema = Schema::new(vec![
+            Field::new("x", DataType::Int32, true),
+            Field::new("s", struct_array.data_type().clone(), true),
+        ]);
+        Ok(RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Int32Array::from(vec![100, 200, 300, 400])),
+                Arc::new(struct_array),
+            ],
+        )?)
+    }
+
+    fn get_field_expr(
+        base: Arc<dyn PhysicalExpr>,
+        name: &str,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(Arc::new(ScalarFunctionExpr::try_new(
+            datafusion_functions::core::get_field(),
+            vec![base, lit(name)],
+            schema,
+            Arc::new(ConfigOptions::default()),
+        )?))
+    }
+
+    /// Building and evaluating a nested `CASE` must not be exponential in the nesting
+    /// depth when each level reads a different field.
+    #[test]
+    fn nested_case_with_distinct_struct_fields() -> Result<()> {
+        let fields = (0..=40)
+            .map(|i| Field::new(format!("f{i}"), DataType::Int32, true))
+            .collect::<Vec<_>>();
+        let columns = (0..=40)
+            .map(|i| Arc::new(Int32Array::from(vec![i, i + 1])) as ArrayRef)
+            .collect::<Vec<_>>();
+        let s = StructArray::new(fields.into(), columns, None);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            s.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(s)])?;
+
+        let s = col("s", &schema)?;
+        let mut expr = get_field_expr(Arc::clone(&s), "f0", &schema)?;
+        for i in 1..=40 {
+            let when = binary(
+                get_field_expr(Arc::clone(&s), &format!("f{i}"), &schema)?,
+                Operator::Eq,
+                lit(-1i32),
+                &schema,
+            )?;
+            expr = Arc::new(CaseExpr::try_new(
+                None,
+                vec![(when, lit(1i32))],
+                Some(expr),
+            )?);
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(as_int32_array(&result)?, &Int32Array::from(vec![0, 1]));
+        Ok(())
+    }
+
+    /// A batch with a column `s: Struct<a: Int32, m: Map<Utf8, Int32>>`.
+    fn case_test_batch_with_struct_map() -> Result<RecordBatch> {
+        let mut map_builder =
+            MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+        for (key, value) in [("k", 1), ("k", 2), ("j", 3)] {
+            map_builder.keys().append_value(key);
+            map_builder.values().append_value(value);
+            map_builder.append(true)?;
+        }
+        let map_array = map_builder.finish();
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("m", map_array.data_type().clone(), true)),
+                Arc::new(map_array) as ArrayRef,
+            ),
+        ]);
+        let schema = Schema::new(vec![Field::new(
+            "s",
+            struct_array.data_type().clone(),
+            true,
+        )]);
+        Ok(RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(struct_array)],
+        )?)
+    }
+
+    /// `CASE WHEN s['a'] = 1 THEN <then> WHEN s['a'] = 2 THEN <then> END`
+    fn case_with_struct_map_lookup(
+        then: Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<CaseExpr> {
+        let s_a = get_field_expr(col("s", schema)?, "a", schema)?;
+        CaseExpr::try_new(
+            None,
+            vec![
+                (
+                    binary(Arc::clone(&s_a), Operator::Eq, lit(1i32), schema)?,
+                    Arc::clone(&then),
+                ),
+                (binary(s_a, Operator::Eq, lit(2i32), schema)?, then),
+            ],
+            None,
+        )
+    }
+
+    #[test]
+    fn case_does_not_precompute_flat_map_lookup() -> Result<()> {
+        let batch = case_test_batch_with_struct_map()?;
+        let schema = batch.schema();
+
+        // get_field(s, 'm', 'k')
+        let s_m_k: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::try_new(
+            datafusion_functions::core::get_field(),
+            vec![col("s", &schema)?, lit("m"), lit("k")],
+            &schema,
+            Arc::new(ConfigOptions::default()),
+        )?);
+        let expr = case_with_struct_map_lookup(s_m_k, &schema)?;
+
+        match &expr.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
+                assert!(projected.supports_projection);
+                assert_eq!(projected.projection, vec![0]);
+                assert!(projected.precomputed.is_empty());
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_int32_array(&result)?,
+            &Int32Array::from(vec![Some(1), Some(2), None])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn case_precomputes_map_base_of_nested_lookup() -> Result<()> {
+        let batch = case_test_batch_with_struct_map()?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+        let s_m = get_field_expr(s, "m", &schema)?;
+
+        // get_field(get_field(s, 'm'), 'k')
+        let s_m_k = get_field_expr(Arc::clone(&s_m), "k", &schema)?;
+        let expr = case_with_struct_map_lookup(s_m_k, &schema)?;
+
+        match &expr.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
+                assert!(projected.supports_projection);
+                assert!(projected.projection.is_empty());
+                assert_eq!(projected.precomputed, vec![s_a, s_m]);
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_int32_array(&result)?,
+            &Int32Array::from(vec![Some(1), Some(2), None])
+        );
+        Ok(())
+    }
+
+    /// A field access whose types cannot be resolved against the schema is assumed to
+    /// possibly reach into a map, so it is not precomputed.
+    #[test]
+    fn may_cross_map_when_types_cannot_be_resolved() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s_a = get_field_expr(col("s", &schema)?, "a", &schema)?;
+        assert!(!may_cross_map(&s_a, &schema));
+
+        // `s` has no field `a`
+        let other_struct = Schema::new(vec![
+            Field::new("x", DataType::Int32, true),
+            Field::new(
+                "s",
+                DataType::Struct(vec![Field::new("b", DataType::Int32, true)].into()),
+                true,
+            ),
+        ]);
+        assert!(may_cross_map(&s_a, &other_struct));
+
+        // `s` is out of the schema's bounds
+        let no_struct = Schema::new(vec![Field::new("x", DataType::Int32, true)]);
+        assert!(may_cross_map(&s_a, &no_struct));
+        Ok(())
+    }
+
+    /// The plan may declare a struct column non-nullable while the batch has null
+    /// structs, which makes the precomputed fields nullable.
+    #[test]
+    fn case_precomputes_fields_of_null_structs_declared_non_nullable() -> Result<()> {
+        let fields = arrow::datatypes::Fields::from(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let struct_array = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+            ],
+            Some(arrow::buffer::NullBuffer::from(vec![true, true, false])),
+        );
+        let batch_schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(fields.clone()),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(batch_schema, vec![Arc::new(struct_array)])?;
+        let plan_schema =
+            Schema::new(vec![Field::new("s", DataType::Struct(fields), false)]);
+
+        let s = col("s", &plan_schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &plan_schema)?;
+        let s_b = get_field_expr(s, "b", &plan_schema)?;
+
+        // CASE WHEN s['a'] = 1 THEN s['b'] WHEN s['a'] > 1 THEN 0 END
+        let expr = CaseExpr::try_new(
+            None,
+            vec![
+                (
+                    binary(Arc::clone(&s_a), Operator::Eq, lit(1i32), &plan_schema)?,
+                    Arc::clone(&s_b),
+                ),
+                (
+                    binary(Arc::clone(&s_a), Operator::Gt, lit(1i32), &plan_schema)?,
+                    lit(0i32),
+                ),
+            ],
+            None,
+        )?;
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_int32_array(&result)?,
+            &Int32Array::from(vec![Some(10), Some(0), None])
+        );
+
+        // The projection is derived on evaluation, against the schema of the batch
+        match &expr.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                let projected = projected
+                    .projected
+                    .get()
+                    .expect("projection derived on evaluation");
+                assert_eq!(projected.precomputed, vec![s_a, s_b]);
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn case_without_expr_precomputes_struct_fields() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let metadata =
+            std::collections::HashMap::from([("key".to_string(), "value".to_string())]);
+        let schema = batch
+            .schema()
+            .as_ref()
+            .clone()
+            .with_metadata(metadata.clone());
+        let batch = batch.with_schema(Arc::new(schema))?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+        let s_b = get_field_expr(Arc::clone(&s), "b", &schema)?;
+
+        // CASE WHEN s['a'] = 1 THEN s['b'] WHEN s['a'] > 1 THEN x ELSE s['a'] END
+        let expr = CaseExpr::try_new(
+            None,
+            vec![
+                (
+                    binary(Arc::clone(&s_a), Operator::Eq, lit(1i32), &schema)?,
+                    Arc::clone(&s_b),
+                ),
+                (
+                    binary(Arc::clone(&s_a), Operator::Gt, lit(1i32), &schema)?,
+                    col("x", &schema)?,
+                ),
+            ],
+            Some(Arc::clone(&s_a)),
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
+                assert!(projected.supports_projection);
+                assert_eq!(projected.projection, vec![0]);
+                assert_eq!(projected.precomputed, vec![s_a, s_b]);
+                let projected_batch = projected
+                    .project_batch(&batch)?
+                    .expect("batch should be projected");
+                assert_eq!(projected_batch.schema().metadata(), &metadata);
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int32_array(&result)?;
+        let expected = Int32Array::from(vec![Some(10), Some(200), None, Some(400)]);
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_expr_precomputes_struct_fields() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+        let s_c = get_field_expr(Arc::clone(&s), "c", &schema)?;
+
+        // CASE s['a'] WHEN 1 THEN s['c'] WHEN 4 THEN 'four' END
+        let expr = CaseExpr::try_new(
+            Some(Arc::clone(&s_a)),
+            vec![(lit(1i32), Arc::clone(&s_c)), (lit(4i32), lit("four"))],
+            None,
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::WithExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
+                assert!(projected.supports_projection);
+                assert!(projected.projection.is_empty());
+                assert_eq!(projected.precomputed, vec![s_a, s_c]);
+            }
+            method => panic!("expected WithExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_string_array(&result);
+        let expected = StringArray::from(vec![Some("p"), None, None, Some("four")]);
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_expr_or_expr_precomputes_struct_fields() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+        let s_b = get_field_expr(Arc::clone(&s), "b", &schema)?;
+
+        // CASE WHEN s['a'] > 1 THEN s['b'] / (s['a'] - 1) ELSE x END
+        let expr = CaseExpr::try_new(
+            None,
+            vec![(
+                binary(Arc::clone(&s_a), Operator::Gt, lit(1i32), &schema)?,
+                binary(
+                    Arc::clone(&s_b),
+                    Operator::Divide,
+                    binary(Arc::clone(&s_a), Operator::Minus, lit(1i32), &schema)?,
+                    &schema,
+                )?,
+            )],
+            Some(col("x", &schema)?),
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::ExpressionOrExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
+                assert!(projected.supports_projection);
+                assert_eq!(projected.projection, vec![0]);
+                assert_eq!(projected.precomputed, vec![s_b, s_a]);
+            }
+            method => panic!("expected ExpressionOrExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int32_array(&result)?;
+        let expected = Int32Array::from(vec![Some(100), Some(20), Some(300), Some(13)]);
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_expr_or_expr_does_not_precompute_when_only_fields() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s_a = get_field_expr(col("s", &schema)?, "a", &schema)?;
+        let x = col("x", &schema)?;
+
+        // CASE WHEN s['a'] > 1 THEN x ELSE -x END
+        let expr = CaseExpr::try_new(
+            None,
+            vec![(
+                binary(s_a, Operator::Gt, lit(1i32), &schema)?,
+                Arc::clone(&x),
+            )],
+            Some(binary(lit(0i32), Operator::Minus, x, &schema)?),
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::ExpressionOrExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
+                assert!(projected.supports_projection);
+                assert_eq!(projected.projection, vec![0]);
+                assert!(projected.precomputed.is_empty());
+            }
+            method => panic!("expected ExpressionOrExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int32_array(&result)?;
+        let expected =
+            Int32Array::from(vec![Some(-100), Some(200), Some(-300), Some(400)]);
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_custom_column_and_struct_fields() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+        let s_b = get_field_expr(Arc::clone(&s), "b", &schema)?;
+
+        // CASE WHEN s['a'] = 1 THEN x WHEN s['a'] > 1 THEN s['b'] END,
+        // with `x` read by a leaf that is opaque to projection
+        let expr = CaseExpr::try_new(
+            None,
+            vec![
+                (
+                    binary(Arc::clone(&s_a), Operator::Eq, lit(1i32), &schema)?,
+                    Arc::new(CustomColumn::new("x", 0)),
+                ),
+                (
+                    binary(Arc::clone(&s_a), Operator::Gt, lit(1i32), &schema)?,
+                    Arc::clone(&s_b),
+                ),
+            ],
+            None,
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
+                assert!(!projected.supports_projection);
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let result = as_int32_array(&result)?;
+        let expected = Int32Array::from(vec![Some(100), Some(20), None, Some(40)]);
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_does_not_precompute_fields_of_used_struct() -> Result<()> {
+        let batch = case_test_batch_with_struct()?;
+        let schema = batch.schema();
+        let s = col("s", &schema)?;
+        let s_a = get_field_expr(Arc::clone(&s), "a", &schema)?;
+
+        // CASE WHEN s['a'] = 1 THEN s WHEN s['a'] = 2 THEN NULL END
+        let expr = CaseExpr::try_new(
+            None,
+            vec![
+                (
+                    binary(Arc::clone(&s_a), Operator::Eq, lit(1i32), &schema)?,
+                    Arc::clone(&s),
+                ),
+                (
+                    binary(Arc::clone(&s_a), Operator::Eq, lit(2i32), &schema)?,
+                    lit(ScalarValue::try_new_null(&s.data_type(&schema)?)?),
+                ),
+            ],
+            None,
+        )?;
+
+        match &expr.eval_method {
+            EvalMethod::NoExpression(projected) => {
+                let projected = projected.project(&expr.body, &schema)?;
+                assert!(projected.supports_projection);
+                assert_eq!(projected.projection, vec![1]);
+                assert!(projected.precomputed.is_empty());
+            }
+            method => panic!("expected NoExpression, got {method:?}"),
+        }
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let expected = StructArray::try_new(
+            batch.column(1).as_struct().fields().clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), None, None, None])),
+                Arc::new(Int32Array::from(vec![Some(10), None, None, None])),
+                Arc::new(StringArray::from(vec![Some("p"), None, None, None])),
+            ],
+            Some(arrow::buffer::NullBuffer::from(vec![
+                true, false, false, false,
+            ])),
+        )?;
+        assert_eq!(result.as_struct(), &expected);
+        Ok(())
+    }
+
+    /// Lambda variables take slots in the projected column numbering but are not
+    /// columns of the projected batch, so nothing is precomputed when lambdas are present.
+    #[test]
+    fn case_with_lambda_does_not_precompute_struct_fields() -> Result<()> {
+        let arr_field =
+            Field::new_list("arr", Field::new_list_field(DataType::Int32, true), true);
+        let batch = case_test_batch_with_struct()?;
+        let s_field = batch.schema().field(1).clone();
+        let schema = Schema::new(vec![arr_field, s_field]);
+        let arr = col("arr", &schema)?;
+        let s_a = get_field_expr(col("s", &schema)?, "a", &schema)?;
+        let v = Arc::new(LambdaVariable::new(
+            2,
+            Arc::new(Field::new("v", DataType::Int32, true)),
+        ));
+
+        // Stands for
+        // CASE WHEN s['a'] > 1 THEN array_transform(arr, v -> v) WHEN s['a'] = 0 THEN arr END;
+        // the bare lambda references `v` the same way the higher-order function's would
+        let body = CaseBody {
+            expr: None,
+            when_then_expr: vec![
+                (
+                    binary(Arc::clone(&s_a), Operator::Gt, lit(1i32), &schema)?,
+                    lambda(["v"], v)?,
+                ),
+                (binary(s_a, Operator::Eq, lit(0i32), &schema)?, arr),
+            ],
+            else_expr: None,
+        };
+
+        let projected = body.project(&schema)?;
+        assert!(projected.supports_projection);
+        assert_eq!(projected.projection, vec![0, 1, 2]);
+        assert!(projected.precomputed.is_empty());
         Ok(())
     }
 
@@ -2624,7 +3491,7 @@ mod tests {
             make_lit_i32(250),
         ));
         let expr = CaseExpr::try_new(None, vec![(predicate, make_col("c2", 1))], None)?;
-        assert_eq!(expr.eval_method, EvalMethod::InfallibleExprOrNull);
+        assert_matches!(expr.eval_method, EvalMethod::InfallibleExprOrNull);
         match expr.evaluate(&batch)? {
             ColumnarValue::Array(array) => {
                 assert_eq!(1000, array.len());
@@ -3286,6 +4153,150 @@ mod tests {
             &lookup_map,
             Arc::new(input_values),
             expected,
+        );
+    }
+
+    /// Covers both the linear and the hash lookup of primitive literals, with inputs
+    /// spanning several chunks of the linear lookup.
+    #[rstest::rstest]
+    fn test_case_when_literal_lookup_int64_by_number_of_literals(
+        #[values(2, 16, 17, 40)] num_literals: i64,
+    ) {
+        let literal = |i: i64| i * 7 - 50;
+        let lookup_map = create_lookup(
+            (0..num_literals).map(|i| (Some(literal(i)), Some(format!("v{i}")))),
+        );
+
+        let (input_values, expected): (Vec<_>, Vec<_>) = (0..700i64)
+            .map(|row| match row % 11 {
+                // Null input
+                0 => (None, None),
+                // No match in WHEN
+                1 => (Some(literal(num_literals) + row), None),
+                _ => {
+                    let i = row % num_literals;
+                    (Some(literal(i)), Some(format!("v{i}")))
+                }
+            })
+            .unzip();
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(Int64Array::from(input_values)),
+            StringArray::from(expected),
+        );
+    }
+
+    /// Covers the lookup of a slice of a nullable array starting at an offset that is
+    /// not a multiple of 8, so that the validity bits of the slice are not byte-aligned.
+    #[rstest::rstest]
+    fn test_case_when_literal_lookup_int64_sliced_with_nulls(
+        #[values(5, 17)] num_literals: i64,
+    ) {
+        const OFFSET: usize = 3;
+        // Spans two linear lookup chunk boundaries, and ends mid-way of a validity word
+        const LEN: usize = 600;
+
+        let literal = |i: i64| i * 7 - 50;
+        let lookup_map = create_lookup(
+            (0..num_literals).map(|i| (Some(literal(i)), Some(format!("v{i}")))),
+        );
+
+        let (input_values, expected): (Vec<_>, Vec<_>) = (0..(OFFSET + LEN) as i64)
+            .map(|row| match row % 13 {
+                // Nulls only in the first half, to also have validity words with no nulls
+                0 | 5 if row < 300 => (None, None),
+                // No match in WHEN
+                1 | 8 => (Some(literal(num_literals) + row), None),
+                _ => {
+                    let i = row % num_literals;
+                    (Some(literal(i)), Some(format!("v{i}")))
+                }
+            })
+            .unzip();
+
+        let input_values = Int64Array::from(input_values).slice(OFFSET, LEN);
+        let expected = StringArray::from(expected).slice(OFFSET, LEN);
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(input_values),
+            expected,
+        );
+    }
+
+    /// Looks up values of a decimal type wider than 64 bits, given the type's null scalar
+    /// and a function making a scalar from the lower and the upper part of its value.
+    ///
+    /// The literals have the upper part set, and the misses differ from them either only in
+    /// the lower part or only in the upper part.
+    fn test_lookup_wide_decimal(
+        num_literals: i64,
+        null: ScalarValue,
+        value: impl Fn(i64, i64) -> ScalarValue,
+    ) {
+        const HIGH: i64 = 5;
+
+        let lookup_map = create_lookup(
+            (0..num_literals).map(|i| (value(i, HIGH), Some(format!("v{i}")))),
+        );
+
+        let (input_values, expected): (Vec<_>, Vec<_>) = (0..300)
+            .map(|row| {
+                let i = row % num_literals;
+                match row % 7 {
+                    0 => (null.clone(), None),
+                    // No match in WHEN, differing in the lower part only
+                    1 => (value(num_literals + i, HIGH), None),
+                    // No match in WHEN, differing in the upper part only
+                    2 => (value(i, HIGH + 1), None),
+                    _ => (value(i, HIGH), Some(format!("v{i}"))),
+                }
+            })
+            .unzip();
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            ScalarValue::iter_to_array(input_values).unwrap(),
+            StringArray::from(expected),
+        );
+    }
+
+    /// Covers both sides of the limit of the number of `Decimal128` literals looked up
+    /// by comparing with each of them.
+    #[rstest::rstest]
+    fn test_case_when_literal_lookup_decimal128_by_number_of_literals(
+        #[values(2, 4, 5)] num_literals: i64,
+    ) {
+        test_lookup_wide_decimal(
+            num_literals,
+            ScalarValue::Decimal128(None, 38, 0),
+            |low, high| {
+                ScalarValue::Decimal128(
+                    Some((i128::from(high) << 64) | i128::from(low)),
+                    38,
+                    0,
+                )
+            },
+        );
+    }
+
+    /// Covers both sides of the limit of the number of `Decimal256` literals looked up
+    /// by comparing with each of them.
+    #[rstest::rstest]
+    fn test_case_when_literal_lookup_decimal256_by_number_of_literals(
+        #[values(2, 3, 4, 5)] num_literals: i64,
+    ) {
+        test_lookup_wide_decimal(
+            num_literals,
+            ScalarValue::Decimal256(None, 76, 0),
+            |low, high| {
+                ScalarValue::Decimal256(
+                    Some(i256::from_parts(low as u128, i128::from(high))),
+                    76,
+                    0,
+                )
+            },
         );
     }
 

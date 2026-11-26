@@ -6542,6 +6542,9 @@ impl serde::Serialize for ParquetOptions {
         if self.enable_rle_to_dictionary {
             len += 1;
         }
+        if self.dictionary_read_max_distinct_values.is_some() {
+            len += 1;
+        }
         if !self.created_by.is_empty() {
             len += 1;
         }
@@ -6678,6 +6681,11 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.enable_rle_to_dictionary {
             struct_ser.serialize_field("enableRleToDictionary", &self.enable_rle_to_dictionary)?;
+        }
+        if let Some(v) = self.dictionary_read_max_distinct_values.as_ref() {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("dictionaryReadMaxDistinctValues", ToString::to_string(&v).as_str())?;
         }
         if !self.created_by.is_empty() {
             struct_ser.serialize_field("createdBy", &self.created_by)?;
@@ -6847,6 +6855,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "rowGroupRangeAssignment",
             "enable_rle_to_dictionary",
             "enableRleToDictionary",
+            "dictionary_read_max_distinct_values",
+            "dictionaryReadMaxDistinctValues",
             "created_by",
             "createdBy",
             "content_defined_chunking",
@@ -6904,6 +6914,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             MaxInListSize,
             RowGroupRangeAssignment,
             EnableRleToDictionary,
+            DictionaryReadMaxDistinctValues,
             CreatedBy,
             ContentDefinedChunking,
             MetadataSizeHint,
@@ -6965,6 +6976,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "maxInListSize" | "max_in_list_size" => Ok(GeneratedField::MaxInListSize),
                             "rowGroupRangeAssignment" | "row_group_range_assignment" => Ok(GeneratedField::RowGroupRangeAssignment),
                             "enableRleToDictionary" | "enable_rle_to_dictionary" => Ok(GeneratedField::EnableRleToDictionary),
+                            "dictionaryReadMaxDistinctValues" | "dictionary_read_max_distinct_values" => Ok(GeneratedField::DictionaryReadMaxDistinctValues),
                             "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
                             "contentDefinedChunking" | "content_defined_chunking" => Ok(GeneratedField::ContentDefinedChunking),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
@@ -7024,6 +7036,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut max_in_list_size__ = None;
                 let mut row_group_range_assignment__ = None;
                 let mut enable_rle_to_dictionary__ = None;
+                let mut dictionary_read_max_distinct_values__ = None;
                 let mut created_by__ = None;
                 let mut content_defined_chunking__ = None;
                 let mut metadata_size_hint_opt__ = None;
@@ -7207,6 +7220,14 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             enable_rle_to_dictionary__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::DictionaryReadMaxDistinctValues => {
+                            if dictionary_read_max_distinct_values__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dictionaryReadMaxDistinctValues"));
+                            }
+                            dictionary_read_max_distinct_values__ =
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
+                            ;
+                        }
                         GeneratedField::CreatedBy => {
                             if created_by__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("createdBy"));
@@ -7325,6 +7346,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     max_in_list_size: max_in_list_size__.unwrap_or_default(),
                     row_group_range_assignment: row_group_range_assignment__.unwrap_or_default(),
                     enable_rle_to_dictionary: enable_rle_to_dictionary__.unwrap_or_default(),
+                    dictionary_read_max_distinct_values: dictionary_read_max_distinct_values__,
                     created_by: created_by__.unwrap_or_default(),
                     content_defined_chunking: content_defined_chunking__,
                     metadata_size_hint_opt: metadata_size_hint_opt__,

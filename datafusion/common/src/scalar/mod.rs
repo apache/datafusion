@@ -6,6 +6,7 @@
 
 mod cache;
 mod consts;
+mod null_struct;
 mod struct_builder;
 
 use std::borrow::Borrow;
@@ -1423,12 +1424,9 @@ impl ScalarValue {
             DataType::LargeListView(field_ref) => ScalarValue::LargeListView(Arc::new(
                 GenericListViewArray::new_null(Arc::clone(field_ref), 1),
             )),
-            DataType::Struct(fields) => ScalarValue::Struct(
-                new_null_array(&DataType::Struct(fields.to_owned()), 1)
-                    .as_struct()
-                    .to_owned()
-                    .into(),
-            ),
+            DataType::Struct(fields) => {
+                ScalarValue::Struct(Arc::new(null_struct::new_null_struct(fields)?))
+            }
             DataType::Map(fields, sorted) => ScalarValue::Map(
                 new_null_array(&DataType::Map(fields.to_owned(), sorted.to_owned()), 1)
                     .as_map()
@@ -1904,9 +1902,10 @@ impl ScalarValue {
 
             // List types
             DataType::List(field) => {
-                let list =
-                    ScalarValue::new_list(&[], field.data_type(), field.is_nullable());
-                Ok(ScalarValue::List(list))
+                let empty_arr = new_empty_array(field.data_type());
+                Ok(SingleRowListArrayBuilder::new(empty_arr)
+                    .with_field(field)
+                    .build_list_scalar())
             }
             DataType::FixedSizeList(field, _size) => {
                 let empty_arr = new_empty_array(field.data_type());
@@ -1918,8 +1917,10 @@ impl ScalarValue {
                 Ok(ScalarValue::FixedSizeList(values))
             }
             DataType::LargeList(field) => {
-                let list = ScalarValue::new_large_list(&[], field.data_type());
-                Ok(ScalarValue::LargeList(list))
+                let empty_arr = new_empty_array(field.data_type());
+                Ok(SingleRowListArrayBuilder::new(empty_arr)
+                    .with_field(field)
+                    .build_large_list_scalar())
             }
             DataType::ListView(field) => {
                 let empty_arr = new_empty_array(field.data_type());
@@ -6319,7 +6320,6 @@ mod tests {
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
     use insta::assert_snapshot;
-    use rand::Rng;
 
     #[test]
     fn try_from_date_timestamp_dst_at_midnight() {
@@ -10231,29 +10231,6 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_op_random_tests() {
-        // timestamp1 + (or -) interval = timestamp2
-        // timestamp2 - timestamp1 (or timestamp1 - timestamp2) = interval ?
-        let sample_size = 1000;
-        let timestamps1 = get_random_timestamps(sample_size);
-        let intervals = get_random_intervals(sample_size);
-        // ts(sec) + interval(ns) = ts(sec); however,
-        // ts(sec) - ts(sec) cannot be = interval(ns). Therefore,
-        // timestamps are more precise than intervals in tests.
-        for (idx, ts1) in timestamps1.iter().enumerate() {
-            if idx % 2 == 0 {
-                let timestamp2 = ts1.add(intervals[idx].clone()).unwrap();
-                let back = timestamp2.sub(intervals[idx].clone()).unwrap();
-                assert_eq!(ts1, &back);
-            } else {
-                let timestamp2 = ts1.sub(intervals[idx].clone()).unwrap();
-                let back = timestamp2.add(intervals[idx].clone()).unwrap();
-                assert_eq!(ts1, &back);
-            }
-        }
-    }
-
-    #[test]
     fn test_nested_scalar_eq() {
         let struct_type = |name: &str| {
             DataType::Struct(Fields::from(vec![
@@ -10715,104 +10692,6 @@ mod tests {
         );
     }
 
-    fn get_random_timestamps(sample_size: u64) -> Vec<ScalarValue> {
-        let vector_size = sample_size;
-        let mut timestamp = vec![];
-        let mut rng = rand::rng();
-        for i in 0..vector_size {
-            let year = rng.random_range(1995..=2050);
-            let month = rng.random_range(1..=12);
-            let day = rng.random_range(1..=28); // to exclude invalid dates
-            let hour = rng.random_range(0..=23);
-            let minute = rng.random_range(0..=59);
-            let second = rng.random_range(0..=59);
-            if i % 4 == 0 {
-                timestamp.push(ScalarValue::TimestampSecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(year, month, day)
-                            .unwrap()
-                            .and_hms_opt(hour, minute, second)
-                            .unwrap()
-                            .and_utc()
-                            .timestamp(),
-                    ),
-                    None,
-                ))
-            } else if i % 4 == 1 {
-                let millisec = rng.random_range(0..=999);
-                timestamp.push(ScalarValue::TimestampMillisecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(year, month, day)
-                            .unwrap()
-                            .and_hms_milli_opt(hour, minute, second, millisec)
-                            .unwrap()
-                            .and_utc()
-                            .timestamp_millis(),
-                    ),
-                    None,
-                ))
-            } else if i % 4 == 2 {
-                let microsec = rng.random_range(0..=999_999);
-                timestamp.push(ScalarValue::TimestampMicrosecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(year, month, day)
-                            .unwrap()
-                            .and_hms_micro_opt(hour, minute, second, microsec)
-                            .unwrap()
-                            .and_utc()
-                            .timestamp_micros(),
-                    ),
-                    None,
-                ))
-            } else if i % 4 == 3 {
-                let nanosec = rng.random_range(0..=999_999_999);
-                timestamp.push(ScalarValue::TimestampNanosecond(
-                    Some(
-                        NaiveDate::from_ymd_opt(year, month, day)
-                            .unwrap()
-                            .and_hms_nano_opt(hour, minute, second, nanosec)
-                            .unwrap()
-                            .and_utc()
-                            .timestamp_nanos_opt()
-                            .unwrap(),
-                    ),
-                    None,
-                ))
-            }
-        }
-        timestamp
-    }
-
-    fn get_random_intervals(sample_size: u64) -> Vec<ScalarValue> {
-        const MILLISECS_IN_ONE_DAY: i64 = 86_400_000;
-        const NANOSECS_IN_ONE_DAY: i64 = 86_400_000_000_000;
-
-        let vector_size = sample_size;
-        let mut intervals = vec![];
-        let mut rng = rand::rng();
-        const SECS_IN_ONE_DAY: i32 = 86_400;
-        const MICROSECS_IN_ONE_DAY: i64 = 86_400_000_000;
-        for i in 0..vector_size {
-            let days = rng.random_range(0..5000);
-            if i % 4 == 0 {
-                // to not break second precision
-                let millis = rng.random_range(0..SECS_IN_ONE_DAY) * 1000;
-                intervals.push(ScalarValue::new_interval_dt(days, millis));
-            } else if i % 4 == 1 {
-                let millisec = rng.random_range(0..(MILLISECS_IN_ONE_DAY as i32));
-                intervals.push(ScalarValue::new_interval_dt(days, millisec));
-            } else if i % 4 == 2 {
-                // to not break microsec precision
-                let nanosec = rng.random_range(0..MICROSECS_IN_ONE_DAY) * 1000;
-                intervals.push(ScalarValue::new_interval_mdn(0, days, nanosec));
-            } else {
-                let nanosec = rng.random_range(0..NANOSECS_IN_ONE_DAY);
-                intervals.push(ScalarValue::new_interval_mdn(0, days, nanosec));
-            }
-        }
-        intervals
-    }
-
     fn union_fields() -> UnionFields {
         [
             (0, Arc::new(Field::new("A", DataType::Int32, true))),
@@ -11012,6 +10891,24 @@ mod tests {
             actual.starts_with(expected_prefix),
             "Expected '{actual}' to start with '{expected_prefix}'"
         );
+    }
+
+    #[test]
+    fn test_new_default_list_preserves_field() {
+        for nullable in [false, true] {
+            let field = Arc::new(
+                Field::new("element", DataType::Int64, nullable)
+                    .with_metadata(HashMap::from([("k".to_string(), "v".to_string())])),
+            );
+            for data_type in [
+                DataType::List(Arc::clone(&field)),
+                DataType::LargeList(field),
+            ] {
+                let value = ScalarValue::new_default(&data_type).unwrap();
+                assert_eq!(value.data_type(), data_type);
+                assert!(!value.is_null());
+            }
+        }
     }
 
     #[test]

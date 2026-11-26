@@ -7,18 +7,20 @@
 # A pull request from a fork to `main` runs `rust.yml` on the fork. This
 # workflow mirrors that run as one `Rust (fork)` check on the pull request, so
 # reviewers see the result without opening the fork. It never checks out or
-# runs code from the pull request: on `pull_request_target` it reads the fork's
-# public run list and creates the check, and on a schedule it updates the
-# active or missing runs of recently updated pull requests plus a rotating
-# slice of all open pull requests. The check is informational. The merge
-# queue runs the full workflow on the merged result and stays the gate.
+# runs code from the pull request: on `workflow_run` of
+# `pull_request_signal.yml` it reads the fork's public run list and creates the
+# check, and on a schedule it updates the active or missing runs of recently
+# updated pull requests plus a rotating slice of all open pull requests. The
+# check is informational. The merge queue runs the full workflow on the merged
+# result and stays the gate.
 #
 # See docs/source/contributor-guide/index.md, "Pull Requests from Forks".
 name: Fork CI status
 
 on:
-  pull_request_target:
-    types: [opened, reopened, synchronize]
+  workflow_run:
+    workflows: ["Pull request signal"]
+    types: [requested]
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
@@ -31,18 +33,30 @@ on:
 permissions:
   actions: read
   checks: write
+  contents: read
   pull-requests: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'update' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_run' && format('{0}-{1}', github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch) || 'update' }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
 
 jobs:
   bridge:
     name: Mirror the fork run
+    # A `workflow_run` needs a runner only for a pull request from a fork. The
+    # base is checked in `notify()`.
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_repository.fork == true)
     runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
+      # Only a `workflow_run` needs the pull request lookup. This checks out
+      # the default branch, never the pull request.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: github.event_name == 'workflow_run'
+        with:
+          sparse-checkout: ci/scripts
+          persist-credentials: false
+
       - name: Create or update the check
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         env:
@@ -194,16 +208,42 @@ jobs:
               const payload = run
                 ? runPayload(fork, sha, run)
                 : missingPayload(fork, sha, await workflowState(fork));
-              await github.rest.checks.create({ ...upstream, name: CHECK, head_sha: sha, ...payload });
-              core.info(`Created ${CHECK} for ${sha}: ${payload.conclusion || payload.status}`);
+              // The commit can already have the check. A pull request of the
+              // same branch to a release branch, or a reopened pull request,
+              // signals it again, and the scheduled update can create the check
+              // while this run waits for the fork run. So look for it only now,
+              // and update it instead of adding a second one.
+              const { data } = await github.rest.checks.listForRef({
+                ...upstream,
+                ref: sha,
+                check_name: CHECK,
+                per_page: 1,
+              });
+              const [existing] = data.check_runs;
+              if (existing) {
+                await github.rest.checks.update({ ...upstream, check_run_id: existing.id, ...payload });
+              } else {
+                await github.rest.checks.create({ ...upstream, name: CHECK, head_sha: sha, ...payload });
+              }
+              core.info(`${existing ? 'Updated' : 'Created'} ${CHECK} for ${sha}: ${payload.conclusion || payload.status}`);
             }
 
             async function notify() {
-              const pr = context.payload.pull_request;
-              // Only fork PRs to main skip jobs upstream; release branches have
-              // no merge queue and keep the full run.
-              if (!isForkPrToMain(pr)) {
-                core.info('Not a fork pull request to main; nothing to mirror.');
+              // Only fork PRs to main skip jobs upstream. The job runs only for
+              // a fork, and a release branch has no merge queue and keeps the
+              // full run, so look only at the pull request to `main`.
+              const pulls = await require('./ci/scripts/pull_requests_of_run.js')({
+                github,
+                context,
+                base: 'main',
+              });
+              // A run for an older commit finds nothing, and the scheduled
+              // update creates the check of the new head.
+              const pr = pulls.find(
+                (pull) => pull.head.sha === context.payload.workflow_run.head_sha
+              );
+              if (!pr) {
+                core.info('No open pull request to main at this commit; nothing to mirror.');
                 return;
               }
               await createCheck(pr, 12);
@@ -299,7 +339,7 @@ jobs:
               }
             }
 
-            if (context.eventName === 'pull_request_target') {
+            if (context.eventName === 'workflow_run') {
               await notify();
             } else {
               await update();

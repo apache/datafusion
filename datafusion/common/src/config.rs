@@ -830,53 +830,6 @@ impl Display for ConfigFilterSelectivity {
     }
 }
 
-/// Policy for handling duplicate keys in Spark-compatible map-construction
-/// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
-/// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum MapKeyDedupPolicy {
-    /// Raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
-    #[default]
-    Exception,
-    /// Keep the last occurrence of each duplicate key.
-    LastWin,
-}
-
-impl FromStr for MapKeyDedupPolicy {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_uppercase().as_str() {
-            "EXCEPTION" => Ok(Self::Exception),
-            "LAST_WIN" => Ok(Self::LastWin),
-            other => Err(DataFusionError::Configuration(format!(
-                "Invalid MapKeyDedupPolicy: {other}. Expected one of: EXCEPTION, LAST_WIN"
-            ))),
-        }
-    }
-}
-
-impl ConfigField for MapKeyDedupPolicy {
-    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
-        v.some(key, self, description)
-    }
-
-    fn set(&mut self, _: &str, value: &str) -> Result<()> {
-        *self = MapKeyDedupPolicy::from_str(value)?;
-        Ok(())
-    }
-}
-
-impl Display for MapKeyDedupPolicy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let str = match self {
-            Self::Exception => "EXCEPTION",
-            Self::LastWin => "LAST_WIN",
-        };
-        write!(f, "{str}")
-    }
-}
-
 impl From<SpillCompression> for Option<CompressionType> {
     fn from(c: SpillCompression) -> Self {
         match c {
@@ -976,6 +929,17 @@ config_namespace! {
         ///
         /// See <https://github.com/apache/datafusion/issues/22710> for details.
         pub enable_migration_aggregate: bool, default = true
+
+        /// Whether inner, left outer, right outer, and full outer hash joins use
+        /// the refactored probe implementation. When set to `false`, these joins
+        /// use the previous probe implementation.
+        ///
+        /// The fallback exists only as a workaround for bugs in the new
+        /// implementation and will be removed, together with this option, once
+        /// the migration is complete.
+        ///
+        /// See <https://github.com/apache/datafusion/issues/26361> for details.
+        pub enable_migration_hash_join: bool, default = true
 
         /// Sets the compression codec used when spilling data to disk.
         ///
@@ -1132,9 +1096,11 @@ config_namespace! {
         /// runtime reassignment occurs.
         pub enable_file_stream_work_stealing: bool, default = true
 
-        /// Aggregation ratio (number of distinct groups / number of input rows)
-        /// threshold for skipping partial aggregation. If the value is greater
-        /// then partial aggregation will skip aggregation for further input
+        /// Aggregation ratio (number of groups the partial aggregation creates /
+        /// number of input rows) threshold for skipping partial aggregation. A key
+        /// that returns after an early emit under memory pressure counts again.
+        /// If the value is greater then partial aggregation will skip aggregation
+        /// for further input
         pub skip_partial_aggregation_probe_ratio_threshold: f64, default = 0.8
 
         /// Number of input rows partial aggregation partition should process, before
@@ -1451,8 +1417,33 @@ config_namespace! {
         /// This applies only when DataFusion infers the table schema. Tables with
         /// a user-supplied schema are not promoted because the Parquet footer is
         /// not read at DDL time, so dictionary pages cannot be detected per column.
+        ///
+        /// Setting `dictionary_read_max_distinct_values` also enables dictionary
+        /// reads. When both options are set, the cap controls which plain columns
+        /// are promoted.
         /// See <https://github.com/apache/datafusion/issues/24112>
         pub enable_rle_to_dictionary: bool, default = false
+
+        /// (reading) If set, promote top-level plain string and binary columns to
+        /// dictionaries when every data page is dictionary encoded and the
+        /// per-file sum of row-group cardinality upper bounds is within this cap.
+        /// Files without page encoding statistics, such as those written by
+        /// parquet-rs before 55.0.0 (DataFusion 46 and earlier) or DuckDB 1.1, are
+        /// not promoted.
+        /// Missing NDVs use the non-null row count when available and the row count
+        /// otherwise. Values repeated across row groups may be counted more than once.
+        /// The cap does not demote a dictionary declared by the same file; mixed
+        /// dictionary/plain schemas across files still merge as plain. Computed during
+        /// schema inference.
+        ///
+        /// Large row-group dictionaries can be slower because each output batch can
+        /// retain the whole dictionary. The crossover is workload-dependent: in one
+        /// 20-million-row group-by benchmark with 40-byte strings and five row groups
+        /// per file, files with a per-file sum of about 500,000 (100,000 per row group)
+        /// were faster than plain reads, while files with about 1,460,000 (about
+        /// 295,000 per row group) were slower. Use a conservative cap and benchmark
+        /// representative queries.
+        pub dictionary_read_max_distinct_values: Option<usize>, default = None
 
         /// (reading) Which byte range of a split file reads each row group.
         /// `start_offset` picks the range containing the row group's start.
@@ -1659,13 +1650,10 @@ config_namespace! {
         pub enable_window_limits: bool, default = true
 
         /// When set to true, the optimizer will replace
-        /// Filter(rn<=K) → Window(ROW_NUMBER) → Sort patterns with a
-        /// PartitionedTopKExec that maintains per-partition heaps, avoiding
-        /// a full sort of the input.
-        /// When the window partition key has low cardinality, enabling this optimization
-        /// can improve performance. However, for high cardinality keys, it may
-        /// cause regressions in both memory usage and runtime.
-        pub enable_window_topn: bool, default = false
+        /// Filter(rn<=K) → Window(ROW_NUMBER, RANK or DENSE_RANK) → Sort
+        /// patterns with a PartitionedTopKExec that keeps only the top K rows
+        /// of each window partition, avoiding a full sort of the input.
+        pub enable_window_topn: bool, default = true
 
         /// When set to true, the optimizer will rewrite a "top-1 per group"
         /// pattern of the form `Filter(row_number() = 1)` over a `PARTITION BY` window into an
@@ -1987,6 +1975,11 @@ config_namespace! {
         /// When set to true, the explain statement will print schema information
         pub show_schema: bool, default = false
 
+        /// When set to true, the explain statement will print the equivalence
+        /// properties (orderings, equivalent expressions, and constants) of each
+        /// physical plan node
+        pub show_equivalences: bool, default = false
+
         /// Display format of explain. Default is "indent".
         /// When set to "tree", it will print the plan in a tree-rendered format.
         pub format: ExplainFormat, default = ExplainFormat::Indent
@@ -2248,24 +2241,6 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
     }
 }
 
-config_namespace! {
-    /// Options controlling DataFusion's Spark-compatibility layer (the
-    /// `datafusion-spark` crate). Keys here mirror their `spark.sql.*`
-    /// equivalents in Apache Spark.
-    pub struct SparkOptions {
-        /// Policy for handling duplicate keys in Spark-compatible map-construction
-        /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`).
-        ///
-        /// Mirrors Spark's
-        /// [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961):
-        /// - `EXCEPTION` (default): raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
-        /// - `LAST_WIN`: keep the last occurrence of each duplicate key.
-        ///
-        /// Values are case-insensitive.
-        pub map_key_dedup_policy: MapKeyDedupPolicy, default = MapKeyDedupPolicy::Exception
-    }
-}
-
 /// A key value pair, with a corresponding description
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ConfigEntry {
@@ -2297,8 +2272,6 @@ pub struct ConfigOptions {
     pub extensions: Extensions,
     /// Formatting options when printing batches
     pub format: FormatOptions,
-    /// Spark-compatibility options (the `datafusion-spark` crate)
-    pub spark: SparkOptions,
 }
 
 impl ConfigField for ConfigOptions {
@@ -2309,7 +2282,6 @@ impl ConfigField for ConfigOptions {
         self.explain.visit(v, "datafusion.explain", "");
         self.sql_parser.visit(v, "datafusion.sql_parser", "");
         self.format.visit(v, "datafusion.format", "");
-        self.spark.visit(v, "datafusion.spark", "");
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -2322,7 +2294,6 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
             "format" => self.format.set(rem, value),
-            "spark" => self.spark.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
@@ -2362,7 +2333,6 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.reset(rem),
             "sql_parser" => self.sql_parser.reset(rem),
             "format" => self.format.reset(rem),
-            "spark" => self.spark.reset(rem),
             other => _config_err!("Config value \"{other}\" not found on ConfigOptions"),
         }
     }
