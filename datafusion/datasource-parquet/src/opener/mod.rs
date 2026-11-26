@@ -1537,27 +1537,33 @@ impl RowGroupsPrunedParquetOpen {
                 )?
             };
 
+            let file_statistics_resolvers = &self.prepared.file_statistics_resolvers;
             let prepared = &mut self.prepared.loaded.prepared;
             let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
                 mem::replace(&mut prepared.async_file_reader, replacement_reader),
                 reader_metadata,
             );
 
-            let parquet_columns = predicate
-                .literal_columns()
-                .into_iter()
-                .filter_map(|column_name| {
-                    let (column_idx, _) = parquet_column(
-                        builder.parquet_schema(),
-                        &prepared.physical_file_schema,
-                        &column_name,
-                    )?;
-                    Some((
-                        column_name,
-                        column_idx,
-                        builder.parquet_schema().column(column_idx).physical_type(),
-                        builder.parquet_schema().column(column_idx).type_length(),
-                    ))
+            // Bloom filters of columns, and of expressions such as struct
+            // fields from the leaf that a statistics resolver names.
+            let parquet_schema = builder.parquet_schema();
+            let columns = predicate.literal_columns().into_iter().filter_map(|name| {
+                let (leaf, _) = parquet_column(
+                    parquet_schema,
+                    &prepared.physical_file_schema,
+                    &name,
+                )?;
+                Some((BloomFilterKey::Column(name), leaf))
+            });
+            let exprs = predicate.literal_exprs().into_iter().filter_map(|expr| {
+                let leaf = file_statistics_resolvers.bind(&expr)?.bloom_filter_leaf()?;
+                Some((BloomFilterKey::Expr(expr), leaf))
+            });
+            let bloom_filter_leaves = columns
+                .chain(exprs)
+                .map(|(key, leaf)| {
+                    let descr = parquet_schema.column(leaf);
+                    (key, leaf, descr.physical_type(), descr.type_length())
                 })
                 .collect::<Vec<_>>();
 
@@ -1570,31 +1576,36 @@ impl RowGroupsPrunedParquetOpen {
                     continue;
                 }
                 let mut bloom_filter_stats =
-                    BloomFilterStatistics::with_capacity(parquet_columns.len());
+                    BloomFilterStatistics::with_capacity(bloom_filter_leaves.len());
                 let mut pruned = false;
 
-                for (column_name, column_idx, physical_type, type_length) in
-                    &parquet_columns
-                {
-                    let bf: Sbbf = match builder
-                        .get_row_group_column_bloom_filter(idx, *column_idx)
-                        .await
-                    {
-                        Ok(Some(bf)) => bf,
-                        Ok(None) => continue,
-                        Err(e) => {
-                            debug!("Ignoring error reading bloom filter: {e}");
-                            prepared.file_metrics.predicate_evaluation_errors.add(1);
-                            continue;
-                        }
-                    };
+                for (key, leaf, physical_type, type_length) in &bloom_filter_leaves {
+                    let bf: Sbbf =
+                        match builder.get_row_group_column_bloom_filter(idx, *leaf).await
+                        {
+                            Ok(Some(bf)) => bf,
+                            Ok(None) => continue,
+                            Err(e) => {
+                                debug!("Ignoring error reading bloom filter: {e}");
+                                prepared.file_metrics.predicate_evaluation_errors.add(1);
+                                continue;
+                            }
+                        };
 
-                    bloom_filter_stats.insert(
-                        column_name.clone(),
-                        bf,
-                        *physical_type,
-                        *type_length,
-                    );
+                    match key {
+                        BloomFilterKey::Column(name) => bloom_filter_stats.insert(
+                            name.clone(),
+                            bf,
+                            *physical_type,
+                            *type_length,
+                        ),
+                        BloomFilterKey::Expr(expr) => bloom_filter_stats.insert_for_expr(
+                            Arc::clone(expr),
+                            bf,
+                            *physical_type,
+                            *type_length,
+                        ),
+                    }
 
                     if self.row_groups.prune_row_group_with_bloom_filters(
                         idx,
@@ -1621,6 +1632,14 @@ impl RowGroupsPrunedParquetOpen {
 
         Ok(self)
     }
+}
+
+/// What a Bloom filter read for row group pruning belongs to.
+enum BloomFilterKey {
+    /// A column of the file schema, by name.
+    Column(String),
+    /// An expression with its own statistics, such as a struct field.
+    Expr(Arc<dyn PhysicalExpr>),
 }
 
 impl RowGroupsPrunedParquetOpen {

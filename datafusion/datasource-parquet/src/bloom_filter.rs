@@ -7,9 +7,11 @@
 //! [`datafusion_pruning`] can consume it.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{Column, ScalarValue};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::pruning::PruningStatistics;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
@@ -23,6 +25,9 @@ use parquet::data_type::Decimal;
 pub struct BloomFilterStatistics {
     /// Per-column Bloom filters keyed by predicate column name.
     column_sbbf: HashMap<String, ColumnBloomFilter>,
+    /// Bloom filters for expressions with their own statistics (such as
+    /// struct fields), from the leaf a statistics resolver names.
+    expr_sbbf: Vec<(Arc<dyn PhysicalExpr>, ColumnBloomFilter)>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,12 +50,57 @@ impl BloomFilterStatistics {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             column_sbbf: HashMap::with_capacity(capacity),
+            expr_sbbf: vec![],
         }
     }
 
     /// Returns true if no per-column Bloom filters have been loaded.
     pub fn is_empty(&self) -> bool {
-        self.column_sbbf.is_empty()
+        self.column_sbbf.is_empty() && self.expr_sbbf.is_empty()
+    }
+
+    /// Add the Bloom filter that holds the values of `expr`, such as the
+    /// leaf of a struct field.
+    pub(crate) fn insert_for_expr(
+        &mut self,
+        expr: Arc<dyn PhysicalExpr>,
+        sbbf: Sbbf,
+        ty: Type,
+        type_length: i32,
+    ) {
+        self.expr_sbbf.push((
+            expr,
+            ColumnBloomFilter {
+                sbbf,
+                physical_type: ty,
+                type_length,
+            },
+        ));
+    }
+
+    /// `Some(false)` if `filter` proves that none of `values` is present,
+    /// otherwise `None` (unknown). Never `Some(true)`: a bloom filter cannot
+    /// prove that a value is present.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
+    fn contains(
+        filter: &ColumnBloomFilter,
+        values: &HashSet<ScalarValue>,
+    ) -> BooleanArray {
+        // Bloom filters are probabilistic data structures that can return false
+        // positives (i.e. it might return true even if the value is not
+        // present) however, the bloom filter will return `false` if the value is
+        // definitely not present.
+        let known_not_present = Self::is_known_not_present(
+            &filter.sbbf,
+            values,
+            &filter.physical_type,
+            filter.type_length,
+        );
+        // Given the bloom filter is probabilistic, we can't be sure that
+        // the row group actually contains the values. Return `None` to
+        // indicate this uncertainty
+        let contains = if known_not_present { Some(false) } else { None };
+        BooleanArray::from(vec![contains])
     }
 
     /// Add a Bloom filter for the specified column, along with the column's
@@ -210,28 +260,17 @@ impl PruningStatistics for BloomFilterStatistics {
         values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
         let column_bloom_filter = self.column_sbbf.get(column.name.as_str())?;
+        Some(Self::contains(column_bloom_filter, values))
+    }
 
-        // Bloom filters are probabilistic data structures that can return false
-        // positives (i.e. it might return true even if the value is not
-        // present) however, the bloom filter will return `false` if the value is
-        // definitely not present.
-        let known_not_present = Self::is_known_not_present(
-            &column_bloom_filter.sbbf,
-            values,
-            &column_bloom_filter.physical_type,
-            column_bloom_filter.type_length,
-        );
-
-        let contains = if known_not_present {
-            Some(false)
-        } else {
-            // Given the bloom filter is probabilistic, we can't be sure that
-            // the row group actually contains the values. Return `None` to
-            // indicate this uncertainty
-            None
-        };
-
-        Some(BooleanArray::from(vec![contains]))
+    /// Like [`Self::contained`], for an expression with its own bloom filter.
+    fn contained_for_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        values: &HashSet<ScalarValue>,
+    ) -> Option<BooleanArray> {
+        let (_, filter) = self.expr_sbbf.iter().find(|(e, _)| e == expr)?;
+        Some(Self::contains(filter, values))
     }
 }
 
@@ -259,7 +298,7 @@ mod tests {
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
 
     fn build_test_pruning_predicate(
-        expr: Arc<dyn datafusion_physical_plan::PhysicalExpr>,
+        expr: Arc<dyn PhysicalExpr>,
         schema: Schema,
     ) -> PruningPredicate {
         PruningPredicateBuilder::new()

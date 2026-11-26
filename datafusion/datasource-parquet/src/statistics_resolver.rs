@@ -121,6 +121,22 @@ pub trait BoundExprStatistics: Debug + Send + Sync {
     fn page_index_leaf(&self) -> Option<usize> {
         None
     }
+
+    /// The Parquet leaf whose bloom filter can rule out values of the
+    /// expression.
+    ///
+    /// Return a leaf only when every non-null value of the expression is
+    /// stored in that leaf, with the leaf's physical type. Then a value
+    /// missing from the leaf's bloom filter cannot be a value of the
+    /// expression. The literal is hashed as its own type, so the expression
+    /// must have the type of the leaf without any conversion.
+    ///
+    /// Return `None` (the default) otherwise. For example, a shredded
+    /// variant may store some values in its binary `value` column, which a
+    /// bloom filter on `typed_value` cannot see.
+    fn bloom_filter_leaf(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// The [`ParquetStatisticsResolver`]s of a Parquet scan.
@@ -167,7 +183,7 @@ type BoundStatistics = Arc<dyn BoundExprStatistics>;
 /// so the key and its statistics always agree.
 ///
 /// Each expression is bound once. The binding is cached for the row group,
-/// page index and dynamic filter pruning of the file.
+/// page index, bloom filter and dynamic filter pruning of the file.
 #[derive(Debug)]
 pub(crate) struct FileStatisticsResolvers {
     resolvers: ParquetStatisticsResolvers,
@@ -350,6 +366,11 @@ impl BoundExprStatistics for StructFieldStatistics {
     }
 
     fn page_index_leaf(&self) -> Option<usize> {
+        Some(self.leaf)
+    }
+
+    /// A struct field leaf holds every non-null value of the field.
+    fn bloom_filter_leaf(&self) -> Option<usize> {
         Some(self.leaf)
     }
 }
