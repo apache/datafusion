@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::aggregates::group_values::{GroupValues, hash_table_growth};
+use crate::aggregates::group_values::{GroupValues, MISSING_GROUP, hash_table_growth};
 use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, LargeListViewArray, ListArray,
     ListViewArray, MapArray, PrimitiveArray, RunArray, StructArray,
@@ -105,10 +105,13 @@ impl GroupValuesRows {
         let starting_data_capacity = 64 * starting_rows_capacity;
         row_converter.empty_rows(starting_rows_capacity, starting_data_capacity)
     }
-}
 
-impl GroupValues for GroupValuesRows {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    /// [`GroupValues::intern`] if `INSERT`, else [`GroupValues::lookup`].
+    fn probe<const INSERT: bool>(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+    ) -> Result<()> {
         // Normalize -0.0 → +0.0 so RowConverter (IEEE 754 totalOrder) and
         // primitive hashing both group ±0 together. No-op for non-float
         // columns.
@@ -154,6 +157,7 @@ impl GroupValues for GroupValuesRows {
             let group_idx = match entry {
                 // Existing group_index for this group value
                 Some((_hash, group_idx)) => *group_idx,
+                None if !INSERT => MISSING_GROUP,
                 //  1.2 Need to create new entry for the group
                 None => {
                     // Add new entry to aggr_state and save newly created index
@@ -175,6 +179,20 @@ impl GroupValues for GroupValuesRows {
         self.group_values = Some(group_values);
 
         Ok(())
+    }
+}
+
+impl GroupValues for GroupValuesRows {
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+        self.probe::<true>(cols, groups)
+    }
+
+    fn lookup(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+        self.probe::<false>(cols, groups)
+    }
+
+    fn supports_lookup(&self) -> bool {
+        true
     }
 
     fn max_intern_growth(&self, num_rows: usize) -> usize {
@@ -552,6 +570,15 @@ mod tests {
         let mut groups = vec![];
         group_values.intern(&[input], &mut groups)?;
         assert_eq!(groups, vec![0, 1, 2, 0]);
+        let probe = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(3)]),
+            Some(vec![Some(9)]),
+            None,
+        ])) as ArrayRef;
+        assert!(group_values.supports_lookup());
+        group_values.lookup(&[probe], &mut groups)?;
+        assert_eq!(groups, vec![2, MISSING_GROUP, 1]);
+        assert_eq!(group_values.len(), 3);
 
         let selection = GroupSelection::try_from_indices(&[2, 0, 1, 2], 3)?;
         let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![

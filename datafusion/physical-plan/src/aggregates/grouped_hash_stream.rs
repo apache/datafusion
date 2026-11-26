@@ -140,68 +140,8 @@ enum OutOfMemoryMode {
 /// This is the legacy implementation. See the [module documentation](self) for
 /// the deprecation schedule.
 ///
-/// # Design Goals
-///
-/// This structure is designed so that updating the aggregates can be
-/// vectorized (done in a tight loop) without allocations. The
-/// accumulator state is *not* managed by this operator (e.g in the
-/// hash table) and instead is delegated to the individual
-/// accumulators which have type specialized inner loops that perform
-/// the aggregation.
-///
-/// # Architecture
-///
-/// ```text
-///
-///     Assigns a consecutive group           internally stores aggregate values
-///     index for each unique set                     for all groups
-///         of group values
-///
-///         ┌────────────┐              ┌──────────────┐       ┌──────────────┐
-///         │ ┌────────┐ │              │┌────────────┐│       │┌────────────┐│
-///         │ │  "A"   │ │              ││accumulator ││       ││accumulator ││
-///         │ ├────────┤ │              ││     0      ││       ││     N      ││
-///         │ │  "Z"   │ │              ││ ┌────────┐ ││       ││ ┌────────┐ ││
-///         │ └────────┘ │              ││ │ state  │ ││       ││ │ state  │ ││
-///         │            │              ││ │┌─────┐ │ ││  ...  ││ │┌─────┐ │ ││
-///         │    ...     │              ││ │├─────┤ │ ││       ││ │├─────┤ │ ││
-///         │            │              ││ │└─────┘ │ ││       ││ │└─────┘ │ ││
-///         │            │              ││ │        │ ││       ││ │        │ ││
-///         │ ┌────────┐ │              ││ │  ...   │ ││       ││ │  ...   │ ││
-///         │ │  "Q"   │ │              ││ │        │ ││       ││ │        │ ││
-///         │ └────────┘ │              ││ │┌─────┐ │ ││       ││ │┌─────┐ │ ││
-///         │            │              ││ │└─────┘ │ ││       ││ │└─────┘ │ ││
-///         └────────────┘              ││ └────────┘ ││       ││ └────────┘ ││
-///                                     │└────────────┘│       │└────────────┘│
-///                                     └──────────────┘       └──────────────┘
-///
-///         group_values                             accumulators
-///
-/// ```
-///
-/// For example, given a query like `COUNT(x), SUM(y) ... GROUP BY z`,
-/// [`group_values`] will store the distinct values of `z`. There will
-/// be one accumulator for `COUNT(x)`, specialized for the data type
-/// of `x` and one accumulator for `SUM(y)`, specialized for the data
-/// type of `y`.
-///
-/// # Discussion
-///
-/// [`group_values`] does not store any aggregate state inline. It only
-/// assigns "group indices", one for each (distinct) group value. The
-/// accumulators manage the in-progress aggregate state for each
-/// group, with the group values themselves are stored in
-/// [`group_values`] at the corresponding group index.
-///
-/// The accumulator state (e.g partial sums) is managed by and stored
-/// by a [`GroupsAccumulator`] accumulator. There is one accumulator
-/// per aggregate expression (COUNT, AVG, etc) in the
-/// stream. Internally, each `GroupsAccumulator` manages the state for
-/// multiple groups, and is passed `group_indexes` during update. Note
-/// The accumulator state is not managed by this operator (e.g in the
-/// hash table).
-///
-/// [`group_values`]: Self::group_values
+/// See [`super::aggregate_hash_table`] for the physical design of group-key and
+/// accumulator storage.
 ///
 /// # Partial Aggregate and multi-phase grouping
 ///

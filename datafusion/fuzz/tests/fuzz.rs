@@ -4,6 +4,8 @@
 
 //! Central registration for DataFusion's fuzzing unit tests.
 //!
+//! See [`FuzzTest`] for how to implement a fuzzing unit test and how the framework works.
+//!
 //! # Running the tests
 //!
 //! Run all fuzz tests with:
@@ -36,6 +38,20 @@ async fn spill_pool_scenario() -> Result<()> {
             max_cases: None,
             time_limit: Some(Duration::from_secs(10)),
             cases_per_dataset: 1000,
+        },
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn float_zero() -> Result<()> {
+    run_suite(
+        &suites::float_zero::FloatZeroFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: None,
+            time_limit: Some(Duration::from_secs(10)),
+            cases_per_dataset: 100,
         },
     )
     .await
@@ -83,8 +99,49 @@ async fn sort_topk() -> Result<()> {
     .await
 }
 
+#[tokio::test]
+async fn record_batch_memory_tracker() -> Result<()> {
+    run_suite(
+        &suites::memory::RecordBatchMemoryFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: None,
+            time_limit: Some(Duration::from_secs(1)),
+            cases_per_dataset: 100,
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn timestamp_arithmetic() -> Result<()> {
+    run_suite(
+        &suites::timestamp::TimestampArithmeticFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: None,
+            time_limit: Some(Duration::from_secs(1)),
+            cases_per_dataset: 1000,
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn merge() -> Result<()> {
+    run_suite(
+        &suites::merge::MergeFuzzer,
+        RunConfig {
+            run_seed: None,
+            max_cases: None,
+            time_limit: Some(Duration::from_secs(4)),
+            cases_per_dataset: 7,
+        },
+    )
+    .await
+}
+
 async fn run_suite<T: FuzzTest>(test: &T, config: RunConfig) -> Result<()> {
-    eprintln!("Running fuzz suite: {}", test.name());
     let stats = run(test, config).await?;
     eprintln!(
         "Fuzz suite {}: {} cases, {} datasets, {:?}",
