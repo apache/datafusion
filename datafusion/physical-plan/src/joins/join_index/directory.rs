@@ -50,6 +50,11 @@ pub(super) enum IndexWidth {
 impl IndexWidth {
     /// See [`JoinHashIndex::build`] and
     /// [`JoinIndexMap::try_new`](super::JoinIndexMap::try_new) for shared argument documentation.
+    ///
+    /// When `force_u64` is `true`, use `u64` row/group IDs regardless of build size.
+    /// See [`JoinHashIndex`] for normal row-width selection.
+    /// Set it to `true` only in tests to exercise wide IDs without allocating
+    /// large arrays; use `false` otherwise.
     pub(super) fn build(
         keys: &[ArrayRef],
         random_state: &RandomState,
@@ -57,6 +62,7 @@ impl IndexWidth {
         dense_range: Option<(u64, u64)>,
         hash_chunk_size: usize,
         reservation: &MemoryReservation,
+        force_u64: bool,
     ) -> Result<Self> {
         let Some(first) = keys.first() else {
             return internal_err!("A join index requires at least one key column");
@@ -66,7 +72,7 @@ impl IndexWidth {
         // Keep validity unions and per-column metadata charged for every layout.
         scratch.try_grow(num_rows.div_ceil(8) * (keys.len() + 1) + keys.len() * 256)?;
         let before = reservation.size();
-        let result = if u32::try_from(num_rows).is_ok() {
+        let result = if !force_u64 && u32::try_from(num_rows).is_ok() {
             JoinHashIndex::<u32>::build(
                 keys,
                 hash_chunk_size,

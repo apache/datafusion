@@ -113,6 +113,7 @@ impl JoinIndexMap {
                 dense_range,
                 hash_chunk_size,
                 reservation,
+                false,
             )?,
             random_state: random_state.clone(),
             null_equality,
@@ -185,4 +186,314 @@ fn reserve<T>(
         buffer.reserve_exact(capacity - buffer.len());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use arrow::array::Int32Array;
+    use arrow::compute::cast;
+    use arrow::datatypes::DataType;
+    use datafusion_execution::memory_pool::{
+        MemoryConsumer, MemoryPool, UnboundedMemoryPool,
+    };
+    use rstest::rstest;
+
+    /// Targets [`IntegerDirectory`](super::directory::integer::IntegerDirectory).
+    #[rstest]
+    #[case::nulls_unequal(NullEquality::NullEqualsNothing)]
+    #[case::nulls_equal(NullEquality::NullEqualsNull)]
+    fn lookup_integer_unique_keys(
+        #[case] null_equality: NullEquality,
+        // force u64 row width in JoinIndexMap for testing
+        #[values(false, true)] force_u64: bool,
+    ) -> Result<()> {
+        // Setup
+        let case = LookupTestCase {
+            build_keys: &[Some(10), Some(12), None],
+            probe_keys: &[Some(12), Some(11), Some(10), None, Some(12)],
+            expected_nulls_unequal: vec![vec![1], vec![], vec![0], vec![], vec![1]],
+            expected_nulls_equal: vec![vec![1], vec![], vec![0], vec![2], vec![1]],
+        };
+        let mut index = case.setup(DataType::Int32, None, null_equality, force_u64)?;
+
+        // Execution
+        let result = index.lookup(case.probe_keys)?;
+
+        // Validation
+        case.check(result, null_equality);
+
+        Ok(())
+    }
+
+    /// Targets [`IntegerDirectory`](super::directory::integer::IntegerDirectory).
+    #[rstest]
+    #[case::nulls_unequal(NullEquality::NullEqualsNothing)]
+    #[case::nulls_equal(NullEquality::NullEqualsNull)]
+    fn lookup_integer_duplicate_keys(
+        #[case] null_equality: NullEquality,
+        #[values(false, true)] force_u64: bool,
+    ) -> Result<()> {
+        let case = LookupTestCase {
+            build_keys: &[Some(10), Some(12), Some(10), None, None],
+            probe_keys: &[Some(10), Some(12), Some(11), None, Some(10)],
+            expected_nulls_unequal: vec![vec![0, 2], vec![1], vec![], vec![], vec![0, 2]],
+            expected_nulls_equal: vec![
+                vec![0, 2],
+                vec![1],
+                vec![],
+                vec![3, 4],
+                vec![0, 2],
+            ],
+        };
+        let mut index = case.setup(DataType::Int32, None, null_equality, force_u64)?;
+
+        let result = index.lookup(case.probe_keys)?;
+        case.check(result, null_equality);
+        Ok(())
+    }
+
+    /// Targets [`DenseIntegerDirectory`](super::directory::dense::DenseIntegerDirectory).
+    #[rstest]
+    #[case::nulls_unequal(NullEquality::NullEqualsNothing)]
+    #[case::nulls_equal(NullEquality::NullEqualsNull)]
+    fn lookup_dense_unique_keys(
+        #[case] null_equality: NullEquality,
+        #[values(false, true)] force_u64: bool,
+    ) -> Result<()> {
+        let case = LookupTestCase {
+            build_keys: &[Some(10), Some(12)],
+            probe_keys: &[Some(12), Some(11), Some(10), None, Some(9), Some(13)],
+            expected_nulls_unequal: vec![
+                vec![1],
+                vec![],
+                vec![0],
+                vec![],
+                vec![],
+                vec![],
+            ],
+            expected_nulls_equal: vec![vec![1], vec![], vec![0], vec![], vec![], vec![]],
+        };
+        let mut index =
+            case.setup(DataType::Int32, Some((10, 12)), null_equality, force_u64)?;
+
+        let result = index.lookup(case.probe_keys)?;
+        case.check(result, null_equality);
+        Ok(())
+    }
+
+    /// Targets [`DenseIntegerDirectory`](super::directory::dense::DenseIntegerDirectory).
+    #[rstest]
+    #[case::nulls_unequal(NullEquality::NullEqualsNothing)]
+    #[case::nulls_equal(NullEquality::NullEqualsNull)]
+    fn lookup_dense_duplicate_keys(
+        #[case] null_equality: NullEquality,
+        #[values(false, true)] force_u64: bool,
+    ) -> Result<()> {
+        let case = LookupTestCase {
+            build_keys: &[Some(10), Some(12), Some(10)],
+            probe_keys: &[
+                Some(10),
+                Some(12),
+                Some(11),
+                None,
+                Some(9),
+                Some(13),
+                Some(10),
+            ],
+            expected_nulls_unequal: vec![
+                vec![0, 2],
+                vec![1],
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+                vec![0, 2],
+            ],
+            expected_nulls_equal: vec![
+                vec![0, 2],
+                vec![1],
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+                vec![0, 2],
+            ],
+        };
+        let mut index =
+            case.setup(DataType::Int32, Some((10, 12)), null_equality, force_u64)?;
+
+        let result = index.lookup(case.probe_keys)?;
+        case.check(result, null_equality);
+        Ok(())
+    }
+
+    /// Targets [`GeneralDirectory`](super::directory::general::GeneralDirectory).
+    #[rstest]
+    #[case::nulls_unequal(NullEquality::NullEqualsNothing)]
+    #[case::nulls_equal(NullEquality::NullEqualsNull)]
+    fn lookup_general_unique_keys(
+        #[case] null_equality: NullEquality,
+        #[values(false, true)] force_u64: bool,
+    ) -> Result<()> {
+        let case = LookupTestCase {
+            build_keys: &[Some(10), Some(12), None],
+            probe_keys: &[Some(12), Some(11), Some(10), None, Some(12)],
+            expected_nulls_unequal: vec![vec![1], vec![], vec![0], vec![], vec![1]],
+            expected_nulls_equal: vec![vec![1], vec![], vec![0], vec![2], vec![1]],
+        };
+        let mut index = case.setup(DataType::Utf8, None, null_equality, force_u64)?;
+
+        let result = index.lookup(case.probe_keys)?;
+        case.check(result, null_equality);
+        Ok(())
+    }
+
+    /// Targets [`GeneralDirectory`](super::directory::general::GeneralDirectory).
+    #[rstest]
+    #[case::nulls_unequal(NullEquality::NullEqualsNothing)]
+    #[case::nulls_equal(NullEquality::NullEqualsNull)]
+    fn lookup_general_duplicate_keys(
+        #[case] null_equality: NullEquality,
+        #[values(false, true)] force_u64: bool,
+    ) -> Result<()> {
+        let case = LookupTestCase {
+            build_keys: &[Some(10), Some(12), Some(10), None, None],
+            probe_keys: &[Some(10), Some(12), Some(11), None, Some(10)],
+            expected_nulls_unequal: vec![vec![0, 2], vec![1], vec![], vec![], vec![0, 2]],
+            expected_nulls_equal: vec![
+                vec![0, 2],
+                vec![1],
+                vec![],
+                vec![3, 4],
+                vec![0, 2],
+            ],
+        };
+        let mut index = case.setup(DataType::Utf8, None, null_equality, force_u64)?;
+
+        let result = index.lookup(case.probe_keys)?;
+        case.check(result, null_equality);
+        Ok(())
+    }
+
+    /// Expectations contain matching build-row IDs for each probe row.
+    ///
+    /// # Example
+    ///
+    /// ```text
+    /// build_keys: [10, 12, 10, NULL, NULL]
+    /// probe_keys: [10, NULL, 11]
+    /// expected_nulls_unequal: [[0, 2], [], []]
+    /// expected_nulls_equal: [[0, 2], [3, 4], []]
+    /// ```
+    struct LookupTestCase<'a> {
+        build_keys: &'a [Option<i32>],
+        probe_keys: &'a [Option<i32>],
+        expected_nulls_unequal: Vec<Vec<u64>>,
+        expected_nulls_equal: Vec<Vec<u64>>,
+    }
+
+    impl LookupTestCase<'_> {
+        fn setup(
+            &self,
+            data_type: DataType,
+            dense_range: Option<(u64, u64)>,
+            null_equality: NullEquality,
+            force_u64: bool,
+        ) -> Result<TestJoinIndex> {
+            let build_keys = [cast(
+                &Int32Array::from(self.build_keys.to_vec()),
+                &data_type,
+            )?];
+            let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+            let reservation = MemoryConsumer::new("join index test").register(&pool);
+            let random_state = RandomState::default();
+            let index = JoinIndexMap {
+                index: IndexWidth::build(
+                    &build_keys,
+                    &random_state,
+                    null_equality,
+                    dense_range,
+                    build_keys[0].len(),
+                    &reservation,
+                    force_u64,
+                )?,
+                random_state,
+                null_equality,
+            };
+            assert_eq!(matches!(index.index, IndexWidth::U64(_)), force_u64);
+            assert_eq!(index.is_dense(), dense_range.is_some());
+            let scratch = LookupScratch::new(&reservation);
+            Ok(TestJoinIndex {
+                build_keys,
+                index: ReservedJoinIndex::new(index, reservation),
+                scratch,
+            })
+        }
+
+        fn check(&self, result: Vec<Vec<u64>>, null_equality: NullEquality) {
+            let expected = match null_equality {
+                NullEquality::NullEqualsNothing => &self.expected_nulls_unequal,
+                NullEquality::NullEqualsNull => &self.expected_nulls_equal,
+            };
+            assert_eq!(&result, expected);
+        }
+    }
+
+    struct TestJoinIndex {
+        build_keys: [ArrayRef; 1],
+        index: ReservedJoinIndex,
+        scratch: LookupScratch,
+    }
+
+    impl TestJoinIndex {
+        fn lookup(&mut self, probe_keys: &[Option<i32>]) -> Result<Vec<Vec<u64>>> {
+            let probe = [cast(
+                &Int32Array::from(probe_keys.to_vec()),
+                self.build_keys[0].data_type(),
+            )?];
+            let result =
+                self.index
+                    .lookup_batch(&self.build_keys, &probe, &mut self.scratch)?;
+            Ok(match result {
+                LookupResult::Unique(matches) => {
+                    assert_eq!(matches.build_rows.len(), matches.probe_rows.len());
+                    let mut rows = vec![vec![]; probe_keys.len()];
+                    for (&build_row, &probe_row) in
+                        matches.build_rows.iter().zip(matches.probe_rows.iter())
+                    {
+                        rows[probe_row as usize].push(build_row);
+                    }
+                    rows
+                }
+                LookupResult::Groups(MatchHandles::U32(handles)) => {
+                    group_lookup_rows(&self.index, &handles)
+                }
+                LookupResult::Groups(MatchHandles::U64(handles)) => {
+                    group_lookup_rows(&self.index, &handles)
+                }
+            })
+        }
+    }
+
+    fn group_lookup_rows<T: RowId>(
+        index: &JoinIndexMap,
+        handles: &MatchHandleArray<T>,
+    ) -> Vec<Vec<u64>> {
+        (0..handles.len())
+            .map(|row| match handles.get(row) {
+                None => vec![],
+                Some(MatchHandle::One(row)) => vec![row.as_u64()],
+                Some(MatchHandle::Group(group)) => match index.group_rows(group.as_u64())
+                {
+                    GroupRows::U32(rows) => {
+                        rows.iter().map(|&row| u64::from(row)).collect()
+                    }
+                    GroupRows::U64(rows) => rows.to_vec(),
+                },
+            })
+            .collect()
+    }
 }
