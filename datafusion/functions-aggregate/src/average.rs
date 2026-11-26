@@ -1672,6 +1672,56 @@ mod tests {
         Ok(())
     }
 
+    // Regression test for https://github.com/apache/datafusion/issues/24894
+    // The retract path (used by bounded window frames) must wrap on underflow
+    // rather than panicking in debug builds.
+    #[test]
+    fn avg_duration_accumulator_retract_wraps_on_underflow() -> Result<()> {
+        let input_type = DataType::Duration(TimeUnit::Second);
+        let return_type = DataType::Duration(TimeUnit::Second);
+        let mut acc = avg_accumulator(&input_type, &return_type)?;
+
+        // Seed the running sum at i64::MIN with a count of 2 so the average
+        // stays observable after the retraction below.
+        let seed: ArrayRef =
+            Arc::new(DurationSecondArray::from(vec![Some(i64::MIN), Some(0)]));
+        acc.update_batch(std::slice::from_ref(&seed))?;
+
+        // Retracting a positive value underflows i64: i64::MIN - 1 wraps to
+        // i64::MAX.
+        let leaving: ArrayRef = Arc::new(DurationSecondArray::from(vec![Some(1)]));
+        acc.retract_batch(std::slice::from_ref(&leaving))?;
+
+        // count == 1, sum == i64::MAX
+        assert_eq!(acc.evaluate()?, ScalarValue::DurationSecond(Some(i64::MAX)));
+
+        Ok(())
+    }
+
+    // Regression test for https://github.com/apache/datafusion/issues/24894
+    // Retraction must still produce the correct average for ordinary values,
+    // not just on overflow.
+    #[test]
+    fn avg_duration_accumulator_retract_updates_average() -> Result<()> {
+        let input_type = DataType::Duration(TimeUnit::Second);
+        let return_type = DataType::Duration(TimeUnit::Second);
+        let mut acc = avg_accumulator(&input_type, &return_type)?;
+
+        let window: ArrayRef = Arc::new(DurationSecondArray::from(vec![
+            Some(10),
+            Some(20),
+            Some(30),
+        ]));
+        acc.update_batch(std::slice::from_ref(&window))?;
+        let leaving: ArrayRef = Arc::new(DurationSecondArray::from(vec![Some(10)]));
+        acc.retract_batch(std::slice::from_ref(&leaving))?;
+
+        // (10 + 20 + 30 - 10) / 2 = 25
+        assert_eq!(acc.evaluate()?, ScalarValue::DurationSecond(Some(25)));
+
+        Ok(())
+    }
+
     /// The widened return type must hold the rescaled average at the input's
     /// maximum precision.
     #[test]
