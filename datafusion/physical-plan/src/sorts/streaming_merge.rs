@@ -52,6 +52,11 @@ pub struct SortedSpillFile {
 
     /// how much memory the largest memory batch is taking
     pub max_record_batch_memory: usize,
+
+    /// The bytes of `max_record_batch_memory` that are dictionary values shared by every
+    /// batch of the file, or 0. A reader holds them once for the file, so a merge
+    /// reserves them once, not once for each batch that it buffers.
+    pub shared_dictionary_bytes: usize,
 }
 
 impl std::fmt::Debug for SortedSpillFile {
@@ -82,6 +87,7 @@ pub struct StreamingMergeBuilder<'a> {
     metrics: Option<BaselineMetrics>,
     batch_size: Option<usize>,
     max_batch_bytes: Option<usize>,
+    spill_max_batch_bytes: Option<usize>,
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     merge_pool: Option<Arc<MergeMemoryPool>>,
@@ -143,6 +149,16 @@ impl<'a> StreamingMergeBuilder<'a> {
     /// See [`SortPreservingMergeStream::with_max_batch_bytes`]
     pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
         self.max_batch_bytes = max_batch_bytes;
+        self
+    }
+
+    /// Like [`Self::with_max_batch_bytes`], but only for the merge passes over spill
+    /// files whose output is spilled again, not for the pass that produces the output.
+    pub(crate) fn with_spill_max_batch_bytes(
+        mut self,
+        max_batch_bytes: Option<usize>,
+    ) -> Self {
+        self.spill_max_batch_bytes = max_batch_bytes;
         self
     }
 
@@ -231,6 +247,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             metrics,
             batch_size,
             max_batch_bytes,
+            spill_max_batch_bytes,
             reservation,
             merge_pool,
             reserve_replay_headroom,
@@ -281,6 +298,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             .with_fan_in_headroom(fan_in_headroom)
             .with_intermediate_merge_sizing(min_spill_batch_rows)
             .with_max_batch_bytes(max_batch_bytes)
+            .with_spill_max_batch_bytes(spill_max_batch_bytes)
             .create_spillable_merge_stream());
         }
 
@@ -410,6 +428,7 @@ mod tests {
                 .map(RecordBatch::get_array_memory_size)
                 .max()
                 .unwrap(),
+            shared_dictionary_bytes: 0,
         };
         let sorted_spill_files = vec![spill(&wide), spill(&narrow)];
         let merged = StreamingMergeBuilder::new()
@@ -535,6 +554,7 @@ mod tests {
             sorted_spill_files.push(SortedSpillFile {
                 file,
                 max_record_batch_memory: batch.get_array_memory_size(),
+                shared_dictionary_bytes: 0,
             });
         }
 
