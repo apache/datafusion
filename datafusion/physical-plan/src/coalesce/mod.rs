@@ -416,6 +416,27 @@ mod tests {
     }
 
     #[test]
+    fn test_push_batch_with_indices_after_limit_reached() {
+        let batch = uint32_batch(0..8);
+        let mut coalescer = LimitedBatchCoalescer::new(batch.schema(), 100, Some(2));
+        assert_eq!(
+            coalescer
+                .push_batch_with_indices(batch.clone(), &UInt32Array::from(vec![0, 1]))
+                .unwrap(),
+            PushBatchStatus::LimitReached,
+        );
+        assert_eq!(
+            coalescer
+                .push_batch_with_indices(batch, &UInt32Array::from(vec![4, 5]))
+                .unwrap(),
+            PushBatchStatus::LimitReached,
+        );
+        coalescer.finish().unwrap();
+        assert_next_batch_values(&mut coalescer, vec![0, 1]);
+        assert!(coalescer.next_completed_batch().is_none());
+    }
+
+    #[test]
     fn test_push_batch_with_filter_fetch_boundaries() {
         let batch1 = uint32_batch(0..4);
         let batch2 = uint32_batch(4..8);
