@@ -5052,4 +5052,314 @@ mod tests {
         "
         )
     }
+
+    #[test]
+    fn push_down_inner_join_on_correlated_exists_right() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("t3")?)
+            .filter(col("t3.a").eq(out_ref_col(DataType::UInt32, "t2.a")))?
+            .project(vec![col("t3.a")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Inner,
+                (vec!["t1.a"], vec!["t2.a"]),
+                Some(exists(Arc::new(subquery))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join: t1.a = t2.a
+          TableScan: t1
+          TableScan: t2, full_filters=[EXISTS (<subquery>)]
+            Subquery:
+              Projection: t3.a
+                TableScan: t3, full_filters=[t3.a = outer_ref(t2.a)]
+        "
+        )
+    }
+
+    #[test]
+    fn push_down_left_join_on_correlated_exists_left() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("t3")?)
+            .filter(col("t3.a").eq(out_ref_col(DataType::UInt32, "t1.a")))?
+            .project(vec![col("t3.a")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec!["t1.a"], vec!["t2.a"]),
+                Some(exists(Arc::new(subquery))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Left Join: t1.a = t2.a Filter: EXISTS (<subquery>)
+          Subquery:
+            Projection: t3.a
+              TableScan: t3, full_filters=[t3.a = outer_ref(t1.a)]
+          TableScan: t1
+          TableScan: t2
+        "
+        )
+    }
+
+    #[test]
+    fn push_down_right_join_on_correlated_exists_right() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("t3")?)
+            .filter(col("t3.a").eq(out_ref_col(DataType::UInt32, "t2.a")))?
+            .project(vec![col("t3.a")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Right,
+                (vec!["t1.a"], vec!["t2.a"]),
+                Some(exists(Arc::new(subquery))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Right Join: t1.a = t2.a Filter: EXISTS (<subquery>)
+          Subquery:
+            Projection: t3.a
+              TableScan: t3, full_filters=[t3.a = outer_ref(t2.a)]
+          TableScan: t1
+          TableScan: t2
+        "
+        )
+    }
+
+    #[test]
+    fn push_down_inner_join_on_or_with_correlated_exists_right() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("t3")?)
+            .filter(col("t3.a").eq(out_ref_col(DataType::UInt32, "t2.a")))?
+            .project(vec![col("t3.a")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Inner,
+                (vec!["t1.a"], vec!["t2.a"]),
+                Some(col("t1.b").eq(lit(1u32)).or(exists(Arc::new(subquery)))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join: t1.a = t2.a Filter: t1.b = UInt32(1) OR EXISTS (<subquery>)
+          Subquery:
+            Projection: t3.a
+              TableScan: t3, full_filters=[t3.a = outer_ref(t2.a)]
+          TableScan: t1
+          TableScan: t2
+        "
+        )
+    }
+
+    #[test]
+    fn push_down_inner_join_on_correlated_subquery_variants() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("t3")?)
+            .filter(col("t3.a").eq(out_ref_col(DataType::UInt32, "t2.a")))?
+            .project(vec![col("t3.a")])?
+            .build()?;
+        let outer_ref_columns = subquery.all_out_ref_exprs();
+
+        // SetComparison: t1.b > ANY (SELECT t3.a FROM t3 WHERE t3.a = t2.a)
+        let set_comparison = Expr::SetComparison(SetComparison::new(
+            Box::new(col("t1.b")),
+            Subquery {
+                subquery: Arc::new(subquery.clone()),
+                outer_ref_columns: outer_ref_columns.clone(),
+                spans: Spans::new(),
+            },
+            Operator::Gt,
+            SetQuantifier::Any,
+        ));
+        let plan_set_cmp = LogicalPlanBuilder::from(t1.clone())
+            .join(
+                t2.clone(),
+                JoinType::Inner,
+                (vec!["t1.a"], vec!["t2.a"]),
+                Some(set_comparison),
+            )?
+            .build()?;
+        assert_optimized_plan_equal!(
+            plan_set_cmp,
+            @r"
+        Inner Join: t1.a = t2.a Filter: t1.b > ANY (<subquery>)
+          Subquery:
+            Projection: t3.a
+              TableScan: t3, full_filters=[t3.a = outer_ref(t2.a)]
+          TableScan: t1
+          TableScan: t2
+        "
+        )?;
+
+        // InSubquery: t1.b IN (SELECT t3.a FROM t3 WHERE t3.a = t2.a)
+        let plan_in_subquery = LogicalPlanBuilder::from(t1.clone())
+            .join(
+                t2.clone(),
+                JoinType::Inner,
+                (vec!["t1.a"], vec!["t2.a"]),
+                Some(in_subquery(col("t1.b"), Arc::new(subquery.clone()))),
+            )?
+            .build()?;
+        assert_optimized_plan_equal!(
+            plan_in_subquery,
+            @r"
+        Inner Join: t1.a = t2.a Filter: t1.b IN (<subquery>)
+          Subquery:
+            Projection: t3.a
+              TableScan: t3, full_filters=[t3.a = outer_ref(t2.a)]
+          TableScan: t1
+          TableScan: t2
+        "
+        )?;
+
+        // ScalarSubquery: (SELECT count(t3.a) FROM t3 WHERE t3.a = t2.a) = 1 -> pushed to right child (t2)
+        let scalar_subquery_plan =
+            LogicalPlanBuilder::from(test_table_scan_with_name("t3")?)
+                .filter(col("t3.a").eq(out_ref_col(DataType::UInt32, "t2.a")))?
+                .aggregate(Vec::<Expr>::new(), vec![count(col("t3.a"))])?
+                .build()?;
+        let scalar_outer_refs = scalar_subquery_plan.all_out_ref_exprs();
+        let scalar_sq = Expr::ScalarSubquery(Subquery {
+            subquery: Arc::new(scalar_subquery_plan),
+            outer_ref_columns: scalar_outer_refs,
+            spans: Spans::new(),
+        });
+        let plan_scalar = LogicalPlanBuilder::from(t1)
+            .join(t2, JoinType::Inner, (vec!["t1.a"], vec!["t2.a"]), None)?
+            .filter(scalar_sq.eq(lit(1i64)))?
+            .build()?;
+        assert_optimized_plan_equal!(
+            plan_scalar,
+            @r"
+        Inner Join: t1.a = t2.a
+          TableScan: t1
+          Filter: (<subquery>) = Int64(1)
+            Subquery:
+              Aggregate: groupBy=[[]], aggr=[[count(t3.a)]]
+                TableScan: t3, full_filters=[t3.a = outer_ref(t2.a)]
+            TableScan: t2
+        "
+        )
+    }
+
+    #[test]
+    fn push_down_inner_join_on_top_level_outer_ref() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Inner,
+                (vec!["t1.a"], vec!["t2.a"]),
+                Some(col("t1.b").eq(out_ref_col(DataType::UInt32, "t0.b"))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join: t1.a = t2.a
+          TableScan: t1, full_filters=[t1.b = outer_ref(t0.b)]
+          TableScan: t2
+        "
+        )
+    }
+
+    #[test]
+    fn push_down_inner_join_on_correlated_exists_both_sides() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("t3")?)
+            .filter(
+                col("t3.a")
+                    .eq(out_ref_col(DataType::UInt32, "t1.a"))
+                    .and(col("t3.b").eq(out_ref_col(DataType::UInt32, "t2.b"))),
+            )?
+            .project(vec![col("t3.a")])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Inner,
+                (vec!["t1.a"], vec!["t2.a"]),
+                Some(exists(Arc::new(subquery))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join: t1.a = t2.a Filter: EXISTS (<subquery>)
+          Subquery:
+            Projection: t3.a
+              TableScan: t3, full_filters=[t3.a = outer_ref(t1.a), t3.b = outer_ref(t2.b)]
+          TableScan: t1
+          TableScan: t2
+        "
+        )
+    }
+
+    #[test]
+    fn infer_join_predicates_does_not_push_correlated_subquery_to_other_side()
+    -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("t3")?)
+            .filter(col("t3.b").eq(out_ref_col(DataType::UInt32, "t1.b")))?
+            .aggregate(Vec::<Expr>::new(), vec![count(col("t3.a"))])?
+            .build()?;
+        let outer_ref_columns = subquery.all_out_ref_exprs();
+        let scalar_sq = Expr::ScalarSubquery(Subquery {
+            subquery: Arc::new(subquery),
+            outer_ref_columns,
+            spans: Spans::new(),
+        });
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(t2, JoinType::Inner, (vec!["t1.a"], vec!["t2.a"]), None)?
+            .filter(col("t1.a").eq(scalar_sq))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Inner Join: t1.a = t2.a
+          Filter: t1.a = (<subquery>)
+            Subquery:
+              Aggregate: groupBy=[[]], aggr=[[count(t3.a)]]
+                TableScan: t3, full_filters=[t3.b = outer_ref(t1.b)]
+            TableScan: t1
+          TableScan: t2
+        "
+        )
+    }
 }
