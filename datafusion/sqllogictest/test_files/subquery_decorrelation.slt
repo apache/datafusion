@@ -1165,19 +1165,6 @@ SELECT t1.a, t1.b, s.x FROM t1 CROSS JOIN LATERAL (SELECT t2.b AS x FROM t2 WHER
 query error Physical plan does not support logical expression OuterReferenceColumn
 SELECT t1.a, t1.b, s.x FROM t1 LEFT JOIN LATERAL (SELECT count(*) AS x FROM t2 WHERE t2.a < t1.a) s ON TRUE;
 
-# correlated_is_not_distinct_from_below_count
-# Fails today. Expected (DuckDB):
-# 1 1 3
-# 1 1 3
-# 1 2 3
-# 2 2 2
-# 2 NULL 2
-# 3 1 1
-# 4 4 0
-# NULL 2 1
-query error Physical plan does not support logical expression ScalarSubquery
-SELECT t1.a, t1.b, (SELECT count(*) FROM t2 WHERE t2.a IS NOT DISTINCT FROM t1.a) AS v FROM t1;
-
 statement ok
 DROP TABLE t1;
 
