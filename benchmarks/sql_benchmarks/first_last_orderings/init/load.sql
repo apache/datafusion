@@ -1,7 +1,7 @@
 -- 1M groups of two rows whose order in `ts` is scrambled, so the second row
 -- wins in about two thirds of the groups. `ts` is Timestamp(Microsecond, "UTC"),
--- `tsn` the same instants without a time zone, `s` a string with the same
--- scrambled order.
+-- `tsn` the same instants without a time zone, `s` a string derived from the
+-- same scrambled values.
 CREATE TABLE first_last_orderings AS
 SELECT value / 2 AS k,
        (value * 7919) % 1000003 AS o,

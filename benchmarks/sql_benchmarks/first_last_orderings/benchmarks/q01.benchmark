@@ -20,9 +20,8 @@ expect_plan AggregateExec
 
 run
 -- first_value ordered by a time zone aware timestamp (issue #27046). The
--- second ORDER BY key keeps the query on the general accumulator, which stores
--- each group's ordering values as ScalarValues; a single primitive key takes a
--- specialized path.
+-- second ORDER BY key keeps the query on the general accumulator; a single
+-- primitive key takes a specialized path.
 SELECT count(*), sum(a)
 FROM (SELECT k, first_value(v ORDER BY ts, o) AS a FROM first_last_orderings GROUP BY k);
 

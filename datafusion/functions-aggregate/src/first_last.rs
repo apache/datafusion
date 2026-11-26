@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, BooleanArray, BooleanBufferBuilder,
-    PrimitiveArray, UInt64Array, downcast_primitive, new_null_array,
+    PrimitiveArray, UInt64Array, downcast_dictionary_array, downcast_primitive,
+    new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{self, LexicographicalComparator, SortColumn, SortOptions};
@@ -25,7 +26,10 @@ use arrow::datatypes::{
 };
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_boolean_array, as_primitive_array};
-use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, get_row_at_idx};
+use datafusion_common::utils::{
+    MAX_DICTIONARY_VALUES_PER_ROW, compact_dictionary, compare_rows,
+    extract_row_at_idx_to_buf, get_row_at_idx,
+};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, arrow_datafusion_err, internal_err,
 };
@@ -839,6 +843,10 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         scoreboard.append_n(num_groups, false);
         self.extreme_of_each_group_buf.1 = scoreboard;
         self.extreme_buf_dirty = false;
+        // The orderings of groups emitted with `EmitTo::First` can leave
+        // capacity behind as well.
+        self.extreme_of_each_group_buf.0.shrink_to_fit();
+        self.orderings.shrink_to_fit();
     }
 
     fn convert_to_state(
@@ -903,7 +911,16 @@ impl GroupOrderings {
     fn size(&self) -> usize {
         match self {
             Self::Rows(r) => r.size(),
-            Self::Scalars(s) => s.size,
+            Self::Scalars(s) => s.size(),
+        }
+    }
+
+    /// Releases capacity the stored groups do not need, such as the rows
+    /// of groups emitted with [`EmitTo::First`].
+    fn shrink_to_fit(&mut self) {
+        match self {
+            Self::Rows(r) => r.shrink_to_fit(),
+            Self::Scalars(s) => s.rows.shrink_to_fit(),
         }
     }
 
@@ -922,8 +939,9 @@ struct ScalarOrderings {
     /// Typed nulls, the orderings of groups without a winner.
     default: Vec<ScalarValue>,
     sort_options: Vec<SortOptions>,
-    /// Cached `ScalarValue::size_of_vec` sum over `rows` (costly to recompute).
-    size: usize,
+    /// Cached `ScalarValue::size_of_vec` sum over `rows` (costly to recompute),
+    /// including each row's `Vec` header.
+    heap: usize,
 }
 
 impl ScalarOrderings {
@@ -935,7 +953,7 @@ impl ScalarOrderings {
                 .map(ScalarValue::try_from)
                 .collect::<Result<_>>()?,
             sort_options: sort_options.to_vec(),
-            size: 0,
+            heap: 0,
         })
     }
 
@@ -945,7 +963,7 @@ impl ScalarOrderings {
             self.rows.resize(n, self.default.clone());
             // Measured on a stored copy: a clone's capacity can differ from
             // `default`'s.
-            self.size += (n - len) * ScalarValue::size_of_vec(&self.rows[n - 1]);
+            self.heap += (n - len) * ScalarValue::size_of_vec(&self.rows[n - 1]);
         }
     }
 
@@ -954,7 +972,7 @@ impl ScalarOrderings {
         let old = ScalarValue::size_of_vec(row);
         row.clear();
         row.extend_from_slice(ordering);
-        self.size = self.size - old + ScalarValue::size_of_vec(row);
+        self.heap = self.heap - old + ScalarValue::size_of_vec(row);
     }
 
     fn take(&mut self, emit_to: EmitTo, decode: bool) -> Result<Vec<ArrayRef>> {
@@ -962,9 +980,9 @@ impl ScalarOrderings {
         // `size_of_vec` is costly (nested values), so it is not summed over
         // the taken rows when nothing is left.
         match emit_to {
-            EmitTo::All => self.size = 0,
+            EmitTo::All => self.heap = 0,
             EmitTo::First(_) => {
-                self.size -= taken.iter().map(ScalarValue::size_of_vec).sum::<usize>()
+                self.heap -= taken.iter().map(ScalarValue::size_of_vec).sum::<usize>()
             }
         }
         if !decode {
@@ -981,9 +999,24 @@ impl ScalarOrderings {
         cols.into_iter().map(ScalarValue::iter_to_array).collect()
     }
 
+    /// `heap` already counts the `Vec` header of each stored row, so only the
+    /// spare capacity of `rows` is added.
+    fn size(&self) -> usize {
+        self.spare_headers() + self.heap
+    }
+
+    fn spare_headers(&self) -> usize {
+        (self.rows.capacity() - self.rows.len()) * size_of::<Vec<ScalarValue>>()
+    }
+
     #[cfg(test)]
     fn compute_size(&self) -> usize {
-        self.rows.iter().map(ScalarValue::size_of_vec).sum()
+        self.spare_headers()
+            + self
+                .rows
+                .iter()
+                .map(ScalarValue::size_of_vec)
+                .sum::<usize>()
     }
 }
 
@@ -1119,8 +1152,10 @@ impl OrderingRows {
         let indices = UInt64Array::from_iter_values(winners.iter().map(|w| w.1 as u64));
         let cols = ordering_cols
             .iter()
-            .map(|c| compute::take(c.as_ref(), &indices, None))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .map(|c| {
+                compact_sparse_dictionary(compute::take(c.as_ref(), &indices, None)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(self.converter.convert_columns(&cols)?)
     }
 
@@ -1135,6 +1170,7 @@ impl OrderingRows {
             EmitTo::All => self.len(),
             EmitTo::First(n) => n,
         };
+        let self_len = self.len();
         let (converter, dtypes) = (&self.converter, &self.dtypes);
         let mut out = Vec::new();
         match &mut self.storage {
@@ -1145,7 +1181,13 @@ impl OrderingRows {
                 }
                 match emit_to {
                     EmitTo::All => *data = Vec::new(),
-                    // Shift the kept rows down in place, without a new buffer.
+                    // Like `EmitTo::take_needed`: when most rows are emitted,
+                    // copy the kept rows into a buffer of their size, so the
+                    // emitted rows' memory is released; otherwise shift them
+                    // down in place.
+                    EmitTo::First(_) if n * 2 > self_len => {
+                        *data = data[n * w..].to_vec();
+                    }
                     EmitTo::First(_) => {
                         data.drain(..n * w);
                     }
@@ -1161,6 +1203,19 @@ impl OrderingRows {
             }
         }
         Ok(out)
+    }
+
+    /// Releases the capacity of emitted groups' rows and of variable-width
+    /// rows that once held a longer winner.
+    fn shrink_to_fit(&mut self) {
+        match &mut self.storage {
+            RowStorage::Fixed { data, .. } => data.shrink_to_fit(),
+            RowStorage::Var { rows, heap } => {
+                rows.shrink_to_fit();
+                rows.iter_mut().for_each(Vec::shrink_to_fit);
+                *heap = rows.iter().map(Vec::capacity).sum();
+            }
+        }
     }
 
     fn size(&self) -> usize {
@@ -1188,6 +1243,23 @@ impl OrderingRows {
                         + rows.iter().map(Vec::capacity).sum::<usize>()
                 }
             }
+    }
+}
+
+/// `take` keeps the whole values array of a dictionary, and the row converter
+/// encodes all of them, so a batch whose dictionary is much larger than its
+/// few winners is reduced to the values the winners reference first.
+fn compact_sparse_dictionary(array: ArrayRef) -> Result<ArrayRef> {
+    let Some(dictionary) = array.as_any_dictionary_opt() else {
+        return Ok(array);
+    };
+    if dictionary.values().len() <= MAX_DICTIONARY_VALUES_PER_ROW * array.len() {
+        return Ok(array);
+    }
+    let array = array.as_ref();
+    downcast_dictionary_array! {
+        array => Ok(Arc::new(compact_dictionary(array)?)),
+        t => internal_err!("expected a dictionary array, got {t}"),
     }
 }
 
@@ -4301,6 +4373,481 @@ mod tests {
         let state = acc.state(EmitTo::All)?;
         assert_eq!(state[0].as_ref(), &Int64Array::from(vec![2]) as &dyn Array);
         assert_eq!(state[1].data_type(), &dict_t);
+        Ok(())
+    }
+
+    /// After a partial emit (of nearly all groups, or of a quarter, which
+    /// shifts the kept rows in place), `shrink_to_fit` leaves about the memory
+    /// a fresh accumulator needs for the kept groups, for fixed-width rows,
+    /// variable-width rows and ScalarValues alike.
+    #[test]
+    fn test_group_acc_shrink_after_partial_emit() -> Result<()> {
+        let n = 10_000;
+        let i64s: ArrayRef = Arc::new(Int64Array::from_iter_values(0..n as i64));
+        let strs: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..n).map(|i| format!("a string of some length {i}")),
+        ));
+        let list: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
+            (0..n as i64).map(|i| Some(vec![Some(i)])),
+        ));
+        for (ordering_cols, emit) in [
+            vec![Arc::clone(&i64s), Arc::clone(&i64s)],
+            vec![Arc::clone(&strs), Arc::clone(&i64s)],
+            vec![Arc::clone(&list)],
+        ]
+        .into_iter()
+        .flat_map(|cols| [(cols.clone(), n - 1), (cols, n / 4)])
+        {
+            let mut fields = vec![Field::new("v", DataType::Int64, true)];
+            for (i, c) in ordering_cols.iter().enumerate() {
+                fields.push(Field::new(format!("o{i}"), c.data_type().clone(), true));
+            }
+            let schema = Schema::new(fields);
+            let names: Vec<String> =
+                (0..ordering_cols.len()).map(|i| format!("o{i}")).collect();
+            let keys: Vec<_> = names
+                .iter()
+                .map(|n| (n.as_str(), SortOptions::default()))
+                .collect();
+            let dtypes: Vec<_> = ordering_cols
+                .iter()
+                .map(|c| c.data_type().clone())
+                .collect();
+            let new_acc = || {
+                FirstLastGroupsAccumulator::try_new(
+                    PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+                    sort_exprs(&schema, &keys),
+                    false,
+                    &dtypes,
+                    true,
+                    false,
+                )
+            };
+            let mut values = vec![Arc::clone(&i64s)];
+            values.extend(ordering_cols);
+            let mut acc = new_acc()?;
+            acc.update_batch(&values, &Vec::from_iter(0..n), None, n)?;
+            let full = acc.orderings.size();
+            acc.state(EmitTo::First(emit))?;
+            acc.shrink_to_fit();
+            let kept = acc.orderings.size();
+            assert_eq!(kept, acc.orderings.compute_size());
+
+            // A fresh accumulator holding only the kept groups.
+            let mut fresh = new_acc()?;
+            let rest: Vec<ArrayRef> =
+                values.iter().map(|c| c.slice(emit, n - emit)).collect();
+            fresh.update_batch(&rest, &Vec::from_iter(0..n - emit), None, n - emit)?;
+            fresh.shrink_to_fit();
+            let ctx = format!("{dtypes:?} emit {emit}: full {full}, kept {kept}");
+            assert!(kept <= fresh.orderings.size() + 64, "{ctx}");
+            assert!(kept < full, "{ctx}");
+            if emit == n - 1 {
+                // The value state keeps its capacity when it shifts its kept
+                // values in place, so the total is compared only here.
+                assert!(acc.size() <= fresh.size() + 1024, "{ctx}");
+            }
+            assert_eq!(
+                acc.evaluate(EmitTo::All)?.as_ref(),
+                &Int64Array::from_iter_values(emit as i64..n as i64) as &dyn Array
+            );
+        }
+        Ok(())
+    }
+
+    /// `ScalarOrderings::size` counts each row's `Vec` header once.
+    #[test]
+    fn test_scalar_orderings_size_counts_headers_once() -> Result<()> {
+        let mut o = ScalarOrderings::try_new(
+            &[DataType::Int64, DataType::Int64],
+            &[SortOptions::default(); 2],
+        )?;
+        o.resize(100);
+        o.set(
+            7,
+            &[ScalarValue::Int64(Some(1)), ScalarValue::Int64(Some(2))],
+        );
+        // Int64 scalars own no heap memory, so the allocations are the outer
+        // headers plus each row's scalar slots.
+        let expected = o.rows.capacity() * size_of::<Vec<ScalarValue>>()
+            + o.rows
+                .iter()
+                .map(|r| r.capacity() * size_of::<ScalarValue>())
+                .sum::<usize>();
+        assert_eq!(o.size(), expected);
+        assert_eq!(o.compute_size(), expected);
+        Ok(())
+    }
+
+    /// `shrink_to_fit` trims a variable-width row that held a longer winner.
+    #[test]
+    fn test_group_acc_shrink_var_rows() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("v", DataType::Int64, true),
+            Field::new("s", DataType::Utf8, true),
+        ]);
+        let mut acc = FirstLastGroupsAccumulator::try_new(
+            PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+            sort_exprs(&schema, &[("s", SortOptions::default())]),
+            false,
+            &[DataType::Utf8],
+            true,
+            false,
+        )?;
+        let long = "z".repeat(4096);
+        for (v, s) in [(1, long.as_str()), (2, "a")] {
+            acc.update_batch(
+                &[
+                    Arc::new(Int64Array::from(vec![v])),
+                    Arc::new(StringArray::from(vec![s])),
+                ],
+                &[0],
+                None,
+                1,
+            )?;
+        }
+        let before = acc.orderings.size();
+        acc.shrink_to_fit();
+        assert_eq!(acc.orderings.size(), acc.orderings.compute_size());
+        assert!(acc.orderings.size() + 4000 < before);
+        let state = acc.state(EmitTo::All)?;
+        assert_eq!(state[0].as_ref(), &Int64Array::from(vec![2]) as &dyn Array);
+        assert_eq!(
+            &state[1],
+            &(Arc::new(StringArray::from(vec!["a"])) as ArrayRef)
+        );
+        Ok(())
+    }
+
+    /// FIRST_VALUE / LAST_VALUE over `col` for all four sort options, with each
+    /// row in its own batch so every row is compared with the stored winner,
+    /// checked against `compare_rows` over ScalarValues (strict, so ties keep
+    /// the stored winner). Also checks the state's type and value, and merging
+    /// the state. Returns whether the orderings use the row format.
+    fn check_orderings_like_scalars(col: &ArrayRef) -> Result<bool> {
+        let dtype = col.data_type().clone();
+        let schema = Schema::new(vec![
+            Field::new("v", DataType::Int64, true),
+            Field::new("o", dtype.clone(), true),
+        ]);
+        let scalars: Vec<ScalarValue> = (0..col.len())
+            .map(|i| ScalarValue::try_from_array(col, i))
+            .collect::<Result<_>>()?;
+        let new_acc = |options, pick_first| {
+            FirstLastGroupsAccumulator::try_new(
+                PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+                sort_exprs(&schema, &[("o", options)]),
+                false,
+                std::slice::from_ref(&dtype),
+                pick_first,
+                false,
+            )
+        };
+        let row = |i: usize| -> Vec<ArrayRef> {
+            vec![Arc::new(Int64Array::from(vec![i as i64])), col.slice(i, 1)]
+        };
+        let mut uses_rows = false;
+        for (descending, nulls_first, pick_first) in
+            (0..8).map(|b| (b & 1 == 1, b & 2 == 2, b & 4 == 4))
+        {
+            let options = SortOptions {
+                descending,
+                nulls_first,
+            };
+            let ctx = format!("{dtype} {options:?} pick_first={pick_first}");
+            let beats = |cur: usize, new: usize| -> Result<bool> {
+                let ord =
+                    compare_rows(&scalars[cur..=cur], &scalars[new..=new], &[options])?;
+                Ok(if pick_first { ord.is_gt() } else { ord.is_lt() })
+            };
+            let mut acc = new_acc(options, pick_first)?;
+            uses_rows = matches!(acc.orderings, GroupOrderings::Rows(_));
+            let mut expected = 0;
+            for i in 0..col.len() {
+                acc.update_batch(&row(i), &[0], None, 1)?;
+                if i > 0 && beats(expected, i)? {
+                    expected = i;
+                }
+            }
+            let state = acc.state(EmitTo::All)?;
+            assert_eq!(
+                state[0].as_ref(),
+                &Int64Array::from(vec![expected as i64]) as &dyn Array,
+                "{ctx}"
+            );
+            assert_eq!(state[1].data_type(), &dtype, "{ctx}");
+            let stored = ScalarValue::try_from_array(&state[1], 0)?;
+            assert_eq!(
+                compare_rows(&[stored], &scalars[expected..=expected], &[options])?,
+                std::cmp::Ordering::Equal,
+                "{ctx}"
+            );
+            // Merge the state into an accumulator that holds row 0.
+            let mut merged = new_acc(options, pick_first)?;
+            merged.update_batch(&row(0), &[0], None, 1)?;
+            merged.merge_batch(&state, &[0], 1)?;
+            let expected = if beats(0, expected)? { expected } else { 0 };
+            assert_eq!(
+                merged.evaluate(EmitTo::All)?.as_ref(),
+                &Int64Array::from(vec![expected as i64]) as &dyn Array,
+                "{ctx} merged"
+            );
+        }
+        Ok(uses_rows)
+    }
+
+    #[test]
+    fn test_row_orderings_compare_like_scalars() -> Result<()> {
+        use arrow::array::*;
+        use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, i256};
+        macro_rules! ints {
+            ($($a:ty: $t:ty),* $(,)?) => {
+                vec![$(Arc::new(<$a>::from(vec![
+                    Some(<$t>::MAX), None, Some(0), Some(<$t>::MIN), Some(1),
+                    Some(0), None, Some(<$t>::MAX), Some(<$t>::MIN),
+                ])) as ArrayRef),*]
+            };
+        }
+        let mut cases = ints!(
+            Int8Array: i8, Int16Array: i16, Int32Array: i32, Int64Array: i64,
+            UInt8Array: u8, UInt16Array: u16, UInt32Array: u32, UInt64Array: u64,
+            Date32Array: i32, Date64Array: i64, Time32SecondArray: i32,
+            Time64NanosecondArray: i64, TimestampNanosecondArray: i64,
+            DurationMillisecondArray: i64, IntervalYearMonthArray: i32,
+        );
+        cases.push(Arc::new(
+            TimestampMicrosecondArray::from(vec![
+                Some(5),
+                None,
+                Some(-3),
+                Some(5),
+                Some(0),
+            ])
+            .with_timezone("+05:00"),
+        ));
+        macro_rules! floats {
+            ($($a:ty: $t:ident),*) => {
+                $(cases.push(Arc::new(<$a>::from(vec![
+                    Some(0.0), Some(-0.0), Some($t::NAN), None, Some(-$t::NAN),
+                    Some($t::INFINITY), Some(-1.5), Some($t::NEG_INFINITY),
+                    Some(-0.0), Some($t::NAN), Some(0.0),
+                ]))));*
+            };
+        }
+        floats!(Float32Array: f32, Float64Array: f64);
+        let decimals = [
+            Some(-5),
+            None,
+            Some(12345),
+            Some(-5),
+            Some(0),
+            Some(i64::MAX),
+        ];
+        cases.push(Arc::new(
+            Decimal128Array::from(
+                decimals
+                    .iter()
+                    .map(|d| d.map(i128::from))
+                    .collect::<Vec<_>>(),
+            )
+            .with_precision_and_scale(20, 2)?,
+        ));
+        cases.push(Arc::new(
+            Decimal256Array::from(
+                decimals
+                    .iter()
+                    .map(|d| d.map(|d| i256::from_i128(d.into())))
+                    .collect::<Vec<_>>(),
+            )
+            .with_precision_and_scale(40, 2)?,
+        ));
+        let dt = IntervalDayTime::new;
+        cases.push(Arc::new(IntervalDayTimeArray::from(vec![
+            Some(dt(1, -5)),
+            Some(dt(0, 100)),
+            None,
+            Some(dt(1, -5)),
+            Some(dt(-1, 0)),
+        ])));
+        let mdn = IntervalMonthDayNano::new;
+        cases.push(Arc::new(IntervalMonthDayNanoArray::from(vec![
+            Some(mdn(1, -5, 0)),
+            Some(mdn(0, 40, 7)),
+            None,
+            Some(mdn(1, -5, 0)),
+            Some(mdn(0, 40, -7)),
+            Some(mdn(-1, 0, 0)),
+        ])));
+        let strs = vec![
+            Some("b"),
+            None,
+            Some("a long string beyond twelve bytes"),
+            Some(""),
+            Some("a"),
+            Some("b"),
+            Some("a long string beyond twelve bytez"),
+            None,
+            Some("\u{ff}"),
+        ];
+        cases.push(Arc::new(StringArray::from(strs.clone())));
+        cases.push(Arc::new(LargeStringArray::from(strs.clone())));
+        cases.push(Arc::new(StringViewArray::from(strs.clone())));
+        let bins: Vec<Option<&[u8]>> = strs
+            .iter()
+            .map(|s| s.map(str::as_bytes))
+            .chain([Some(&[0u8][..]), Some(&[0xff, 0][..])])
+            .collect();
+        cases.push(Arc::new(BinaryArray::from(bins.clone())));
+        cases.push(Arc::new(LargeBinaryArray::from(bins.clone())));
+        cases.push(Arc::new(BinaryViewArray::from(bins)));
+        cases.push(Arc::new(
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                [
+                    Some([1u8, 2, 3]),
+                    None,
+                    Some([0, 0, 0]),
+                    Some([1, 2, 3]),
+                    Some([255, 0, 0]),
+                ]
+                .into_iter(),
+                3,
+            )?,
+        ));
+        cases.push(Arc::new(BooleanArray::from(vec![
+            Some(true),
+            None,
+            Some(false),
+            Some(true),
+            Some(false),
+            None,
+        ])));
+        // Dictionaries, including a null value and keys pointing to it.
+        cases.push(Arc::new(DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![
+                Some(2),
+                None,
+                Some(0),
+                Some(1),
+                Some(2),
+                Some(0),
+                Some(3),
+            ]),
+            Arc::new(StringArray::from(vec![
+                Some("b"),
+                None,
+                Some("a"),
+                Some("c"),
+            ])),
+        )?));
+        cases.push(Arc::new(DictionaryArray::<UInt16Type>::try_new(
+            UInt16Array::from(vec![Some(1), Some(0), None, Some(1), Some(2)]),
+            Arc::new(Int64Array::from(vec![7, -7, 0])),
+        )?));
+        cases.push(Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![Some(0), Some(1), None, Some(0)]),
+            Arc::new(StringViewArray::from(vec![
+                "a long string beyond twelve bytes",
+                "a",
+            ])),
+        )?));
+        for col in &cases {
+            assert!(check_orderings_like_scalars(col)?, "{}", col.data_type());
+        }
+        Ok(())
+    }
+
+    /// Ordering types that keep ScalarValues (the earlier blockers of the row
+    /// format) give the ScalarValue semantics: unions under DESC, dictionaries
+    /// whose values `cast` cannot pack again, and lists with NULL elements.
+    #[test]
+    fn test_scalar_orderings_fallbacks() -> Result<()> {
+        use arrow::array::DurationSecondArray;
+        use arrow::array::{
+            DictionaryArray, Int32Array, IntervalMonthDayNanoArray, UnionArray,
+        };
+        use arrow::datatypes::{IntervalMonthDayNano, UnionFields};
+        let mut cases: Vec<ArrayRef> = vec![];
+        // A dense union, mostly the same variant.
+        cases.push(Arc::new(UnionArray::try_new(
+            UnionFields::try_new(
+                vec![0, 1],
+                vec![
+                    Field::new("i", DataType::Int32, true),
+                    Field::new("s", DataType::Utf8, true),
+                ],
+            )?,
+            vec![0, 0, 0, 1, 0, 0].into(),
+            Some(vec![0, 1, 2, 0, 3, 4].into()),
+            vec![
+                Arc::new(Int32Array::from(vec![5, 1, 9, 7, 9])),
+                Arc::new(StringArray::from(vec!["x"])),
+            ],
+        )?));
+        let keys = || Int32Array::from(vec![Some(1), Some(0), None, Some(2), Some(1)]);
+        cases.push(Arc::new(DictionaryArray::<Int32Type>::try_new(
+            keys(),
+            Arc::new(BooleanArray::from(vec![Some(true), Some(false), None])),
+        )?));
+        cases.push(Arc::new(DictionaryArray::<Int32Type>::try_new(
+            keys(),
+            Arc::new(DurationSecondArray::from(vec![3, -3, 0])),
+        )?));
+        let mdn = IntervalMonthDayNano::new;
+        cases.push(Arc::new(DictionaryArray::<Int32Type>::try_new(
+            keys(),
+            Arc::new(IntervalMonthDayNanoArray::from(vec![
+                mdn(1, 0, 0),
+                mdn(0, 31, 0),
+                mdn(0, 0, -1),
+            ])),
+        )?));
+        cases.push(Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
+            vec![
+                Some(vec![Some(1), None]),
+                Some(vec![None]),
+                Some(vec![Some(1)]),
+                None,
+                Some(vec![None, Some(2)]),
+                Some(vec![]),
+                Some(vec![Some(1), None]),
+            ],
+        )));
+        for col in &cases {
+            assert!(!check_orderings_like_scalars(col)?, "{}", col.data_type());
+        }
+        Ok(())
+    }
+
+    /// A batch whose dictionary is much larger than its winners only encodes
+    /// the referenced values, with the same results.
+    #[test]
+    fn test_row_orderings_sparse_dictionary() -> Result<()> {
+        use arrow::array::{DictionaryArray, Int32Array};
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..1000).map(|i| format!("value {i:04}")),
+        ));
+        let dict: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![Some(900), None, Some(3), Some(900)]),
+            values,
+        )?);
+        let compacted = compact_sparse_dictionary(compute::take(
+            dict.as_ref(),
+            &UInt64Array::from(vec![0, 2]),
+            None,
+        )?)?;
+        assert_eq!(compacted.as_any_dictionary().values().len(), 2);
+        let GroupOrderings::Rows(r) = GroupOrderings::try_new(
+            &[dict.data_type().clone()],
+            &[SortOptions::default()],
+        )?
+        else {
+            unreachable!("dictionaries of strings use the row format")
+        };
+        let rows = r.encode(&[Arc::clone(&dict)], &[(0, 0), (1, 2)])?;
+        let all = r.converter.convert_columns(&[Arc::clone(&dict)])?;
+        assert_eq!(rows.row(0), all.row(0));
+        assert_eq!(rows.row(1), all.row(2));
+        check_orderings_like_scalars(&dict)?;
         Ok(())
     }
 }
