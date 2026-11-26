@@ -2092,3 +2092,32 @@ prod 10
 
 statement ok
 drop table leaf_merge_source;
+
+# Regression test for https://github.com/apache/datafusion/issues/27703
+# Join key is an expression over a struct field of an aliased table.
+statement ok
+create table join_leaf_a as select {f: 1} as s;
+
+statement ok
+create table join_leaf_b as select 2 as f, {g: 0} as s;
+
+query ?I?
+select * from join_leaf_a x join join_leaf_b on x.s['f'] + 1 = join_leaf_b.f;
+----
+{f: 1} 2 {g: 0}
+
+query ?I?
+select * from join_leaf_a x join join_leaf_b y on x.s['f'] + 1 = y.s['g'] + 2;
+----
+{f: 1} 2 {g: 0}
+
+query ?I?
+select * from (select s from join_leaf_a) x left join join_leaf_b on cast(x.s['f'] as bigint) + 1 = join_leaf_b.f;
+----
+{f: 1} 2 {g: 0}
+
+statement ok
+drop table join_leaf_a;
+
+statement ok
+drop table join_leaf_b;
