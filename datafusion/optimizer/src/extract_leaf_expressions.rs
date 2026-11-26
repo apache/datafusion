@@ -55,6 +55,7 @@
 //! [`OptimizeProjections`]: crate::optimize_projections::OptimizeProjections
 
 use indexmap::{IndexMap, IndexSet};
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
@@ -244,19 +245,20 @@ impl OptimizerRule for ExtractLeafExpressions {
         }
         let alias_generator = config.alias_generator();
 
-        // Advance the alias generator past any user-provided __datafusion_extracted_N
-        // aliases to prevent collisions when generating new extraction aliases.
-        advance_generator_past_existing(&plan, alias_generator)?;
+        // Advance the alias generator past any canonical __datafusion_extracted_N
+        // aliases and record all extraction-prefixed names to avoid wraparound
+        // collisions near usize::MAX.
+        let existing_aliases = advance_generator_past_existing(&plan, alias_generator)?;
 
         plan.transform_down_with_subqueries(|plan| {
-            extract_from_plan(plan, alias_generator)
+            extract_from_plan(plan, alias_generator, &existing_aliases)
         })
     }
 }
 
-/// Scans the plan for pre-existing `__datafusion_extracted_N` aliases and
-/// advances the generator counter past them to avoid collisions with
-/// user-provided aliases.
+/// Scans the plan for pre-existing `__datafusion_extracted` names, returning all
+/// matching names and advancing the generator counter past canonical IDs to avoid
+/// collisions with user-provided aliases.
 ///
 /// Subquery plans nested inside expressions are scanned as well: extraction
 /// rewrites with `transform_down_with_subqueries`, so it can generate aliases
@@ -264,20 +266,33 @@ impl OptimizerRule for ExtractLeafExpressions {
 fn advance_generator_past_existing(
     plan: &LogicalPlan,
     alias_generator: &AliasGenerator,
-) -> Result<()> {
+) -> Result<std::collections::HashSet<String>> {
+    let mut existing = std::collections::HashSet::new();
     plan.apply_with_subqueries(|plan| {
+        for field in plan.schema().fields() {
+            let name = field.name();
+            if name.starts_with(EXTRACTED_EXPR_PREFIX) {
+                existing.insert(name.clone());
+                if let Some(id) = extracted_expr_id(name) {
+                    alias_generator.update_min_id(id);
+                }
+            }
+        }
         plan.apply_expressions(|expr| {
             expr.apply(|e| {
                 if let Expr::Alias(alias) = e
-                    && let Some(id) = extracted_expr_id(&alias.name)
+                    && alias.name.starts_with(EXTRACTED_EXPR_PREFIX)
                 {
-                    alias_generator.update_min_id(id);
+                    existing.insert(alias.name.clone());
+                    if let Some(id) = extracted_expr_id(&alias.name) {
+                        alias_generator.update_min_id(id);
+                    }
                 }
                 Ok(TreeNodeRecursion::Continue)
             })
         })
-    })
-    .map(|_| ())
+    })?;
+    Ok(existing)
 }
 
 /// Extracts `MoveTowardsLeafNodes` sub-expressions from a plan node.
@@ -289,6 +304,7 @@ fn advance_generator_past_existing(
 fn extract_from_plan(
     plan: LogicalPlan,
     alias_generator: &Arc<AliasGenerator>,
+    existing_aliases: &std::collections::HashSet<String>,
 ) -> Result<Transformed<LogicalPlan>> {
     // Only extract from plan types whose output schema is predictable after
     // expression rewriting.  Nodes like Window derive column names from
@@ -338,7 +354,13 @@ fn extract_from_plan(
     // Build per-input extractors
     let mut extractors: Vec<LeafExpressionExtractor> = input_schemas
         .iter()
-        .map(|schema| LeafExpressionExtractor::new(schema.as_ref(), alias_generator))
+        .map(|schema| {
+            LeafExpressionExtractor::new(
+                schema.as_ref(),
+                alias_generator,
+                Cow::Borrowed(existing_aliases),
+            )
+        })
         .collect();
 
     // Build per-input column sets for routing expressions to the correct input
@@ -443,8 +465,7 @@ fn routing_extract(
         match e.placement() {
             ExpressionPlacement::MoveTowardsLeafNodes => {
                 if let Some(idx) = find_owning_input(&e, input_column_sets) {
-                    let col_ref = extractors[idx].add_extracted(e)?;
-                    Ok(Transformed::yes(col_ref))
+                    extractors[idx].add_extracted(e)
                 } else {
                     // References columns from multiple inputs — cannot extract
                     Ok(Transformed::no(e))
@@ -643,35 +664,68 @@ struct LeafExpressionExtractor<'a> {
     input_schema: &'a DFSchema,
     /// Alias generator
     alias_generator: &'a Arc<AliasGenerator>,
+    /// Reserved `__datafusion_extracted` names, including those in the input schema.
+    existing_aliases: Cow<'a, std::collections::HashSet<String>>,
 }
 
 impl<'a> LeafExpressionExtractor<'a> {
-    fn new(input_schema: &'a DFSchema, alias_generator: &'a Arc<AliasGenerator>) -> Self {
+    fn new(
+        input_schema: &'a DFSchema,
+        alias_generator: &'a Arc<AliasGenerator>,
+        mut existing_aliases: Cow<'a, std::collections::HashSet<String>>,
+    ) -> Self {
+        for field in input_schema.fields() {
+            let name = field.name();
+            if name.starts_with(EXTRACTED_EXPR_PREFIX) && !existing_aliases.contains(name)
+            {
+                existing_aliases.to_mut().insert(name.clone());
+            }
+        }
         Self {
             extracted: IndexMap::new(),
             columns_needed: IndexSet::new(),
             input_schema,
             alias_generator,
+            existing_aliases,
         }
     }
 
-    /// Adds an expression to extracted set, returns column reference.
-    fn add_extracted(&mut self, expr: Expr) -> Result<Expr> {
+    fn next_available_alias(&self) -> Option<String> {
+        for _ in 0..=self.existing_aliases.len() {
+            let alias = self.alias_generator.next(EXTRACTED_EXPR_PREFIX);
+            if !self.existing_aliases.contains(&alias) {
+                return Some(alias);
+            }
+        }
+        None
+    }
+
+    /// Adds an expression to extracted set, returning its column reference if an
+    /// unambiguous alias is available.
+    fn add_extracted(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         // Deduplication: reuse existing alias if same expression
         if let Some(alias) = self.extracted.get(&expr) {
-            return Ok(Expr::Column(Column::new_unqualified(alias)));
+            return Ok(Transformed::yes(Expr::Column(Column::new_unqualified(
+                alias,
+            ))));
         }
+
+        // Generate unique alias before recording columns_needed so a skipped
+        // extraction leaves the extractor state unchanged.
+        let Some(alias) = self.next_available_alias() else {
+            return Ok(Transformed::no(expr));
+        };
 
         // Track columns referenced by this expression
         for col in expr.column_refs() {
             self.columns_needed.insert(col.clone());
         }
 
-        // Generate unique alias
-        let alias = self.alias_generator.next(EXTRACTED_EXPR_PREFIX);
         self.extracted.insert(expr, alias.clone());
 
-        Ok(Expr::Column(Column::new_unqualified(&alias)))
+        Ok(Transformed::yes(Expr::Column(Column::new_unqualified(
+            &alias,
+        ))))
     }
 
     /// Builds an extraction projection above the given input, or merges into
@@ -1045,6 +1099,13 @@ fn split_and_push_projection(
 
     let input = &proj.input;
     let input_schema = input.schema();
+    let original_schema = proj.schema.as_ref();
+    let existing_aliases = original_schema
+        .fields()
+        .iter()
+        .filter(|f| f.name().starts_with(EXTRACTED_EXPR_PREFIX))
+        .map(|f| f.name().clone())
+        .collect();
 
     // ── Phase 1: Split ──────────────────────────────────────────────────
     // For each projection expression, collect extraction pairs and build
@@ -1064,10 +1125,10 @@ fn split_and_push_projection(
     let mut extractors = vec![LeafExpressionExtractor::new(
         input_schema.as_ref(),
         alias_generator,
+        Cow::Owned(existing_aliases),
     )];
     let input_column_sets = vec![schema_columns(input_schema.as_ref())];
 
-    let original_schema = proj.schema.as_ref();
     let mut recovery_exprs: Vec<Expr> = Vec::with_capacity(proj.expr.len());
     let mut has_new_extractions = false;
     let mut proj_exprs_captured: usize = 0;
@@ -3964,6 +4025,77 @@ mod tests {
                 "Filter: {max_alias} = Utf8(\"active\") AND {zero_alias} = Utf8(\"admin\")"
             )),
             "expected filter to keep {max_alias} and {zero_alias} without re-extraction:\n{formatted}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_existing_max_and_zero_aliases_avoid_schema_ambiguity() -> Result<()> {
+        let table_scan = inexact_table_scan_with_struct()?;
+        let max_minus_one = format!("{EXTRACTED_EXPR_PREFIX}_{}", usize::MAX - 1);
+        let max_alias = format!("{EXTRACTED_EXPR_PREFIX}_{}", usize::MAX);
+        let zero_alias = format!("{EXTRACTED_EXPR_PREFIX}_0");
+        let inner = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                col("id"),
+                col("user"),
+                lit(1u32).alias(&max_minus_one),
+                lit(2u32).alias(&max_alias),
+                lit(3u32).alias(&zero_alias),
+            ])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(inner)
+            .filter(leaf_udf(col("user"), "status").eq(lit("active")))?
+            .project(vec![col("id"), col(&max_alias), col(&zero_alias)])?
+            .build()?;
+
+        let ctx = OptimizerContext::new();
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(ExtractLeafExpressions::new()),
+            Arc::new(PushDownLeafProjections::new()),
+            Arc::new(OptimizeProjections::new()),
+        ]);
+        let optimized = optimizer.optimize(plan, &ctx, |_, _| {})?;
+        let expected_fields = vec!["id", max_alias.as_str(), zero_alias.as_str()];
+        let actual_fields: Vec<&str> = optimized
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
+        assert_eq!(actual_fields, expected_fields);
+        let formatted = format!("{optimized}");
+        assert!(
+            formatted.contains(&format!("{EXTRACTED_EXPR_PREFIX}_1")),
+            "expected extraction to skip colliding _MAX and _0 aliases:\n{formatted}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_extraction_skips_input_and_output_aliases() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan_with_struct()?)
+            .project(vec![
+                col("id"),
+                col("user"),
+                lit(1u32).alias("__datafusion_extracted_1"),
+            ])?
+            .filter(col("id").gt(lit(0u32)))?
+            .project(vec![
+                leaf_udf(col("user"), "status").alias("status"),
+                lit(2u32).alias("__datafusion_extracted_2"),
+            ])?
+            .build()?;
+        let schema = Arc::clone(plan.schema());
+        let optimized = PushDownLeafProjections::new()
+            .rewrite(plan, &OptimizerContext::new())?
+            .data;
+
+        assert_eq!(optimized.schema(), &schema);
+        let formatted = format!("{optimized}");
+        assert!(
+            formatted.contains("AS __datafusion_extracted_3"),
+            "expected extraction to skip input alias _1 and output alias _2:\n{formatted}"
         );
         Ok(())
     }
