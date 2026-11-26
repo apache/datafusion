@@ -79,6 +79,12 @@ pub trait ParquetStatisticsResolver: Debug + Send + Sync {
     /// predicate does not use `expr` as a statistics key, and it looks for
     /// keys in the children of `expr` instead. For example, a predicate on
     /// `TRY_CAST(e AS Int64)` can use the statistics of `e`.
+    ///
+    /// `EXPLAIN` has no file, so it binds against a Parquet schema that it
+    /// builds from the Arrow file schema. A resolver for leaves that exist
+    /// only in real files, such as shredded variant columns, binds nothing
+    /// there. Its keys then do not show in the `EXPLAIN` pruning predicate,
+    /// but the scan still uses them.
     fn bind(
         &self,
         expr: &Arc<dyn PhysicalExpr>,

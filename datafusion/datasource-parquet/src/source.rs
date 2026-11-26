@@ -3,7 +3,8 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! ParquetSource implementation for reading parquet files
-use crate::statistics_resolver::ParquetStatisticsResolvers;
+use crate::statistics_resolver::{FileStatisticsResolvers, ParquetStatisticsResolvers};
+use parquet::arrow::ArrowSchemaConverter;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -845,13 +846,25 @@ impl FileSource for ParquetSource {
                 // Instead, we use the logical schema of the file (the table schema without partition columns).
                 if let Some(predicate) = &self.predicate {
                     let predicate_creation_errors = Count::new();
+                    // Bind the resolvers to the Parquet schema that a file
+                    // written with the logical schema would have.
+                    let file_schema = self.table_schema.file_schema();
+                    let statistics_resolvers = ArrowSchemaConverter::new()
+                        .convert(file_schema)
+                        .ok()
+                        .map(|parquet_schema| {
+                            Arc::new(FileStatisticsResolvers::new(
+                                self.statistics_resolvers.clone(),
+                                Arc::clone(file_schema),
+                                Arc::new(parquet_schema),
+                            ))
+                        });
                     if let Some(pruning_predicate) = build_pruning_predicates(
                         Some(predicate),
-                        self.table_schema.table_schema(),
+                        file_schema,
                         &predicate_creation_errors,
                         self.max_in_list_size(),
-                        // There is no file to bind statistics resolvers to.
-                        None,
+                        statistics_resolvers.as_ref(),
                     ) {
                         let mut guarantees = pruning_predicate
                             .literal_guarantees()
