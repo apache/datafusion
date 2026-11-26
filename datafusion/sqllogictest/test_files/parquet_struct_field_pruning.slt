@@ -313,6 +313,74 @@ Plan with Metrics
 statement ok
 DROP TABLE drift;
 
+# Bloom filters on struct fields. Each row group spans a wide range, so
+# min/max cannot rule out `s['a'] = 50`, but the bloom filters can.
+#
+# | Row group | s.a     | s.i8   | s.d                       | s.dec        |
+# |-----------|---------|--------|---------------------------|--------------|
+# | 0         | 1, 100  | 1, 100 | 2024-01-01, 2024-04-09    | 1.00, 100.00 |
+# | 1         | 2, 99   | 2, 99  | 2024-01-02, 2024-04-08    | 2.00, 99.00  |
+statement ok
+COPY (
+  SELECT named_struct(
+    'a', column1,
+    'i8', CAST(column1 AS TINYINT),
+    'd', CAST('2024-01-01' AS DATE) + CAST(column1 - 1 AS INT),
+    'dec', CAST(column1 AS DECIMAL(10, 2))
+  ) AS s
+  FROM (VALUES (1), (100), (2), (99))
+)
+TO 'test_files/scratch/parquet_struct_field_pruning/bloom.parquet'
+STORED AS PARQUET
+OPTIONS (
+  'format.max_row_group_size' '2',
+  'format.bloom_filter_on_write' 'true'
+);
+
+statement ok
+CREATE EXTERNAL TABLE bloom
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_struct_field_pruning/bloom.parquet';
+
+# Both row groups can be skipped by their bloom filters.
+query TT
+EXPLAIN ANALYZE SELECT * FROM bloom WHERE s['a'] = 50;
+----
+Plan with Metrics
+01)FilterExec: __datafusion_extracted_1@0 = 50, projection=[s@1], metrics=[output_rows=0, selectivity=0% (0/4)]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=4]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_struct_field_pruning/bloom.parquet]]}, projection=[get_field(s@0, a) as __datafusion_extracted_1, s], file_type=parquet, predicate=get_field(s@0, a) = 50, pruning_predicate=get_field(s@0, a)_null_count@2 != row_count@3 AND get_field(s@0, a)_min@0 <= 50 AND 50 <= get_field(s@0, a)_max@1, required_guarantees=[], metrics=[output_rows=4, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=2 total → 2 matched, page_index_pages_pruned=2 total → 2 matched, limit_pruned_row_groups=0 total → 0 matched, scan_efficiency_ratio=20.1% (560/2.79 K)]
+
+# `!=` can never be proven false by a bloom filter.
+query I
+SELECT count(*) FROM bloom WHERE s['a'] != 50;
+----
+4
+
+# Values that are present are found for every field type.
+query I
+SELECT count(*) FROM bloom WHERE s['a'] = 99;
+----
+1
+
+query I
+SELECT count(*) FROM bloom WHERE s['i8'] = 99;
+----
+1
+
+query I
+SELECT count(*) FROM bloom WHERE s['d'] = DATE '2024-04-08';
+----
+1
+
+query I
+SELECT count(*) FROM bloom WHERE s['dec'] = 99.00;
+----
+1
+
+statement ok
+DROP TABLE bloom;
+
 # Hash join dynamic filter. The build side `u` has ids 0, 5000 and 9999, so
 # its bounds [0, 9999] cover all 10 row groups of `hj`, but its key bitmap
 # only reaches row groups 0, 5 and 9. A hash-lookup filter (forced by an
@@ -407,3 +475,24 @@ SELECT id FROM full_match WHERE s['a'] <= 5 ORDER BY id;
 
 statement ok
 set datafusion.execution.parquet.pushdown_filters = false;
+
+# A real column whose name looks like a statistics placeholder must not
+# take the bloom filter guarantees of a struct field.
+statement ok
+COPY (SELECT column1 AS "__datafusion_pruning_stats_expr_0", named_struct('a', column2) AS s FROM (VALUES (99, 7), (6, 8)))
+TO 'test_files/scratch/parquet_struct_field_pruning/placeholder/f.parquet'
+STORED AS PARQUET OPTIONS ('format.bloom_filter_on_write' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE placeholder STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_struct_field_pruning/placeholder/f.parquet';
+
+query I
+SELECT count(*) FROM placeholder WHERE "__datafusion_pruning_stats_expr_0" = 99 AND s['a'] > 0;
+----
+1
+
+query I
+SELECT count(*) FROM placeholder WHERE s['a'] > 0 AND "__datafusion_pruning_stats_expr_0" IN (99, 100);
+----
+1
