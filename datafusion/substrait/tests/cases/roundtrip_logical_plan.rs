@@ -478,15 +478,26 @@ async fn aggregate_duplicate_group_by_key_roundtrip() -> Result<()> {
         vec![0],
         "producer should not repeat the grouping expression reference"
     );
+    #[expect(deprecated)]
+    {
+        assert_eq!(aggregate.groupings[0].grouping_expressions.len(), 1);
+    }
 
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let expected = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
     let actual = DataFrame::new(ctx.state(), plan2).collect().await?;
-    assert_eq!(
-        format!("{expected:?}"),
-        format!("{actual:?}"),
-        "round trip should preserve column order and values"
+    datafusion::assert_batches_eq!(
+        [
+            "+---+------+",
+            "| a | s    |",
+            "+---+------+",
+            "| 1 | 2.00 |",
+            "| 3 | 4.50 |",
+            "+---+------+",
+        ],
+        &actual
     );
+    assert_eq!(expected[0].schema(), actual[0].schema());
 
     // Optimized plans already drop the duplicate key via eliminate_duplicated_expr.
     roundtrip("SELECT a, sum(b) AS s FROM data GROUP BY a, a").await?;
