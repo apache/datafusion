@@ -957,7 +957,19 @@ SELECT a FROM struct_before_sort_key ORDER BY a;
 2
 2
 
-# The file is sorted by b, so ORDER BY b needs no sort
+# The file is not sorted by a, so the physical plan keeps the SortExec
+query TT
+EXPLAIN SELECT a FROM struct_before_sort_key ORDER BY a;
+----
+logical_plan
+01)Sort: struct_before_sort_key.a ASC NULLS LAST
+02)--TableScan: struct_before_sort_key projection=[a]
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/struct_before_sort_key/sorted.parquet]]}, projection=[a], file_type=parquet, sort_order_for_reorder=[a@0 ASC NULLS LAST]
+
+# The logical plan keeps the Sort, but the file is sorted by b,
+# so the physical plan has no SortExec
 query TT
 EXPLAIN SELECT b FROM struct_before_sort_key ORDER BY b;
 ----
@@ -999,6 +1011,27 @@ SELECT b FROM struct_sort_key ORDER BY b;
 4
 5
 6
+
+# No sort order is recorded, so both physical plans keep the SortExec
+query TT
+EXPLAIN SELECT a FROM struct_sort_key ORDER BY a;
+----
+logical_plan
+01)Sort: struct_sort_key.a ASC NULLS LAST
+02)--TableScan: struct_sort_key projection=[a]
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/struct_sort_key/sorted.parquet]]}, projection=[a], file_type=parquet, sort_order_for_reorder=[a@0 ASC NULLS LAST]
+
+query TT
+EXPLAIN SELECT b FROM struct_sort_key ORDER BY b;
+----
+logical_plan
+01)Sort: struct_sort_key.b ASC NULLS LAST
+02)--TableScan: struct_sort_key projection=[b]
+physical_plan
+01)SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/struct_sort_key/sorted.parquet]]}, projection=[b], file_type=parquet, sort_order_for_reorder=[b@0 ASC NULLS LAST]
 
 statement ok
 DROP TABLE struct_before_sort_key;
