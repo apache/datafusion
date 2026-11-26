@@ -40,11 +40,19 @@ pub(crate) fn build_inverted_predicate(
             .then_with(|| a.name().cmp(b.name()))
     });
 
-    for column in columns {
+    // A matched expression such as `s['a']` can be NULL when its root column
+    // is not nullable, so every matched expression gets its own `IS NULL`.
+    let mut null_operands: Vec<Arc<dyn PhysicalExpr>> = columns
+        .into_iter()
+        .map(|column| Arc::new(column) as Arc<dyn PhysicalExpr>)
+        .collect();
+    null_operands.extend(predicate.stats_key_exprs().iter().cloned());
+
+    for operand in null_operands {
         inverted_expr = Arc::new(BinaryExpr::new(
             inverted_expr,
             Operator::Or,
-            Arc::new(IsNullExpr::new(Arc::new(column))),
+            Arc::new(IsNullExpr::new(operand)),
         ));
     }
 
@@ -53,6 +61,7 @@ pub(crate) fn build_inverted_predicate(
     PruningPredicateBuilder::new()
         .with_file_schema(Arc::clone(predicate.schema()))
         .with_max_in_list_size(predicate.max_in_list_size())
+        .with_statistics_expr_matcher(predicate.statistics_expr_matcher().cloned())
         .try_build(inverted_expr)
         .ok()
 }

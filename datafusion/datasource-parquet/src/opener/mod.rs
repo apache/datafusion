@@ -21,6 +21,7 @@ use crate::push_decoder::{
     RowFilterContext, RowGroupPruner, RowGroupReverser,
 };
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
+use crate::statistics_resolver::{FileStatisticsResolvers, ParquetStatisticsResolvers};
 use crate::{
     Int96Coercer, ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     ParquetRowSelection, ParquetVirtualColumn, RowGroupAccess,
@@ -300,6 +301,8 @@ pub(super) struct ParquetMorselizer {
     /// Whether to also reverse the rows of each row group, making a reversed
     /// scan exactly ordered. Buffers one decoded row group at a time.
     pub reverse_rows: bool,
+    /// Statistics for expressions such as struct field accesses.
+    pub statistics_resolvers: ParquetStatisticsResolvers,
     /// Pool charged for the row group a `reverse_rows` scan buffers.
     pub memory_pool: Option<Arc<dyn MemoryPool>>,
     /// Optional sort order used to reorder row groups by their min/max statistics.
@@ -493,6 +496,7 @@ struct PreparedParquetOpen {
     row_group_range_assignment: RowGroupRangeAssignment,
     reverse_row_groups: bool,
     reverse_rows: bool,
+    statistics_resolvers: ParquetStatisticsResolvers,
     memory_pool: Option<Arc<dyn MemoryPool>>,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
@@ -517,6 +521,9 @@ struct FiltersPreparedParquetOpen {
     loaded: MetadataLoadedParquetOpen,
     pruning_predicate: Option<Arc<PruningPredicate>>,
     page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
+    /// The scan's statistics resolvers bound to this file. Every pruning
+    /// predicate of the file uses them as its matcher.
+    file_statistics_resolvers: Arc<FileStatisticsResolvers>,
 }
 
 /// State of [`ParquetOpenState`]
@@ -1002,6 +1009,7 @@ impl ParquetMorselizer {
             row_group_range_assignment: self.row_group_range_assignment,
             reverse_row_groups: self.reverse_row_groups,
             reverse_rows: self.reverse_rows,
+            statistics_resolvers: self.statistics_resolvers.clone(),
             memory_pool: self.memory_pool.clone(),
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
@@ -1226,11 +1234,20 @@ impl MetadataLoadedParquetOpen {
         }
 
         // Build predicates for this specific file
+        let file_statistics_resolvers = Arc::new(FileStatisticsResolvers::new(
+            prepared.statistics_resolvers.clone(),
+            Arc::clone(&physical_file_schema),
+            reader_metadata
+                .metadata()
+                .file_metadata()
+                .schema_descr_ptr(),
+        ));
         let pruning_predicate = build_pruning_predicates(
             prepared.predicate.as_ref(),
             &physical_file_schema,
             &prepared.predicate_creation_errors,
             prepared.max_in_list_size,
+            Some(&file_statistics_resolvers),
         );
 
         // Only build page pruning predicate if page index is enabled
@@ -1255,6 +1272,7 @@ impl MetadataLoadedParquetOpen {
             },
             pruning_predicate,
             page_pruning_predicate,
+            file_statistics_resolvers,
         })
     }
 }
@@ -1274,6 +1292,8 @@ impl FiltersPreparedParquetOpen {
             &prepared.extensions,
             rg_metadata,
         )?);
+        row_groups = row_groups
+            .with_statistics_resolvers(Arc::clone(&self.file_statistics_resolvers));
 
         // If there is a range restricting what parts of the file to read
         if let Some(range) = prepared.file_range.as_ref() {
@@ -1616,6 +1636,7 @@ impl RowGroupsPrunedParquetOpen {
             loaded,
             pruning_predicate: _,
             page_pruning_predicate,
+            file_statistics_resolvers,
         } = prepared;
         let MetadataLoadedParquetOpen {
             prepared,
@@ -1890,14 +1911,15 @@ impl RowGroupsPrunedParquetOpen {
                         DynamicFilterTracking::Watching(_)
                     ) =>
                 {
-                    Some(RowGroupPruner::new(
+                    let pruner = RowGroupPruner::new(
                         Arc::clone(predicate),
                         Arc::clone(&prepared.physical_file_schema),
                         Arc::clone(reader_metadata.metadata()),
                         prepared.predicate_creation_errors.clone(),
                         prepared.file_metrics.predicate_evaluation_errors.clone(),
                         prepared.max_in_list_size,
-                    ))
+                    );
+                    Some(pruner.with_statistics_resolvers(file_statistics_resolvers))
                 }
                 _ => None,
             };
@@ -2115,13 +2137,15 @@ pub(crate) fn build_pruning_predicates(
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
     max_in_list_size: usize,
+    statistics_resolvers: Option<&Arc<FileStatisticsResolvers>>,
 ) -> Option<Arc<PruningPredicate>> {
     let predicate = predicate.as_ref()?;
-    PruningPredicateBuilder::new()
+    let builder = PruningPredicateBuilder::new()
         .with_file_schema(Arc::clone(file_schema))
         .with_error_counter(predicate_creation_errors)
         .with_max_in_list_size(max_in_list_size)
-        .build(Arc::clone(predicate))
+        .with_statistics_expr_matcher(statistics_resolvers.cloned().map(|r| r as _));
+    builder.build(Arc::clone(predicate))
 }
 
 /// Returns a `ArrowReaderMetadata` with the page index loaded, loading
@@ -2430,6 +2454,14 @@ mod test {
         let options = ArrowReaderOptions::new();
         let reader_metadata =
             ArrowReaderMetadata::try_new(Arc::new(metadata), options.clone()).unwrap();
+        let file_statistics_resolvers = Arc::new(FileStatisticsResolvers::new(
+            Default::default(),
+            arrow_schema,
+            reader_metadata
+                .metadata()
+                .file_metadata()
+                .schema_descr_ptr(),
+        ));
         let mut open = RowGroupsPrunedParquetOpen {
             prepared: FiltersPreparedParquetOpen {
                 loaded: MetadataLoadedParquetOpen {
@@ -2439,6 +2471,7 @@ mod test {
                 },
                 pruning_predicate: None,
                 page_pruning_predicate,
+                file_statistics_resolvers,
             },
             row_groups: RowGroupAccessPlanFilter::new(plan),
             decoder_read_plans: None,
@@ -2700,6 +2733,7 @@ mod test {
                 row_group_range_assignment: self.row_group_range_assignment,
                 reverse_row_groups: self.reverse_row_groups,
                 reverse_rows: self.reverse_rows,
+                statistics_resolvers: Default::default(),
                 memory_pool: self.memory_pool.clone(),
                 sort_order_for_reorder: None,
                 virtual_state,

@@ -9,12 +9,16 @@ use super::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccess};
 use crate::bloom_filter::BloomFilterStatistics;
 use crate::metadata::{has_untrusted_byte_array_stats, has_untrusted_min_max_order};
 use crate::pruning::build_inverted_predicate;
+use crate::statistics_resolver::{
+    ExprStatisticsKind, FileStatisticsResolvers, ParquetLeafStatistics,
+};
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::compute::nullif;
-use arrow::datatypes::Schema;
+use arrow::datatypes::{Field, Schema};
 use datafusion_common::parquet_config::RowGroupRangeAssignment;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::pruning::PruningStatistics;
 use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
@@ -32,6 +36,9 @@ use parquet::schema::types::SchemaDescriptor;
 pub struct RowGroupAccessPlanFilter {
     /// which row groups should be accessed
     access_plan: ParquetAccessPlan,
+    /// Statistics for expressions such as struct field accesses. They must be
+    /// the matcher of the pruning predicates.
+    statistics_resolvers: Option<Arc<FileStatisticsResolvers>>,
 }
 
 /// Returns true if `assignment` assigns this row group to `range`.
@@ -65,9 +72,26 @@ pub(crate) fn row_group_in_range(
 
 impl RowGroupAccessPlanFilter {
     /// Create a new `RowGroupPlanBuilder` for pruning out the groups to scan
-    /// based on metadata and statistics
+    /// based on metadata and statistics.
+    ///
+    /// The filter has no statistics resolvers, so only column statistics
+    /// prune row groups.
     pub fn new(access_plan: ParquetAccessPlan) -> Self {
-        Self { access_plan }
+        Self {
+            access_plan,
+            statistics_resolvers: None,
+        }
+    }
+
+    /// Use `statistics_resolvers` for the statistics of expressions such as
+    /// struct field accesses. The pruning predicates must use the same
+    /// `statistics_resolvers` as their matcher.
+    pub(crate) fn with_statistics_resolvers(
+        mut self,
+        statistics_resolvers: Arc<FileStatisticsResolvers>,
+    ) -> Self {
+        self.statistics_resolvers = Some(statistics_resolvers);
+        self
     }
 
     /// Skip every remaining row group: used when the predicate has been
@@ -350,11 +374,13 @@ impl RowGroupAccessPlanFilter {
             .map(|&i| &groups[i])
             .collect::<Vec<_>>();
 
+        let statistics_resolvers = self.statistics_resolvers.clone();
         let pruning_stats = RowGroupPruningStatistics {
             parquet_schema,
             column_orders,
             row_group_metadatas,
             arrow_schema,
+            statistics_resolvers: statistics_resolvers.as_deref(),
         };
 
         // try to prune the row groups in a single call
@@ -423,6 +449,7 @@ impl RowGroupAccessPlanFilter {
                 .map(|&i| &groups[i])
                 .collect::<Vec<_>>(),
             arrow_schema,
+            statistics_resolvers: pruning_stats.statistics_resolvers,
         };
 
         let Ok(inverted_values) = inverted_predicate.prune(&inverted_pruning_stats)
@@ -544,6 +571,8 @@ pub(crate) struct RowGroupPruningStatistics<'a> {
     pub(crate) column_orders: Option<&'a [ColumnOrder]>,
     pub(crate) row_group_metadatas: Vec<&'a RowGroupMetaData>,
     pub(crate) arrow_schema: &'a Schema,
+    /// `None` means no expression has statistics.
+    pub(crate) statistics_resolvers: Option<&'a FileStatisticsResolvers>,
 }
 
 impl<'a> RowGroupPruningStatistics<'a> {
@@ -598,7 +627,61 @@ impl<'a> RowGroupPruningStatistics<'a> {
     }
 }
 
+impl ParquetLeafStatistics for RowGroupPruningStatistics<'_> {
+    fn leaf_mins(&self, leaf: usize, field: &Field) -> Option<ArrayRef> {
+        if has_untrusted_min_max_order(self.parquet_schema, self.column_orders, leaf) {
+            return None;
+        }
+        let converter =
+            StatisticsConverter::from_column_index(leaf, field, self.parquet_schema)
+                .ok()?;
+        let values = converter.row_group_mins(self.metadata_iter()).ok()?;
+        self.mask_untrusted_byte_array_stats(Some(leaf), values)
+    }
+
+    fn leaf_maxes(&self, leaf: usize, field: &Field) -> Option<ArrayRef> {
+        if has_untrusted_min_max_order(self.parquet_schema, self.column_orders, leaf) {
+            return None;
+        }
+        let converter =
+            StatisticsConverter::from_column_index(leaf, field, self.parquet_schema)
+                .ok()?;
+        let values = converter.row_group_maxes(self.metadata_iter()).ok()?;
+        self.mask_untrusted_byte_array_stats(Some(leaf), values)
+    }
+
+    fn leaf_null_counts(&self, leaf: usize, field: &Field) -> Option<ArrayRef> {
+        let counts =
+            StatisticsConverter::from_column_index(leaf, field, self.parquet_schema)
+                .ok()?
+                // Missing counts cannot rule out nulls.
+                .with_missing_null_counts_as_zero(false)
+                .row_group_null_counts(self.metadata_iter())
+                .ok()?;
+        Some(Arc::new(counts))
+    }
+
+    fn row_counts(&self) -> Option<ArrayRef> {
+        PruningStatistics::row_counts(self)
+    }
+}
+
 impl PruningStatistics for RowGroupPruningStatistics<'_> {
+    fn min_values_for_expr(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+        self.statistics_resolvers?
+            .statistics(expr, ExprStatisticsKind::Min, self)
+    }
+
+    fn max_values_for_expr(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+        self.statistics_resolvers?
+            .statistics(expr, ExprStatisticsKind::Max, self)
+    }
+
+    fn null_counts_for_expr(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+        self.statistics_resolvers?
+            .statistics(expr, ExprStatisticsKind::NullCount, self)
+    }
+
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let converter = self.min_max_statistics_converter(column)?;
         let values = converter.row_group_mins(self.metadata_iter()).ok()?;

@@ -22,6 +22,7 @@
 //! The opener constructs both halves and hands the state off to
 //! [`PushDecoderStreamState::into_stream`] for consumption.
 
+use crate::statistics_resolver::FileStatisticsResolvers;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -169,6 +170,8 @@ pub(crate) struct RowGroupPruner {
     /// container-level pruning. Sourced from
     /// `datafusion.execution.parquet.max_in_list_size`.
     max_in_list_size: usize,
+    /// Statistics for expressions such as struct field accesses.
+    statistics_resolvers: Option<Arc<FileStatisticsResolvers>>,
 }
 
 impl RowGroupPruner {
@@ -191,7 +194,18 @@ impl RowGroupPruner {
             predicate_creation_errors,
             predicate_evaluation_errors,
             max_in_list_size,
+            statistics_resolvers: None,
         }
+    }
+
+    /// Use `statistics_resolvers` for the statistics of expressions such as
+    /// struct field accesses, as the scan's row group pruning does.
+    pub(crate) fn with_statistics_resolvers(
+        mut self,
+        statistics_resolvers: Arc<FileStatisticsResolvers>,
+    ) -> Self {
+        self.statistics_resolvers = Some(statistics_resolvers);
+        self
     }
 
     /// Returns `true` when the statistics for `row_group_indices` prove that
@@ -215,11 +229,14 @@ impl RowGroupPruner {
             .watcher()
             .is_some_and(|tracker| tracker.changed());
         if self.needs_initial_build || dynamic_changed {
-            self.pruning_predicate = PruningPredicateBuilder::new()
+            let builder = PruningPredicateBuilder::new()
                 .with_file_schema(Arc::clone(&self.arrow_schema))
                 .with_error_counter(&self.predicate_creation_errors)
                 .with_max_in_list_size(self.max_in_list_size)
-                .build(Arc::clone(&self.predicate));
+                .with_statistics_expr_matcher(
+                    self.statistics_resolvers.clone().map(|r| r as _),
+                );
+            self.pruning_predicate = builder.build(Arc::clone(&self.predicate));
             self.needs_initial_build = false;
         }
 
@@ -240,6 +257,7 @@ impl RowGroupPruner {
                 .map(Vec::as_slice),
             row_group_metadatas,
             arrow_schema: self.arrow_schema.as_ref(),
+            statistics_resolvers: self.statistics_resolvers.as_deref(),
         };
 
         match pp.prune(&stats) {
