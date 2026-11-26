@@ -77,6 +77,21 @@ use crate::{OptimizerConfig, OptimizerRule};
 /// in user queries.
 const EXTRACTED_EXPR_PREFIX: &str = "__datafusion_extracted";
 
+/// Recognizes canonical positive decimal IDs (`1..usize::MAX` without leading
+/// zeros) for seeding [`AliasGenerator`] in [`advance_generator_past_existing`].
+fn extracted_expr_id(name: &str) -> Option<usize> {
+    let suffix = name
+        .strip_prefix(EXTRACTED_EXPR_PREFIX)?
+        .strip_prefix('_')?;
+    // Integer parsing alone also accepts leading zeros and a leading '+'.
+    if suffix.starts_with('0') || !suffix.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let id = suffix.parse::<usize>().ok()?;
+    // update_min_id adds one, so the maximum value has no usable successor.
+    (id < usize::MAX).then_some(id)
+}
+
 /// Returns `true` if any sub-expression in `exprs` has
 /// [`ExpressionPlacement::MoveTowardsLeafNodes`] placement.
 ///
@@ -235,11 +250,7 @@ fn advance_generator_past_existing(
         plan.apply_expressions(|expr| {
             expr.apply(|e| {
                 if let Expr::Alias(alias) = e
-                    && let Some(id) = alias
-                        .name
-                        .strip_prefix(EXTRACTED_EXPR_PREFIX)
-                        .and_then(|s| s.strip_prefix('_'))
-                        .and_then(|s| s.parse().ok())
+                    && let Some(id) = extracted_expr_id(&alias.name)
                 {
                     alias_generator.update_min_id(id);
                 }
@@ -3775,6 +3786,49 @@ mod tests {
                       Projection: right.id, leaf_udf(right.user, Utf8("t")) AS __datafusion_extracted_2
                         TableScan: right projection=[id, user]
         "#);
+        Ok(())
+    }
+
+    #[test]
+    fn test_extracted_expr_id_boundaries() {
+        for id in [1, 42, usize::MAX - 1] {
+            let name = format!("{EXTRACTED_EXPR_PREFIX}_{id}");
+            assert_eq!(extracted_expr_id(&name), Some(id), "{name}");
+        }
+
+        assert_eq!(extracted_expr_id(EXTRACTED_EXPR_PREFIX), None);
+        let invalid_suffixes =
+            ["", "0", "01", "0001", "+1", "-1", "1x", " 1", "1 ", "１"]
+                .map(str::to_owned);
+        for suffix in invalid_suffixes
+            .into_iter()
+            .chain([usize::MAX.to_string(), format!("{}0", usize::MAX)])
+        {
+            let name = format!("{EXTRACTED_EXPR_PREFIX}_{suffix}");
+            assert_eq!(extracted_expr_id(&name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn test_advance_generator_ignores_invalid_extraction_ids() -> Result<()> {
+        let exprs = [
+            "0".to_owned(),
+            "01".to_owned(),
+            usize::MAX.to_string(),
+            format!("{}0", usize::MAX),
+        ]
+        .into_iter()
+        .map(|suffix| lit(1).alias(format!("{EXTRACTED_EXPR_PREFIX}_{suffix}")))
+        .collect::<Vec<_>>();
+        let plan = LogicalPlanBuilder::from(test_table_scan_with_struct()?)
+            .project(exprs)?
+            .build()?;
+        let alias_generator = AliasGenerator::new();
+        advance_generator_past_existing(&plan, &alias_generator)?;
+        assert_eq!(
+            alias_generator.next(EXTRACTED_EXPR_PREFIX),
+            "__datafusion_extracted_1"
+        );
         Ok(())
     }
 
