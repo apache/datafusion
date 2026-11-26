@@ -1,0 +1,12 @@
+name Q29
+group hj
+
+init sql_benchmarks/hj/init/set_config_no_stats.sql
+
+load sql_benchmarks/hj/init/q29.sql
+
+expect_plan HashJoinExec
+
+run sql_benchmarks/hj/queries/q29.sql
+
+result sql_benchmarks/hj/results/q29.csv

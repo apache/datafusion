@@ -18,6 +18,8 @@ use futures::StreamExt;
 /// It uses simple equality predicates to ensure a hash join is selected.
 /// Where we vary selectivity, we do so with additional cheap predicates that
 /// do not change the join key (so the physical operator remains HashJoin).
+///
+/// Join reordering is disabled, so joins preserve SQL input order.
 #[derive(Debug, Args, Clone)]
 #[command(verbatim_doc_comment)]
 pub struct RunOpt {
@@ -40,6 +42,7 @@ pub struct RunOpt {
 
 struct HashJoinQuery {
     sql: &'static str,
+    setup_sql: Option<&'static str>,
     density: f64,
     prob_hit: f64,
     build_size: &'static str,
@@ -53,6 +56,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
     // Build Side: nation (25 rows) | Probe Side: customer (1.5M rows)
     HashJoinQuery {
         sql: r###"SELECT n_nationkey FROM nation JOIN customer ON c_nationkey = n_nationkey"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 1.0,
         build_size: "25",
@@ -70,6 +74,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
     JOIN (
       SELECT n_nationkey * 40 as k FROM nation
     ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 0.026,
         prob_hit: 1.0,
         build_size: "25",
@@ -79,6 +84,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
     // Q3: 100% Density, 100% Hit rate
     HashJoinQuery {
         sql: r###"SELECT s_suppkey FROM supplier JOIN lineitem ON s_suppkey = l_suppkey"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 1.0,
         build_size: "100K",
@@ -95,6 +101,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         JOIN (
           SELECT s_suppkey as k FROM supplier
         ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 0.1,
         build_size: "100K",
@@ -111,6 +118,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         JOIN (
           SELECT s_suppkey * 4 / 3 as k FROM supplier
         ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 0.75,
         prob_hit: 1.0,
         build_size: "100K",
@@ -131,6 +139,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         JOIN (
           SELECT s_suppkey * 4 / 3 as k FROM supplier
         ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 0.75,
         prob_hit: 0.1,
         build_size: "100K",
@@ -147,6 +156,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         JOIN (
           SELECT s_suppkey * 2 as k FROM supplier
         ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 0.5,
         prob_hit: 1.0,
         build_size: "100K",
@@ -167,6 +177,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         JOIN (
           SELECT s_suppkey * 2 as k FROM supplier
         ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 0.5,
         prob_hit: 0.1,
         build_size: "100K",
@@ -183,6 +194,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         JOIN (
           SELECT s_suppkey * 5 as k FROM supplier
         ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 0.2,
         prob_hit: 1.0,
         build_size: "100K",
@@ -203,6 +215,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         JOIN (
           SELECT s_suppkey * 5 as k FROM supplier
         ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 0.2,
         prob_hit: 0.1,
         build_size: "100K",
@@ -219,6 +232,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         JOIN (
           SELECT s_suppkey * 10 as k FROM supplier
         ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 0.1,
         prob_hit: 1.0,
         build_size: "100K",
@@ -239,6 +253,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         JOIN (
           SELECT s_suppkey * 10 as k FROM supplier
         ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 0.1,
         prob_hit: 0.1,
         build_size: "100K",
@@ -255,6 +270,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         JOIN (
           SELECT s_suppkey * 100 as k FROM supplier
         ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 0.01,
         prob_hit: 1.0,
         build_size: "100K",
@@ -275,6 +291,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
             JOIN (
               SELECT s_suppkey * 100 as k FROM supplier
             ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 0.01,
         prob_hit: 0.1,
         build_size: "100K",
@@ -298,6 +315,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
                  END as k 
           FROM supplier
         ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 0.2,
         prob_hit: 0.1,
         build_size: "100K_(20%_dups)",
@@ -324,6 +342,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         FROM (SELECT CAST(n_nationkey AS INT) as k FROM nation) n
         RIGHT SEMI JOIN (SELECT CAST(c_nationkey AS INT) as k FROM customer) c
         ON n.k = c.k"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 1.0,
         build_size: "25",
@@ -337,6 +356,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s
         RIGHT SEMI JOIN (SELECT CAST(l_suppkey AS INT) as k FROM lineitem) l
         ON s.k = l.k"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 1.0,
         build_size: "100K",
@@ -353,6 +373,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
           FROM lineitem
         ) l
         ON s.k = l.k"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 0.1,
         build_size: "100K",
@@ -379,6 +400,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         FROM (SELECT CAST(n_nationkey AS INT) as k FROM nation) n
         RIGHT ANTI JOIN (SELECT CAST(c_nationkey AS INT) as k FROM customer) c
         ON n.k = c.k"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 1.0,
         build_size: "25",
@@ -392,6 +414,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         FROM (SELECT CAST(s_suppkey AS INT) as k FROM supplier) s
         RIGHT ANTI JOIN (SELECT CAST(l_suppkey AS INT) as k FROM lineitem) l
         ON s.k = l.k"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 1.0,
         build_size: "100K",
@@ -408,6 +431,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
           FROM lineitem
         ) l
         ON s.k = l.k"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 0.1,
         build_size: "100K",
@@ -430,6 +454,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
           FROM lineitem
         ) l
         ON s.k = l.k"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 0.01,
         build_size: "100K_(fanout_100)",
@@ -453,6 +478,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
           FROM lineitem
           WHERE l_orderkey % 265 = 0
         ) l ON s.k = l.k"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 1.0,
         build_size: "32K_(fanout~78)",
@@ -475,6 +501,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
           FROM lineitem
           WHERE l_orderkey % 3000 = 0
         ) l ON s.k = l.k"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 1.0,
         build_size: "3K_(single_hot_bucket)",
@@ -499,6 +526,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
           FROM lineitem
           WHERE l_orderkey % 250 = 0
         ) l ON s.k1 = l.k1 AND s.k2 = l.k2"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 1.0,
         build_size: "20K_(fanout~78_multi_key)",
@@ -513,6 +541,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         sql: r###"SELECT count(*)
         FROM (SELECT o_custkey as k FROM orders WHERE o_custkey <= 40000) b
         JOIN (SELECT o_custkey as k FROM orders) p ON b.k = p.k"###,
+        setup_sql: None,
         density: 1.0,
         prob_hit: 0.027,
         build_size: "270K_dense_keys",
@@ -525,6 +554,7 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         sql: r###"SELECT count(*)
         FROM (SELECT o_custkey as k FROM orders WHERE o_custkey % 37 = 0) b
         JOIN (SELECT o_custkey as k FROM orders) p ON b.k = p.k"###,
+        setup_sql: None,
         density: 0.027,
         prob_hit: 0.027,
         build_size: "270K_sparse_keys",
@@ -547,10 +577,23 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
           SELECT CASE WHEN s_suppkey <= 100 THEN 0 ELSE s_suppkey * 80 + 2 END as k
           FROM supplier
         ) s ON l.k = s.k"###,
+        setup_sql: None,
         density: 0.01,
         prob_hit: 0.2,
         build_size: "6M_(1.5M_one_key)",
         probe_size: "100K_count",
+        isolate_partitioned_join: true,
+    },
+    // Q29: expensive build, cheap probe.
+    // Build: 3M rows, 30K distinct keys (100 rows per key), 128-bytes string keys
+    // Probe: 10K rows, 1% hit rate
+    HashJoinQuery {
+        sql: include_str!("../sql_benchmarks/hj/queries/q29.sql"),
+        setup_sql: Some(include_str!("../sql_benchmarks/hj/init/q29.sql")),
+        density: 0.5,
+        prob_hit: 0.01,
+        build_size: "3M_(fanout_100_long_keys)",
+        probe_size: "10K_long_keys_count",
         isolate_partitioned_join: true,
     },
 ];
@@ -604,6 +647,10 @@ impl RunOpt {
         for query_id in query_range {
             let query_index = query_id - 1;
             let query = &HASH_QUERIES[query_index];
+
+            if let Some(setup_sql) = query.setup_sql {
+                ctx.sql(setup_sql).await?.collect().await?;
+            }
 
             let case_name = format!(
                 "Query {}_density={}_prob_hit={}_{}*{}",
