@@ -669,17 +669,11 @@ impl FinalHashAggregateStream {
 
     fn spill_table(
         hash_table: &mut AggregateHashTable<FinalMarker>,
-        spill_context: Option<&mut Box<AggregateSpill>>,
+        spill_context: &mut AggregateSpill,
         reservation: &MemoryReservation,
-        err: DataFusionError,
     ) -> Result<()> {
-        let Some(spill_context) = spill_context else {
-            return Err(err.context(
-                "Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager",
-            ));
-        };
         if hash_table.building_group_count() == 0 {
-            return Err(err);
+            return Ok(());
         }
         let result = hash_table
             .take_state_batch()
@@ -716,16 +710,19 @@ impl FinalHashAggregateStream {
             match admission {
                 Ok(()) => {}
                 Err(e @ DataFusionError::ResourcesExhausted(_)) => {
-                    // Spill the current table to make room for this batch, then
-                    // retry admission. An individual batch that still cannot fit
-                    // must fail rather than proceed without a reservation.
-                    Self::spill_table(
-                        hash_table,
-                        spill_context.as_mut(),
-                        &self.reservation,
-                        e,
-                    )?;
-                    self.reservation.try_grow(batch_memory)?;
+                    let Some(spill_ctx) = spill_context.as_mut() else {
+                        return Err(e.context(
+                            "Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager",
+                        ));
+                    };
+                    Self::spill_table(hash_table, spill_ctx.as_mut(), &self.reservation)?;
+                    if self.reservation.try_grow(batch_memory).is_err() {
+                        // The batch itself cannot fit into the pool even with an empty table.
+                        // Spill the incoming state batch directly so execution can proceed via
+                        // spill replay.
+                        spill_ctx.sort_and_spill(Some(batch))?;
+                        continue;
+                    }
                 }
                 Err(e) => return Err(e),
             }
@@ -756,12 +753,12 @@ impl FinalHashAggregateStream {
                 // The table cannot reserve enough memory.
                 // Move all current states into one fully group-key-sorted spill run.
                 Err(e @ DataFusionError::ResourcesExhausted(_)) => {
-                    Self::spill_table(
-                        hash_table,
-                        spill_context.as_mut(),
-                        &self.reservation,
-                        e,
-                    )?;
+                    let Some(spill_ctx) = spill_context.as_mut() else {
+                        return Err(e.context(
+                            "Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager",
+                        ));
+                    };
+                    Self::spill_table(hash_table, spill_ctx.as_mut(), &self.reservation)?;
                 }
                 Err(e) => return Err(e),
             }
@@ -1920,6 +1917,12 @@ mod tests {
             .set_bool("datafusion.execution.enable_migration_aggregate", true);
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::new(GreedyMemoryPool::new(64 * 1024)))
+            .with_disk_manager_builder(
+                datafusion_execution::disk_manager::DiskManagerBuilder::default()
+                    .with_mode(
+                        datafusion_execution::disk_manager::DiskManagerMode::Disabled,
+                    ),
+            )
             .build_arc()?;
         let context = Arc::new(
             TaskContext::default()
@@ -2029,6 +2032,75 @@ mod tests {
                 arrow::compute::sum(b.column(1).as_primitive::<Int64Type>()).unwrap_or(0);
         }
         assert_eq!(total, 4064);
+        Ok(())
+    }
+
+    /// When an incoming state batch itself exceeds the memory pool, it is spilled
+    /// directly to disk and processed via spill replay.
+    #[tokio::test]
+    async fn final_hash_spills_when_state_batch_exceeds_pool() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Utf8, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".into())]);
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("sum")
+                .build()?,
+        );
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let state = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            vec![Arc::clone(&aggregate)],
+            vec![None],
+            empty,
+            Arc::clone(&schema),
+        )?
+        .schema();
+        // 64 rows of 32 KB string keys (2 MB).
+        let large_str = "x".repeat(32 * 1024);
+        let keys: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..64).map(|i| format!("k_{i:02}_{large_str}")),
+        ));
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1_i64; 64]));
+        let large_batch = RecordBatch::try_new(Arc::clone(&state), vec![keys, values])?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![large_batch]], Arc::clone(&state), None)?;
+        let plan = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by.as_final(),
+            vec![aggregate],
+            vec![None],
+            input,
+            Arc::clone(&state),
+        )?);
+        // Pool is 1500 KB, smaller than the 2 MB incoming batch.
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(1500 * 1024)))
+            .build_arc()?;
+        let context =
+            Arc::new(
+                TaskContext::default()
+                    .with_session_config(SessionConfig::new().set_bool(
+                        "datafusion.execution.enable_migration_aggregate",
+                        true,
+                    ))
+                    .with_runtime(runtime),
+            );
+        let output = collect(plan.execute(0, context)?).await?;
+        assert!(plan.metrics().unwrap().spill_count().unwrap() > 0);
+        let rows: usize = output.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 64);
+        let mut total = 0;
+        for b in &output {
+            total +=
+                arrow::compute::sum(b.column(1).as_primitive::<Int64Type>()).unwrap_or(0);
+        }
+        assert_eq!(total, 64);
         Ok(())
     }
 
