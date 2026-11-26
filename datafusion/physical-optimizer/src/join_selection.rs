@@ -21,9 +21,12 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{JoinSide, JoinType, internal_err, plan_err};
 use datafusion_expr_common::sort_properties::SortProperties;
-use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_expr::{Distribution, LexOrdering};
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::execution_plan::{
+    EmissionType, replace_children_if_necessary,
+};
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
@@ -344,35 +347,77 @@ fn statistical_join_selection_subrule(
     };
 
     Ok(match transformed {
-        Some(transformed) if !breaks_satisfied_requirements(&plan, &transformed) => {
-            Transformed::yes(transformed)
-        }
-        _ => Transformed::no(plan),
+        Some(transformed) => match keep_satisfied_requirements(&plan, transformed)? {
+            Some(transformed) => Transformed::yes(transformed),
+            None => Transformed::no(plan),
+        },
+        None => Transformed::no(plan),
     })
 }
 
-/// Whether `new`, which replaces the join `old` over the same inputs, breaks an
-/// order or distribution requirement that `old`'s inputs satisfy, such as the
-/// single partition that a build side needs. Once `EnsureRequirements` has run,
-/// nothing restores such a requirement, so the join is kept as it is.
+/// Makes `new`, which replaces the join `old` over the same inputs, keep the
+/// order and distribution requirements that `old`'s inputs satisfy, because
+/// nothing restores them once `EnsureRequirements` has run.
 ///
-/// A hash join in [`PartitionMode::Auto`] has no requirement to break:
-/// `EnsureRequirements` resolves every `Auto` join, and satisfies the
-/// requirements of the mode chosen for it.
-fn breaks_satisfied_requirements(
+/// A swap can make an input with several partitions the build side, which
+/// needs one partition, so that input gets a [`CoalescePartitionsExec`]. When
+/// `EnsureRequirements` runs later, it replaces this merge with the ones the
+/// plan needs. Returns `None`, so that the join is kept as it is, when the
+/// rewrite breaks any other requirement that held.
+///
+/// A hash join in [`PartitionMode::Auto`] has no requirement yet:
+/// `EnsureRequirements` resolves it and satisfies the requirements of the mode
+/// chosen for it.
+fn keep_satisfied_requirements(
     old: &Arc<dyn ExecutionPlan>,
-    new: &Arc<dyn ExecutionPlan>,
-) -> bool {
+    new: Arc<dyn ExecutionPlan>,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     let mode_undecided = old
         .downcast_ref::<HashJoinExec>()
         .is_some_and(|join| join.partition_mode() == &PartitionMode::Auto);
     if mode_undecided || check_input_requirements(old).is_err() {
-        return false;
+        return Ok(Some(new));
     }
     let inputs = old.children();
+    let is_input = |node: &Arc<dyn ExecutionPlan>| {
+        inputs.iter().any(|input| Arc::ptr_eq(input, node))
+    };
+    let merged = new
+        .transform_down(|node| {
+            if is_input(&node) {
+                return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump));
+            }
+            let requirements = node.input_distribution_requirements();
+            let mut merged_any = false;
+            let children = node
+                .children()
+                .into_iter()
+                .enumerate()
+                .map(|(idx, child)| {
+                    let needs_one_partition = matches!(
+                        requirements.child_distribution(idx),
+                        Some(Distribution::SinglePartition)
+                    );
+                    if needs_one_partition
+                        && child.output_partitioning().partition_count() > 1
+                    {
+                        merged_any = true;
+                        Arc::new(CoalescePartitionsExec::new(Arc::clone(child))) as _
+                    } else {
+                        Arc::clone(child)
+                    }
+                })
+                .collect();
+            Ok(if merged_any {
+                Transformed::yes(replace_children_if_necessary(node, children)?)
+            } else {
+                Transformed::no(node)
+            })
+        })?
+        .data;
     let mut broken = false;
-    let _ = new.apply(|node| {
-        if inputs.iter().any(|input| Arc::ptr_eq(input, node)) {
+    merged.apply(|node| {
+        if is_input(node) {
             return Ok(TreeNodeRecursion::Jump);
         }
         broken = check_input_requirements(node).is_err();
@@ -381,8 +426,8 @@ fn breaks_satisfied_requirements(
         } else {
             TreeNodeRecursion::Continue
         })
-    });
-    broken
+    })?;
+    Ok((!broken).then_some(merged))
 }
 
 /// Pipeline-fixing join selection subrule.

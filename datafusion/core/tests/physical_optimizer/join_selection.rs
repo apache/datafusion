@@ -9,7 +9,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use arrow::array::record_batch;
+use arrow::array::{ArrayRef, Int32Array, record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
@@ -2327,6 +2327,45 @@ async fn join_selection_after_enforcement_keeps_merged_build_side() -> Result<()
     | 4 | 10 |
     | 4 | 20 |
     +---+----+
+    ");
+    Ok(())
+}
+
+/// Before `EnsureRequirements` runs, the larger input of a cross join can have
+/// one partition only because it is one batch, and `JoinSelection` still moves it
+/// to the probe side so the smaller input is built.
+#[tokio::test]
+async fn join_selection_swaps_larger_single_partition_input() -> Result<()> {
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(2));
+    let big = RecordBatch::try_from_iter([(
+        "a",
+        Arc::new(Int32Array::from_iter_values(0..10_000)) as ArrayRef,
+    )])?;
+    let small = [
+        record_batch!(("b", Int32, [10]))?,
+        record_batch!(("b", Int32, [20]))?,
+    ];
+    ctx.register_table(
+        "big",
+        Arc::new(MemTable::try_new(big.schema(), vec![vec![big]])?),
+    )?;
+    let schema = small[0].schema();
+    let partitions = small.into_iter().map(|batch| vec![batch]).collect();
+    ctx.register_table("small", Arc::new(MemTable::try_new(schema, partitions)?))?;
+
+    let plan = ctx
+        .sql("SELECT a, b FROM big, small")
+        .await?
+        .create_physical_plan()
+        .await?;
+    assert_snapshot!(displayable(plan.as_ref()).indent(true), @r"
+    ProjectionExec: expr=[a@1 as a, b@0 as b]
+      CrossJoinExec
+        CoalescePartitionsExec
+          DataSourceExec: partitions=2, partition_sizes=[1, 1]
+        RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+          DataSourceExec: partitions=1, partition_sizes=[1]
     ");
     Ok(())
 }
