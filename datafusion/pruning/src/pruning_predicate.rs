@@ -369,6 +369,9 @@ pub struct PruningPredicate {
     ///
     /// See [`PruningPredicate::literal_guarantees`] for more details.
     literal_guarantees: Vec<LiteralGuarantee>,
+    /// Like `literal_guarantees`, for expressions with their own statistics
+    /// (see [`StatisticsExprMatcher`]).
+    expr_literal_guarantees: Vec<ExprLiteralGuarantee>,
     /// Maximum IN-list size used to build this predicate.
     max_in_list_size: usize,
     /// Whether its logical inverse can safely prove every row matches.
@@ -569,7 +572,8 @@ impl<'a> PruningPredicateBuilder<'a> {
         // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
         let predicate_expr =
             PhysicalExprSimplifier::new(&predicate_schema).simplify(predicate_expr)?;
-        let literal_guarantees = LiteralGuarantee::analyze(&predicate);
+        let (literal_guarantees, expr_literal_guarantees) =
+            analyze_literal_guarantees(&predicate, &ctx);
         let stats_key_exprs = collect_stats_key_exprs(&predicate, &ctx);
 
         Ok(PruningPredicate {
@@ -578,6 +582,7 @@ impl<'a> PruningPredicateBuilder<'a> {
             required_columns,
             orig_expr: predicate,
             literal_guarantees,
+            expr_literal_guarantees,
             max_in_list_size: self.max_in_list_size,
             can_be_inverted_for_full_match: !properties.has_filter_semantics_only,
             statistics_expr_matcher: self.statistics_expr_matcher,
@@ -730,6 +735,25 @@ impl PruningPredicate {
             }
         }
 
+        for ExprLiteralGuarantee {
+            expr,
+            guarantee,
+            literals,
+        } in &self.expr_literal_guarantees
+        {
+            if let Some(results) = statistics.contained_for_expr(expr, literals) {
+                match guarantee {
+                    Guarantee::In => builder.combine_array(&results),
+                    Guarantee::NotIn => {
+                        builder.combine_array(&arrow::compute::not(&results)?)
+                    }
+                }
+                if builder.check_all_pruned() {
+                    return Ok(builder.build());
+                }
+            }
+        }
+
         // Next, try to prove the predicate can't be true for the containers based
         // on min/max values
 
@@ -768,6 +792,21 @@ impl PruningPredicate {
         &self.literal_guarantees
     }
 
+    /// Returns the distinct expressions with their own statistics (see
+    /// [`StatisticsExprMatcher`]) that have literal guarantees, such as
+    /// `get_field(s, 'a')` for `get_field(s, 'a') = 5`. Like
+    /// [`Self::literal_guarantees`], all of the guarantees must hold for the
+    /// expression to possibly be `true`. Use this list for example to load only the bloom filters a predicate can use.
+    pub fn literal_exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut exprs: Vec<Arc<dyn PhysicalExpr>> = vec![];
+        for guarantee in &self.expr_literal_guarantees {
+            if !exprs.contains(&guarantee.expr) {
+                exprs.push(Arc::clone(&guarantee.expr));
+            }
+        }
+        exprs
+    }
+
     /// Returns true if this pruning predicate can not prune anything.
     ///
     /// This happens if the predicate is a literal `true`  and
@@ -775,7 +814,9 @@ impl PruningPredicate {
     ///
     /// This can happen when a predicate is simplified to a constant `true`
     pub fn always_true(&self) -> bool {
-        is_always_true(&self.predicate_expr) && self.literal_guarantees.is_empty()
+        is_always_true(&self.predicate_expr)
+            && self.literal_guarantees.is_empty()
+            && self.expr_literal_guarantees.is_empty()
     }
 
     /// Returns the configured maximum IN-list size used to build this predicate.
@@ -822,6 +863,87 @@ impl PruningPredicate {
             .map(|s| s.to_string())
             .collect()
     }
+}
+
+/// A [`LiteralGuarantee`] on an expression with its own statistics, such as
+/// `get_field(s, 'a') IN (1, 2)`.
+#[derive(Debug, Clone)]
+struct ExprLiteralGuarantee {
+    /// The expression, for example `get_field(s, 'a')`
+    expr: Arc<dyn PhysicalExpr>,
+    /// Whether `expr` must, or must not, be one of `literals`
+    guarantee: Guarantee,
+    /// The literal values
+    literals: HashSet<ScalarValue>,
+}
+
+/// Prefix of the placeholder columns that stand in for statistics keys
+/// while [`LiteralGuarantee::analyze`] runs.
+const STATS_EXPR_PLACEHOLDER: &str = "__datafusion_pruning_stats_expr_";
+
+/// Returns the literal guarantees of `predicate` on columns and on matched
+/// expressions.
+///
+/// [`LiteralGuarantee::analyze`] only understands columns. Each distinct
+/// matched expression is replaced with a placeholder column of a reserved
+/// name, so that the analysis treats it as one column, and the placeholder
+/// guarantees are mapped back to their expressions.
+fn analyze_literal_guarantees(
+    predicate: &Arc<dyn PhysicalExpr>,
+    ctx: &PredicateBuildContext,
+) -> (Vec<LiteralGuarantee>, Vec<ExprLiteralGuarantee>) {
+    // A real column with a placeholder name would be mistaken for a key.
+    if ctx.statistics_expr_matcher.is_none()
+        || collect_columns(predicate)
+            .iter()
+            .any(|c| c.name().starts_with(STATS_EXPR_PLACEHOLDER))
+    {
+        return (LiteralGuarantee::analyze(predicate), vec![]);
+    }
+    let mut keys: Vec<Arc<dyn PhysicalExpr>> = vec![];
+    let replaced = Arc::clone(predicate)
+        .transform_down(|expr| {
+            let Some(StatsKey {
+                expr: Some(key), ..
+            }) = matched_stats_key(&expr, ctx)
+            else {
+                return Ok(Transformed::no(expr));
+            };
+            let idx = keys.iter().position(|k| k == &key).unwrap_or_else(|| {
+                keys.push(Arc::clone(&key));
+                keys.len() - 1
+            });
+            let placeholder =
+                phys_expr::Column::new(&format!("{STATS_EXPR_PLACEHOLDER}{idx}"), 0);
+            Ok(Transformed::new(
+                Arc::new(placeholder),
+                true,
+                TreeNodeRecursion::Jump,
+            ))
+        })
+        .data();
+    let Ok(replaced) = replaced else {
+        return (LiteralGuarantee::analyze(predicate), vec![]);
+    };
+    let mut column_guarantees = vec![];
+    let mut expr_guarantees = vec![];
+    for guarantee in LiteralGuarantee::analyze(&replaced) {
+        match guarantee
+            .column
+            .name
+            .strip_prefix(STATS_EXPR_PLACEHOLDER)
+            .and_then(|idx| idx.parse::<usize>().ok())
+            .and_then(|idx| keys.get(idx))
+        {
+            Some(key) => expr_guarantees.push(ExprLiteralGuarantee {
+                expr: Arc::clone(key),
+                guarantee: guarantee.guarantee,
+                literals: guarantee.literals,
+            }),
+            None => column_guarantees.push(guarantee),
+        }
+    }
+    (column_guarantees, expr_guarantees)
 }
 
 /// Returns the distinct expressions in `predicate` that are statistics keys,
@@ -7860,6 +7982,53 @@ mod tests {
             "get_field(s@0, a)_null_count@3 != row_count@2 AND \
              IN_SET_INTERSECTS(get_field(s@0, a)_min@0, get_field(s@0, a)_max@1, 21 values)"
         );
+    }
+
+    #[test]
+    fn matched_expression_literal_guarantees() {
+        use datafusion_functions::core::expr_fn::get_field;
+        let a = || get_field(col("s"), "a");
+        let b = || get_field(col("s"), "b");
+        let guarantees = |expr: &Expr| {
+            let predicate = build_with_matcher(expr, true);
+            // Placeholders never show up as column guarantees.
+            assert!(predicate.literal_guarantees().is_empty(), "{expr}");
+            predicate
+                .expr_literal_guarantees
+                .iter()
+                .map(|g| format!("{} {:?} {}", g.expr, g.guarantee, g.literals.len()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            guarantees(&a().eq(lit(1)).or(a().eq(lit(2)))),
+            ["get_field(s@0, a) In 2"]
+        );
+        assert_eq!(
+            guarantees(&a().not_eq(lit(1)).and(b().eq(lit(2)))),
+            ["get_field(s@0, a) NotIn 1", "get_field(s@0, b) In 1"]
+        );
+        // Two different keys in an OR guarantee nothing about either.
+        assert!(guarantees(&a().eq(lit(1)).or(b().eq(lit(2)))).is_empty());
+        // A cast key compares converted values, not the stored ones.
+        assert!(guarantees(&cast(a(), DataType::Int64).eq(lit(1i64))).is_empty());
+    }
+
+    #[test]
+    fn expr_literal_guarantee_alone_is_not_always_true() {
+        use datafusion_functions::core::expr_fn::get_field;
+        let schema = struct_schema();
+        let expr = get_field(col("s"), "a").in_list(vec![lit(1), lit(2)], false);
+        // A cap of zero disables the min/max rewrite of IN, so only the
+        // literal guarantee can prune.
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .with_max_in_list_size(0)
+            .with_statistics_expr_matcher(Some(Arc::new(GetFieldMatcher)))
+            .try_build(logical2physical(&expr, &schema))
+            .unwrap();
+        assert!(is_always_true(predicate.predicate_expr()));
+        assert!(!predicate.always_true());
+        assert_eq!(predicate.literal_exprs().len(), 1);
     }
 
     #[test]
