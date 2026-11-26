@@ -23,7 +23,6 @@ use arrow_select::dictionary::garbage_collect_any_dictionary;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
-use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::scalar::copy_array_data;
 use datafusion_common::utils::map_dictionary_values;
 use datafusion_common::utils::memory::estimate_memory_size;
@@ -250,8 +249,10 @@ impl AggregateUDFImpl for ArrayAgg {
 }
 
 fn list_item_field(field: &Field) -> FieldRef {
-    FieldMetadata::from(field)
-        .add_to_field(Field::new_list_field(field.data_type().clone(), true))
+    field
+        .clone()
+        .with_name(Field::LIST_FIELD_DEFAULT_NAME)
+        .with_nullable(true)
         .into()
 }
 
