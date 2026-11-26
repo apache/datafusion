@@ -9,8 +9,8 @@
 use std::collections::{HashMap, HashSet};
 
 use arrow::array::{ArrayRef, BooleanArray};
-use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, ScalarValue};
+use datafusion_physical_expr_common::pruning::PruningStatistics;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
 use parquet::data_type::Decimal;

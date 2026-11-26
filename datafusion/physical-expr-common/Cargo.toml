@@ -45,6 +45,7 @@ datafusion-proto-models = { workspace = true, optional = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
+log = { workspace = true }
 parking_lot = { workspace = true }
 pin-project = { workspace = true }
 regex = { workspace = true }

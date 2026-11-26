@@ -43,7 +43,6 @@ pub mod nested_struct;
 mod null_equality;
 pub mod parquet_config;
 pub mod parsers;
-pub mod pruning;
 pub mod rounding;
 pub mod scalar;
 pub mod spans;

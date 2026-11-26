@@ -10,7 +10,6 @@ use crate::{ListingOptions, ListingTableConfig};
 use arrow::datatypes::{Field, Metadata, Schema, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
-use datafusion_common::pruning::PrunableStatistics;
 use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{
     Constraints, DFSchema, SchemaExt, SplitPoint, Statistics, internal_datafusion_err,
@@ -38,6 +37,7 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::{create_lex_ordering, create_physical_partitioning};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion_physical_expr_common::pruning::PrunableStatistics;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;

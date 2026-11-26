@@ -8,10 +8,10 @@ use arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::error::DataFusionError;
-use crate::stats::Precision;
-use crate::{Column, Statistics};
-use crate::{ColumnStatistics, ScalarValue};
+use datafusion_common::error::DataFusionError;
+use datafusion_common::stats::Precision;
+use datafusion_common::{Column, Statistics};
+use datafusion_common::{ColumnStatistics, ScalarValue};
 
 /// A source of runtime statistical information to [`PruningPredicate`]s.
 ///
@@ -191,7 +191,7 @@ impl PartitionPruningStatistics {
     /// # use std::sync::Arc;
     /// # use datafusion_common::ScalarValue;
     /// # use arrow::datatypes::{DataType, Field};
-    /// # use datafusion_common::pruning::PartitionPruningStatistics;
+    /// # use datafusion_physical_expr_common::pruning::PartitionPruningStatistics;
     ///
     /// let partition_values = vec![
     ///     vec![ScalarValue::from(1i32), ScalarValue::from(2i32)],
@@ -525,7 +525,7 @@ impl PruningStatistics for CompositePruningStatistics {
 #[expect(deprecated)]
 #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
 mod tests {
-    use crate::{
+    use datafusion_common::{
         ColumnStatistics,
         cast::{as_int32_array, as_uint64_array},
     };

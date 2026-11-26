@@ -21,8 +21,8 @@ use arrow::{
     record_batch::{RecordBatch, RecordBatchOptions},
 };
 // pub use for backwards compatibility
-pub use datafusion_common::pruning::PruningStatistics;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
+pub use datafusion_physical_expr_common::pruning::PruningStatistics;
 use datafusion_physical_plan::metrics::Count;
 use log::{debug, trace};
 

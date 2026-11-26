@@ -22,6 +22,7 @@ pub mod binary_view_map;
 pub mod datum;
 pub mod metrics;
 pub mod physical_expr;
+pub mod pruning;
 pub mod regex;
 pub mod sort_expr;
 pub mod tree_node;

@@ -18,8 +18,8 @@ use arrow::{
     datatypes::{Schema, SchemaRef},
 };
 use datafusion_common::ScalarValue;
-use datafusion_common::pruning::PruningStatistics;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
+use datafusion_physical_expr_common::pruning::PruningStatistics;
 use datafusion_pruning::{MAX_IN_LIST_SIZE, PruningPredicate, PruningPredicateBuilder};
 
 use log::{debug, trace};
