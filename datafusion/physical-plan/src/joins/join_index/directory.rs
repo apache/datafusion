@@ -294,22 +294,21 @@ impl<T: RowId> JoinHashIndex<T> {
         reservation: &MemoryReservation,
         random_state: &RandomState,
     ) -> Result<Self> {
-        let mut groups = MatchedGroupsBuilder::new(keys[0].len(), reservation)?;
         let valid = matchable_join_keys(keys, null_equality);
-        let directory = if let Some(range) = dense_range {
+        if let Some(range) = dense_range {
             let key = match keys {
                 [key] if ArrayMap::is_supported_type(key.data_type()) => key,
                 _ => return internal_err!("Dense join index requires one integer key"),
             };
-            DenseIntegerDirectory::build(
-                key,
-                valid.as_ref(),
-                range,
-                reservation,
-                &mut groups,
-            )
-            .map(KeyDirectory::Dense)?
-        } else if let Some(hash_key) = (keys.len() == 1)
+            let (directory, groups) =
+                DenseIntegerDirectory::build(key, valid.as_ref(), range, reservation)?;
+            return Ok(Self {
+                directory: KeyDirectory::Dense(directory),
+                groups,
+            });
+        }
+        let mut groups = MatchedGroupsBuilder::new(keys[0].len(), reservation)?;
+        let directory = if let Some(hash_key) = (keys.len() == 1)
             .then(|| integer_hasher(keys[0].data_type()))
             .flatten()
         {

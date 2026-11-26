@@ -15,11 +15,25 @@ use num_traits::AsPrimitive;
 
 use super::super::keys::LookupScratch;
 use super::super::matches::{
-    JoinHashLookup, MatchHandle, MatchHandleArray, MatchedGroupsBuilder, RowId,
-    UniqueMatches, bitmap_bytes,
+    JoinHashLookup, MatchHandle, MatchHandleArray, MatchedGroups, RowId, UniqueMatches,
+    bitmap_bytes,
 };
 use super::Probe;
 use crate::joins::array_map::ArrayMap;
+
+// Plain loops let the build body inline and give NULL-free arrays a separate path.
+macro_rules! for_each_valid {
+    ($len:expr, $valid:expr, |$row:ident| $body:block) => {
+        match $valid {
+            Some(valid) => {
+                for $row in valid.valid_indices() $body
+            }
+            None => {
+                for $row in 0..$len $body
+            }
+        }
+    };
+}
 
 /// Direct lookup for a single integer join key in a compact range.
 ///
@@ -63,28 +77,26 @@ pub(super) struct DenseIntegerDirectory<T> {
 }
 
 impl<T: RowId> DenseIntegerDirectory<T> {
-    /// Map dense integer keys directly to slots at `key - min`, promoting
-    /// repeated keys to group handles.
+    /// Count dense integer keys at `key - min`, then scatter row IDs directly
+    /// into contiguous groups without buffering duplicate rows.
     ///
     /// # Arguments
     ///
     /// See [`JoinIndexMap::try_new`](super::super::JoinIndexMap::try_new) for
     /// shared argument documentation.
     ///
-    /// - `key_array`: the build-side integer join-key column, including NULLs.
+    /// - `key_array`: the build-side integer join-key column. Any NULLs must
+    ///   be excluded by `valid`; matchable NULLs use a hash-based directory.
     ///   Read values directly, casting non-NULL keys to `u64` for slot addressing.
     pub(super) fn build(
         key_array: &ArrayRef,
         valid: Option<&NullBuffer>,
         range: (u64, u64),
         reservation: &MemoryReservation,
-        groups: &mut MatchedGroupsBuilder<T>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, MatchedGroups<T>)> {
         // Dispatch once per column; the typed build reads values without a copy.
         downcast_integer_array!(
-            key_array => {
-                Self::build_typed(key_array, valid, range, reservation, groups)
-            }
+            key_array => Self::build_typed(key_array, valid, range, reservation),
             _ => internal_err!("Dense join index requires an integer key"),
         )
     }
@@ -95,93 +107,105 @@ impl<T: RowId> DenseIntegerDirectory<T> {
         valid: Option<&NullBuffer>,
         (min, max): (u64, u64),
         reservation: &MemoryReservation,
-        groups: &mut MatchedGroupsBuilder<T>,
-    ) -> Result<Self>
+    ) -> Result<(Self, MatchedGroups<T>)>
     where
         K::Native: AsPrimitive<u64>,
     {
-        // Step 1: Sanity check
         let range = ArrayMap::calculate_range(min, max);
         if range >= usize::MAX as u64 {
             return internal_err!("Dense join index key range is too large");
         }
-
-        // Step 2: update memory reservation
+        // `array_map_key_range` excludes builds with matchable NULL keys.
+        if valid.is_none() && key_array.null_count() > 0 {
+            return internal_err!("Dense join index cannot store NULL keys");
+        }
         let len = range as usize + 1;
         let bytes = len
             .checked_mul(size_of::<T>())
             .ok_or_else(|| exec_datafusion_err!("Dense join index size overflow"))?;
         reservation.try_grow(bytes)?;
+        let values = key_array.values();
 
-        // Step 3: initialize flat array directory
-        let mut dense = Self {
-            offset: min,
-            slots: vec![T::default(); len],
-            is_group: None,
-            null: None,
-            distinct: 0,
-            build_unique: true,
-        };
-        let mut group_flags: Option<BooleanBufferBuilder> = None;
-
-        // Step 4: build the index
-        for (row, &key) in key_array.values().iter().enumerate() {
-            if valid.is_some_and(|valid| valid.is_null(row)) {
-                continue;
-            }
-            if key_array.is_null(row) {
-                match &mut dense.null {
-                    Some(handle) => groups.add_duplicate(handle, T::from_index(row)),
-                    slot @ None => {
-                        *slot = Some(MatchHandle::One(T::from_index(row)));
-                        dense.distinct += 1;
-                    }
-                }
-                continue;
-            }
-
-            let key: u64 = key.as_();
-            let position = key.wrapping_sub(min);
+        // Counts and write cursors fit T: IndexWidth selects it for the row count.
+        let mut slots = vec![T::default(); len];
+        for_each_valid!(values.len(), valid, |row| {
+            let position = values[row].as_().wrapping_sub(min);
             if position >= len as u64 {
                 return internal_err!("Build key is outside the dense join index range");
             }
-            let position = position as usize;
-            let slot = dense.slots[position].as_index();
+            let slot = &mut slots[position as usize];
+            *slot = T::usize_as(slot.as_usize() + 1);
+        });
 
-            if slot == 0 {
-                dense.slots[position] = T::from_index(row + 1);
-                dense.distinct += 1;
-                continue;
+        let (mut distinct, mut num_groups, mut grouped_rows) = (0, 0, 0);
+        for slot in &slots {
+            let count = slot.as_usize();
+            distinct += usize::from(count != 0);
+            if count > 1 {
+                num_groups += 1;
+                grouped_rows += count;
             }
-            // E.g. key 10 at rows 0 and 2: One(0) becomes Group(0) -> [0, 2].
-            let already_group = group_flags
-                .as_ref()
-                .is_some_and(|flags| flags.get_bit(position));
-            let mut handle = if already_group {
-                MatchHandle::Group(T::from_index(slot - 1))
-            } else {
-                MatchHandle::One(T::from_index(slot - 1))
-            };
-            groups.add_duplicate(&mut handle, T::from_index(row));
-            let MatchHandle::Group(group) = handle else {
-                unreachable!()
-            };
-            // Allocate group flags only when a non-NULL key repeats.
-            if group_flags.is_none() {
-                reservation.try_grow(bitmap_bytes(len))?;
-                let mut flags = BooleanBufferBuilder::new(len);
-                flags.append_n(len, false);
-                group_flags = Some(flags);
+        }
+        let mut is_group = None;
+        let mut offsets = Vec::new();
+        let mut rows = Vec::new();
+        if num_groups > 0 {
+            reservation.try_grow(
+                bitmap_bytes(len)
+                    + (num_groups + 1) * size_of::<usize>()
+                    + grouped_rows * size_of::<T>(),
+            )?;
+            // Reuse each group's slot as its write cursor into the final rows.
+            let mut flags = BooleanBufferBuilder::new(len);
+            flags.append_n(len, false);
+            offsets.reserve_exact(num_groups + 1);
+            offsets.push(0);
+            for (position, slot) in slots.iter_mut().enumerate() {
+                let count = slot.as_usize();
+                if count > 1 {
+                    let start = offsets[offsets.len() - 1];
+                    *slot = T::usize_as(start);
+                    offsets.push(start + count);
+                    flags.set_bit(position, true);
+                }
             }
-            group_flags.as_mut().unwrap().set_bit(position, true);
-            dense.slots[position] = T::from_index(group.as_index() + 1);
+            let flags = flags.finish();
+            rows = vec![T::default(); grouped_rows];
+
+            // The forward scan preserves build order within each group.
+            // The counting pass already checked every slot position.
+            for_each_valid!(values.len(), valid, |row| {
+                let position = values[row].as_().wrapping_sub(min) as usize;
+                let slot = &mut slots[position];
+                if flags.value(position) {
+                    rows[slot.as_usize()] = T::usize_as(row);
+                    *slot = T::usize_as(slot.as_usize() + 1);
+                } else {
+                    *slot = T::usize_as(row + 1);
+                }
+            });
+
+            // Probing needs group handles, not the completed write cursors.
+            for (group, position) in flags.set_indices().enumerate() {
+                slots[position] = T::usize_as(group + 1);
+            }
+            is_group = Some(flags);
+        } else {
+            for_each_valid!(values.len(), valid, |row| {
+                let position = values[row].as_().wrapping_sub(min) as usize;
+                slots[position] = T::usize_as(row + 1);
+            });
         }
 
-        // Step 5: Freeze the group bitmap; without grouped slots it stays None.
-        dense.is_group = group_flags.map(|mut flags| flags.finish());
-        // Include NULL groups, which do not appear in the slot bitmap.
-        dense.build_unique = !groups.has_groups();
-        Ok(dense)
+        let dense = Self {
+            offset: min,
+            slots,
+            is_group,
+            null: None,
+            distinct,
+            build_unique: num_groups == 0,
+        };
+        Ok((dense, MatchedGroups { offsets, rows }))
     }
 
     pub(super) fn lookup_batch(

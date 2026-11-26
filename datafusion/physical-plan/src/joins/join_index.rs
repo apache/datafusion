@@ -92,6 +92,7 @@ impl JoinIndexMap {
     /// The index uses the following specializations:
     /// - If `dense_range` is provided for a single integer key column, its
     ///   inclusive `(min, max)` bounds must cover all non-NULL build keys.
+    ///   NULL build keys must not be matchable.
     ///   Use one array slot per value in that range, including gaps:
     ///   `Some((10, 12))` allocates three slots; key `12` maps to slot `2`.
     /// - Otherwise, if `keys` contains a single integer column, keep a hash table
