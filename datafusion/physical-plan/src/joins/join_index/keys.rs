@@ -201,6 +201,34 @@ pub(super) fn hash_probe_keys(
     Ok(())
 }
 
+/// Hash build keys in forward slices with a reusable buffer.
+///
+/// It avoids allocating hash buffers for all keys.
+pub(super) fn for_each_hash_chunk(
+    keys: &[ArrayRef],
+    random_state: &RandomState,
+    // slice size
+    hash_chunk_size: usize,
+    mut insert: impl FnMut(usize, &[u64]),
+) -> Result<()> {
+    let num_rows = keys[0].len();
+    if num_rows == 0 {
+        return Ok(());
+    }
+    let hash_chunk_size = hash_chunk_size.max(1).min(num_rows);
+    let mut hashes = vec![0; hash_chunk_size];
+    for offset in (0..num_rows).step_by(hash_chunk_size) {
+        let len = hash_chunk_size.min(num_rows - offset);
+        let chunk: Vec<_> = keys.iter().map(|key| key.slice(offset, len)).collect();
+        hashes.truncate(len);
+        // Hash kernels can leave NULL slots untouched in this reusable buffer.
+        hashes.fill(0);
+        create_hashes(&chunk, random_state, &mut hashes)?;
+        insert(offset, &hashes);
+    }
+    Ok(())
+}
+
 /// Check one join-key column for every candidate pair, updating `scratch.equal`.
 ///
 /// # Example

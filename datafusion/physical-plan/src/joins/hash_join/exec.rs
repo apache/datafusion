@@ -3539,6 +3539,7 @@ fn build_in_memory(
             random_state,
             null_equality,
             dense_range,
+            hash_chunk_rows(&normalized_values, max_batch_rows, num_rows),
             &map_reservation,
         )?;
         if index.is_dense() {

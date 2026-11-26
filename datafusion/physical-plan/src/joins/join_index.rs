@@ -82,6 +82,9 @@ impl JoinIndexMap {
     /// - `null_equality`: NULL matching semantics for the join.
     /// - `dense_range`: `Some((min, max))` enables direct indexing; `None` keeps
     ///   hashing. See the Specializations section below.
+    /// - `hash_chunk_size`: maximum rows hashed at once during construction.
+    ///   Reusing the hash buffer across chunks reduces peak memory usage by
+    ///   avoiding a buffer of hashes for the entire build input.
     /// - `reservation`: memory budget for index storage and build scratch.
     ///
     /// # Specializations
@@ -98,6 +101,7 @@ impl JoinIndexMap {
         random_state: &RandomState,
         null_equality: NullEquality,
         dense_range: Option<(u64, u64)>,
+        hash_chunk_size: usize,
         reservation: &MemoryReservation,
     ) -> Result<Self> {
         Ok(Self {
@@ -106,6 +110,7 @@ impl JoinIndexMap {
                 random_state,
                 null_equality,
                 dense_range,
+                hash_chunk_size,
                 reservation,
             )?,
             random_state: random_state.clone(),

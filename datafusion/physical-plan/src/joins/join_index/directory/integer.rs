@@ -17,7 +17,7 @@ use datafusion_execution::memory_pool::MemoryReservation;
 use hashbrown::{HashTable, hash_table::Entry};
 use num_traits::AsPrimitive;
 
-use super::super::keys::{LookupScratch, hash_probe_keys};
+use super::super::keys::{LookupScratch, for_each_hash_chunk, hash_probe_keys};
 use super::super::matches::{
     JoinHashLookup, MatchHandle, MatchHandleArray, MatchedGroupsBuilder, RowId,
     UniqueMatches,
@@ -108,7 +108,7 @@ impl<T: RowId> IntegerDirectory<T> {
     /// repeated keys and matchable NULLs accumulate in [`MatchedGroupsBuilder`].
     pub(super) fn build(
         key_array: &ArrayRef,
-        hashes: &[u64],
+        hash_chunk_size: usize,
         null_equality: NullEquality,
         hash_key: fn(u64, &RandomState) -> u64,
         random_state: &RandomState,
@@ -116,11 +116,11 @@ impl<T: RowId> IntegerDirectory<T> {
         groups: &mut MatchedGroupsBuilder<T>,
     ) -> Result<Self> {
         reservation.try_grow(estimate_memory_size::<IntegerKeyEntry<T>>(
-            hashes.len(),
+            key_array.len(),
             size_of::<HashTable<IntegerKeyEntry<T>>>(),
         )?)?;
         let mut directory = Self {
-            table: HashTable::with_capacity(hashes.len()),
+            table: HashTable::with_capacity(key_array.len()),
             null: None,
             hash_key,
             build_unique: true,
@@ -128,44 +128,53 @@ impl<T: RowId> IntegerDirectory<T> {
         macro_rules! build_integer {
             ($type:ty) => {{
                 let array = key_array.as_primitive::<$type>();
-                for (row, &hash) in hashes.iter().enumerate() {
-                    if array.is_null(row) {
-                        if null_equality == NullEquality::NullEqualsNull {
-                            match &mut directory.null {
-                                Some(handle) => {
-                                    groups.add_duplicate(handle, T::from_index(row))
+                for_each_hash_chunk(
+                    std::slice::from_ref(key_array),
+                    random_state,
+                    hash_chunk_size,
+                    |start, hashes| {
+                        for (offset, &hash) in hashes.iter().enumerate() {
+                            let row = start + offset;
+                            if array.is_null(row) {
+                                if null_equality == NullEquality::NullEqualsNull {
+                                    match &mut directory.null {
+                                        Some(handle) => groups
+                                            .add_duplicate(handle, T::from_index(row)),
+                                        slot @ None => {
+                                            *slot =
+                                                Some(MatchHandle::One(T::from_index(row)))
+                                        }
+                                    }
                                 }
-                                slot @ None => {
-                                    *slot = Some(MatchHandle::One(T::from_index(row)))
+                                continue;
+                            }
+                            let key = array.value(row).as_();
+                            match directory.table.entry(
+                                hash,
+                                |entry| entry.key == key,
+                                |entry| hash_key(entry.key, random_state),
+                            ) {
+                                Entry::Occupied(mut entry) => {
+                                    let entry = entry.get_mut();
+                                    let mut handle = entry.matches();
+                                    groups.add_duplicate(&mut handle, T::from_index(row));
+                                    let MatchHandle::Group(group) = handle else {
+                                        unreachable!()
+                                    };
+                                    entry.group_plus_one =
+                                        T::from_index(group.as_index() + 1);
+                                }
+                                Entry::Vacant(entry) => {
+                                    entry.insert(IntegerKeyEntry {
+                                        key,
+                                        representative_row: T::from_index(row),
+                                        group_plus_one: T::default(),
+                                    });
                                 }
                             }
                         }
-                        continue;
-                    }
-                    let key = array.value(row).as_();
-                    match directory.table.entry(
-                        hash,
-                        |entry| entry.key == key,
-                        |entry| hash_key(entry.key, random_state),
-                    ) {
-                        Entry::Occupied(mut entry) => {
-                            let entry = entry.get_mut();
-                            let mut handle = entry.matches();
-                            groups.add_duplicate(&mut handle, T::from_index(row));
-                            let MatchHandle::Group(group) = handle else {
-                                unreachable!()
-                            };
-                            entry.group_plus_one = T::from_index(group.as_index() + 1);
-                        }
-                        Entry::Vacant(entry) => {
-                            entry.insert(IntegerKeyEntry {
-                                key,
-                                representative_row: T::from_index(row),
-                                group_plus_one: T::default(),
-                            });
-                        }
-                    }
-                }
+                    },
+                )?;
             }};
         }
         match key_array.data_type() {

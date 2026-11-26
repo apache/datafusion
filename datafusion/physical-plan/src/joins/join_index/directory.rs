@@ -10,15 +10,13 @@
 //! whose Arrow values establish equality. All three identify exact keys and
 //! return the same singleton/group representation; only row IDs are grouped.
 
-use std::mem::size_of;
-
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::buffer::BooleanBuffer;
-use datafusion_common::hash_utils::{RandomState, create_hashes};
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::{NullEquality, Result, internal_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 
-use super::keys::{LookupScratch, hash_scratch_bytes};
+use super::keys::LookupScratch;
 use super::matches::{
     GroupRows, JoinHashLookup, LookupResult, MatchHandles, MatchedGroups,
     MatchedGroupsBuilder, RowId,
@@ -57,6 +55,7 @@ impl IndexWidth {
         random_state: &RandomState,
         null_equality: NullEquality,
         dense_range: Option<(u64, u64)>,
+        hash_chunk_size: usize,
         reservation: &MemoryReservation,
     ) -> Result<Self> {
         let Some(first) = keys.first() else {
@@ -65,21 +64,12 @@ impl IndexWidth {
         let num_rows = first.len();
         let scratch = reservation.new_empty();
         // Keep validity unions and per-column metadata charged for every layout.
-        // Dense keys are read directly, so only hash-based directories need hashes.
         scratch.try_grow(num_rows.div_ceil(8) * (keys.len() + 1) + keys.len() * 256)?;
-        let hashes = if dense_range.is_none() {
-            scratch.try_grow(num_rows * size_of::<u64>() + hash_scratch_bytes(keys))?;
-            let mut hashes = vec![0; num_rows];
-            create_hashes(keys, random_state, &mut hashes)?;
-            hashes
-        } else {
-            Vec::new()
-        };
         let before = reservation.size();
         let result = if u32::try_from(num_rows).is_ok() {
             JoinHashIndex::<u32>::build(
                 keys,
-                &hashes,
+                hash_chunk_size,
                 null_equality,
                 dense_range,
                 reservation,
@@ -89,7 +79,7 @@ impl IndexWidth {
         } else {
             JoinHashIndex::<u64>::build(
                 keys,
-                &hashes,
+                hash_chunk_size,
                 null_equality,
                 dense_range,
                 reservation,
@@ -298,7 +288,7 @@ impl<T: RowId> JoinHashIndex<T> {
     /// See [`JoinIndexMap::try_new`](super::JoinIndexMap::try_new) for shared argument documentation.
     fn build(
         keys: &[ArrayRef],
-        hashes: &[u64],
+        hash_chunk_size: usize,
         null_equality: NullEquality,
         dense_range: Option<(u64, u64)>,
         reservation: &MemoryReservation,
@@ -325,7 +315,7 @@ impl<T: RowId> JoinHashIndex<T> {
         {
             IntegerDirectory::build(
                 &keys[0],
-                hashes,
+                hash_chunk_size,
                 null_equality,
                 hash_key,
                 random_state,
@@ -336,7 +326,8 @@ impl<T: RowId> JoinHashIndex<T> {
         } else {
             GeneralDirectory::build(
                 keys,
-                hashes,
+                random_state,
+                hash_chunk_size,
                 valid.as_ref(),
                 reservation,
                 &mut groups,

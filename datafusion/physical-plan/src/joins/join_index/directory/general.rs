@@ -17,12 +17,15 @@ use arrow::array::ArrayRef;
 use arrow::buffer::NullBuffer;
 use arrow::compute::SortOptions;
 use datafusion_common::float_semantics::{has_float_leaf, normalize};
+use datafusion_common::hash_utils::RandomState;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{NullEquality, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use hashbrown::{HashTable, hash_table::Entry};
 
-use super::super::keys::{LookupScratch, compare_column, hash_probe_keys};
+use super::super::keys::{
+    LookupScratch, compare_column, for_each_hash_chunk, hash_probe_keys,
+};
 use super::super::matches::{
     HandleBuilder, JoinHashLookup, MatchHandle, MatchedGroupsBuilder, RowId,
 };
@@ -80,16 +83,17 @@ impl<T: RowId> GeneralDirectory<T> {
     /// Only exact matches share a group, even when different keys have the same hash.
     pub(super) fn build(
         keys: &[ArrayRef],
-        hashes: &[u64],
+        random_state: &RandomState,
+        hash_chunk_size: usize,
         valid: Option<&NullBuffer>,
         reservation: &MemoryReservation,
         groups: &mut MatchedGroupsBuilder<T>,
     ) -> Result<Self> {
         reservation.try_grow(estimate_memory_size::<KeyEntry<T>>(
-            hashes.len(),
+            keys[0].len(),
             size_of::<HashTable<KeyEntry<T>>>(),
         )?)?;
-        let mut table: HashTable<KeyEntry<T>> = HashTable::with_capacity(hashes.len());
+        let mut table: HashTable<KeyEntry<T>> = HashTable::with_capacity(keys[0].len());
         // NULL != NULL rows are excluded before comparison. Using NULL
         // equality here avoids rebuilding dictionary logical-null masks;
         // it does not change equality of nested children.
@@ -99,37 +103,41 @@ impl<T: RowId> GeneralDirectory<T> {
             &vec![SortOptions::default(); keys.len()],
             NullEquality::NullEqualsNull,
         )?;
-        for (row, &hash) in hashes.iter().enumerate() {
-            if valid.is_some_and(|valid| valid.is_null(row)) {
-                continue;
-            }
-            match table.entry(
-                hash,
-                |entry| {
-                    entry.hash == hash
-                        && comparator.is_equal(entry.representative_row.as_index(), row)
-                },
-                |entry| entry.hash,
-            ) {
-                Entry::Occupied(mut entry) => {
-                    let entry = entry.get_mut();
-                    let mut handle = entry.matches();
-                    groups.add_duplicate(&mut handle, T::from_index(row));
-                    let MatchHandle::Group(group) = handle else {
-                        unreachable!()
-                    };
-                    entry.group_plus_one = T::from_index(group.as_index() + 1);
+        for_each_hash_chunk(keys, random_state, hash_chunk_size, |start, hashes| {
+            for (offset, &hash) in hashes.iter().enumerate() {
+                let row = start + offset;
+                if valid.is_some_and(|valid| valid.is_null(row)) {
+                    continue;
                 }
-                Entry::Vacant(entry) => {
-                    let row = T::from_index(row);
-                    entry.insert(KeyEntry {
-                        hash,
-                        representative_row: row,
-                        group_plus_one: T::default(),
-                    });
+                match table.entry(
+                    hash,
+                    |entry| {
+                        entry.hash == hash
+                            && comparator
+                                .is_equal(entry.representative_row.as_index(), row)
+                    },
+                    |entry| entry.hash,
+                ) {
+                    Entry::Occupied(mut entry) => {
+                        let entry = entry.get_mut();
+                        let mut handle = entry.matches();
+                        groups.add_duplicate(&mut handle, T::from_index(row));
+                        let MatchHandle::Group(group) = handle else {
+                            unreachable!()
+                        };
+                        entry.group_plus_one = T::from_index(group.as_index() + 1);
+                    }
+                    Entry::Vacant(entry) => {
+                        let row = T::from_index(row);
+                        entry.insert(KeyEntry {
+                            hash,
+                            representative_row: row,
+                            group_plus_one: T::default(),
+                        });
+                    }
                 }
             }
-        }
+        })?;
         Ok(Self {
             table,
             build_unique: !groups.has_groups(),

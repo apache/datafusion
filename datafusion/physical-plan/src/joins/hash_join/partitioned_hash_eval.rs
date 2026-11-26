@@ -1297,6 +1297,7 @@ mod tests {
                         random_state.random_state(),
                         NullEquality::NullEqualsNothing,
                         dense.then_some((min, max)),
+                        batch.num_rows(),
                         &reservation,
                     )?;
                     Arc::new(ReservedJoinIndex::new(index, reservation))
