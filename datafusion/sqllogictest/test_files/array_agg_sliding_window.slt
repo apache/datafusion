@@ -427,13 +427,13 @@ query I??TT
 SELECT i, a, d, arrow_field(a)['data_type'], arrow_field(d)['data_type']
 FROM (
   SELECT i,
-    array_agg(with_metadata(x, 'source', 'input')) OVER w AS a,
-    array_agg(DISTINCT with_metadata(x, 'source', 'input')) OVER w AS d
-  FROM (VALUES (1, 1), (2, 1), (3, NULL), (4, 2)) AS t(i, x)
+    array_agg(CAST(x AS JSON)) OVER w AS a,
+    array_agg(DISTINCT CAST(x AS JSON)) OVER w AS d
+  FROM (VALUES (1, '1'), (2, '1'), (3, NULL), (4, '2')) AS t(i, x)
   WINDOW w AS (ORDER BY i ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)
 ) ORDER BY i;
 ----
-1 NULL NULL List(Int64, metadata: {"source": "input"}) List(Int64, metadata: {"source": "input"})
-2 [1] [1] List(Int64, metadata: {"source": "input"}) List(Int64, metadata: {"source": "input"})
-3 [1] [1] List(Int64, metadata: {"source": "input"}) List(Int64, metadata: {"source": "input"})
-4 [NULL] [NULL] List(Int64, metadata: {"source": "input"}) List(Int64, metadata: {"source": "input"})
+1 NULL NULL List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"}) List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"})
+2 [1] [1] List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"}) List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"})
+3 [1] [1] List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"}) List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"})
+4 [NULL] [NULL] List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"}) List(Utf8, metadata: {"ARROW:extension:metadata": "", "ARROW:extension:name": "arrow.json"})
