@@ -699,6 +699,28 @@ fn scale_date_literal(
     }
 }
 
+/// Rescales the unscaled decimal `v` at `scale` to the scale whose multiplier is
+/// `mul`, or `None` if that drops digits or overflows `i128`.
+fn rescale_decimal_literal(v: i128, scale: i8, mul: i128) -> Option<i128> {
+    let lit_scale_mul = 10_i128.checked_pow(u32::try_from(scale).ok()?)?;
+    if mul >= lit_scale_mul {
+        // Example:
+        // lit is decimal(123,3,2)
+        // target type is decimal(5,3)
+        // the lit can be converted to the decimal(1230,5,3)
+        v.checked_mul(mul / lit_scale_mul)
+    } else if v % (lit_scale_mul / mul) == 0 {
+        // Example:
+        // lit is decimal(123000,10,3)
+        // target type is int32: the lit can be converted to INT32(123)
+        // target type is decimal(10,2): the lit can be converted to decimal(12300,10,2)
+        Some(v / (lit_scale_mul / mul))
+    } else {
+        // can't convert the lit decimal to the target data type
+        None
+    }
+}
+
 /// Convert a numeric value from one numeric data type to another
 fn try_cast_numeric_literal(
     lit_value: &ScalarValue,
@@ -785,76 +807,18 @@ fn try_cast_numeric_literal(
         ScalarValue::TimestampMicrosecond(Some(v), _) => (*v as i128).checked_mul(mul),
         ScalarValue::TimestampNanosecond(Some(v), _) => (*v as i128).checked_mul(mul),
         ScalarValue::Decimal32(Some(v), _, scale) => {
-            let v = *v as i128;
-            let lit_scale_mul = 10_i128.pow(*scale as u32);
-            if mul >= lit_scale_mul {
-                // Example:
-                // lit is decimal(123,3,2)
-                // target type is decimal(5,3)
-                // the lit can be converted to the decimal(1230,5,3)
-                v.checked_mul(mul / lit_scale_mul)
-            } else if v % (lit_scale_mul / mul) == 0 {
-                // Example:
-                // lit is decimal(123000,10,3)
-                // target type is int32: the lit can be converted to INT32(123)
-                // target type is decimal(10,2): the lit can be converted to decimal(12300,10,2)
-                Some(v / (lit_scale_mul / mul))
-            } else {
-                // can't convert the lit decimal to the target data type
-                None
-            }
+            rescale_decimal_literal(*v as i128, *scale, mul)
         }
         ScalarValue::Decimal64(Some(v), _, scale) => {
-            let v = *v as i128;
-            let lit_scale_mul = 10_i128.pow(*scale as u32);
-            if mul >= lit_scale_mul {
-                // Example:
-                // lit is decimal(123,3,2)
-                // target type is decimal(5,3)
-                // the lit can be converted to the decimal(1230,5,3)
-                v.checked_mul(mul / lit_scale_mul)
-            } else if v % (lit_scale_mul / mul) == 0 {
-                // Example:
-                // lit is decimal(123000,10,3)
-                // target type is int32: the lit can be converted to INT32(123)
-                // target type is decimal(10,2): the lit can be converted to decimal(12300,10,2)
-                Some(v / (lit_scale_mul / mul))
-            } else {
-                // can't convert the lit decimal to the target data type
-                None
-            }
-        }
-        ScalarValue::Decimal256(Some(v), _, scale) => {
-            // A value or scale beyond `i128` has no exact preimage, so
-            // the cast stays rather than overflowing.
-            let v = v.to_i128()?;
-            let lit_scale_mul = 10_i128.checked_pow(u32::try_from(*scale).ok()?)?;
-            if mul >= lit_scale_mul {
-                v.checked_mul(mul / lit_scale_mul)
-            } else if v % (lit_scale_mul / mul) == 0 {
-                Some(v / (lit_scale_mul / mul))
-            } else {
-                None
-            }
+            rescale_decimal_literal(*v as i128, *scale, mul)
         }
         ScalarValue::Decimal128(Some(v), _, scale) => {
-            let lit_scale_mul = 10_i128.pow(*scale as u32);
-            if mul >= lit_scale_mul {
-                // Example:
-                // lit is decimal(123,3,2)
-                // target type is decimal(5,3)
-                // the lit can be converted to the decimal(1230,5,3)
-                (*v).checked_mul(mul / lit_scale_mul)
-            } else if (*v) % (lit_scale_mul / mul) == 0 {
-                // Example:
-                // lit is decimal(123000,10,3)
-                // target type is int32: the lit can be converted to INT32(123)
-                // target type is decimal(10,2): the lit can be converted to decimal(12300,10,2)
-                Some(*v / (lit_scale_mul / mul))
-            } else {
-                // can't convert the lit decimal to the target data type
-                None
-            }
+            rescale_decimal_literal(*v, *scale, mul)
+        }
+        ScalarValue::Decimal256(Some(v), _, scale) => {
+            // A value beyond `i128` has no exact preimage, so the cast stays
+            // rather than overflowing.
+            rescale_decimal_literal(v.to_i128()?, *scale, mul)
         }
         _ => None,
     };
@@ -1259,6 +1223,16 @@ mod tests {
             DataType::Decimal128(2, 0),
             ExpectedCast::NoValue,
         );
+
+        // A negative scale has no `u32` exponent, so each arm rejects the
+        // literal instead of overflowing `10^scale`.
+        for literal in [
+            ScalarValue::Decimal32(Some(1), 5, -2),
+            ScalarValue::Decimal64(Some(1), 5, -2),
+            ScalarValue::Decimal128(Some(1), 5, -2),
+        ] {
+            expect_cast(literal, DataType::Decimal128(10, 2), ExpectedCast::NoValue);
+        }
     }
 
     #[test]
