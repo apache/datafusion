@@ -12,10 +12,13 @@
 
 use crate::PhysicalOptimizerRule;
 use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
+use crate::sanity_checker::check_input_requirements;
 use datafusion_common::Statistics;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{JoinSide, JoinType, internal_err, plan_err};
 use datafusion_expr_common::sort_properties::SortProperties;
 use datafusion_physical_expr::LexOrdering;
@@ -340,11 +343,46 @@ fn statistical_join_selection_subrule(
         None
     };
 
-    Ok(if let Some(transformed) = transformed {
-        Transformed::yes(transformed)
-    } else {
-        Transformed::no(plan)
+    Ok(match transformed {
+        Some(transformed) if !breaks_satisfied_requirements(&plan, &transformed) => {
+            Transformed::yes(transformed)
+        }
+        _ => Transformed::no(plan),
     })
+}
+
+/// Whether `new`, which replaces the join `old` over the same inputs, breaks an
+/// order or distribution requirement that `old`'s inputs satisfy, such as the
+/// single partition that a build side needs. Once `EnsureRequirements` has run,
+/// nothing restores such a requirement, so the join is kept as it is.
+///
+/// A hash join in [`PartitionMode::Auto`] has no requirement to break:
+/// `EnsureRequirements` resolves every `Auto` join, and satisfies the
+/// requirements of the mode chosen for it.
+fn breaks_satisfied_requirements(
+    old: &Arc<dyn ExecutionPlan>,
+    new: &Arc<dyn ExecutionPlan>,
+) -> bool {
+    let mode_undecided = old
+        .downcast_ref::<HashJoinExec>()
+        .is_some_and(|join| join.partition_mode() == &PartitionMode::Auto);
+    if mode_undecided || check_input_requirements(old).is_err() {
+        return false;
+    }
+    let inputs = old.children();
+    let mut broken = false;
+    let _ = new.apply(|node| {
+        if inputs.iter().any(|input| Arc::ptr_eq(input, node)) {
+            return Ok(TreeNodeRecursion::Jump);
+        }
+        broken = check_input_requirements(node).is_err();
+        Ok(if broken {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    });
+    broken
 }
 
 /// Pipeline-fixing join selection subrule.
