@@ -4,7 +4,7 @@
 
 use std::mem::size_of;
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{GroupValues, MISSING_GROUP};
 
 use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use datafusion_common::Result;
@@ -61,6 +61,19 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
         // ensure we assigned a group to for each row
         assert_eq!(groups.len(), arr.len());
         Ok(())
+    }
+
+    fn lookup(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+        assert_eq!(cols.len(), 1);
+        groups.clear();
+        self.map.find(&cols[0], |group_idx| {
+            groups.push(group_idx.unwrap_or(MISSING_GROUP));
+        });
+        Ok(())
+    }
+
+    fn supports_lookup(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {
@@ -199,6 +212,15 @@ mod tests {
         group_values
             .intern(&[Arc::clone(&values)], &mut groups)
             .unwrap();
+        assert_eq!(group_values.len(), 10);
+        let probe: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("group value number 3"),
+            Some("not stored"),
+            None,
+        ]));
+        assert!(group_values.supports_lookup());
+        group_values.lookup(&[probe], &mut groups).unwrap();
+        assert_eq!(groups, vec![3, MISSING_GROUP, MISSING_GROUP]);
         assert_eq!(group_values.len(), 10);
         group_values.clear_shrink(0);
         assert_eq!(group_values.len(), 0);
