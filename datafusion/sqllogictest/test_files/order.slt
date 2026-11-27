@@ -2713,6 +2713,75 @@ ORDER BY price DESC;
 5
 1
 
+# A colliding name inside an ORDER BY expression also means the output
+# column, with or without an alias on the subquery.
+query II
+SELECT price AS old_price, 10 - price AS price
+FROM (SELECT 1 AS price UNION ALL SELECT 5)
+ORDER BY 10 - price;
+----
+1 9
+5 5
+
+query II
+SELECT price AS old_price, 10 - price AS price
+FROM (SELECT 1 AS price UNION ALL SELECT 5) AS s
+ORDER BY 10 - price;
+----
+1 9
+5 5
+
+query II
+SELECT price AS old_price, 10 - price AS price
+FROM (SELECT 1 AS price UNION ALL SELECT 5)
+ORDER BY -price;
+----
+1 9
+5 5
+
+query II
+SELECT price AS old_price, 10 - price AS price
+FROM (SELECT 1 AS price UNION ALL SELECT 5) AS s
+ORDER BY -price;
+----
+1 9
+5 5
+
+query II
+SELECT price AS old_price, 10 - price AS price
+FROM (SELECT 1 AS price UNION ALL SELECT 5)
+ORDER BY price + 0;
+----
+5 5
+1 9
+
+query II
+SELECT price AS old_price, 10 - price AS price
+FROM (SELECT 1 AS price UNION ALL SELECT 5) AS s
+ORDER BY price + 0;
+----
+5 5
+1 9
+
+query II
+SELECT price AS old_price, 10 - price AS price
+FROM (SELECT 1 AS price UNION ALL SELECT 5)
+ORDER BY CAST(price AS BIGINT);
+----
+5 5
+1 9
+
+query II
+SELECT price AS old_price, 10 - price AS price
+FROM (SELECT 1 AS price UNION ALL SELECT 5) AS s
+ORDER BY CAST(price AS BIGINT);
+----
+5 5
+1 9
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
 query TT
 EXPLAIN SELECT price AS old_price, 10 - price AS price
 FROM (SELECT 1 AS price UNION ALL SELECT 5)
@@ -2726,11 +2795,6 @@ logical_plan
 05)--------EmptyRelation: rows=1
 06)------Projection: Int64(5) AS price
 07)--------EmptyRelation: rows=1
-physical_plan
-01)SortPreservingMergeExec: [price@1 ASC NULLS LAST]
-02)--ProjectionExec: expr=[price@0 as old_price, 10 - price@0 as price]
-03)----UnionExec
-04)------ProjectionExec: expr=[1 as price]
-05)--------PlaceholderRowExec
-06)------ProjectionExec: expr=[5 as price]
-07)--------PlaceholderRowExec
+
+statement ok
+set datafusion.explain.logical_plan_only = false;

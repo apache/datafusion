@@ -68,11 +68,15 @@ fn rewrite_sort_col_by_aggs(
 /// 1. given a projection with exprs: [a, b + c]
 /// 2. t produces an output schema with two columns "a", "b + c"
 ///
-/// A column that already resolves against `output_schema` is left as is.
-/// Projection expressions are written over the input, so an unqualified
-/// input column can share its name with a different output column (e.g.
-/// `price AS old_price, 10 - price AS price`); matching it against the
-/// projection would sort by the wrong output column.
+/// An expression that references a column resolving against
+/// `output_schema` is left as is: the column already names an output column,
+/// and the expression is evaluated over the output. Projection expressions
+/// are written over the input, so an unqualified input column can share its
+/// name with a different output column (e.g.
+/// `price AS old_price, 10 - price AS price`); matching such an expression
+/// against the projection would read the input column instead.
+/// Sub-expressions that reference only input columns, such as `min(c2)` in
+/// `c1 + min(c2)`, are still rewritten.
 fn rewrite_in_terms_of_projection(
     expr: Expr,
     proj_exprs: &[Expr],
@@ -82,8 +86,10 @@ fn rewrite_in_terms_of_projection(
     // assumption is that each item in exprs, such as "b + c" is
     // available as an output column named "b + c"
     expr.transform(|expr| {
-        if let Expr::Column(col) = &expr
-            && output_schema.has_column(col)
+        if expr
+            .column_refs()
+            .iter()
+            .any(|col| output_schema.has_column(col))
         {
             return Ok(Transformed::no(expr));
         }
@@ -304,9 +310,9 @@ mod test {
         }
     }
 
-    /// An output column that shares its name with an unqualified input
-    /// column read by another projection expression must not be rewritten
-    /// to that other expression's alias.
+    /// A sort key that references an output column must use that output
+    /// column, even when an unqualified input column of the same name is
+    /// read by another projection expression.
     /// See <https://github.com/apache/datafusion/issues/27795>
     #[test]
     fn output_column_not_matched_against_unqualified_input() {
@@ -333,15 +339,54 @@ mod test {
                 expected: sort(col("column2")),
             },
             TestCase {
-                desc: "an expression over the input still resolves to its alias",
+                desc: "column1 inside an expression is the output column too,                        so the expression is not matched to diff",
                 input: sort(lit(10) - col("column1")),
-                expected: sort(col("diff")),
+                expected: sort(lit(10) - col("column1")),
+            },
+            TestCase {
+                desc: "same for a cast of the output column",
+                input: sort(cast(col("column1"), DataType::Int64)),
+                expected: sort(cast(col("column1"), DataType::Int64)),
             },
         ];
 
         for case in cases {
             case.run(&plan)
         }
+    }
+
+    /// Parts of a sort key that reference only input columns are still
+    /// rewritten to the projection's output columns.
+    #[test]
+    fn input_only_columns_still_resolve_to_aliases() {
+        let plan = LogicalPlanBuilder::values(vec![vec![lit(1), lit(20)]])
+            .unwrap()
+            .project(vec![
+                col("column1"),
+                (lit(10) - col("column2")).alias("diff"),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+        TestCase {
+            desc: "an expression over an input-only column resolves to its alias",
+            input: sort(lit(10) - col("column2")),
+            expected: sort(col("diff")),
+        }
+        .run(&plan);
+
+        let plan = LogicalPlanBuilder::values(vec![vec![lit(1), lit(20)]])
+            .unwrap()
+            .project(vec![col("column1"), col("column2").alias("b")])
+            .unwrap()
+            .build()
+            .unwrap();
+        TestCase {
+            desc: "an input-only column inside a mixed expression is rewritten",
+            input: sort(col("column1") + col("column2")),
+            expected: sort(col("column1") + col("b")),
+        }
+        .run(&plan);
     }
 
     #[test]
