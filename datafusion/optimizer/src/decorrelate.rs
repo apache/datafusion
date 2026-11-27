@@ -837,6 +837,9 @@ impl PullUpCorrelatedExpr {
             // `f_down` checked that the pulled up filters do not read an
             // unnested column.
             LogicalPlan::Unnest(_) => self.pass_through_pulled_up_cols(plan),
+            LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_) => {
+                self.pass_through_pulled_up_cols(plan)
+            }
             _ => Ok(Transformed::no(plan)),
         }
     }

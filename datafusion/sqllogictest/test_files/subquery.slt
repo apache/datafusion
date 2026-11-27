@@ -5105,3 +5105,71 @@ DROP TABLE t26692;
 
 statement ok
 DROP TABLE t26692_2;
+
+# A correlated filter that moves above a join of the subquery adds a column to
+# the join output.
+# See https://github.com/apache/datafusion/issues/27691
+statement ok
+CREATE TABLE t27691 (a INT) AS VALUES (1), (2), (4);
+
+statement ok
+CREATE TABLE t27691_i (a INT) AS VALUES (1), (2), (2), (3);
+
+statement ok
+CREATE TABLE t27691_u (b INT) AS VALUES (10), (20);
+
+query II
+SELECT o.a, (
+  SELECT count(*) FROM (SELECT a AS x FROM t27691_i WHERE a = o.a) e, t27691_u u
+) FROM t27691 o ORDER BY o.a;
+----
+1 2
+2 4
+4 0
+
+query II
+SELECT o.a, (
+  SELECT count(*) FROM t27691_u u, (SELECT a AS x FROM t27691_i WHERE a = o.a) e
+) FROM t27691 o ORDER BY o.a;
+----
+1 2
+2 4
+4 0
+
+query I
+SELECT o.a FROM t27691 o WHERE EXISTS (
+  SELECT 1 FROM (SELECT a AS x FROM t27691_i WHERE a = o.a) e, t27691_u u
+) ORDER BY o.a;
+----
+1
+2
+
+query I
+SELECT o.a FROM t27691 o WHERE NOT EXISTS (
+  SELECT 1 FROM (SELECT a AS x FROM t27691_i WHERE a = o.a) e, t27691_u u
+) ORDER BY o.a;
+----
+4
+
+query I
+SELECT o.a FROM t27691 o WHERE o.a IN (
+  SELECT e.x FROM (SELECT a AS x FROM t27691_i WHERE a = o.a) e, t27691_u u
+) ORDER BY o.a;
+----
+1
+2
+
+# A correlated non-equality filter is not decorrelated.
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT (
+  SELECT count(*) FROM (SELECT a AS x FROM t27691_i) e, t27691_u u WHERE e.x < o.a
+) FROM t27691 o;
+
+statement ok
+DROP TABLE t27691;
+
+statement ok
+DROP TABLE t27691_i;
+
+statement ok
+DROP TABLE t27691_u;
