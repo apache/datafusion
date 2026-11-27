@@ -84,6 +84,15 @@ class CompareTest(unittest.TestCase):
         self.assertEqual(out.count("no change"), QUERIES - 1, out)
         self.assertIn("n/a", out)
 
+    def test_hide_times_drops_time_columns(self):
+        rng = random.Random(5)
+        base, comp = noisy_run(rng, 1.0), noisy_run(rng, 2.0)
+        shown = run_compare(base, comp).split("Benchmark Summary")[0]
+        hidden = run_compare(base, comp, show_times=False).split("Benchmark Summary")[0]
+        self.assertIn(" ms ", shown)
+        self.assertNotIn(" ms ", hidden)
+        self.assertEqual(hidden.count("x slower"), QUERIES, hidden)
+
     def test_ci_is_reproducible(self):
         b = [100.0, 120.0, 90.0, 130.0, 80.0]
         c = [200.0, 230.0, 180.0, 260.0, 170.0]

@@ -193,6 +193,7 @@ def compare(
     noise_threshold: float,
     detailed: bool,
     show_ci: bool = True,
+    show_times: bool = True,
 ) -> None:
     baseline = BenchmarkRun.load_from_file(baseline_path)
     comparison = BenchmarkRun.load_from_file(comparison_path)
@@ -205,8 +206,9 @@ def compare(
 
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("Query", style="dim", no_wrap=True)
-    table.add_column(baseline_header, justify="right", style="dim", no_wrap=True)
-    table.add_column(comparison_header, justify="right", style="dim", no_wrap=True)
+    if show_times:
+        table.add_column(baseline_header, justify="right", style="dim", no_wrap=True)
+        table.add_column(comparison_header, justify="right", style="dim", no_wrap=True)
     table.add_column("Change", justify="right", style="dim", no_wrap=True)
     if show_ci:
         table.add_column(
@@ -229,10 +231,13 @@ def compare(
         if base_failed or comp_failed:
             change_text = "incomparable"
             failure_count += 1
-            table.add_row(
-                f"Q{baseline_result.query}",
+            times = [
                 "FAIL" if base_failed else baseline_result.execution_time_report(detailed)[1],
                 "FAIL" if comp_failed else comparison_result.execution_time_report(detailed)[1],
+            ]
+            table.add_row(
+                f"Q{baseline_result.query}",
+                *(times if show_times else []),
                 change_text,
                 *([""] if show_ci else []),
             )
@@ -264,8 +269,7 @@ def compare(
 
         table.add_row(
             f"Q{baseline_result.query}",
-            baseline_text,
-            comparison_text,
+            *([baseline_text, comparison_text] if show_times else []),
             change_text,
             *([f"[{ci[0]:.2f}, {ci[1]:.2f}]" if ci else "n/a"] if show_ci else []),
         )
@@ -331,6 +335,13 @@ def main() -> None:
         "Use --no-show-ci to hide it.",
     )
 
+    compare_parser.add_argument(
+        "--show-times",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show the per-query time columns. Use --no-show-times to hide them.",
+    )
+
     options = parser.parse_args()
 
     compare(
@@ -339,6 +350,7 @@ def main() -> None:
         options.noise_threshold,
         options.detailed,
         options.show_ci,
+        options.show_times,
     )
 
 
