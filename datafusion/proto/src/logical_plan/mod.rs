@@ -483,6 +483,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             .map_err(|e| internal_datafusion_err!("failed to encode logical plan: {e:?}"))
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn try_into_logical_plan(
         &self,
         ctx: &TaskContext,

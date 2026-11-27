@@ -204,6 +204,9 @@ impl FileCompressionType {
     }
 
     /// Given a `Stream`, create a `Stream` which data are decompressed with `FileCompressionType`.
+    ///
+    /// Input made of several concatenated members (streams or frames) is
+    /// decoded in full, the same as by [`Self::convert_read`].
     pub fn convert_stream<'a>(
         &self,
         s: BoxStream<'a, Result<Bytes>>,
@@ -219,17 +222,32 @@ impl FileCompressionType {
                     .boxed()
             }
             #[cfg(feature = "compression")]
-            BZIP2 => ReaderStream::new(AsyncBzDecoder::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
-                .boxed(),
+            BZIP2 => {
+                let mut decoder = AsyncBzDecoder::new(StreamReader::new(s));
+                decoder.multiple_members(true);
+
+                ReaderStream::new(decoder)
+                    .map_err(DataFusionError::from)
+                    .boxed()
+            }
             #[cfg(feature = "compression")]
-            XZ => ReaderStream::new(AsyncXzDecoder::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
-                .boxed(),
+            XZ => {
+                let mut decoder = AsyncXzDecoder::new(StreamReader::new(s));
+                decoder.multiple_members(true);
+
+                ReaderStream::new(decoder)
+                    .map_err(DataFusionError::from)
+                    .boxed()
+            }
             #[cfg(feature = "compression")]
-            ZSTD => ReaderStream::new(AsyncZstdDecoer::new(StreamReader::new(s)))
-                .map_err(DataFusionError::from)
-                .boxed(),
+            ZSTD => {
+                let mut decoder = AsyncZstdDecoer::new(StreamReader::new(s));
+                decoder.multiple_members(true);
+
+                ReaderStream::new(decoder)
+                    .map_err(DataFusionError::from)
+                    .boxed()
+            }
             #[cfg(not(feature = "compression"))]
             GZIP | BZIP2 | XZ | ZSTD => {
                 return Err(DataFusionError::NotImplemented(

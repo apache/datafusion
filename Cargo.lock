@@ -6401,6 +6401,7 @@ dependencies = [
  "chrono-tz",
  "datafusion-common",
  "env_logger",
+ "futures",
  "rand 0.9.4",
 ]
 

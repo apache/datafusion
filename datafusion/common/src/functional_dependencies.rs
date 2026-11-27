@@ -9,6 +9,8 @@ use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::vec::IntoIter;
 
+use arrow::datatypes::Schema;
+
 use crate::utils::{merge_and_order_indices, set_difference};
 use crate::{DFSchema, HashSet, JoinType, NullEquality};
 
@@ -18,8 +20,42 @@ pub enum Constraint {
     /// Columns with the given indices form a composite primary key (they are
     /// jointly unique and not nullable):
     PrimaryKey(Vec<usize>),
-    /// Columns with the given indices form a composite unique key:
+    /// Columns with the given indices form a composite unique key (they are
+    /// jointly unique, but may be NULL: the rows `(1, NULL)` and `(1, NULL)`
+    /// can both exist under `UNIQUE (a, b)`):
     Unique(Vec<usize>),
+}
+
+impl Constraint {
+    /// Returns `true` if an ordering that starts with the constraint columns
+    /// sorts rows uniquely, so that any later sort key is redundant.
+    ///
+    /// This holds for a primary key. For a unique key, it holds only if none
+    /// of its columns is nullable in `schema`. For example, given `UNIQUE (a, b)`,
+    /// where both `a` and `b` are non-null, an existing sort prefix `(a, b)`
+    /// uniquely identifies each row, making subsequent sort keys redundant.
+    /// If `b` is nullable, the key allows several rows with NULL in `b`, and
+    /// sorting places them next to each other: the rows
+    /// `(a, b, c) = (1, NULL, 2)` and `(1, NULL, 1)` tie on `(a, b)`, so
+    /// `ORDER BY a, b, c` still needs `c`.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    pub fn implies_unique_sort_prefix(&self, schema: &Schema) -> bool {
+        match self {
+            Constraint::PrimaryKey(_) => true,
+            Constraint::Unique(indices) => indices.iter().all(|&idx| {
+                schema
+                    .fields()
+                    .get(idx)
+                    .is_some_and(|field| !field.is_nullable())
+            }),
+        }
+    }
 }
 
 /// This object encapsulates a list of functional constraints:
@@ -861,6 +897,8 @@ fn add_offset_to_vec<T: Copy + std::ops::Add<Output = T>>(
 mod tests {
     use super::*;
 
+    use arrow::datatypes::{DataType, Field};
+
     #[test]
     fn constraints_iter() {
         let constraints = Constraints::new_unverified(vec![
@@ -871,6 +909,18 @@ mod tests {
         assert_eq!(iter.next(), Some(&Constraint::PrimaryKey(vec![10])));
         assert_eq!(iter.next(), Some(&Constraint::Unique(vec![20])));
         assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn constraint_implies_unique_sort_prefix() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        assert!(Constraint::PrimaryKey(vec![0, 1]).implies_unique_sort_prefix(&schema));
+        assert!(Constraint::Unique(vec![0]).implies_unique_sort_prefix(&schema));
+        assert!(!Constraint::Unique(vec![0, 1]).implies_unique_sort_prefix(&schema));
+        assert!(!Constraint::Unique(vec![2]).implies_unique_sort_prefix(&schema));
     }
 
     #[test]
