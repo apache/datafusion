@@ -1767,10 +1767,21 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
                         && total_filters == 1
-                        && session
+                        && (session
                             .config_options()
                             .optimizer
                             .enable_piecewise_merge_join
+                            || (session
+                                .config_options()
+                                .optimizer
+                                .auto_piecewise_merge_join
+                                && matches!(
+                                    join_type,
+                                    JoinType::Inner
+                                        | JoinType::Left
+                                        | JoinType::Right
+                                        | JoinType::Full
+                                )))
                     {
                         let Expr::BinaryExpr(be) = &range_filters[0] else {
                             return plan_err!(
@@ -1865,6 +1876,28 @@ impl DefaultPhysicalPlanner {
                             execution_props,
                             planning_ctx,
                         )?;
+
+                        if !session
+                            .config_options()
+                            .optimizer
+                            .enable_piecewise_merge_join
+                            && !prefer_ordered_range_join(
+                                &physical_left,
+                                &physical_right,
+                                &on_left,
+                                &on_right,
+                                op,
+                                session,
+                            )
+                        {
+                            return Ok(Arc::new(NestedLoopJoinExec::try_new(
+                                physical_left,
+                                physical_right,
+                                join_filter,
+                                join_type,
+                                None,
+                            )?));
+                        }
 
                         Arc::new(PiecewiseMergeJoinExec::try_new(
                             physical_left,
@@ -3942,6 +3975,54 @@ impl InvariantChecker {
     }
 }
 
+/// Avoid a global sort on the buffered side. Keep small joins and large,
+/// similar-sized inputs on their existing path until their crossover is known.
+fn prefer_ordered_range_join(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    left_key: &Arc<dyn PhysicalExpr>,
+    right_key: &Arc<dyn PhysicalExpr>,
+    op: Operator,
+    session: &dyn Session,
+) -> bool {
+    if left.boundedness().is_unbounded() || right.boundedness().is_unbounded() {
+        return false;
+    }
+    if !left_key
+        .data_type(&left.schema())
+        .is_ok_and(|t| t.is_integer())
+        || !right_key
+            .data_type(&right.schema())
+            .is_ok_and(|t| t.is_integer())
+    {
+        return false;
+    }
+    let options = match op {
+        Operator::Lt | Operator::LtEq => SortOptions::new(true, false),
+        Operator::Gt | Operator::GtEq => SortOptions::new(false, true),
+        _ => return false,
+    };
+    let ordering = PhysicalSortExpr::new(Arc::clone(left_key), options);
+    if !left
+        .equivalence_properties()
+        .ordering_satisfy([ordering])
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    let context = SessionOptimizerContext::new(session);
+    let rows = |plan: &Arc<dyn ExecutionPlan>| {
+        context
+            .compute_statistics(plan, &StatisticsArgs::new())
+            .ok()?
+            .num_rows
+            .get_value()
+            .copied()
+    };
+    matches!((rows(left), rows(right)), (Some(l @ 64..=100_000), Some(r @ 64..=100_000))
+        if l.saturating_mul(r) >= 1_000_000)
+}
+
 #[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
@@ -4503,6 +4584,40 @@ mod tests {
                 params.args[0].human_display()
             ))
         }
+    }
+
+    #[tokio::test]
+    async fn automatically_choose_ordered_range_join() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int32, false)]));
+        for (rows, ordered, auto, expected) in [
+            (1024, true, true, "PiecewiseMergeJoin"),
+            (32, true, true, "NestedLoopJoinExec"),
+            (1024, false, true, "NestedLoopJoinExec"),
+            (1024, true, false, "NestedLoopJoinExec"),
+        ] {
+            let mut config = SessionConfig::new();
+            config.options_mut().optimizer.auto_piecewise_merge_join = auto;
+            let ctx = SessionContext::new_with_config(config);
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from_iter_values(0..rows))],
+            )?;
+            let mut table = MemTable::try_new(Arc::clone(&schema), vec![vec![batch]])?;
+            if ordered {
+                table = table.with_sort_order(vec![vec![col("k").sort(true, true)]]);
+            }
+            ctx.register_table("keys", Arc::new(table))?;
+            let plan = ctx
+                .sql("select a.k, b.k from keys a join keys b on a.k > b.k")
+                .await?
+                .create_physical_plan()
+                .await?;
+            assert_contains!(
+                displayable(plan.as_ref()).indent(false).to_string(),
+                expected
+            );
+        }
+        Ok(())
     }
 
     async fn plan_sql(query: &str) -> Result<Arc<dyn ExecutionPlan>> {

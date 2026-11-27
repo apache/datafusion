@@ -283,6 +283,10 @@ Determines whether the optimizer prefers Hash Join over Sort Merge Join during p
 - true: favors HashJoin for faster execution when sufficient memory is available.
 - false: allows SortMergeJoin to be chosen when more memory-efficient execution is needed.
 
+### auto_piecewise_merge_join (bool, default = true)
+
+For a single integer inequality, the planner can use a piecewise merge join when the buffered input already has the required ordering. Automatic selection considers bounded inner and outer joins with estimated inputs of 64 to 100,000 rows each and at least one million candidate pairs. Set this option to false to disable automatic selection.
+
 ### enable_piecewise_merge_join (bool, default = false)
 
 Enables the experimental Piecewise Merge Join algorithm.

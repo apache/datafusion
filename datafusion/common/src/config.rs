@@ -1848,6 +1848,11 @@ config_namespace! {
         /// one range filter.
         pub enable_piecewise_merge_join: bool, default = false
 
+        /// Automatically consider piecewise merge for a single integer inequality
+        /// on bounded inputs when the buffered key already has the required order.
+        /// Explicitly enabling piecewise merge also considers unordered inputs.
+        pub auto_piecewise_merge_join: bool, default = true
+
         /// The maximum estimated size in bytes for one input side of a HashJoin
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold: usize, default = 4 * 1024 * 1024
