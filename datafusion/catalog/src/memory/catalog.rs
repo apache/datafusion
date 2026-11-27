@@ -111,25 +111,20 @@ impl CatalogProvider for MemoryCatalogProvider {
         name: &str,
         cascade: bool,
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
-        if let Some(schema) = self.schema(name)? {
+        let Some(schema) = self.schema(name)? else {
+            return Ok(None);
+        };
+        if !cascade {
             let table_names = schema.table_names()?;
-            match (table_names.is_empty(), cascade) {
-                (true, _) | (false, true) => {
-                    let (_, removed) = self
-                        .schemas
-                        .remove(name)
-                        .expect("schema should exist after successful lookup");
-                    Ok(Some(removed))
-                }
-                (false, false) => exec_err!(
+            if !table_names.is_empty() {
+                return exec_err!(
                     "Cannot drop schema {} containing tables: {}",
                     name,
                     itertools::join(table_names.iter(), ", ")
-                ),
+                );
             }
-        } else {
-            Ok(None)
         }
+        Ok(self.schemas.remove(name).map(|(_, removed)| removed))
     }
 
     fn prepare_deregister_catalog(&self, cascade: bool) -> Result<()> {

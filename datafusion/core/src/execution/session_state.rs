@@ -35,7 +35,7 @@ use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     DFSchema, DataFusionError, ResolvedTableReference, TableReference, config_err,
-    exec_err, plan_datafusion_err, plan_err,
+    exec_err, plan_datafusion_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
@@ -401,20 +401,44 @@ impl SessionState {
 
     /// Retrieve the [`SchemaProvider`] for a specific [`TableReference`], if it
     /// exists.
+    ///
+    /// Returns an error if the catalog or schema does not exist, or if the
+    /// catalog provider fails to look up the schema.
     pub fn schema_for_ref(
         &self,
         table_ref: impl Into<TableReference>,
     ) -> datafusion_common::Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
-        let catalog_name = resolved_ref.catalog.as_ref();
+        let catalog = self.resolve_catalog(resolved_ref.catalog.as_ref())?;
+        self.schema_in_catalog(&catalog, &resolved_ref)?
+            .ok_or_else(|| {
+                plan_datafusion_err!("failed to resolve schema: {}", resolved_ref.schema)
+            })
+    }
 
+    /// Like [`Self::schema_for_ref`], but returns `Ok(None)` when the catalog
+    /// or schema does not exist. An `Err` means a provider failed to answer.
+    fn try_schema_for_ref(
+        &self,
+        resolved_ref: &ResolvedTableReference,
+    ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
+        match self.inner.catalog_list.catalog(&resolved_ref.catalog) {
+            Some(catalog) => self.schema_in_catalog(&catalog, resolved_ref),
+            None => Ok(None),
+        }
+    }
+
+    /// Look up `resolved_ref.schema` in `catalog`, handling the special
+    /// `information_schema` schema.
+    fn schema_in_catalog(
+        &self,
+        catalog: &Arc<dyn CatalogProvider>,
+        resolved_ref: &ResolvedTableReference,
+    ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
         // Special case handling for `information_schema`.
         if *resolved_ref.schema == *INFORMATION_SCHEMA
             && self.inner.config.information_schema()
         {
-            // Resolve catalog to ensure it exists
-            let _ = self.resolve_catalog(catalog_name)?;
-
             // Create the global information schema
             let information_schema_provider =
                 InformationSchemaProvider::new(Arc::clone(self.catalog_list()))
@@ -429,20 +453,15 @@ impl SessionState {
             let information_schema_provider =
                 if self.config().partition_information_schema() {
                     information_schema_provider
-                        .with_catalog_filter(Some(catalog_name.to_string()))
+                        .with_catalog_filter(Some(resolved_ref.catalog.to_string()))
                 } else {
                     information_schema_provider
                 };
 
-            return Ok(Arc::new(information_schema_provider));
+            return Ok(Some(Arc::new(information_schema_provider)));
         }
 
-        let catalog = self.resolve_catalog(catalog_name)?;
-        let Some(schema) = catalog.schema(&resolved_ref.schema)? else {
-            return plan_err!("failed to resolve schema: {}", resolved_ref.schema);
-        };
-
-        Ok(schema)
+        catalog.schema(&resolved_ref.schema)
     }
 
     fn resolve_catalog(
@@ -651,7 +670,7 @@ impl SessionState {
             let resolved = self.resolve_table_ref(reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved) {
                 let resolved = v.key();
-                if let Ok(schema) = self.schema_for_ref(resolved.clone())
+                if let Some(schema) = self.try_schema_for_ref(resolved)?
                     && let Some(table) = schema.table(&resolved.table).await?
                 {
                     v.insert(provider_as_source(table));

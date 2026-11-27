@@ -382,6 +382,64 @@ mod tests {
         Arc::new(EmptyTable::new(Arc::new(Schema::empty())))
     }
 
+    #[derive(Debug)]
+    struct FailingSchemaProvider;
+
+    #[async_trait]
+    impl SchemaProvider for FailingSchemaProvider {
+        fn table_names(&self) -> Result<Vec<String>> {
+            Err(DataFusionError::Internal(
+                "table_names failure from provider".to_string(),
+            ))
+        }
+
+        async fn table(&self, _name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+            Ok(None)
+        }
+
+        fn table_exist(&self, _name: &str) -> Result<bool> {
+            Err(DataFusionError::Internal(
+                "table_exist failure from provider".to_string(),
+            ))
+        }
+    }
+
+    fn assert_ffi_error_contains(err: DataFusionError, expected: &str) {
+        let DataFusionError::Ffi(message) = err else {
+            panic!("expected FFI error, got {err:?}");
+        };
+        assert!(
+            message.contains(expected),
+            "expected error message to contain '{expected}', got '{message}'"
+        );
+    }
+
+    #[test]
+    fn test_ffi_schema_provider_propagates_failures() {
+        let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+
+        let mut ffi_schema_provider = FFI_SchemaProvider::new(
+            Arc::new(FailingSchemaProvider),
+            None,
+            task_ctx_provider,
+            None,
+        );
+        ffi_schema_provider.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_schema_provider: Arc<dyn SchemaProvider> =
+            (&ffi_schema_provider).into();
+
+        let table_names_err = foreign_schema_provider
+            .table_names()
+            .expect_err("table_names failure should cross FFI boundary");
+        assert_ffi_error_contains(table_names_err, "table_names failure from provider");
+
+        let table_exist_err = foreign_schema_provider
+            .table_exist("failing_table")
+            .expect_err("table_exist failure should cross FFI boundary");
+        assert_ffi_error_contains(table_exist_err, "table_exist failure from provider");
+    }
+
     #[tokio::test]
     async fn test_round_trip_ffi_schema_provider() {
         let schema_provider = Arc::new(MemorySchemaProvider::new());

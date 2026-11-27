@@ -1097,13 +1097,13 @@ impl SessionContext {
         let DropTable {
             name, if_exists, ..
         } = cmd;
-        let result = self
+        let dropped = self
             .find_and_deregister(name.clone(), TableType::Base)
-            .await;
-        match (result, if_exists) {
-            (Ok(true), _) => self.return_empty_dataframe(),
-            (_, true) => self.return_empty_dataframe(),
-            (_, _) => exec_err!("Table '{name}' doesn't exist."),
+            .await?;
+        if dropped || if_exists {
+            self.return_empty_dataframe()
+        } else {
+            exec_err!("Table '{name}' doesn't exist.")
         }
     }
 
@@ -1111,13 +1111,13 @@ impl SessionContext {
         let DropView {
             name, if_exists, ..
         } = cmd;
-        let result = self
+        let dropped = self
             .find_and_deregister(name.clone(), TableType::View)
-            .await;
-        match (result, if_exists) {
-            (Ok(true), _) => self.return_empty_dataframe(),
-            (_, true) => self.return_empty_dataframe(),
-            (_, _) => exec_err!("View '{name}' doesn't exist."),
+            .await?;
+        if dropped || if_exists {
+            self.return_empty_dataframe()
+        } else {
+            exec_err!("View '{name}' doesn't exist.")
         }
     }
 

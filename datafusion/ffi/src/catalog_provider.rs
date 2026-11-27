@@ -475,12 +475,12 @@ mod tests {
         let schema_names_err = foreign_catalog
             .schema_names()
             .expect_err("schema_names failure should cross FFI boundary");
-        assert_ffi_error_contains(schema_names_err, "schema_names failure");
+        assert_ffi_error_contains(schema_names_err, "schema_names failure from provider");
 
         let schema_err = foreign_catalog
             .schema("failing_schema")
             .expect_err("schema failure should cross FFI boundary");
-        assert_ffi_error_contains(schema_err, "schema failure");
+        assert_ffi_error_contains(schema_err, "schema failure from provider");
     }
 
     #[test]
