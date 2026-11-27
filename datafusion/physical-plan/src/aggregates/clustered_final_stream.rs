@@ -911,15 +911,7 @@ mod tests {
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::new(GreedyMemoryPool::new(2300 * 1024)))
             .build_arc()?;
-        let context =
-            Arc::new(
-                TaskContext::default()
-                    .with_session_config(SessionConfig::new().set_bool(
-                        "datafusion.execution.enable_migration_aggregate",
-                        true,
-                    ))
-                    .with_runtime(runtime),
-            );
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
         let output = collect(plan.execute(0, context)?).await?;
         assert!(plan.metrics().unwrap().spill_count().unwrap() > 0);
         let rows: usize = output.iter().map(|b| b.num_rows()).sum();
@@ -995,15 +987,7 @@ mod tests {
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::new(GreedyMemoryPool::new(1500 * 1024)))
             .build_arc()?;
-        let context =
-            Arc::new(
-                TaskContext::default()
-                    .with_session_config(SessionConfig::new().set_bool(
-                        "datafusion.execution.enable_migration_aggregate",
-                        true,
-                    ))
-                    .with_runtime(runtime),
-            );
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
         let output = collect(plan.execute(0, context)?).await?;
         assert!(plan.metrics().unwrap().spill_count().unwrap() > 0);
         let rows: usize = output.iter().map(|b| b.num_rows()).sum();
