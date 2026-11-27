@@ -1230,6 +1230,30 @@ FROM distinct_pct_nulls ORDER BY id;
 statement ok
 DROP TABLE distinct_pct_nulls;
 
+# Issue #25266: percentile_cont does not round the interpolation weight for floats
+query RR
+SELECT percentile_cont(x, 2.5e-7), percentile_cont(2.5e-7) WITHIN GROUP (ORDER BY x)
+FROM (VALUES (CAST(0.0 AS DOUBLE)), (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE))) AS t(x);
+----
+0.0000005 0.0000005
+
+# Issue #25267: percentile_cont does not overflow for finite Float64 extremes
+query RR
+SELECT percentile_cont(x, 0.5), percentile_cont(0.5) WITHIN GROUP (ORDER BY x)
+FROM (VALUES (CAST(-1.7976931348623157e308 AS DOUBLE)), (CAST(1.7976931348623157e308 AS DOUBLE))) AS t(x);
+----
+0 0
+
+query IR
+SELECT id, percentile_cont(x, 0.5) OVER (
+    ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+)
+FROM (VALUES (1, CAST(-1.7976931348623157e308 AS DOUBLE)), (2, CAST(1.7976931348623157e308 AS DOUBLE))) AS t(id, x)
+ORDER BY id;
+----
+1 0
+2 0
+
 # percentile_cont for shorter floats
 
 query RT
@@ -4992,7 +5016,7 @@ SELECT percentile_cont(0.6) WITHIN GROUP (ORDER BY v DESC) FROM (VALUES (1), (2)
 query R
 SELECT percentile_cont(0.3) WITHIN GROUP (ORDER BY v) FROM (VALUES (10), (20), (30), (40), (50)) as t (v)
 ----
-21.99999
+22
 
 # Show 0.7 descending (should be same as 0.3 ascending)
 query R
