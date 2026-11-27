@@ -46,7 +46,12 @@ pub(crate) fn build_inverted_predicate(
         .into_iter()
         .map(|column| Arc::new(column) as Arc<dyn PhysicalExpr>)
         .collect();
-    null_operands.extend(predicate.stats_key_exprs().iter().cloned());
+    null_operands.extend(
+        predicate
+            .stats_key_exprs()
+            .iter()
+            .map(|key| Arc::clone(key.expr())),
+    );
 
     for operand in null_operands {
         inverted_expr = Arc::new(BinaryExpr::new(

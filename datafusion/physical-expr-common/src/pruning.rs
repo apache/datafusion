@@ -5,7 +5,10 @@
 use arrow::array::{Array, NullArray, UInt64Array};
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::{FieldRef, Schema, SchemaRef};
+use std::any::Any;
 use std::collections::HashSet;
+use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
@@ -13,6 +16,68 @@ use datafusion_common::error::DataFusionError;
 use datafusion_common::stats::Precision;
 use datafusion_common::{Column, Statistics};
 use datafusion_common::{ColumnStatistics, ScalarValue};
+
+/// An expression that has its own statistics, such as `get_field(s, 'a')`,
+/// together with the binding that the statistics source returned for it.
+///
+/// The source creates the binding when the pruning predicate asks whether
+/// `expr` has statistics. The predicate then passes the same value back to
+/// the `*_for_expr` methods of [`PruningStatistics`]. So the source reads the
+/// statistics from its own binding and does not look `expr` up again.
+///
+/// Two values are equal when their expressions are equal. The binding is
+/// not compared.
+#[derive(Clone)]
+pub struct StatsExpr {
+    expr: Arc<dyn PhysicalExpr>,
+    binding: Arc<dyn Any + Send + Sync>,
+}
+
+impl StatsExpr {
+    /// Creates a statistics key for `expr` with the source's `binding`.
+    pub fn new(expr: Arc<dyn PhysicalExpr>, binding: Arc<dyn Any + Send + Sync>) -> Self {
+        Self { expr, binding }
+    }
+
+    /// The expression, for example `get_field(s, 'a')`.
+    pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.expr
+    }
+
+    /// The binding as `T`, or `None` when another source created it.
+    ///
+    /// Only the type identifies the source, so a source must bind a private
+    /// type.
+    pub fn binding<T: Any>(&self) -> Option<&T> {
+        self.binding.downcast_ref()
+    }
+}
+
+impl fmt::Debug for StatsExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("StatsExpr").field(&self.expr).finish()
+    }
+}
+
+impl fmt::Display for StatsExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.expr.fmt(f)
+    }
+}
+
+impl PartialEq for StatsExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr.eq(&other.expr)
+    }
+}
+
+impl Eq for StatsExpr {}
+
+impl Hash for StatsExpr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+    }
+}
 
 /// A source of runtime statistical information to [`PruningPredicate`]s.
 ///
@@ -134,28 +199,29 @@ pub trait PruningStatistics {
     /// `expr` is an expression that the pruning predicate treats as having
     /// its own statistics instead of being computed from column statistics.
     /// Examples are a struct field access `get_field(s, 'a')`, or a shredded
-    /// variant access `variant_get(v, 'a')`. Columns in `expr` refer to the
-    /// schema the pruning predicate was built with.
+    /// variant access `variant_get(v, 'a')`. It carries the binding that this
+    /// source created for it (see [`StatsExpr`]). Columns in the expression
+    /// refer to the schema the pruning predicate was built with.
     ///
     /// The contract matches [`Self::min_values`]: each non-null entry must
     /// be a lower bound for every non-null value of `expr` in its container.
     ///
     /// The default returns `None`, so pruning keeps every container.
-    fn min_values_for_expr(&self, _expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+    fn min_values_for_expr(&self, _expr: &StatsExpr) -> Option<ArrayRef> {
         None
     }
 
     /// Return the maximum values of the expression `expr`, if known.
     ///
     /// See [`Self::min_values_for_expr`].
-    fn max_values_for_expr(&self, _expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+    fn max_values_for_expr(&self, _expr: &StatsExpr) -> Option<ArrayRef> {
         None
     }
 
     /// Return the number of rows where `expr` evaluates to null, if known.
     ///
     /// See [`Self::min_values_for_expr`].
-    fn null_counts_for_expr(&self, _expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+    fn null_counts_for_expr(&self, _expr: &StatsExpr) -> Option<ArrayRef> {
         None
     }
 
@@ -175,7 +241,7 @@ pub trait PruningStatistics {
     #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn contained_for_expr(
         &self,
-        _expr: &Arc<dyn PhysicalExpr>,
+        _expr: &StatsExpr,
         _values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
         None
@@ -573,19 +639,19 @@ impl PruningStatistics for CompositePruningStatistics {
         None
     }
 
-    fn min_values_for_expr(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+    fn min_values_for_expr(&self, expr: &StatsExpr) -> Option<ArrayRef> {
         self.statistics
             .iter()
             .find_map(|stats| stats.min_values_for_expr(expr))
     }
 
-    fn max_values_for_expr(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+    fn max_values_for_expr(&self, expr: &StatsExpr) -> Option<ArrayRef> {
         self.statistics
             .iter()
             .find_map(|stats| stats.max_values_for_expr(expr))
     }
 
-    fn null_counts_for_expr(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
+    fn null_counts_for_expr(&self, expr: &StatsExpr) -> Option<ArrayRef> {
         self.statistics
             .iter()
             .find_map(|stats| stats.null_counts_for_expr(expr))
@@ -594,7 +660,7 @@ impl PruningStatistics for CompositePruningStatistics {
     #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn contained_for_expr(
         &self,
-        expr: &Arc<dyn PhysicalExpr>,
+        expr: &StatsExpr,
         values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
         self.statistics

@@ -5,7 +5,7 @@
 //! Contains code to filter entire pages
 
 use crate::statistics_resolver::{
-    ExprStatisticsKind, FileStatisticsResolvers, ParquetLeafStatistics,
+    ExprStatisticsKind, FileStatisticsResolvers, ParquetLeafStatistics, bound_statistics,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -22,7 +22,7 @@ use arrow::{
 };
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
-use datafusion_physical_expr_common::pruning::PruningStatistics;
+use datafusion_physical_expr_common::pruning::{PruningStatistics, StatsExpr};
 use datafusion_pruning::{MAX_IN_LIST_SIZE, PruningPredicate, PruningPredicateBuilder};
 
 use log::{debug, trace};
@@ -109,9 +109,6 @@ pub struct PagePruningAccessPlanFilter {
     /// Whether every original conjunct can be evaluated from one column's page
     /// statistics. Otherwise no range can be classified as fully matched.
     all_predicates_supported: bool,
-    /// Statistics for expressions such as struct field accesses, and the
-    /// matcher of `predicates`
-    statistics_resolvers: Option<Arc<FileStatisticsResolvers>>,
 }
 
 /// Result of applying page-index pruning to a [`ParquetAccessPlan`].
@@ -164,7 +161,7 @@ impl PagePruningAccessPlanFilter {
         expr: &Arc<dyn PhysicalExpr>,
         schema: &SchemaRef,
         max_in_list_size: usize,
-        statistics_resolvers: Option<Arc<FileStatisticsResolvers>>,
+        statistics_resolvers: Option<&Arc<FileStatisticsResolvers>>,
     ) -> Self {
         let mut predicates = vec![];
         let mut all_predicates_supported = true;
@@ -176,7 +173,7 @@ impl PagePruningAccessPlanFilter {
                 .with_file_schema(Arc::clone(schema))
                 .with_max_in_list_size(max_in_list_size)
                 .with_statistics_expr_matcher(
-                    statistics_resolvers.clone().map(|r| r as _),
+                    statistics_resolvers.cloned().map(|r| r as _),
                 );
             let pp = match builder.try_build(Arc::clone(predicate)) {
                 Ok(pp) => pp,
@@ -205,7 +202,6 @@ impl PagePruningAccessPlanFilter {
         Self {
             predicates,
             all_predicates_supported,
-            statistics_resolvers,
         }
     }
 
@@ -343,7 +339,6 @@ impl PagePruningAccessPlanFilter {
                     parquet_schema,
                     parquet_metadata,
                     file_metrics,
-                    self.statistics_resolvers.as_deref(),
                 );
 
                 let Some((selection, pages)) = selection else {
@@ -416,7 +411,6 @@ impl PagePruningAccessPlanFilter {
                         parquet_schema,
                         parquet_metadata,
                         file_metrics,
-                        self.statistics_resolvers.as_deref(),
                     ) else {
                         complete = false;
                         break;
@@ -511,11 +505,7 @@ impl PagePruningAccessPlanFilter {
                     parquet_column(parquet_schema, arrow_schema, column.name())
                         .map(|(leaf, _)| leaf)
                 }
-                (_, Some(expr)) => self
-                    .statistics_resolvers
-                    .as_ref()?
-                    .bind(expr)?
-                    .page_index_leaf(),
+                (_, Some(expr)) => bound_statistics(expr)?.page_index_leaf(),
             }
         })
     }
@@ -640,7 +630,6 @@ fn prune_pages_for_predicate(
     parquet_schema: &SchemaDescriptor,
     parquet_metadata: &ParquetMetaData,
     metrics: &ParquetFileMetrics,
-    statistics_resolvers: Option<&FileStatisticsResolvers>,
 ) -> Option<(RowSelection, Vec<bool>)> {
     #[cfg(test)]
     tests::PAGE_PREDICATE_CALLS.set(tests::PAGE_PREDICATE_CALLS.get() + 1);
@@ -653,9 +642,12 @@ fn prune_pages_for_predicate(
     let converter = match stats_expr {
         None => StatisticsConverter::try_new(column.name(), arrow_schema, parquet_schema),
         Some(expr) => {
-            let leaf = statistics_resolvers?.bind(expr)?.page_index_leaf()?;
-            expr_field =
-                Field::new(expr.to_string(), expr.data_type(arrow_schema).ok()?, true);
+            let leaf = bound_statistics(expr)?.page_index_leaf()?;
+            expr_field = Field::new(
+                expr.to_string(),
+                expr.expr().data_type(arrow_schema).ok()?,
+                true,
+            );
             StatisticsConverter::from_column_index(leaf, &expr_field, parquet_schema)
         }
     };
@@ -670,12 +662,8 @@ fn prune_pages_for_predicate(
         }
     };
 
-    let pruning_stats = PagesPruningStatistics::try_new(
-        row_group_index,
-        converter,
-        parquet_metadata,
-        statistics_resolvers,
-    )?;
+    let pruning_stats =
+        PagesPruningStatistics::try_new(row_group_index, converter, parquet_metadata)?;
     prune_pages_in_one_row_group(row_group_index, predicate, &pruning_stats, metrics)
 }
 
@@ -757,7 +745,6 @@ struct PagesPruningStatistics<'a> {
     /// The Parquet leaf whose pages are pruned
     leaf: usize,
     parquet_schema: &'a SchemaDescriptor,
-    statistics_resolvers: Option<&'a FileStatisticsResolvers>,
 }
 
 impl<'a> PagesPruningStatistics<'a> {
@@ -770,7 +757,6 @@ impl<'a> PagesPruningStatistics<'a> {
         row_group_index: usize,
         converter: StatisticsConverter<'a>,
         parquet_metadata: &'a ParquetMetaData,
-        statistics_resolvers: Option<&'a FileStatisticsResolvers>,
     ) -> Option<Self> {
         let Some(parquet_column_index) = converter.parquet_column_index() else {
             trace!(
@@ -812,7 +798,6 @@ impl<'a> PagesPruningStatistics<'a> {
             trusted_min_max,
             leaf: parquet_column_index,
             parquet_schema: file_metadata.schema_descr(),
-            statistics_resolvers,
         })
     }
 
@@ -878,19 +863,16 @@ impl ParquetLeafStatistics for PagesPruningStatistics<'_> {
 }
 
 impl PruningStatistics for PagesPruningStatistics<'_> {
-    fn min_values_for_expr(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
-        self.statistics_resolvers?
-            .statistics(expr, ExprStatisticsKind::Min, self)
+    fn min_values_for_expr(&self, expr: &StatsExpr) -> Option<ArrayRef> {
+        bound_statistics(expr)?.statistics(ExprStatisticsKind::Min, self)
     }
 
-    fn max_values_for_expr(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
-        self.statistics_resolvers?
-            .statistics(expr, ExprStatisticsKind::Max, self)
+    fn max_values_for_expr(&self, expr: &StatsExpr) -> Option<ArrayRef> {
+        bound_statistics(expr)?.statistics(ExprStatisticsKind::Max, self)
     }
 
-    fn null_counts_for_expr(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<ArrayRef> {
-        self.statistics_resolvers?
-            .statistics(expr, ExprStatisticsKind::NullCount, self)
+    fn null_counts_for_expr(&self, expr: &StatsExpr) -> Option<ArrayRef> {
+        bound_statistics(expr)?.statistics(ExprStatisticsKind::NullCount, self)
     }
 
     fn min_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {

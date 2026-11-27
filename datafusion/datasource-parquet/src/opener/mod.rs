@@ -21,7 +21,9 @@ use crate::push_decoder::{
     RowFilterContext, RowGroupPruner, RowGroupReverser,
 };
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
-use crate::statistics_resolver::{FileStatisticsResolvers, ParquetStatisticsResolvers};
+use crate::statistics_resolver::{
+    FileStatisticsResolvers, ParquetStatisticsResolvers, bound_statistics,
+};
 use crate::{
     Int96Coercer, ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     ParquetRowSelection, ParquetVirtualColumn, RowGroupAccess,
@@ -1293,8 +1295,6 @@ impl FiltersPreparedParquetOpen {
             &prepared.extensions,
             rg_metadata,
         )?);
-        row_groups = row_groups
-            .with_statistics_resolvers(Arc::clone(&self.file_statistics_resolvers));
 
         // If there is a range restricting what parts of the file to read
         if let Some(range) = prepared.file_range.as_ref() {
@@ -1537,7 +1537,6 @@ impl RowGroupsPrunedParquetOpen {
                 )?
             };
 
-            let file_statistics_resolvers = &self.prepared.file_statistics_resolvers;
             let prepared = &mut self.prepared.loaded.prepared;
             let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(
                 mem::replace(&mut prepared.async_file_reader, replacement_reader),
@@ -1556,11 +1555,17 @@ impl RowGroupsPrunedParquetOpen {
                 Some((BloomFilterKey::Column(name), leaf))
             });
             let exprs = predicate.literal_exprs().into_iter().filter_map(|expr| {
-                let leaf = file_statistics_resolvers.bind(&expr)?.bloom_filter_leaf()?;
-                Some((BloomFilterKey::Expr(expr), leaf))
+                let leaf = bound_statistics(&expr)?.bloom_filter_leaf()?;
+                Some((BloomFilterKey::Leaf(leaf), leaf))
             });
-            let bloom_filter_leaves = columns
-                .chain(exprs)
+            let mut bloom_filter_leaves = columns.chain(exprs).collect::<Vec<_>>();
+            // Expressions that read the same leaf share its bloom filter.
+            let mut seen_leaves = HashSet::new();
+            bloom_filter_leaves.retain(|(key, leaf)| {
+                !matches!(key, BloomFilterKey::Leaf(_)) || seen_leaves.insert(*leaf)
+            });
+            let bloom_filter_leaves = bloom_filter_leaves
+                .into_iter()
                 .map(|(key, leaf)| {
                     let descr = parquet_schema.column(leaf);
                     (key, leaf, descr.physical_type(), descr.type_length())
@@ -1599,8 +1604,8 @@ impl RowGroupsPrunedParquetOpen {
                             *physical_type,
                             *type_length,
                         ),
-                        BloomFilterKey::Expr(expr) => bloom_filter_stats.insert_for_expr(
-                            Arc::clone(expr),
+                        BloomFilterKey::Leaf(leaf) => bloom_filter_stats.insert_for_leaf(
+                            *leaf,
                             bf,
                             *physical_type,
                             *type_length,
@@ -1638,8 +1643,9 @@ impl RowGroupsPrunedParquetOpen {
 enum BloomFilterKey {
     /// A column of the file schema, by name.
     Column(String),
-    /// An expression with its own statistics, such as a struct field.
-    Expr(Arc<dyn PhysicalExpr>),
+    /// The leaf of an expression with its own statistics, such as a struct
+    /// field. The bloom filter statistics find it through the binding.
+    Leaf(usize),
 }
 
 impl RowGroupsPrunedParquetOpen {
@@ -2148,7 +2154,7 @@ pub(crate) fn build_page_pruning_predicate(
         predicate,
         file_schema,
         max_in_list_size,
-        statistics_resolvers.cloned(),
+        statistics_resolvers,
     ))
 }
 

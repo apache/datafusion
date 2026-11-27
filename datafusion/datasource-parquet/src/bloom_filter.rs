@@ -7,12 +7,11 @@
 //! [`datafusion_pruning`] can consume it.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
+use crate::statistics_resolver::bound_statistics;
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{Column, ScalarValue};
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::pruning::PruningStatistics;
+use datafusion_physical_expr_common::pruning::{PruningStatistics, StatsExpr};
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
 use parquet::data_type::Decimal;
@@ -27,7 +26,7 @@ pub struct BloomFilterStatistics {
     column_sbbf: HashMap<String, ColumnBloomFilter>,
     /// Bloom filters for expressions with their own statistics (such as
     /// struct fields), from the leaf a statistics resolver names.
-    expr_sbbf: Vec<(Arc<dyn PhysicalExpr>, ColumnBloomFilter)>,
+    expr_sbbf: Vec<(usize, ColumnBloomFilter)>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,17 +58,17 @@ impl BloomFilterStatistics {
         self.column_sbbf.is_empty() && self.expr_sbbf.is_empty()
     }
 
-    /// Add the Bloom filter that holds the values of `expr`, such as the
-    /// leaf of a struct field.
-    pub(crate) fn insert_for_expr(
+    /// Add the Bloom filter of the Parquet leaf `leaf`, for the expressions
+    /// whose binding names it as their bloom filter leaf.
+    pub(crate) fn insert_for_leaf(
         &mut self,
-        expr: Arc<dyn PhysicalExpr>,
+        leaf: usize,
         sbbf: Sbbf,
         ty: Type,
         type_length: i32,
     ) {
         self.expr_sbbf.push((
-            expr,
+            leaf,
             ColumnBloomFilter {
                 sbbf,
                 physical_type: ty,
@@ -266,10 +265,11 @@ impl PruningStatistics for BloomFilterStatistics {
     /// Like [`Self::contained`], for an expression with its own bloom filter.
     fn contained_for_expr(
         &self,
-        expr: &Arc<dyn PhysicalExpr>,
+        expr: &StatsExpr,
         values: &HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
-        let (_, filter) = self.expr_sbbf.iter().find(|(e, _)| e == expr)?;
+        let leaf = bound_statistics(expr)?.bloom_filter_leaf()?;
+        let (_, filter) = self.expr_sbbf.iter().find(|(l, _)| *l == leaf)?;
         Some(Self::contains(filter, values))
     }
 }
@@ -289,6 +289,7 @@ mod tests {
     use bytes::{BufMut, BytesMut};
     use datafusion_common::Result;
     use datafusion_expr::{Expr, col, lit};
+    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};

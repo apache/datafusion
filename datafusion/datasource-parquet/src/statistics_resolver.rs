@@ -7,11 +7,11 @@
 //!
 //! ```text
 //! PruningPredicate                         Parquet scan, one file
-//!   asks the matcher: is `expr` a key? --> FileStatisticsResolvers::matches
-//!                                            -> first resolver whose `bind`
-//!                                               returns a binding (cached)
-//!   min_values_for_expr(expr) ----------> RowGroupPruningStatistics / PagesPruningStatistics
-//!                                            -> the cached binding reads leaf
+//!   asks the matcher: is `expr` a key? --> FileStatisticsResolvers::bind
+//!     keeps the binding in StatsExpr  <--    -> first resolver whose `bind`
+//!                                               returns a binding
+//!   min_values_for_expr(stats_expr) ----> RowGroupPruningStatistics / PagesPruningStatistics
+//!                                            -> the binding reads leaf
 //!                                               statistics through
 //!                                               ParquetLeafStatistics
 //! ```
@@ -19,9 +19,9 @@
 //! A resolver works on [`ParquetLeafStatistics`], so the same resolver serves
 //! row group statistics and the page index.
 
-use std::collections::HashMap;
+use std::any::Any;
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -29,7 +29,7 @@ use datafusion_common::ScalarValue;
 use datafusion_functions::core::getfield::GetFieldFunc;
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
-use datafusion_pruning::StatisticsExprMatcher;
+use datafusion_pruning::{StatisticsExprMatcher, StatsExpr};
 use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
 
 /// Which statistic a [`BoundExprStatistics`] is asked for.
@@ -76,12 +76,16 @@ pub trait ParquetLeafStatistics {
 pub trait ParquetStatisticsResolver: Debug + Send + Sync {
     /// Binds `expr` to the leaves of one file.
     ///
-    /// The scan calls `bind` once per file for each distinct expression
-    /// that the pruning predicates ask about. Return `None` when this
-    /// resolver has no statistics for `expr` in this file. Then the pruning
-    /// predicate does not use `expr` as a statistics key, and it looks for
-    /// keys in the children of `expr` instead. For example, a predicate on
-    /// `TRY_CAST(e AS Int64)` can use the statistics of `e`.
+    /// Return `None` when this resolver has no statistics for `expr` in this
+    /// file. Then the pruning predicate does not use `expr` as a statistics
+    /// key, and it looks for keys in the children of `expr` instead. For
+    /// example, a predicate on `TRY_CAST(e AS Int64)` can use the statistics
+    /// of `e`.
+    ///
+    /// The pruning predicates of a file call `bind` for many nodes of each
+    /// predicate, and again for each dynamic filter update. So a resolver
+    /// must reject an expression that it does not handle cheaply, for
+    /// example with one downcast.
     ///
     /// `EXPLAIN` has no file, so it binds against a Parquet schema that it
     /// builds from the Arrow file schema. A resolver for leaves that exist
@@ -179,17 +183,15 @@ type BoundStatistics = Arc<dyn BoundExprStatistics>;
 ///
 /// This is the [`StatisticsExprMatcher`] of the pruning predicates for the
 /// file. An expression is a statistics key when the first resolver binds
-/// it. The pruning statistics then read the values from the same binding,
-/// so the key and its statistics always agree.
-///
-/// Each expression is bound once. The binding is cached for the row group,
-/// page index, bloom filter and dynamic filter pruning of the file.
+/// it. The predicate stores that binding in the key's [`StatsExpr`], and the
+/// pruning statistics read the values from it (see [`bound_statistics`]).
+/// So the key and its statistics always agree, and nothing looks the
+/// expression up again.
 #[derive(Debug)]
 pub(crate) struct FileStatisticsResolvers {
     resolvers: ParquetStatisticsResolvers,
     arrow_schema: SchemaRef,
     parquet_schema: SchemaDescPtr,
-    bindings: Mutex<HashMap<Arc<dyn PhysicalExpr>, BoundStatistics>>,
 }
 
 impl FileStatisticsResolvers {
@@ -204,48 +206,7 @@ impl FileStatisticsResolvers {
             resolvers,
             arrow_schema,
             parquet_schema,
-            bindings: Mutex::new(HashMap::new()),
         }
-    }
-
-    /// The binding of `expr` from the first resolver that binds it.
-    ///
-    /// The cache holds only successful bindings, so an expression without
-    /// statistics does not grow it. The lock is not held while a resolver
-    /// runs.
-    pub(crate) fn bind(
-        &self,
-        expr: &Arc<dyn PhysicalExpr>,
-    ) -> Option<Arc<dyn BoundExprStatistics>> {
-        if let Some(bound) = self.lock_bindings().get(expr) {
-            return Some(Arc::clone(bound));
-        }
-        let bound = self
-            .resolvers
-            .resolvers
-            .iter()
-            .find_map(|r| r.bind(expr, &self.arrow_schema, &self.parquet_schema))?;
-        Some(Arc::clone(
-            self.lock_bindings()
-                .entry(Arc::clone(expr))
-                .or_insert(bound),
-        ))
-    }
-
-    fn lock_bindings(
-        &self,
-    ) -> MutexGuard<'_, HashMap<Arc<dyn PhysicalExpr>, BoundStatistics>> {
-        self.bindings.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    /// The statistics of `expr` for `kind`, if `expr` is bound.
-    pub(crate) fn statistics(
-        &self,
-        expr: &Arc<dyn PhysicalExpr>,
-        kind: ExprStatisticsKind,
-        statistics: &dyn ParquetLeafStatistics,
-    ) -> Option<ArrayRef> {
-        self.bind(expr)?.statistics(kind, statistics)
     }
 }
 
@@ -258,9 +219,21 @@ impl PartialEq for FileStatisticsResolvers {
 }
 
 impl StatisticsExprMatcher for FileStatisticsResolvers {
-    fn matches(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        self.bind(expr).is_some()
+    /// The binding of the first resolver that binds `expr`.
+    fn bind(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<Arc<dyn Any + Send + Sync>> {
+        let bound: BoundStatistics = self
+            .resolvers
+            .resolvers
+            .iter()
+            .find_map(|r| r.bind(expr, &self.arrow_schema, &self.parquet_schema))?;
+        Some(Arc::new(bound))
     }
+}
+
+/// The binding that [`FileStatisticsResolvers`] created for `expr`, or
+/// `None` when another matcher created it.
+pub(crate) fn bound_statistics(expr: &StatsExpr) -> Option<&BoundStatistics> {
+    expr.binding::<BoundStatistics>()
 }
 
 /// Returns the index of the Parquet leaf column at `path`, such as
