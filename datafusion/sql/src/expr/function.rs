@@ -58,6 +58,7 @@ fn find_closest_match(candidates: Vec<String>, target: &str) -> Option<String> {
     let target = target.to_lowercase();
     let target_len = target.chars().count();
     let mut cache = Vec::new();
+    // (best_distance, best_max_len, best_lower, candidate)
     let mut best_match: Option<(usize, usize, String, String)> = None;
     for candidate in candidates {
         let candidate_lower = candidate.to_lowercase();
