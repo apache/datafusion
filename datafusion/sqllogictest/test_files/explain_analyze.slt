@@ -473,9 +473,6 @@ set datafusion.execution.target_partitions = 1;
 statement ok
 set datafusion.optimizer.repartition_joins = false;
 
-statement ok
-set datafusion.execution.enable_migration_aggregate = false;
-
 query TT
 EXPLAIN ANALYZE
 WITH t (k) AS (
@@ -487,12 +484,9 @@ GROUP BY k;
 ----
 Plan with Metrics
 01)ProjectionExec: expr=[k@0 as k, count(Int64(1))@1 as count(*)], metrics=[output_bytes=1056.0 B]
-02)--AggregateExec: mode=Single, gby=[k@0 as k], aggr=[count(Int64(1))], metrics=[output_bytes=1056.0 B, spilled_bytes=0.0 B, peak_mem_used=10.9 KB]
+02)--AggregateExec: mode=Single, gby=[k@0 as k], aggr=[count(Int64(1))], metrics=[output_bytes=1056.0 B, spilled_bytes=0.0 B]
 03)----ProjectionExec: expr=[column1@0 as k], metrics=[output_bytes=32.0 B]
 04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
-
-statement ok
-reset datafusion.execution.enable_migration_aggregate;
 
 statement ok
 reset datafusion.optimizer.prefer_hash_join;
