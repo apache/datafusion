@@ -8418,8 +8418,8 @@ async fn filtered_join_returns_output_coalescer_error() -> Result<()> {
     let left = RecordBatch::try_new(
         Arc::clone(&left_schema),
         vec![
-            Arc::new(Int32Array::from((0..200).collect::<Vec<_>>())),
-            Arc::new(Int32Array::from(vec![0; 200])),
+            Arc::new(Int32Array::from((0..300).collect::<Vec<_>>())),
+            Arc::new(Int32Array::from(vec![0; 300])),
         ],
     )?;
     let right_batch = |base: i32, tag: &str| -> Result<RecordBatch> {
@@ -8443,7 +8443,11 @@ async fn filtered_join_returns_output_coalescer_error() -> Result<()> {
             ],
         )?)
     };
-    let right = vec![right_batch(0, "a")?, right_batch(100, "b")?];
+    let right = vec![
+        right_batch(0, "a")?,
+        right_batch(100, "b")?,
+        right_batch(200, "c")?,
+    ];
     let left_exec =
         TestMemoryExec::try_new_exec(&[vec![left]], Arc::clone(&left_schema), None)?;
     let right_exec =
