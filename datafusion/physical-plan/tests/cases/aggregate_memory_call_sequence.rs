@@ -300,12 +300,7 @@ impl Case {
         let context = Arc::new(
             TaskContext::default()
                 .with_session_config(
-                    SessionConfig::new()
-                        .with_batch_size(self.batch_size)
-                        .set_bool(
-                            "datafusion.execution.enable_migration_aggregate",
-                            true,
-                        ),
+                    SessionConfig::new().with_batch_size(self.batch_size),
                 )
                 .with_runtime(runtime.build_arc()?),
         );
