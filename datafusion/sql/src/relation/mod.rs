@@ -264,7 +264,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             TableFactor::Function {
                 name, args, alias, ..
             } => {
-                let tbl_func_ref = self.object_name_to_table_reference(name)?;
+                // Explicit object normalization must not change function registry lookup.
+                let tbl_func_ref = crate::planner::object_name_to_table_reference(
+                    name,
+                    self.options.enable_ident_normalization,
+                )?;
                 let schema = planner_context
                     .outer_queries_schemas()
                     .last()
