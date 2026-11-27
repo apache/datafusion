@@ -788,17 +788,24 @@ mod test {
             })
             .collect::<Result<Vec<_>>>()?;
         assert_eq!(statistics.len(), 2);
+        // The files hold no nulls, and a limit cannot add any
         let mut expected_0 = Statistics::clone(&statistics[0]);
         expected_0.column_statistics = expected_0
             .column_statistics
             .into_iter()
-            .map(|c| c.to_inexact())
+            .map(|c| ColumnStatistics {
+                null_count: Precision::Exact(0),
+                ..c.to_inexact()
+            })
             .collect();
         let mut expected_1 = Statistics::clone(&statistics[1]);
         expected_1.column_statistics = expected_1
             .column_statistics
             .into_iter()
-            .map(|c| c.to_inexact())
+            .map(|c| ColumnStatistics {
+                null_count: Precision::Exact(0),
+                ..c.to_inexact()
+            })
             .collect();
         assert_eq!(*statistics[0], expected_0);
         assert_eq!(*statistics[1], expected_1);
