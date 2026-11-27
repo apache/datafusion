@@ -13,6 +13,7 @@ use crate::aggregates::{
     AccumulatorItem, AggrDynFilter, AggregateInputMode, AggregateMode,
     AggregateOutputMode, DynamicFilterAggregateType, aggregate_expressions,
     aggregate_metric_label, create_accumulators_with_metrics,
+    incoming_state_batch_reservation_bytes,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::stream::EmptyRecordBatchStream;
@@ -386,6 +387,22 @@ impl AggregateStream {
             loop {
                 let result = match this.input.next().await {
                     Some(Ok(batch)) => {
+                        // Partial states can own the entire input. Reserve the batch
+                        // before merging it, then transfer that reservation to the
+                        // accumulator's state below.
+                        let previous_size = this.reservation.size();
+                        let batch_memory =
+                            if this.mode.input_mode() == AggregateInputMode::Partial {
+                                incoming_state_batch_reservation_bytes(&batch)
+                            } else {
+                                0
+                            };
+                        if batch_memory > 0
+                            && let Err(e) = this.reservation.try_grow(batch_memory)
+                        {
+                            this.finished = true;
+                            return Some((Err(e), this));
+                        }
                         let result = {
                             let elapsed_compute = this.baseline_metrics.elapsed_compute();
                             let _timer = elapsed_compute.timer(); // Stops on drop
@@ -405,12 +422,11 @@ impl AggregateStream {
                             Ok(allocated)
                         });
 
-                        // allocate memory
-                        // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
-                        // overshooting a bit. Also this means we either store the whole record batch or not.
-                        match result
-                            .and_then(|allocated| this.reservation.try_grow(allocated))
-                        {
+                        // Once the batch is merged, its buffers are either part of
+                        // the accumulator state or no longer retained.
+                        match result.and_then(|allocated| {
+                            this.reservation.try_resize(previous_size + allocated)
+                        }) {
                             Ok(_) => continue,
                             Err(e) => Err(e),
                         }
@@ -596,10 +612,18 @@ mod tests {
     use crate::metrics::{MetricValue, MetricsSet};
     use crate::test::TestMemoryExec;
     use crate::{ExecutionPlan, collect};
-    use arrow::array::{Float64Array, Int32Array, UInt32Array};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{
+        ArrayRef, AsArray, Float64Array, Int32Array, Int64Array, ListArray, StringArray,
+        StringViewBuilder, UInt32Array,
+    };
+    use arrow::buffer::OffsetBuffer;
+    use arrow::datatypes::{DataType, Field, Int64Type, Schema};
+    use datafusion_common::DataFusionError;
+    use datafusion_execution::memory_pool::GreedyMemoryPool;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::{
         array_agg::array_agg_udaf,
+        count::count_udaf,
         min_max::{max_udaf, min_udaf},
         sum::sum_udaf,
     };
@@ -1027,6 +1051,250 @@ mod tests {
         assert!(aggregate_metrics(&final_metrics, "update").is_empty());
         assert!(aggregate_metrics(&final_metrics, "state").is_empty());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn final_aggregate_reserves_incoming_state_batch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("array_agg")
+                .build()?,
+        );
+        let group_by = PhysicalGroupBy::default();
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            vec![Arc::clone(&aggregate)],
+            vec![None],
+            empty,
+            Arc::clone(&schema),
+        )?;
+        // One row that retains 1 MB of list elements, like the state of `array_agg`.
+        let state_schema = partial.schema();
+        let values = Arc::new(Int64Array::from(vec![1_i64; 131_072]));
+        let offsets = OffsetBuffer::from_lengths([131_072]);
+        let field = Arc::new(Field::new_list_field(DataType::Int64, true));
+        let list: ArrayRef = Arc::new(ListArray::new(field, offsets, values, None));
+        let batch = RecordBatch::try_new(Arc::clone(&state_schema), vec![list])?;
+        let input = TestMemoryExec::try_new_exec(
+            &[vec![batch]],
+            Arc::clone(&state_schema),
+            None,
+        )?;
+        let final_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by.as_final(),
+            vec![aggregate],
+            vec![None],
+            input,
+            state_schema,
+        )?);
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(64 * 1024)))
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        let err = collect(
+            Arc::clone(&final_aggregate) as Arc<dyn ExecutionPlan>,
+            context,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            err.find_root(),
+            DataFusionError::ResourcesExhausted(_)
+        ));
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(2 * 1024 * 1024)))
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        let output = collect(final_aggregate as Arc<dyn ExecutionPlan>, context).await?;
+        let result = output[0].column(0).as_list::<i32>();
+        assert_eq!(result.value(0).len(), 131_072);
+        Ok(())
+    }
+
+    /// A full batch of fixed-width states is bounded by `batch_size`, so it is
+    /// not charged even when it is larger than the pool.
+    #[tokio::test]
+    async fn final_aggregate_does_not_charge_bounded_state_batch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let aggregates = vec![
+            sum_aggregate(&schema, "v", "a")?,
+            sum_aggregate(&schema, "v", "b")?,
+        ];
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let state = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            aggregates.clone(),
+            vec![None, None],
+            empty,
+            Arc::clone(&schema),
+        )?
+        .schema();
+        // 8192 rows of two `Int64` states: 128 KB, 16 bytes per row.
+        let values = || Arc::new(Int64Array::from(vec![1_i64; 8192])) as ArrayRef;
+        let batch = RecordBatch::try_new(Arc::clone(&state), vec![values(), values()])?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&state), None)?;
+        let plan = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            aggregates,
+            vec![None, None],
+            input,
+            state,
+        )?);
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(96 * 1024)))
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        let output = collect(plan as Arc<dyn ExecutionPlan>, context).await?;
+        let result = output[0].column(0).as_primitive::<Int64Type>();
+        assert_eq!(result.value(0), 8192);
+        Ok(())
+    }
+
+    /// `Single` mode operates on raw input rather than partial states, so its
+    /// batches are not charged to the incoming state batch reservation.
+    #[tokio::test]
+    async fn single_aggregate_does_not_charge_raw_input() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, false)]));
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("count")
+                .build()?,
+        );
+        // 64 rows of 16 KB string values (1 MB).
+        let val_str = "a".repeat(16 * 1024);
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..64).map(|_| val_str.as_str()),
+        ));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![values])?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let plan = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::default(),
+            vec![aggregate],
+            vec![None],
+            input,
+            schema,
+        )?);
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(512 * 1024)))
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        let output = collect(plan as Arc<dyn ExecutionPlan>, context).await?;
+        let result = output[0].column(0).as_primitive::<Int64Type>();
+        assert_eq!(result.value(0), 64);
+        Ok(())
+    }
+
+    /// `max` keeps one value of the batch, so only the up-front reservation
+    /// can refuse a state batch that holds 1 MB.
+    #[tokio::test]
+    async fn final_aggregate_reserves_state_batch_it_does_not_retain() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, false)]));
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(max_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("max")
+                .build()?,
+        );
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let state = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            vec![Arc::clone(&aggregate)],
+            vec![None],
+            empty,
+            Arc::clone(&schema),
+        )?
+        .schema();
+        // 64 rows of 16 KB string states (1 MB).
+        let value = "a".repeat(16 * 1024);
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..64).map(|_| value.as_str()),
+        ));
+        let batch = RecordBatch::try_new(Arc::clone(&state), vec![values])?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&state), None)?;
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![aggregate],
+            vec![None],
+            input,
+            state,
+        )?);
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(512 * 1024)))
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        let err = collect(plan, context).await.unwrap_err();
+        assert!(matches!(
+            err.find_root(),
+            DataFusionError::ResourcesExhausted(_)
+        ));
+        Ok(())
+    }
+
+    /// Views of one shared value count it once per row, so only the buffers
+    /// the batch holds decide whether it is charged.
+    #[tokio::test]
+    async fn final_aggregate_does_not_charge_shared_view_bytes() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "v",
+            DataType::Utf8View,
+            false,
+        )]));
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(max_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("max")
+                .build()?,
+        );
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let state = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::default(),
+            vec![Arc::clone(&aggregate)],
+            vec![None],
+            empty,
+            Arc::clone(&schema),
+        )?
+        .schema();
+        // 8192 views of one 2 KB value: 130 KB of buffers, 16 MB counted per row.
+        let value = "a".repeat(2 * 1024);
+        let mut builder = StringViewBuilder::new().with_deduplicate_strings();
+        for _ in 0..8192 {
+            builder.append_value(&value);
+        }
+        let values: ArrayRef = Arc::new(builder.finish());
+        let batch = RecordBatch::try_new(Arc::clone(&state), vec![values])?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&state), None)?;
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            PhysicalGroupBy::default(),
+            vec![aggregate],
+            vec![None],
+            input,
+            state,
+        )?);
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(4 * 1024 * 1024)))
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        collect(plan, context).await?;
         Ok(())
     }
 }
