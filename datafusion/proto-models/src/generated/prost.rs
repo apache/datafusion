@@ -2127,6 +2127,10 @@ pub struct ParquetScanExecNode {
     /// Source-specific footer prefetch size. Absent means no hint.
     #[prost(uint64, optional, tag = "7")]
     pub metadata_size_hint: ::core::option::Option<u64>,
+    /// Reverse the rows within each row group too, making a reversed scan
+    /// exactly ordered. Only meaningful with `reverse_row_groups`.
+    #[prost(bool, tag = "8")]
+    pub reverse_rows: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvScanExecNode {
