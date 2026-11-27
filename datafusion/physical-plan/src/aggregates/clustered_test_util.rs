@@ -12,7 +12,6 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
-use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
 use datafusion_execution::memory_pool::{
     GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
@@ -159,20 +158,14 @@ async fn collect_with_held_memory(
     pool: Arc<dyn MemoryPool>,
 ) -> Result<(Vec<RecordBatch>, usize)> {
     let context = Arc::new(
-        TaskContext::default()
-            .with_session_config(
-                SessionConfig::new()
-                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
-            )
-            .with_runtime(
-                RuntimeEnvBuilder::new()
-                    .with_memory_pool(Arc::clone(&pool))
-                    .with_disk_manager_builder(
-                        DiskManagerBuilder::default()
-                            .with_mode(DiskManagerMode::Disabled),
-                    )
-                    .build_arc()?,
-            ),
+        TaskContext::default().with_runtime(
+            RuntimeEnvBuilder::new()
+                .with_memory_pool(Arc::clone(&pool))
+                .with_disk_manager_builder(
+                    DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+                )
+                .build_arc()?,
+        ),
     );
     let mut stream = plan.execute(0, context)?;
     // Each output batch is a single slice, so the stream releases it before

@@ -19,9 +19,6 @@ SET datafusion.optimizer.repartition_aggregations = true
 statement ok
 SET datafusion.optimizer.prefer_existing_sort = true
 
-statement ok
-SET datafusion.execution.enable_migration_aggregate = true
-
 # Limit merge buffers so replay can allocate while another partition retains
 # its aggregate state in the shared greedy pool.
 statement ok
@@ -225,9 +222,6 @@ RESET datafusion.runtime.memory_limit
 
 statement ok
 RESET datafusion.optimizer.enable_round_robin_repartition
-
-statement ok
-RESET datafusion.execution.enable_migration_aggregate
 
 statement ok
 RESET datafusion.optimizer.prefer_existing_sort
