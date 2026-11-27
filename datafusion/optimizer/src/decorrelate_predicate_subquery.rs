@@ -3,7 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`DecorrelatePredicateSubquery`] converts `IN`/`EXISTS` subquery predicates to `SEMI`/`ANTI` joins
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -27,7 +27,10 @@ use datafusion_expr::expr::{Exists, InSubquery, in_subquery_tuple_values};
 use datafusion_expr::expr_rewriter::{
     create_col_from_scalar_expr, strip_outer_reference,
 };
-use datafusion_expr::logical_plan::{JoinType, Subquery};
+use datafusion_expr::logical_plan::{
+    JoinType, MaterializedCte, MaterializedCteId, MaterializedCtePlan,
+    MaterializedCteScan, Subquery,
+};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, Operator,
@@ -867,6 +870,163 @@ struct BuiltJoin {
     mark_is_three_valued_exact: bool,
 }
 
+/// Evaluate a scalar aggregate over the rows matching each distinct set of
+/// outer values. Pulling a range predicate above this aggregate would split
+/// those rows into separate groups and evaluate HAVING on the wrong counts.
+fn build_domain_join(
+    left: &LogicalPlan,
+    subquery: &LogicalPlan,
+    join_type: JoinType,
+    alias: &str,
+) -> Result<Option<BuiltJoin>> {
+    // An ordinary SELECT list does not affect EXISTS.
+    let subquery = match subquery {
+        LogicalPlan::Projection(p) => p.input.as_ref(),
+        plan => plan,
+    };
+    let LogicalPlan::Filter(having) = subquery else {
+        return Ok(None);
+    };
+    let LogicalPlan::Aggregate(agg) = having.input.as_ref() else {
+        return Ok(None);
+    };
+    let LogicalPlan::Filter(correlation) = agg.input.as_ref() else {
+        return Ok(None);
+    };
+    if !agg.group_expr.is_empty()
+        || having.predicate.contains_outer()
+        || agg.aggr_expr.iter().any(Expr::contains_outer)
+        || correlation
+            .input
+            .exists(|p| Ok(p.contains_outer_reference()))?
+        || subquery.exists(|p| {
+            for expr in p.expressions() {
+                if expr.exists(|e| {
+                    Ok(e.is_volatile_node()
+                        || matches!(
+                            e,
+                            Expr::ScalarSubquery(_)
+                                | Expr::Exists(_)
+                                | Expr::InSubquery(_)
+                                | Expr::SetComparison(_)
+                        ))
+                })? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })?
+    {
+        return Ok(None);
+    }
+
+    // Assign each outer reference its own domain column, even if two tables
+    // have columns with the same unqualified name.
+    let domain_column = |mut name: String| {
+        while [left.schema(), correlation.input.schema(), &agg.schema]
+            .iter()
+            .any(|schema| schema.has_column_with_unqualified_name(&name))
+        {
+            name.push('_');
+        }
+        Column::new(Some(alias), name)
+    };
+    let mut keys = BTreeMap::new();
+    let predicate = correlation
+        .predicate
+        .clone()
+        .transform(|expr| {
+            if let Expr::OuterReferenceColumn(_, outer) = expr {
+                let index = keys.len();
+                let key = keys
+                    .entry(outer)
+                    .or_insert_with(|| domain_column(format!("key_{index}")));
+                Ok(Transformed::yes(Expr::Column(key.clone())))
+            } else {
+                Ok(Transformed::no(expr))
+            }
+        })
+        .data()?;
+    if keys.is_empty() || keys.keys().any(|k| !left.schema().has_column(k)) {
+        return Ok(None);
+    }
+
+    // Both the domain and the final join must see the same outer rows.
+    let id = MaterializedCteId::next();
+    let scan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+        MaterializedCteScan::new(id, alias, Arc::clone(left.schema())),
+    ));
+    let domain = LogicalPlanBuilder::from(scan.clone())
+        .project(keys.iter().map(|(outer, key)| {
+            Expr::Column(outer.clone()).alias_qualified(Some(alias), &key.name)
+        }))?
+        .distinct()?;
+
+    // Keep an empty group for domains without a match. The extra row from
+    // the left join must not enter any aggregate, including COUNT(*).
+    let marker = domain_column("matched".into());
+    let inner = LogicalPlanBuilder::from(Arc::clone(&correlation.input))
+        .project(
+            correlation
+                .input
+                .schema()
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .chain([lit(true).alias_qualified(Some(alias), &marker.name)]),
+        )?
+        .build()?;
+    let mut aggregates = Vec::with_capacity(agg.aggr_expr.len());
+    for (index, expr) in agg.aggr_expr.iter().enumerate() {
+        let Expr::AggregateFunction(mut function) = expr.clone().unalias() else {
+            return Ok(None);
+        };
+        let matched = Expr::Column(marker.clone()).is_not_null();
+        let filter = match function.params.filter.take() {
+            Some(filter) => matched.and(*filter),
+            None => matched,
+        };
+        function.params.filter = Some(Box::new(filter));
+        let (qualifier, field) = agg.schema.qualified_field(index);
+        aggregates.push(
+            Expr::AggregateFunction(function)
+                .alias_qualified(qualifier.cloned(), field.name()),
+        );
+    }
+    let domain_columns = || keys.values().cloned().map(Expr::Column);
+    let passing = domain
+        .join_on(inner, JoinType::Left, [predicate])?
+        .aggregate(domain_columns(), aggregates)?
+        .filter(having.predicate.clone())?
+        .project(domain_columns())?
+        .alias(alias)?
+        .build()?;
+    // NULL is also a domain value. Reconnect it to the original rows after
+    // evaluating the SQL comparison (with its usual NULL semantics) above.
+    let continuation = LogicalPlanBuilder::from(scan)
+        .join_detailed(
+            passing,
+            join_type,
+            (
+                keys.keys().cloned().collect(),
+                keys.values().cloned().collect(),
+            ),
+            None,
+            NullEquality::NullEqualsNull,
+        )?
+        .build()?;
+    let cte = MaterializedCte::try_new(
+        id,
+        alias,
+        Arc::new(left.clone()),
+        Arc::new(continuation),
+    )?;
+    Ok(Some(BuiltJoin {
+        plan: LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)),
+        mark_is_three_valued_exact: false,
+    }))
+}
+
 fn build_join(
     left: &LogicalPlan,
     subquery: &LogicalPlan,
@@ -918,6 +1078,9 @@ fn build_join(
         count_bug_compensation = None;
     }
     if !pull_up.can_pull_up {
+        if exists_sub_query {
+            return build_domain_join(left, subquery, join_type, alias);
+        }
         return Ok(None);
     }
     // TODO(#24960): stopgap until count-bug compensation covers `IN`/`NOT IN`.
