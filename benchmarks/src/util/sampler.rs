@@ -21,7 +21,9 @@ use std::time::Duration;
 /// narrower than the full sample range.
 const MIN_SAMPLES_FOR_CI: usize = 6;
 
-/// Controls the iteration loop of one query. See the [module docs](self).
+/// Controls the iteration loop of one query, as set by the `--iterations`,
+/// `--max-time`, `--target-precision` and `--max-iterations` flags of
+/// [`CommonOpt`](crate::util::CommonOpt).
 ///
 /// ```ignore
 /// let mut sampler = common.sampler();
