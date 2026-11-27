@@ -217,6 +217,48 @@ SELECT id FROM t
 UNION ALL
 SELECT X'00010203040506070809000102030507';
 
+# Same extension name but different storage type (FixedSizeBinary(16) vs Binary) also fails
+statement error UNION types cannot be unified for column 'id'
+SELECT id FROM t
+UNION
+SELECT with_metadata(
+  X'00010203040506070809000102030507',
+  'ARROW:extension:name',
+  'arrow.uuid'
+);
+
+# Same extension name and storage type but different extension payload also fails
+statement error UNION types cannot be unified for column 'id'
+SELECT with_metadata(
+  with_metadata(
+    arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)'),
+    'ARROW:extension:name',
+    'arrow.uuid'
+  ),
+  'ARROW:extension:metadata',
+  '{"shape":"v1"}'
+) AS id
+UNION
+SELECT with_metadata(
+  with_metadata(
+    arrow_cast(X'00010203040506070809000102030507', 'FixedSizeBinary(16)'),
+    'ARROW:extension:name',
+    'arrow.uuid'
+  ),
+  'ARROW:extension:metadata',
+  '{"shape":"v2"}'
+) AS id;
+
+# NULL branch does not force incompatibility and preserves extension metadata
+query T
+SELECT arrow_metadata(id, 'ARROW:extension:name') FROM (
+  SELECT id FROM t
+  UNION ALL
+  SELECT NULL
+) LIMIT 1;
+----
+arrow.uuid
+
 # UNION between two UUID columns works and preserves arrow.uuid
 query T
 SELECT arrow_metadata(id, 'ARROW:extension:name') FROM (
