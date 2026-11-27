@@ -26,7 +26,9 @@ use datafusion_execution::memory_pool::MemoryReservation;
 
 use directory::IndexWidth;
 pub(crate) use keys::LookupScratch;
-pub(crate) use matches::{GroupRows, LookupResult, MatchHandle, MatchHandles, RowId};
+#[cfg(test)]
+use matches::MatchHandle;
+pub(crate) use matches::{GroupRows, LookupResult, MatchHandles, RowId};
 
 /// Maps exact join keys (one or more columns) to matching build-row IDs.
 /// Lookup returns compact [`MatchHandles`] for the join processor to consume.

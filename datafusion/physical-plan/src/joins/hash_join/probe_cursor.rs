@@ -24,7 +24,7 @@ use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 use crate::joins::join_index::{
-    GroupRows, JoinIndexMap, LookupResult, MatchHandle, MatchHandles, RowId,
+    GroupRows, JoinIndexMap, LookupResult, MatchHandles, RowId,
 };
 
 /// At most one batch of key-equal pairs, before residual filtering.
@@ -148,59 +148,68 @@ impl GroupPosition {
     ) -> usize {
         let build_rows = &mut output.build_rows;
         let probe_rows = &mut output.probe_rows;
-        if !matches.has_groups() {
-            let end = matches.len().min(self.match_index + batch_size);
+        // Every match emits at least one pair, so this chunk cannot reach beyond
+        // `limit`. Scan group bits a word at a time and bulk-copy singleton runs.
+        let limit = matches.len().min(self.match_index + batch_size);
+        let Some(mut groups) = matches.group_indices(self.match_index..limit) else {
             build_rows.extend(
-                matches.ids()[self.match_index..end]
+                matches.ids()[self.match_index..limit]
                     .iter()
                     .map(|row| row.as_u64()),
             );
-            probe_rows.extend_from_slice(&matches.probe_indices()[self.match_index..end]);
-            let newly_matched = end - self.match_index;
-            self.match_index = end;
+            probe_rows
+                .extend_from_slice(&matches.probe_indices()[self.match_index..limit]);
+            let newly_matched = limit - self.match_index;
+            self.match_index = limit;
             return newly_matched;
-        }
+        };
 
-        let mut newly_matched = 0;
-        while self.match_index < matches.len() && build_rows.len() < batch_size {
-            let row = matches.probe_indices()[self.match_index];
-            match matches.get(self.match_index) {
-                MatchHandle::One(build) => {
-                    newly_matched += 1;
-                    build_rows.push(build.as_u64());
-                    probe_rows.push(row);
-                    self.match_index += 1;
-                }
-                MatchHandle::Group(group) => {
-                    if self.offset_in_group == 0 {
-                        newly_matched += 1;
-                    }
-                    let members = index.group_rows(group.as_u64());
-                    let count = (members.len() - self.offset_in_group)
-                        .min(batch_size - build_rows.len());
-                    let end = self.offset_in_group + count;
-                    match members {
-                        GroupRows::U32(rows) => build_rows.extend(
-                            rows[self.offset_in_group..end]
-                                .iter()
-                                .map(|&row| u64::from(row)),
-                        ),
-                        GroupRows::U64(rows) => {
-                            build_rows.extend_from_slice(&rows[self.offset_in_group..end])
-                        }
-                    }
-                    probe_rows.resize(probe_rows.len() + count, row);
-                    if end == members.len() {
-                        self.match_index += 1;
-                        self.offset_in_group = 0;
-                    } else {
-                        self.offset_in_group = end;
-                        return newly_matched;
-                    }
+        let started_before = self.match_index + usize::from(self.offset_in_group != 0);
+        while self.match_index < limit && build_rows.len() < batch_size {
+            let group_index = groups.next().unwrap_or(limit);
+            if self.match_index < group_index {
+                let end =
+                    group_index.min(self.match_index + batch_size - build_rows.len());
+                build_rows.extend(
+                    matches.ids()[self.match_index..end]
+                        .iter()
+                        .map(|row| row.as_u64()),
+                );
+                probe_rows
+                    .extend_from_slice(&matches.probe_indices()[self.match_index..end]);
+                self.match_index = end;
+            }
+            if build_rows.len() == batch_size || self.match_index == limit {
+                break;
+            }
+
+            let members = index.group_rows(matches.ids()[group_index].as_u64());
+            let count =
+                (members.len() - self.offset_in_group).min(batch_size - build_rows.len());
+            let end = self.offset_in_group + count;
+            match members {
+                GroupRows::U32(rows) => build_rows.extend(
+                    rows[self.offset_in_group..end]
+                        .iter()
+                        .map(|&row| u64::from(row)),
+                ),
+                GroupRows::U64(rows) => {
+                    build_rows.extend_from_slice(&rows[self.offset_in_group..end])
                 }
             }
+            probe_rows.resize(
+                probe_rows.len() + count,
+                matches.probe_indices()[group_index],
+            );
+            if end == members.len() {
+                self.match_index += 1;
+                self.offset_in_group = 0;
+            } else {
+                self.offset_in_group = end;
+                break;
+            }
         }
-        newly_matched
+        self.match_index + usize::from(self.offset_in_group != 0) - started_before
     }
 }
 
@@ -250,5 +259,91 @@ impl PairBuffer {
         let probe: UInt32Array = std::mem::take(&mut self.probe_rows).into();
         self.retained = Some((build.values().clone(), probe.values().clone()));
         (build, probe)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::array::{ArrayRef, Int32Array};
+    use datafusion_common::NullEquality;
+    use datafusion_common::hash_utils::RandomState;
+    use datafusion_execution::memory_pool::{
+        MemoryConsumer, MemoryPool, UnboundedMemoryPool,
+    };
+    use rstest::rstest;
+
+    use super::*;
+    use crate::joins::join_index::LookupScratch;
+
+    #[rstest]
+    fn singleton_runs_and_groups_across_chunks(
+        #[values(1, 2, 63, 64, 65, 8192)] batch_size: usize,
+        #[values(false, true)] duplicates: bool,
+    ) -> Result<()> {
+        let build_keys = if duplicates {
+            vec![10, 12, 10, 10]
+        } else {
+            vec![10, 12]
+        };
+        // Group flags straddle a bitmap word; misses leave gaps in probe indices.
+        let mut probe_keys = vec![12; 63];
+        probe_keys.extend([11, 10, 10, 12, 10, 11]);
+        probe_keys.extend([12; 65]);
+        probe_keys.extend([10; 130]);
+        probe_keys.extend([12, 11]);
+        let mut expected = Vec::new();
+        for (probe_row, probe_key) in probe_keys.iter().enumerate() {
+            for (build_row, build_key) in build_keys.iter().enumerate() {
+                if probe_key == build_key {
+                    expected.push((build_row as u64, probe_row as u32));
+                }
+            }
+        }
+
+        let build: [ArrayRef; 1] = [Arc::new(Int32Array::from(build_keys))];
+        let probe: [ArrayRef; 1] = [Arc::new(Int32Array::from(probe_keys.clone()))];
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let reservation = MemoryConsumer::new("cursor test").register(&pool);
+        let index = JoinIndexMap::try_new(
+            &build,
+            &RandomState::default(),
+            NullEquality::NullEqualsNothing,
+            Some((10, 12)),
+            8192,
+            &reservation,
+        )?;
+        let mut scratch = LookupScratch::new(&reservation);
+        let mut cursor =
+            GroupCursor::new(index.lookup_batch(&build, &probe, &mut scratch)?);
+        let mut buffers = PairBuffer::new(&reservation);
+        let mut actual = Vec::new();
+        let mut seen = vec![false; probe_keys.len()];
+        while !cursor.is_finished() {
+            let chunk = cursor.next_batch(&index, batch_size, &mut buffers)?;
+            assert!(!chunk.build_rows.is_empty());
+            assert!(chunk.build_rows.len() <= batch_size);
+            assert_eq!(chunk.build_rows.len(), chunk.probe_rows.len());
+            let mut newly_matched = 0;
+            for (&build, &probe) in chunk
+                .build_rows
+                .values()
+                .iter()
+                .zip(chunk.probe_rows.values())
+            {
+                actual.push((build, probe));
+                if !std::mem::replace(&mut seen[probe as usize], true) {
+                    newly_matched += 1;
+                }
+            }
+            assert_eq!(chunk.newly_matched_probe_rows, newly_matched);
+        }
+        assert_eq!(actual, expected);
+        let chunk = cursor.next_batch(&index, batch_size, &mut buffers)?;
+        assert!(chunk.build_rows.is_empty());
+        assert!(chunk.probe_rows.is_empty());
+        assert_eq!(chunk.newly_matched_probe_rows, 0);
+        Ok(())
     }
 }

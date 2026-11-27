@@ -12,10 +12,12 @@
 
 use std::fmt::Debug;
 use std::mem::size_of;
+use std::ops::Range;
 
 use arrow::array::BooleanBufferBuilder;
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::datatypes::ArrowNativeType;
+use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{Result, exec_datafusion_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 
@@ -316,6 +318,23 @@ impl<T: RowId> MatchHandles<T> {
         self.is_group.is_some()
     }
 
+    /// Positions of group IDs within `range`, or `None` for all-singleton results.
+    #[inline]
+    pub(crate) fn group_indices(
+        &self,
+        range: Range<usize>,
+    ) -> Option<impl Iterator<Item = usize>> {
+        self.is_group.as_ref().map(move |flags| {
+            BitIndexIterator::new(
+                flags.values(),
+                flags.offset() + range.start,
+                range.len(),
+            )
+            .map(move |position| range.start + position)
+        })
+    }
+
+    #[cfg(test)]
     #[inline]
     pub(crate) fn get(&self, position: usize) -> MatchHandle<T> {
         if self
