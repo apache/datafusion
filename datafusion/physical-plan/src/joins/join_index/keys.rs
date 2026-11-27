@@ -15,7 +15,7 @@ use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::{NullEquality, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 
-use super::matches::{MatchHandle, MatchHandleArray, RowId, UniqueMatches};
+use super::matches::MatchHandles;
 use super::reserve;
 use crate::joins::utils::JoinKeyComparator;
 
@@ -86,7 +86,7 @@ pub(crate) struct LookupScratch {
     // Keep reservations after the allocations they account for.
     /// Temporary normalized arrays and metadata, released after lookup.
     pub(super) batch_reservation: MemoryReservation,
-    /// Reusable vector capacity; transferred with buffers moved into results.
+    /// Reusable vector capacity.
     pub(super) reservation: MemoryReservation,
 }
 
@@ -134,54 +134,27 @@ impl LookupScratch {
         self.equal.clear();
     }
 
-    /// Convert resolved singleton handles to row pairs in the existing candidate buffers.
-    /// Scan only candidate rows; rows without hash candidates cannot become matches.
-    /// The caller must ensure the build has unique keys, so no handle refers to a group.
-    ///
-    /// # Example
-    ///
-    /// For unique build keys `[A, B]` and probe keys `[B, X, A]`:
-    ///
-    /// ```text
-    /// handles:              [One(1), miss, One(0)]
-    /// result probe_rows:    [0, 2]
-    /// result build_rows:    [1, 0]
-    /// ```
-    ///
-    /// Both buffers and their memory charge leave scratch; hashes and equality
-    /// flags remain available for reuse by the next probe batch.
-    pub(super) fn take_unique_matches<T: RowId>(
-        &mut self,
-        handles: &MatchHandleArray<T>,
-    ) -> UniqueMatches {
+    /// Return verified singleton candidates in output-ready buffers.
+    /// Rejected candidates are removed in place, preserving probe order.
+    pub(super) fn take_unique_matches(&mut self) -> MatchHandles<u64> {
         let mut matched = 0;
-        for position in 0..self.probe_candidate_rows.len() {
-            let row = self.probe_candidate_rows[position];
-            let build = match handles.get(row as usize) {
-                Some(MatchHandle::One(build)) => build,
-                None => continue,
-                Some(MatchHandle::Group(_)) => {
-                    unreachable!("unique build cannot return group handles")
-                }
-            };
-            // Retry may have changed the representative; read the resolved handle.
-            // Writing at matched <= position preserves unread candidate rows.
-            self.representatives[matched] = build.as_u64();
-            self.probe_candidate_rows[matched] = row;
-            matched += 1;
+        for (position, &equal) in self.equal.iter().enumerate() {
+            if equal {
+                self.representatives[matched] = self.representatives[position];
+                self.probe_candidate_rows[matched] = self.probe_candidate_rows[position];
+                matched += 1;
+            }
         }
         self.representatives.truncate(matched);
         self.probe_candidate_rows.truncate(matched);
-        // Transfer allocated capacity, including the truncated tail. For example,
-        // capacity 8 in each vector still owns 8 * (8 + 4) = 96 bytes for 2 pairs.
         let bytes = self.representatives.capacity() * size_of::<u64>()
             + self.probe_candidate_rows.capacity() * size_of::<u32>();
-        let reservation = self.reservation.split(bytes);
-        UniqueMatches {
-            build_rows: std::mem::take(&mut self.representatives).into(),
-            probe_rows: std::mem::take(&mut self.probe_candidate_rows).into(),
-            _reservation: reservation,
-        }
+        self.reservation.shrink(bytes);
+        MatchHandles::from_buffers(
+            std::mem::take(&mut self.representatives),
+            std::mem::take(&mut self.probe_candidate_rows),
+            None,
+        )
     }
 }
 

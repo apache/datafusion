@@ -6,8 +6,8 @@
 //!
 //! Lookup resolves exact keys; the join operator handles output batching and
 //! residual predicates. For build keys `[A, B, A]`, the directory maps `A` to
-//! group `[0, 2]` and `B` to row `1`. An all-unique build returns verified row
-//! pairs, avoiding handle-to-pair conversion during output.
+//! group `[0, 2]` and `B` to row `1`. Lookup records only successful probe
+//! positions and their row/group IDs; see [`MatchHandles`] for an example.
 //!
 //! `directory` owns layouts and construction, `keys` owns hashing and exact
 //! comparison, and `matches` owns grouped row IDs and lookup-result memory.
@@ -26,13 +26,10 @@ use datafusion_execution::memory_pool::MemoryReservation;
 
 use directory::IndexWidth;
 pub(crate) use keys::LookupScratch;
-pub(crate) use matches::{
-    GroupRows, LookupResult, MatchHandle, MatchHandleArray, MatchHandles, RowId,
-    UniqueMatches,
-};
+pub(crate) use matches::{GroupRows, LookupResult, MatchHandle, MatchHandles, RowId};
 
 /// Maps exact join keys (one or more columns) to matching build-row IDs.
-/// Lookup returns row pairs or group handles for the join processor to consume.
+/// Lookup returns compact [`MatchHandles`] for the join processor to consume.
 /// See [`directory::JoinHashIndex`] for the storage design and a small example.
 #[derive(Debug)]
 pub(crate) struct JoinIndexMap {
@@ -120,7 +117,7 @@ impl JoinIndexMap {
         })
     }
 
-    /// Resolve a probe batch to verified row pairs or row/group handles.
+    /// Resolve a probe batch to compact, verified row/group handles.
     ///
     /// See comments on [`JoinIndexMap`] for the explanations for 'group handles' and
     /// more details.
@@ -348,6 +345,12 @@ mod tests {
 
         let result = index.lookup(case.probe_keys)?;
         case.check(result, null_equality);
+        let reserved = index.scratch.reservation.size();
+        for _ in 0..2 {
+            let result = index.lookup(case.probe_keys)?;
+            case.check(result, null_equality);
+            assert_eq!(index.scratch.reservation.size(), reserved);
+        }
         Ok(())
     }
 
@@ -375,6 +378,78 @@ mod tests {
 
         let result = index.lookup(case.probe_keys)?;
         case.check(result, null_equality);
+        Ok(())
+    }
+
+    #[rstest]
+    fn lookup_duplicate_build_without_group_hits(
+        #[values(DataType::Int32, DataType::Utf8)] data_type: DataType,
+        #[values(false, true)] force_u64: bool,
+    ) -> Result<()> {
+        let case = LookupTestCase {
+            build_keys: &[Some(10), Some(12), Some(10)],
+            probe_keys: &[Some(12), Some(11), Some(12)],
+            expected_nulls_unequal: vec![vec![1], vec![], vec![1]],
+            expected_nulls_equal: vec![vec![1], vec![], vec![1]],
+        };
+        let mut index =
+            case.setup(data_type, None, NullEquality::NullEqualsNothing, force_u64)?;
+        for (values, expected_indices) in [
+            (case.probe_keys, &[0, 2][..]),
+            (&[Some(11), None][..], &[][..]),
+        ] {
+            let probe = [cast(
+                &Int32Array::from(values.to_vec()),
+                index.build_keys[0].data_type(),
+            )?];
+            let result = index.index.lookup_batch(
+                &index.build_keys,
+                &probe,
+                &mut index.scratch,
+            )?;
+            let (positions, has_groups) = match &result {
+                LookupResult::U32(handles) => {
+                    (handles.probe_indices().as_ref(), handles.has_groups())
+                }
+                LookupResult::U64(handles) => {
+                    (handles.probe_indices().as_ref(), handles.has_groups())
+                }
+            };
+            assert!(!has_groups);
+            assert_eq!(positions, expected_indices);
+        }
+        let result = index.lookup(case.probe_keys)?;
+        case.check(result, NullEquality::NullEqualsNothing);
+        Ok(())
+    }
+
+    #[rstest]
+    fn lookup_compact_flags_across_words(
+        #[values(None, Some((10, 12)))] dense_range: Option<(u64, u64)>,
+        #[values(false, true)] force_u64: bool,
+    ) -> Result<()> {
+        // The first group follows 63 singleton hits and a miss. Its flag crosses
+        // a word boundary together with the next singleton and group.
+        let mut probe_keys = vec![Some(12); 63];
+        probe_keys.extend([None, Some(10), None, Some(12), Some(10)]);
+        probe_keys.extend([None; 64]);
+        let mut expected = vec![vec![1]; 63];
+        expected.extend([vec![], vec![0, 2], vec![], vec![1], vec![0, 2]]);
+        expected.extend(vec![vec![]; 64]);
+        let case = LookupTestCase {
+            build_keys: &[Some(10), Some(12), Some(10)],
+            probe_keys: &probe_keys,
+            expected_nulls_unequal: expected.clone(),
+            expected_nulls_equal: expected,
+        };
+        let mut index = case.setup(
+            DataType::Int32,
+            dense_range,
+            NullEquality::NullEqualsNothing,
+            force_u64,
+        )?;
+        let result = index.lookup(case.probe_keys)?;
+        case.check(result, NullEquality::NullEqualsNothing);
         Ok(())
     }
 
@@ -458,42 +533,40 @@ mod tests {
                 self.index
                     .lookup_batch(&self.build_keys, &probe, &mut self.scratch)?;
             Ok(match result {
-                LookupResult::Unique(matches) => {
-                    assert_eq!(matches.build_rows.len(), matches.probe_rows.len());
-                    let mut rows = vec![vec![]; probe_keys.len()];
-                    for (&build_row, &probe_row) in
-                        matches.build_rows.iter().zip(matches.probe_rows.iter())
-                    {
-                        rows[probe_row as usize].push(build_row);
-                    }
-                    rows
+                LookupResult::U32(handles) => {
+                    lookup_rows(&self.index, &handles, probe_keys.len())
                 }
-                LookupResult::Groups(MatchHandles::U32(handles)) => {
-                    group_lookup_rows(&self.index, &handles)
-                }
-                LookupResult::Groups(MatchHandles::U64(handles)) => {
-                    group_lookup_rows(&self.index, &handles)
+                LookupResult::U64(handles) => {
+                    lookup_rows(&self.index, &handles, probe_keys.len())
                 }
             })
         }
     }
 
-    fn group_lookup_rows<T: RowId>(
+    fn lookup_rows<T: RowId>(
         index: &JoinIndexMap,
-        handles: &MatchHandleArray<T>,
+        handles: &MatchHandles<T>,
+        num_probe_rows: usize,
     ) -> Vec<Vec<u64>> {
-        (0..handles.len())
-            .map(|row| match handles.get(row) {
-                None => vec![],
-                Some(MatchHandle::One(row)) => vec![row.as_u64()],
-                Some(MatchHandle::Group(group)) => match index.group_rows(group.as_u64())
-                {
+        assert_eq!(handles.probe_indices().len(), handles.len());
+        assert!(
+            handles
+                .probe_indices()
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        );
+        let mut rows = vec![vec![]; num_probe_rows];
+        for (position, &probe_row) in handles.probe_indices().iter().enumerate() {
+            rows[probe_row as usize] = match handles.get(position) {
+                MatchHandle::One(row) => vec![row.as_u64()],
+                MatchHandle::Group(group) => match index.group_rows(group.as_u64()) {
                     GroupRows::U32(rows) => {
                         rows.iter().map(|&row| u64::from(row)).collect()
                     }
                     GroupRows::U64(rows) => rows.to_vec(),
                 },
-            })
-            .collect()
+            };
+        }
+        rows
     }
 }

@@ -2,22 +2,19 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Groups of build rows with equal keys, plus lookup results and their memory
-//! reservations.
+//! Groups of build rows with equal keys, plus compact lookup results.
 //!
 //! Build keys `[A, B, A]` give `A -> Group(0)` and `B -> One(1)`. Only rows with
 //! duplicate keys occupy [`MatchedGroups`]: `offsets = [0, 2]`, `rows = [0, 2]`.
-//! Payload columns stay untouched. Batch handles keep IDs separate from nullable
-//! flags: true means group, false means singleton, and NULL means lookup miss.
-//!
-//! If the entire build is unique, results are already compact row pairs and
-//! need neither flags nor group expansion. Both forms own their memory charge.
+//! Payload columns stay untouched. [`MatchHandles`] records only successful
+//! lookups, pairing each original probe position with a build row or group ID.
+//! Missing keys occupy no entries. All-singleton results need no group bitmap.
 
 use std::fmt::Debug;
 use std::mem::size_of;
 
-use arrow::array::{Array, BooleanArray, BooleanBufferBuilder};
-use arrow::buffer::{BooleanBuffer, NullBuffer, ScalarBuffer};
+use arrow::array::BooleanBufferBuilder;
+use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::datatypes::ArrowNativeType;
 use datafusion_common::{Result, exec_datafusion_err};
 use datafusion_execution::memory_pool::MemoryReservation;
@@ -27,10 +24,11 @@ pub(crate) trait RowId: ArrowNativeType + Copy + Debug + Default {
     fn from_index(value: usize) -> Self;
     fn as_index(self) -> usize;
     fn as_u64(self) -> u64;
+    fn into_lookup_result(matches: MatchHandles<Self>) -> LookupResult;
 }
 
 macro_rules! row_id {
-    ($type:ty) => {
+    ($type:ty, $variant:ident) => {
         impl RowId for $type {
             #[inline]
             fn from_index(value: usize) -> Self {
@@ -44,13 +42,16 @@ macro_rules! row_id {
             fn as_u64(self) -> u64 {
                 self as u64
             }
+            fn into_lookup_result(matches: MatchHandles<Self>) -> LookupResult {
+                LookupResult::$variant(matches)
+            }
         }
     };
 }
-row_id!(u32);
-row_id!(u64);
+row_id!(u32, U32);
+row_id!(u64, U64);
 
-/// A row ID or a group ID, both using the index's row-ID width.
+/// A build-row ID or a group ID.
 ///
 /// See [`JoinHashIndex`](super::directory::JoinHashIndex) for the design overview.
 #[derive(Clone, Copy, Debug)]
@@ -207,155 +208,86 @@ impl<T: RowId> MatchedGroupsBuilder<T> {
     }
 }
 
-/// See [`JoinHashIndex`](super::directory::JoinHashIndex) for the design overview.
-pub(super) enum JoinHashLookup<T: RowId> {
-    Unique(UniqueMatches),
-    Groups(MatchHandleArray<T>),
-}
-
-/// Verified row pairs for unique build keys. Misses occupy no slots.
+/// Successful key lookups, in original probe order.
 ///
-/// See [`JoinHashIndex`](super::directory::JoinHashIndex) for the design overview.
-#[derive(Debug)]
-pub(crate) struct UniqueMatches {
-    pub(crate) build_rows: ScalarBuffer<u64>,
-    pub(crate) probe_rows: ScalarBuffer<u32>,
-    pub(super) _reservation: MemoryReservation,
-}
-
-impl UniqueMatches {
-    // Keep typed lookup constants visible across the directory/matches boundary.
-    #[inline]
-    pub(super) fn from_lookup<T: RowId>(
-        len: usize,
-        reservation: &MemoryReservation,
-        mut lookup: impl FnMut(usize) -> Option<T>,
-    ) -> Result<Self> {
-        let reservation = reservation.new_empty();
-        reservation.try_grow(len.checked_mul(12).ok_or_else(|| {
-            exec_datafusion_err!("Unique join pair array size overflow")
-        })?)?;
-        let mut build_rows = Vec::with_capacity(len);
-        let mut probe_rows = Vec::with_capacity(len);
-        for row in 0..len {
-            if let Some(build) = lookup(row) {
-                build_rows.push(build.as_u64());
-                probe_rows.push(row as u32);
-            }
-        }
-        Ok(Self {
-            build_rows: build_rows.into(),
-            probe_rows: probe_rows.into(),
-            _reservation: reservation,
-        })
-    }
-}
-
-/// See [`JoinHashIndex`](super::directory::JoinHashIndex) for the design overview.
-#[derive(Debug)]
-pub(crate) enum LookupResult {
-    Unique(UniqueMatches),
-    Groups(MatchHandles),
-}
-
-/// One physical match handle per probe row. NULL in `is_group` means a miss;
-/// otherwise the corresponding non-null ID is a build row or a group ID.
+/// Each entry identifies one build row or a group of equal-key build rows.
+/// Missing keys occupy no entries; a repeated probe key has its own entry.
 ///
-/// See [`JoinHashIndex`](super::directory::JoinHashIndex) for the design overview.
+/// - `probe_indices`: original positions in the probe batch, strictly increasing.
+/// - `ids`: build-row or group IDs, aligned with `probe_indices`.
+/// - `is_group`: true for group IDs; absent when every entry is a single row.
+///   This depends on the returned matches, even if the build has duplicate keys.
 ///
-/// # Example
+/// For build keys `[A, B, A]` and probe keys `[X, B, A, X, A]`:
 ///
-/// ```txt
-/// is_group | ids
-/// ---------+----
-/// NULL     | 0
-/// false    | 3
-/// true     | 1
+/// ```text
+/// probe_indices: [1, 2, 4]
+/// ids: [1, 0, 0]
+/// is_group: [false, true, true]
+/// group 0: [0, 2]
 /// ```
 ///
-/// The first probe row misses, so its ID is ignored. The second matches build
-/// row 3. The third refers to group 1; the caller looks up this group in
-/// [`MatchedGroups`] to retrieve its build-row IDs.
+/// Key equality is already verified. Residual ON predicates are evaluated after
+/// expansion and may reject some or all members of a group. The original probe
+/// batch remains with the join processor so outer joins can emit missing rows.
+/// These buffers are bounded by one probe batch and are not charged to the
+/// memory pool; see [`MemoryPool`](datafusion_execution::memory_pool::MemoryPool).
 #[derive(Debug)]
-pub(crate) struct MatchHandleArray<T: RowId> {
-    /// Row index into build-side batch.
+pub(crate) struct MatchHandles<T: RowId> {
     ids: ScalarBuffer<T>,
-    /// true/false represents a match group or a single match. Null means no match.
-    is_group: BooleanArray,
-    /// Cached property for if there is any match group stored.
-    has_groups: bool,
-    // Keep the charge with the returned buffers, after the allocations it owns.
-    pub(super) _reservation: MemoryReservation,
+    probe_indices: ScalarBuffer<u32>,
+    is_group: Option<BooleanBuffer>,
 }
 
-impl<T: RowId> MatchHandleArray<T> {
-    /// Look up each probe row and pack its match into the output arrays.
-    ///
-    /// The caller supplies `lookup(i)`, which resolves probe row `i` to `None`
-    /// for a miss, `Some(MatchHandle::One(id))` for one build row, or
-    /// `Some(MatchHandle::Group(id))` for a duplicate-key group. Output slot `i`
-    /// always corresponds to probe row `i`.
-    ///
-    /// Each ID is written once, and flags are packed 64 probe rows at a time.
+impl<T: RowId> MatchHandles<T> {
+    /// Resolve each input row, retaining only successful lookups.
     #[inline]
     pub(super) fn from_lookup(
         len: usize,
-        reservation: &MemoryReservation,
         mut lookup: impl FnMut(usize) -> Option<MatchHandle<T>>,
-    ) -> Result<Self> {
-        let reservation = reservation.new_empty();
-        reservation.try_grow(handle_bytes::<T>(len)?)?;
-        let mut ids = Vec::with_capacity(len);
-        let mut group_words = Vec::with_capacity(len.div_ceil(64));
-        let mut valid_words = Vec::with_capacity(len.div_ceil(64));
-        for start in (0..len).step_by(64) {
-            let mut groups = 0_u64;
-            let mut valid = 0_u64;
-            for bit in 0..(len - start).min(64) {
-                match lookup(start + bit) {
-                    None => ids.push(T::default()),
-                    Some(MatchHandle::One(id)) => {
-                        ids.push(id);
-                        valid |= 1 << bit;
-                    }
-                    Some(MatchHandle::Group(id)) => {
-                        ids.push(id);
-                        valid |= 1 << bit;
-                        groups |= 1 << bit;
-                    }
-                }
+    ) -> Self {
+        let mut handles = HandleBuilder::new(len);
+        for row in 0..len {
+            if let Some(handle) = lookup(row) {
+                handles.push(row as u32, handle);
             }
-            group_words.push(groups.to_le());
-            valid_words.push(valid.to_le());
         }
-        Ok(Self::from_buffers(
-            ids,
-            BooleanBuffer::new(group_words.into(), 0, len),
-            BooleanBuffer::new(valid_words.into(), 0, len),
-            reservation,
-        ))
+        handles.finish()
     }
 
-    fn from_buffers(
-        ids: Vec<T>,
-        is_group: BooleanBuffer,
-        valid: BooleanBuffer,
-        reservation: MemoryReservation,
+    /// Resolve singleton keys without group-bitmap bookkeeping.
+    #[inline]
+    pub(super) fn from_singleton_lookup(
+        len: usize,
+        mut lookup: impl FnMut(usize) -> Option<T>,
     ) -> Self {
-        let has_groups = is_group.has_true();
-        let nulls = NullBuffer::new(valid);
-        let nulls = if nulls.null_count() == 0 {
-            drop(nulls);
-            reservation.shrink(bitmap_bytes(ids.len()));
-            None
-        } else {
-            Some(nulls)
-        };
+        let mut ids = Vec::with_capacity(len);
+        let mut probe_indices = Vec::with_capacity(len);
+        for row in 0..len {
+            if let Some(id) = lookup(row) {
+                ids.push(id);
+                probe_indices.push(row as u32);
+            }
+        }
+        Self::from_buffers(ids, probe_indices, None)
+    }
+
+    #[inline]
+    pub(super) fn from_buffers(
+        ids: Vec<T>,
+        probe_indices: Vec<u32>,
+        is_group: Option<BooleanBuffer>,
+    ) -> Self {
+        debug_assert_eq!(ids.len(), probe_indices.len());
+        debug_assert!(
+            is_group
+                .as_ref()
+                .is_none_or(|flags| flags.len() == ids.len())
+        );
         Self {
             ids: ids.into(),
-            is_group: BooleanArray::new(is_group, nulls),
-            has_groups,
-            _reservation: reservation,
+            probe_indices: probe_indices.into(),
+            is_group,
         }
     }
 
@@ -370,37 +302,42 @@ impl<T: RowId> MatchHandleArray<T> {
     }
 
     #[inline]
-    pub(crate) fn validity(&self) -> Option<&NullBuffer> {
-        self.is_group.nulls()
+    pub(crate) fn ids_buffer(&self) -> &ScalarBuffer<T> {
+        &self.ids
+    }
+
+    #[inline]
+    pub(crate) fn probe_indices(&self) -> &ScalarBuffer<u32> {
+        &self.probe_indices
     }
 
     #[inline]
     pub(crate) fn has_groups(&self) -> bool {
-        self.has_groups
+        self.is_group.is_some()
     }
 
     #[inline]
-    pub(crate) fn get(&self, row: usize) -> Option<MatchHandle<T>> {
-        if self.is_group.is_null(row) {
-            None
-        } else if self.is_group.value(row) {
-            Some(MatchHandle::Group(self.ids[row]))
+    pub(crate) fn get(&self, position: usize) -> MatchHandle<T> {
+        if self
+            .is_group
+            .as_ref()
+            .is_some_and(|flags| flags.value(position))
+        {
+            MatchHandle::Group(self.ids[position])
         } else {
-            Some(MatchHandle::One(self.ids[row]))
+            MatchHandle::One(self.ids[position])
         }
     }
 }
 
-/// Columnar match handles using the index's row-ID width.
-///
-/// See [`JoinHashIndex`](super::directory::JoinHashIndex) for the design overview.
+/// Dispatch the lookup ID width once per output chunk.
 #[derive(Debug)]
-pub(crate) enum MatchHandles {
-    U32(MatchHandleArray<u32>),
-    U64(MatchHandleArray<u64>),
+pub(crate) enum LookupResult {
+    U32(MatchHandles<u32>),
+    U64(MatchHandles<u64>),
 }
 
-impl MatchHandles {
+impl LookupResult {
     pub(crate) fn len(&self) -> usize {
         match self {
             Self::U32(handles) => handles.len(),
@@ -431,58 +368,88 @@ pub(super) fn bitmap_bytes(len: usize) -> usize {
     len.div_ceil(512).saturating_mul(64)
 }
 
-fn handle_bytes<T: RowId>(len: usize) -> Result<usize> {
-    len.checked_mul(size_of::<T>())
-        .and_then(|bytes| bytes.checked_add(bitmap_bytes(len).saturating_mul(2)))
-        .ok_or_else(|| exec_datafusion_err!("Join match handle array size overflow"))
-}
-
-/// See [`JoinHashIndex`](super::directory::JoinHashIndex) for the design overview.
+/// Collect compact handles; general-key lookup may replace or reject candidates
+/// after checking actual keys. See [`MatchHandles`] for the returned layout.
 pub(super) struct HandleBuilder<T: RowId> {
     ids: Vec<T>,
-    is_group: BooleanBufferBuilder,
-    valid: BooleanBufferBuilder,
-    reservation: MemoryReservation,
+    probe_indices: Vec<u32>,
+    is_group: Option<BooleanBufferBuilder>,
+    capacity: usize,
 }
 
 impl<T: RowId> HandleBuilder<T> {
-    pub(super) fn new(len: usize, reservation: &MemoryReservation) -> Result<Self> {
-        let reservation = reservation.new_empty();
-        reservation.try_grow(handle_bytes::<T>(len)?)?;
-        let mut is_group = BooleanBufferBuilder::new(len);
-        is_group.append_n(len, false);
-        let mut valid = BooleanBufferBuilder::new(len);
-        valid.append_n(len, false);
-        Ok(Self {
-            ids: vec![T::default(); len],
-            is_group,
-            valid,
-            reservation,
-        })
-    }
-
-    pub(super) fn set(&mut self, row: usize, handle: Option<MatchHandle<T>>) {
-        match handle {
-            None => self.valid.set_bit(row, false),
-            Some(MatchHandle::One(id)) => {
-                self.ids[row] = id;
-                self.is_group.set_bit(row, false);
-                self.valid.set_bit(row, true);
-            }
-            Some(MatchHandle::Group(id)) => {
-                self.ids[row] = id;
-                self.is_group.set_bit(row, true);
-                self.valid.set_bit(row, true);
-            }
+    #[inline]
+    pub(super) fn new(capacity: usize) -> Self {
+        Self {
+            ids: Vec::with_capacity(capacity),
+            probe_indices: Vec::with_capacity(capacity),
+            is_group: None,
+            capacity,
         }
     }
 
-    pub(super) fn finish(mut self) -> MatchHandleArray<T> {
-        MatchHandleArray::from_buffers(
-            self.ids,
-            self.is_group.finish(),
-            self.valid.finish(),
-            self.reservation,
-        )
+    #[inline]
+    pub(super) fn push(&mut self, probe_index: u32, handle: MatchHandle<T>) {
+        let (id, is_group) = match handle {
+            MatchHandle::One(id) => (id, false),
+            MatchHandle::Group(id) => (id, true),
+        };
+        if is_group && self.is_group.is_none() {
+            let mut flags = BooleanBufferBuilder::new(self.capacity);
+            flags.append_n(self.ids.len(), false);
+            self.is_group = Some(flags);
+        }
+        self.ids.push(id);
+        self.probe_indices.push(probe_index);
+        if let Some(flags) = &mut self.is_group {
+            flags.append(is_group);
+        }
+    }
+
+    #[inline]
+    pub(super) fn set(&mut self, position: usize, handle: MatchHandle<T>) {
+        let (id, is_group) = match handle {
+            MatchHandle::One(id) => (id, false),
+            MatchHandle::Group(id) => (id, true),
+        };
+        self.ids[position] = id;
+        if is_group && self.is_group.is_none() {
+            let mut flags = BooleanBufferBuilder::new(self.capacity);
+            flags.append_n(self.ids.len(), false);
+            self.is_group = Some(flags);
+        }
+        if let Some(flags) = &mut self.is_group {
+            flags.set_bit(position, is_group);
+        }
+    }
+
+    /// Remove rejected hash candidates without changing successful row order.
+    pub(super) fn retain(&mut self, keep: &[bool]) {
+        debug_assert_eq!(self.ids.len(), keep.len());
+        let mut matched = 0;
+        for (position, &keep) in keep.iter().enumerate() {
+            if keep {
+                self.ids[matched] = self.ids[position];
+                self.probe_indices[matched] = self.probe_indices[position];
+                if let Some(flags) = &mut self.is_group {
+                    flags.set_bit(matched, flags.get_bit(position));
+                }
+                matched += 1;
+            }
+        }
+        self.ids.truncate(matched);
+        self.probe_indices.truncate(matched);
+        if let Some(flags) = &mut self.is_group {
+            flags.truncate(matched);
+        }
+    }
+
+    #[inline]
+    pub(super) fn finish(self) -> MatchHandles<T> {
+        let is_group = self.is_group.and_then(|mut flags| {
+            let flags = flags.finish();
+            flags.has_true().then_some(flags)
+        });
+        MatchHandles::from_buffers(self.ids, self.probe_indices, is_group)
     }
 }

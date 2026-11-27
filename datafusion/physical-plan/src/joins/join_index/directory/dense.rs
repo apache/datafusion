@@ -13,10 +13,8 @@ use datafusion_common::{Result, exec_datafusion_err, internal_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 use num_traits::AsPrimitive;
 
-use super::super::keys::LookupScratch;
 use super::super::matches::{
-    JoinHashLookup, MatchHandle, MatchHandleArray, MatchedGroups, RowId, UniqueMatches,
-    bitmap_bytes,
+    LookupResult, MatchHandle, MatchHandles, MatchedGroups, RowId, bitmap_bytes,
 };
 use super::Probe;
 use crate::joins::array_map::ArrayMap;
@@ -204,17 +202,13 @@ impl<T: RowId> DenseIntegerDirectory<T> {
         Ok((dense, MatchedGroups { offsets, rows }))
     }
 
-    pub(super) fn lookup_batch(
-        &self,
-        probe: &Probe<'_>,
-        scratch: &mut LookupScratch,
-    ) -> Result<JoinHashLookup<T>> {
+    pub(super) fn lookup_batch(&self, probe: &Probe<'_>) -> Result<LookupResult> {
         let [array] = probe.probe_keys else {
             return internal_err!("Integer join index requires one integer key");
         };
         downcast_integer_array!(
             array => {
-                self.lookup(array, &scratch.reservation)
+                Ok(self.lookup(array))
             }
             _ => internal_err!("Integer join index requires integer keys"),
         )
@@ -246,39 +240,36 @@ impl<T: RowId> DenseIntegerDirectory<T> {
         }
     }
 
-    fn lookup<K: ArrowPrimitiveType>(
-        &self,
-        array: &PrimitiveArray<K>,
-        reservation: &MemoryReservation,
-    ) -> Result<JoinHashLookup<T>>
+    fn lookup<K: ArrowPrimitiveType>(&self, array: &PrimitiveArray<K>) -> LookupResult
     where
         K::Native: AsPrimitive<u64>,
     {
         let has_nulls = array.null_count() > 0;
         if self.build_unique {
-            return UniqueMatches::from_lookup(array.len(), reservation, |row| {
-                if has_nulls && array.is_null(row) {
-                    None
-                } else {
-                    let key: u64 = array.value(row).as_();
-                    let position = key.wrapping_sub(self.offset);
-                    if position >= self.slots.len() as u64 {
-                        return None;
+            return LookupResult::U64(MatchHandles::<u64>::from_singleton_lookup(
+                array.len(),
+                |row| {
+                    if has_nulls && array.is_null(row) {
+                        None
+                    } else {
+                        let key: u64 = array.value(row).as_();
+                        let position = key.wrapping_sub(self.offset);
+                        if position >= self.slots.len() as u64 {
+                            return None;
+                        }
+                        let slot = self.slots[position as usize].as_index();
+                        (slot != 0).then(|| (slot - 1) as u64)
                     }
-                    let slot = self.slots[position as usize].as_index();
-                    (slot != 0).then(|| T::from_index(slot - 1))
-                }
-            })
-            .map(JoinHashLookup::Unique);
+                },
+            ));
         }
-        MatchHandleArray::from_lookup(array.len(), reservation, |row| {
+        T::into_lookup_result(MatchHandles::<T>::from_lookup(array.len(), |row| {
             if has_nulls && array.is_null(row) {
                 None
             } else {
                 self.get(array.value(row).as_())
             }
-        })
-        .map(JoinHashLookup::Groups)
+        }))
     }
 
     /// Dynamic filters need membership only. Read the typed keys directly, so

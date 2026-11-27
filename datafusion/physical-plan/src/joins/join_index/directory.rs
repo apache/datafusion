@@ -8,7 +8,8 @@
 //! Sparse integers such as `[10, 1_000_000]` use SwissTable with the actual key
 //! in each entry. General keys use a cached hash and a representative build row
 //! whose Arrow values establish equality. All three identify exact keys and
-//! return the same singleton/group representation; only row IDs are grouped.
+//! return compact successful matches with their probe-row indices; only row IDs
+//! are grouped.
 
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::buffer::BooleanBuffer;
@@ -18,8 +19,7 @@ use datafusion_execution::memory_pool::MemoryReservation;
 
 use super::keys::LookupScratch;
 use super::matches::{
-    GroupRows, JoinHashLookup, LookupResult, MatchHandles, MatchedGroups,
-    MatchedGroupsBuilder, RowId,
+    GroupRows, LookupResult, MatchedGroups, MatchedGroupsBuilder, RowId,
 };
 use crate::joins::array_map::ArrayMap;
 use crate::joins::utils::matchable_join_keys;
@@ -123,27 +123,10 @@ impl IndexWidth {
             null_equality,
             random_state,
         };
-        let result =
-            match self {
-                IndexWidth::U32(index) => index
-                    .directory
-                    .lookup_batch(&probe, scratch)
-                    .map(|result| match result {
-                        JoinHashLookup::Unique(matches) => LookupResult::Unique(matches),
-                        JoinHashLookup::Groups(handles) => {
-                            LookupResult::Groups(MatchHandles::U32(handles))
-                        }
-                    }),
-                IndexWidth::U64(index) => index
-                    .directory
-                    .lookup_batch(&probe, scratch)
-                    .map(|result| match result {
-                        JoinHashLookup::Unique(matches) => LookupResult::Unique(matches),
-                        JoinHashLookup::Groups(handles) => {
-                            LookupResult::Groups(MatchHandles::U64(handles))
-                        }
-                    }),
-            };
+        let result = match self {
+            IndexWidth::U32(index) => index.directory.lookup_batch(&probe, scratch),
+            IndexWidth::U64(index) => index.directory.lookup_batch(&probe, scratch),
+        };
         scratch.release_batch();
         result
     }
@@ -214,11 +197,11 @@ impl<T: RowId> KeyDirectory<T> {
         &self,
         probe: &Probe<'_>,
         scratch: &mut LookupScratch,
-    ) -> Result<JoinHashLookup<T>> {
+    ) -> Result<LookupResult> {
         match self {
             Self::General(index) => index.lookup_batch(probe, scratch),
             Self::Integer(index) => index.lookup_batch(probe, scratch),
-            Self::Dense(index) => index.lookup_batch(probe, scratch),
+            Self::Dense(index) => index.lookup_batch(probe),
         }
     }
 }
@@ -239,9 +222,9 @@ impl<T: RowId> KeyDirectory<T> {
 ///    to find candidates, then check full key equality. Each distinct key maps
 ///    to a row or group handle.
 ///    See [SwissTable internals (video)](https://www.youtube.com/watch?v=ncHmEUmJZf4).
-/// 3. **Lazy expansion:** [`MatchHandleArray`](super::matches::MatchHandleArray)
-///    holds one row/group handle or miss per probe row. The join processor expands
-///    groups into bounded chunks for memory efficiency.
+/// 3. **Lazy expansion:** [`MatchHandles`](super::matches::MatchHandles) holds
+///    row/group handles and probe-row indices for successful matches. Misses
+///    occupy no slots. The join processor expands groups into bounded chunks.
 ///
 /// ## Hash directory specializations
 ///
@@ -266,21 +249,25 @@ impl<T: RowId> KeyDirectory<T> {
 ///   A -> Group(0)
 ///   B -> One(1)
 ///
-/// Groups:     offsets = [0, 2], rows = [0, 2]
+/// Group offsets: [0, 2]
+/// Group rows: [0, 2]
 ///
-/// Probe keys: [B, A, X]
-/// Handles:    [One(1), Group(0), miss]
-/// Expansion: probe 0 -> build [1]
-///            probe 1 -> build [0, 2]    // read group 0's slice on demand
+/// Probe keys: [B, X, A]
+/// Probe indices: [0, 2]
+/// Handles: [One(1), Group(0)]
+/// Expanded build rows: [1, 0, 2]
+/// Expanded probe rows: [0, 2, 2]
 /// ```
 ///
-/// All-unique builds return compact row pairs directly.
+/// All-unique builds use the same result representation with `u64` row IDs and
+/// no group bits, so their buffers can be used directly for output.
 ///
 /// # Row ID width
 ///
 /// [`IndexWidth`] selects `T`, the row/group ID type: `u32` for fewer than 2^32
-/// build rows to save memory, otherwise `u64`. Directory entries, match handles,
-/// and grouped row IDs all use this width.
+/// build rows to save memory, otherwise `u64`. Directory entries, grouped lookup
+/// results, and grouped row IDs use this width. Results from all-unique builds
+/// use `u64` to match the output's build-row indices.
 #[derive(Debug)]
 pub(super) struct JoinHashIndex<T> {
     directory: KeyDirectory<T>,
@@ -306,6 +293,11 @@ impl<T: RowId> JoinHashIndex<T> {
                 [key] if ArrayMap::is_supported_type(key.data_type()) => key,
                 _ => return internal_err!("Dense join index requires one integer key"),
             };
+            log::debug!(
+                "Join index specialization: dense, build_rows={}, row_id={}",
+                key.len(),
+                std::any::type_name::<T>()
+            );
             let (directory, groups) =
                 DenseIntegerDirectory::build(key, valid.as_ref(), range, reservation)?;
             return Ok(Self {
@@ -318,6 +310,11 @@ impl<T: RowId> JoinHashIndex<T> {
             .then(|| integer_hasher(keys[0].data_type()))
             .flatten()
         {
+            log::debug!(
+                "Join index specialization: integer, build_rows={}, row_id={}",
+                keys[0].len(),
+                std::any::type_name::<T>()
+            );
             IntegerDirectory::build(
                 &keys[0],
                 hash_chunk_size,
@@ -329,6 +326,11 @@ impl<T: RowId> JoinHashIndex<T> {
             )
             .map(KeyDirectory::Integer)?
         } else {
+            log::debug!(
+                "Join index specialization: general, build_rows={}, row_id={}",
+                keys[0].len(),
+                std::any::type_name::<T>()
+            );
             GeneralDirectory::build(
                 keys,
                 random_state,

@@ -21,9 +21,9 @@ use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 
 use super::build::RegularJoinLeftData;
-use super::probe_cursor::{GroupCursor, MatchChunk, PairBuffer};
+use super::probe_cursor::{GroupCursor, PairBuffer};
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
-use crate::joins::join_index::{LookupResult, LookupScratch, UniqueMatches};
+use crate::joins::join_index::LookupScratch;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, adjust_indices_by_join_type,
     apply_join_filter_to_indices, build_batch_empty_build_side, build_batch_from_indices,
@@ -123,24 +123,12 @@ pub(super) struct BatchedJoinProcessor {
 }
 
 /// Current probe batch and its progress.
-///
-/// Input batches follow the DataFusion [`ExecutionPlan`](crate::ExecutionPlan)
-/// convention of coalescing to the configured `batch_size`, so the `Unique`
-/// variant can materialize all matches at once without tracking progress.
-enum ProbeBatch {
-    Unique {
-        input: RecordBatch,
-        pairs: UniqueMatches,
-    },
-    Groups {
-        input: RecordBatch,
-        /// Match handles from the raw hash index and a progress tracker for
-        /// incremental materialization.
-        cursor: GroupCursor,
-        /// Only right and full joins need this across chunks, to avoid emitting a
-        /// previously matched probe row as unmatched when later pairs fail the filter.
-        last_probe_row_with_on_match: Option<u32>,
-    },
+struct ProbeBatch {
+    input: RecordBatch,
+    cursor: GroupCursor,
+    /// Right and full joins retain this across chunks so a previously matched
+    /// probe row is not emitted as unmatched when later pairs fail the filter.
+    last_probe_row_with_on_match: Option<u32>,
 }
 
 /// The next action for the caller of [`BatchedJoinProcessor::next_output_batch`].
@@ -219,8 +207,6 @@ impl BatchedJoinProcessor {
         );
         let keys = evaluate_expressions_to_arrays(&self.context.on_right, &batch)?;
 
-        // Unique results already fit in one chunk. Group handles defer duplicate
-        // expansion to avoid materializing every pair in a large group here.
         let matches = {
             let _timer = self.metrics.join_time.timer();
             self.build.data.map.lookup_batch(
@@ -229,16 +215,10 @@ impl BatchedJoinProcessor {
                 &mut self.lookup_scratch,
             )?
         };
-        self.probe = Some(match matches {
-            LookupResult::Unique(pairs) => ProbeBatch::Unique {
-                input: batch,
-                pairs,
-            },
-            LookupResult::Groups(matches) => ProbeBatch::Groups {
-                input: batch,
-                cursor: GroupCursor::new(matches),
-                last_probe_row_with_on_match: None,
-            },
+        self.probe = Some(ProbeBatch {
+            input: batch,
+            cursor: GroupCursor::new(matches),
+            last_probe_row_with_on_match: None,
         });
         Ok(())
     }
@@ -353,15 +333,10 @@ impl BatchedJoinProcessor {
         // Such rows cannot match but are still emitted at build finalization
         // for left and full joins. Right and full joins preserve the entire probe batch.
         if build.data.map.is_empty() {
-            let input = match probe {
-                ProbeBatch::Unique { input, .. } | ProbeBatch::Groups { input, .. } => {
-                    input
-                }
-            };
             let batch = build_batch_empty_build_side(
                 &context.schema,
                 &build.data.batch,
-                input,
+                &probe.input,
                 &context.column_indices,
                 context.kind.join_type(),
             )?;
@@ -369,37 +344,14 @@ impl BatchedJoinProcessor {
             return Ok(Some(batch));
         }
 
-        // Keep the lookup result (and its reservation) alive until output has
-        // been materialized. Retain it only while the probe batch has more chunks.
-        let (input, chunk, exhausted, last_on_match) = match probe {
-            ProbeBatch::Unique { input, pairs } => (
-                input,
-                MatchChunk {
-                    build_rows: UInt64Array::new(pairs.build_rows.clone(), None),
-                    probe_rows: UInt32Array::new(pairs.probe_rows.clone(), None),
-                    newly_matched_probe_rows: pairs.probe_rows.len(),
-                },
-                true,
-                None,
-            ),
-            ProbeBatch::Groups {
-                input,
-                cursor,
-                last_probe_row_with_on_match,
-            } => {
-                let chunk = cursor.next_batch(
-                    &build.data.map,
-                    context.batch_size,
-                    &mut self.pair_buffers,
-                )?;
-                (
-                    input,
-                    chunk,
-                    cursor.is_finished(),
-                    Some(last_probe_row_with_on_match),
-                )
-            }
-        };
+        let input = &probe.input;
+        let chunk = probe.cursor.next_batch(
+            &build.data.map,
+            context.batch_size,
+            &mut self.pair_buffers,
+        )?;
+        let exhausted = probe.cursor.is_finished();
+        let last_on_match = &mut probe.last_probe_row_with_on_match;
         let matched_probe_rows = chunk.newly_matched_probe_rows;
         let (build_indices, probe_indices) = (chunk.build_rows, chunk.probe_rows);
         self.metrics.probe_hit_rate.add_part(matched_probe_rows);
@@ -427,18 +379,13 @@ impl BatchedJoinProcessor {
 
         let (build_indices, probe_indices) = if context.kind.preserves_probe() {
             let last_joined_probe_row = probe_indices.values().last().copied();
-            let start = last_on_match
-                .as_ref()
-                .and_then(|row| **row)
-                .map_or(0, |row| row as usize + 1);
+            let start = last_on_match.map_or(0, |row| row as usize + 1);
             let end = if exhausted {
                 input.num_rows()
             } else {
                 last_joined_probe_row.map_or(0, |row| row as usize + 1)
             };
-            if let Some(last_on_match) = last_on_match
-                && last_joined_probe_row.is_some()
-            {
+            if last_joined_probe_row.is_some() {
                 *last_on_match = last_joined_probe_row;
             }
             adjust_indices_by_join_type(

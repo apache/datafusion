@@ -19,8 +19,7 @@ use num_traits::AsPrimitive;
 
 use super::super::keys::{LookupScratch, for_each_hash_chunk, hash_probe_keys};
 use super::super::matches::{
-    JoinHashLookup, MatchHandle, MatchHandleArray, MatchedGroupsBuilder, RowId,
-    UniqueMatches,
+    LookupResult, MatchHandle, MatchHandles, MatchedGroupsBuilder, RowId,
 };
 use super::Probe;
 
@@ -95,6 +94,7 @@ pub(super) fn integer_hasher(
 }
 
 impl<T: RowId> IntegerKeyEntry<T> {
+    #[inline]
     fn matches(&self) -> MatchHandle<T> {
         match self.group_plus_one.as_index() {
             0 => MatchHandle::One(self.representative_row),
@@ -196,14 +196,14 @@ impl<T: RowId> IntegerDirectory<T> {
         &self,
         probe: &Probe<'_>,
         scratch: &mut LookupScratch,
-    ) -> Result<JoinHashLookup<T>> {
+    ) -> Result<LookupResult> {
         let [array] = probe.probe_keys else {
             return internal_err!("Integer join index requires one integer key");
         };
         downcast_integer_array!(
             array => {
                 hash_probe_keys(probe.probe_keys, probe.random_state, scratch)?;
-                self.lookup(array, &scratch.probe_hashes, &scratch.reservation)
+                Ok(self.lookup(array, &scratch.probe_hashes))
             }
             _ => internal_err!("Integer join index requires integer keys"),
         )
@@ -213,8 +213,7 @@ impl<T: RowId> IntegerDirectory<T> {
         &self,
         array: &PrimitiveArray<K>,
         hashes: &[u64],
-        reservation: &MemoryReservation,
-    ) -> Result<JoinHashLookup<T>>
+    ) -> LookupResult
     where
         K::Native: AsPrimitive<u64>,
     {
@@ -229,23 +228,25 @@ impl<T: RowId> IntegerDirectory<T> {
                 None => None,
                 Some(MatchHandle::Group(_)) => unreachable!("unique index has no groups"),
             };
-            return UniqueMatches::from_lookup(array.len(), reservation, |row| {
-                if has_nulls && array.is_null(row) {
-                    null
-                } else {
-                    find(row).map(|entry| entry.representative_row)
-                }
-            })
-            .map(JoinHashLookup::Unique);
+            return LookupResult::U64(MatchHandles::<u64>::from_singleton_lookup(
+                array.len(),
+                |row| {
+                    let build = if has_nulls && array.is_null(row) {
+                        null
+                    } else {
+                        find(row).map(|entry| entry.representative_row)
+                    };
+                    build.map(|row| row.as_u64())
+                },
+            ));
         }
-        MatchHandleArray::from_lookup(array.len(), reservation, |row| {
+        T::into_lookup_result(MatchHandles::<T>::from_lookup(array.len(), |row| {
             if has_nulls && array.is_null(row) {
                 self.null
             } else {
                 find(row).map(IntegerKeyEntry::matches)
             }
-        })
-        .map(JoinHashLookup::Groups)
+        }))
     }
 
     pub(super) fn len(&self) -> usize {

@@ -7,8 +7,8 @@
 //! A hash match is only a candidate. Compare representatives column by column,
 //! once per key rather than per duplicate. If `A` and `B` share a hash, rejecting
 //! representative `A` must retry the directory: another entry may hold `B`.
-//! Both paths resolve candidates into handles. Unique builds convert these to
-//! row pairs at return; duplicate keys retain handles for later expansion.
+//! Successful candidates become compact [`super::super::matches::MatchHandles`].
+//! Unique builds reuse the candidate row buffers directly; groups expand later.
 
 use std::mem::size_of;
 use std::sync::Arc;
@@ -27,7 +27,7 @@ use super::super::keys::{
     LookupScratch, compare_column, for_each_hash_chunk, hash_probe_keys,
 };
 use super::super::matches::{
-    HandleBuilder, JoinHashLookup, MatchHandle, MatchedGroupsBuilder, RowId,
+    HandleBuilder, LookupResult, MatchHandle, MatchedGroupsBuilder, RowId,
 };
 use super::super::reserve;
 use super::Probe;
@@ -61,6 +61,7 @@ struct KeyEntry<T> {
 }
 
 impl<T: RowId> KeyEntry<T> {
+    #[inline]
     fn matches(&self) -> MatchHandle<T> {
         match self.group_plus_one.as_index() {
             0 => MatchHandle::One(self.representative_row),
@@ -144,54 +145,18 @@ impl<T: RowId> GeneralDirectory<T> {
         })
     }
 
-    /// Find exact join-key matches for the current probe batch.
-    ///
-    /// # Implementation
-    ///
-    /// - Fast pre-filter: collect hash-only candidates, then compare keys column by
-    ///   column.
-    /// - Retry rejected candidates with full key equality.
-    /// - Return all match handles (with unique build-side specialization).
-    ///
-    /// # Example
-    ///
-    /// With build keys `[A, B, A]` and probe keys `[B, X, A]` (no collisions):
-    ///
-    /// ```text
-    /// candidate (probe row, build representative): [(0, 1), (2, 0)]
-    /// verified handles, indexed by probe row:     [One(1), miss, Group(0)]
-    /// ```
-    ///
-    /// Group 0 expands to build rows `[0, 2]` later. If all build keys are unique,
-    /// the handles are converted to row pairs using the candidate buffers.
+    /// Verify hash candidates column by column, then keep exact matches only.
+    /// Rejected candidates retry with full key equality to handle hash collisions.
+    /// See [`super::super::matches::MatchHandles`] for the result layout.
     pub(super) fn lookup_batch(
         &self,
         probe: &Probe<'_>,
         scratch: &mut LookupScratch,
-    ) -> Result<JoinHashLookup<T>> {
-        // step1: Prepare probe scratch and reserve space for lookup results.
+    ) -> Result<LookupResult> {
         let len = probe.probe_keys[0].len();
         prepare_probe_scratch(probe, scratch)?;
-
-        let mut handles = HandleBuilder::new(len, &scratch.reservation)?;
-        // step2: Find candidates using full hash equality, not actual join keys.
-        // Record at most one candidate per eligible probe row in scratch:
-        //
-        // Build batch
-        // row  key  hash
-        //   0   A     7
-        //   1   B     7
-        //   2   C     9
-        //
-        // Probe batch
-        // row  key  hash
-        //   0   B     7
-        //   1   C     9
-        //
-        // If the hash-7 lookup finds A first:
-        //   probe_candidate_rows = [0, 1] // indices into the current probe batch
-        //   representatives      = [0, 2] // indices into the concatenated build batch
-        // These pairs mean (B, A) and (C, C); equality is still unverified.
+        // Unique candidates already carry their final row IDs in scratch.
+        let mut handles = (!self.build_unique).then(|| HandleBuilder::new(len));
         for row in 0..len {
             if scratch
                 .probe_valid
@@ -206,15 +171,12 @@ impl<T: RowId> GeneralDirectory<T> {
                 scratch
                     .representatives
                     .push(entry.representative_row.as_u64());
-                handles.set(row, Some(entry.matches()));
+                if let Some(handles) = &mut handles {
+                    handles.push(row as u32, entry.matches());
+                }
             }
         }
 
-        // step3: Compare actual keys column by column, updating equal per candidate slot.
-        // For the pairs above: equal starts [true, true], then becomes [false, true].
-        //
-        // A rejected candidate may still match another entry with the same hash;
-        // step4 retries those candidates with full join-key equality.
         scratch
             .equal
             .resize(scratch.probe_candidate_rows.len(), true);
@@ -222,10 +184,8 @@ impl<T: RowId> GeneralDirectory<T> {
             compare_column(scratch, column)?;
         }
 
-        // step4: Keep verified handles; retry rejected candidates to replace or clear theirs.
-        // In the example, probing B first found A; retry replaces One(0) with One(1).
+        let mut rejected = false;
         for position in 0..scratch.probe_candidate_rows.len() {
-            let row = scratch.probe_candidate_rows[position] as usize;
             if scratch.equal[position] {
                 continue;
             }
@@ -238,25 +198,31 @@ impl<T: RowId> GeneralDirectory<T> {
                     NullEquality::NullEqualsNull,
                 )?);
             }
+            let row = scratch.probe_candidate_rows[position] as usize;
             let hash = scratch.probe_hashes[row];
             let comparator = scratch.comparator.as_ref().unwrap();
-            // A different exact key can share the first candidate's
-            // full hash. Retry all entries with that hash on rejection.
             let entry = self.table.find(hash, |entry| {
                 entry.hash == hash
                     && comparator.is_equal(entry.representative_row.as_index(), row)
             });
-            handles.set(row, entry.map(KeyEntry::matches));
+            if let Some(entry) = entry {
+                scratch.equal[position] = true;
+                scratch.representatives[position] = entry.representative_row.as_u64();
+                if let Some(handles) = &mut handles {
+                    handles.set(position, entry.matches());
+                }
+            } else {
+                rejected = true;
+            }
         }
 
-        // step5: Return handles, or convert them once to compact pairs for unique builds.
-        let handles = handles.finish();
-        if self.build_unique {
-            Ok(JoinHashLookup::Unique(
-                scratch.take_unique_matches(&handles),
-            ))
+        if let Some(mut handles) = handles {
+            if rejected {
+                handles.retain(&scratch.equal);
+            }
+            Ok(T::into_lookup_result(handles.finish()))
         } else {
-            Ok(JoinHashLookup::Groups(handles))
+            Ok(LookupResult::U64(scratch.take_unique_matches()))
         }
     }
 

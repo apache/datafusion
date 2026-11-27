@@ -8145,15 +8145,23 @@ mod tests {
     ) -> Result<()> {
         let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
-            ("a", &vec![0, 1, 2, 2]),
-            ("b", &vec![4, 5, 7, 8]),
-            ("c", &vec![7, 8, 9, 1]),
+            ("a", &vec![0, 1, 2, 2, 2]),
+            ("b", &vec![4, 5, 7, 8, 9]),
+            ("c", &vec![7, 8, 9, 1, 8]),
         );
-        let right = build_table(
-            ("a", &vec![10, 20, 30, 40]),
-            ("b", &vec![2, 2, 3, 4]),
-            ("c", &vec![7, 5, 6, 4]),
+        // The first key-2 row keeps only the first group member; the second
+        // rejects all three. Misses surround the groups, and the final input
+        // batch has no key matches at all.
+        let right = build_table_i32(
+            ("a", &vec![10, 20, 30, 40, 50, 60]),
+            ("b", &vec![9, 2, 3, 2, 4, 9]),
+            ("c", &vec![0, 8, 0, 9, 0, 0]),
         );
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![right.slice(0, 5), right.slice(5, 1)]],
+            right.schema(),
+            None,
+        )?;
         let on = vec![(
             Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
             Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
@@ -8180,10 +8188,12 @@ mod tests {
             +---+---+---+----+---+---+
             | a | b | c | a  | b | c |
             +---+---+---+----+---+---+
-            |   |   |   | 30 | 3 | 6 |
-            |   |   |   | 40 | 4 | 4 |
-            | 2 | 7 | 9 | 10 | 2 | 7 |
-            | 2 | 7 | 9 | 20 | 2 | 5 |
+            |   |   |   | 10 | 9 | 0 |
+            |   |   |   | 30 | 3 | 0 |
+            |   |   |   | 40 | 2 | 9 |
+            |   |   |   | 50 | 4 | 0 |
+            |   |   |   | 60 | 9 | 0 |
+            | 2 | 7 | 9 | 20 | 2 | 8 |
             +---+---+---+----+---+---+
             ");
         }
@@ -8202,15 +8212,20 @@ mod tests {
     ) -> Result<()> {
         let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
-            ("a", &vec![0, 1, 2, 2]),
-            ("b", &vec![4, 5, 7, 8]),
-            ("c", &vec![7, 8, 9, 1]),
+            ("a", &vec![0, 1, 2, 2, 2]),
+            ("b", &vec![4, 5, 7, 8, 9]),
+            ("c", &vec![7, 8, 9, 1, 8]),
         );
-        let right = build_table(
-            ("a", &vec![10, 20, 30, 40]),
-            ("b", &vec![2, 2, 3, 4]),
-            ("c", &vec![7, 5, 6, 4]),
+        let right = build_table_i32(
+            ("a", &vec![10, 20, 30, 40, 50, 60]),
+            ("b", &vec![9, 2, 3, 2, 4, 9]),
+            ("c", &vec![0, 8, 0, 9, 0, 0]),
         );
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![right.slice(0, 5), right.slice(5, 1)]],
+            right.schema(),
+            None,
+        )?;
         let on = vec![(
             Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
             Arc::new(Column::new_with_schema("b", &right.schema()).unwrap()) as _,
@@ -8236,36 +8251,22 @@ mod tests {
             "+---+---+---+----+---+---+",
             "| a | b | c | a  | b | c |",
             "+---+---+---+----+---+---+",
-            "|   |   |   | 30 | 3 | 6 |",
-            "|   |   |   | 40 | 4 | 4 |",
-            "| 2 | 7 | 9 | 10 | 2 | 7 |",
-            "| 2 | 7 | 9 | 20 | 2 | 5 |",
+            "|   |   |   | 10 | 9 | 0 |",
+            "|   |   |   | 30 | 3 | 0 |",
+            "|   |   |   | 40 | 2 | 9 |",
+            "|   |   |   | 50 | 4 | 0 |",
+            "|   |   |   | 60 | 9 | 0 |",
+            "| 2 | 7 | 9 | 20 | 2 | 8 |",
             "| 0 | 4 | 7 |    |   |   |",
             "| 1 | 5 | 8 |    |   |   |",
             "| 2 | 8 | 1 |    |   |   |",
+            "| 2 | 9 | 8 |    |   |   |",
             "+---+---+---+----+---+---+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
         let metrics = join.metrics().unwrap();
         assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
-
-        // THIS MIGRATION HALTED DUE TO ISSUE #15312
-        //allow_duplicates! {
-        //    assert_snapshot!(batches_to_sort_string(&batches), @r#"
-        //    +---+---+---+----+---+---+
-        //    | a | b | c | a  | b | c |
-        //    +---+---+---+----+---+---+
-        //    |   |   |   | 30 | 3 | 6 |
-        //    |   |   |   | 40 | 4 | 4 |
-        //    | 2 | 7 | 9 | 10 | 2 | 7 |
-        //    | 2 | 7 | 9 | 20 | 2 | 5 |
-        //    | 0 | 4 | 7 |    |   |   |
-        //    | 1 | 5 | 8 |    |   |   |
-        //    | 2 | 8 | 1 |    |   |   |
-        //    +---+---+---+----+---+---+
-        //        "#)
-        //}
 
         Ok(())
     }
