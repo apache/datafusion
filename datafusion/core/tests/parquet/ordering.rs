@@ -148,6 +148,78 @@ async fn test_partitioned_table_remaps_sorting_columns() -> Result<()> {
     Ok(())
 }
 
+/// Sort key after a struct column is written and read by leaf index.
+#[tokio::test]
+async fn test_sorting_columns_after_struct_round_trip() -> Result<()> {
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
+    use std::fs::File;
+
+    let ctx = SessionContext::new();
+    let tmp_dir = tempdir()?;
+    let table_path = tmp_dir.path().join("sorted_after_struct");
+    std::fs::create_dir_all(&table_path)?;
+
+    // Leaves: payload.a, payload.b, b, id
+    ctx.sql(&format!(
+        "CREATE EXTERNAL TABLE sorted_by_id (payload STRUCT<a INT, b INT>, b INT, id INT) \
+         STORED AS PARQUET \
+         LOCATION '{}' \
+         WITH ORDER (id ASC)",
+        table_path.display()
+    ))
+    .await?;
+    // `b` decreases as `id` increases
+    ctx.sql(
+        "INSERT INTO sorted_by_id VALUES \
+         (named_struct('a', 1, 'b', 30), 30, 1), \
+         (named_struct('a', 2, 'b', 20), 20, 2), \
+         (named_struct('a', 3, 'b', 10), 10, 3)",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    // No WITH ORDER, so the ordering comes from the file metadata
+    ctx.sql(&format!(
+        "CREATE EXTERNAL TABLE inferred (payload STRUCT<a INT, b INT>, b INT, id INT) \
+         STORED AS PARQUET LOCATION '{}'",
+        table_path.display()
+    ))
+    .await?;
+    let batches = ctx
+        .sql("SELECT b, id FROM inferred ORDER BY b")
+        .await?
+        .collect()
+        .await?;
+    datafusion::assert_batches_eq!(
+        [
+            "+----+----+",
+            "| b  | id |",
+            "+----+----+",
+            "| 10 | 3  |",
+            "| 20 | 2  |",
+            "| 30 | 1  |",
+            "+----+----+",
+        ],
+        &batches
+    );
+
+    let parquet_file =
+        find_parquet_file(&table_path)?.expect("expected a Parquet file in the table");
+    let reader = SerializedFileReader::new(File::open(parquet_file)?)?;
+    let sorting = reader
+        .metadata()
+        .row_group(0)
+        .sorting_columns()
+        .expect("expected sorting_columns in row group metadata")
+        .clone();
+    assert_eq!(sorting.len(), 1);
+    assert_eq!(sorting[0].column_idx, 3);
+
+    Ok(())
+}
+
 fn find_parquet_file(
     path: &std::path::Path,
 ) -> std::io::Result<Option<std::path::PathBuf>> {
