@@ -154,7 +154,7 @@ impl WindowShift {
 static LAG_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(DOC_SECTION_ANALYTICAL, "Returns value evaluated at the row that is offset rows before the \
             current row within the partition; if there is no such row, instead return default \
-            (which must be of the same type as value).", "lag(expression, offset, default)")
+            (which must be of the same type as value).", "lag(expression[, offset[, default]])")
         .with_argument("expression", "Expression to operate on")
         .with_argument("offset", "Integer. Specifies how many rows back \
         the value of expression should be retrieved. Defaults to 1.")
@@ -190,7 +190,7 @@ static LEAD_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
             "Returns value evaluated at the row that is offset rows after the \
             current row within the partition; if there is no such row, instead return default \
             (which must be of the same type as value).",
-        "lead(expression, offset, default)")
+        "lead(expression[, offset[, default]])")
         .with_argument("expression", "Expression to operate on")
         .with_argument("offset", "Integer. Specifies how many rows \
         forward the value of expression should be retrieved. Defaults to 1.")
