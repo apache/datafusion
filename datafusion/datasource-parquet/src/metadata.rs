@@ -9,16 +9,17 @@ use crate::file_format::ObjectStoreFetch;
 use crate::leaf_resolver::LeafResolver;
 use crate::schema_coercion::{dictionary_reads_enabled, promote_dictionary_columns};
 use crate::{Int96Coercer, apply_file_schema_type_coercions};
-use arrow::array::{Array, ArrayRef, BooleanArray, DynComparator, make_comparator};
+use arrow::array::{Array, ArrayRef, BooleanArray, RecordBatch};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::{SortOptions, and, nullif, sum};
-use arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, Result, ScalarValue, Statistics,
     internal_datafusion_err,
 };
+use datafusion_datasource::MinMaxStatistics;
 use datafusion_execution::cache::cache_manager::{
     CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
 };
@@ -40,7 +41,6 @@ use parquet::file::metadata::{
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use std::any::Any;
-use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -1335,50 +1335,51 @@ fn num_columns_ordered_across_row_groups(
     };
     let resolver = LeafResolver::new(parquet_schema, &arrow_schema);
 
-    // Compares the value that sorts last in one row group with the value that
-    // sorts first in another
-    let comparator = |sorting_column: &SortingColumn| -> Option<DynComparator> {
-        let (first, last) =
-            row_group_sort_bounds(row_groups, parquet_schema, &resolver, sorting_column)?;
-        let options =
-            SortOptions::new(sorting_column.descending, sorting_column.nulls_first);
-        make_comparator(&last, &first, options).ok()
-    };
-    // One comparator per sorting column, created when the column is first
-    // needed. A later column is often not needed at all.
-    let mut comparators: Vec<Option<DynComparator>> = vec![];
+    let mut sort_exprs = vec![];
+    let mut fields = vec![];
+    let mut mins = vec![];
+    let mut maxes = vec![];
+    for (num_ordered, sorting_column) in sorting_columns.iter().enumerate() {
+        let Some((min, max)) =
+            row_group_min_max(row_groups, parquet_schema, &resolver, sorting_column)
+        else {
+            return num_ordered;
+        };
+        // `MinMaxStatistics` finds a column by name, so name it by its position
+        let name = num_ordered.to_string();
+        sort_exprs.push(PhysicalSortExpr::new(
+            Arc::new(Column::new(&name, num_ordered)),
+            SortOptions::new(sorting_column.descending, sorting_column.nulls_first),
+        ));
+        fields.push(Field::new(name, min.data_type().clone(), true));
+        mins.push(min);
+        maxes.push(max);
 
-    let mut num_ordered = sorting_columns.len();
-    // Compare each row group with the next one, column by column
-    for i in 0..row_groups.len() - 1 {
-        for column in 0..num_ordered {
-            if column == comparators.len() {
-                comparators.push(comparator(&sorting_columns[column]));
-            }
-            let Some(compare) = &comparators[column] else {
-                num_ordered = column;
-                break;
-            };
-            match compare(i, i + 1) {
-                // In order, so the later columns do not matter here
-                Ordering::Less => break,
-                // Equal, so the next column decides
-                Ordering::Equal => {}
-                Ordering::Greater => {
-                    num_ordered = column;
-                    break;
-                }
-            }
+        let statistics = || {
+            let schema = Arc::new(Schema::new(fields.clone()));
+            let mins = RecordBatch::try_new(Arc::clone(&schema), mins.clone()).ok()?;
+            let maxes = RecordBatch::try_new(Arc::clone(&schema), maxes.clone()).ok()?;
+            let sort_order = LexOrdering::new(sort_exprs.iter().cloned())?;
+            MinMaxStatistics::new(&sort_order, &schema, mins, maxes).ok()
+        };
+        let Some(statistics) = statistics().filter(|statistics| statistics.is_sorted())
+        else {
+            return num_ordered;
+        };
+        // Each row group ends before the next one starts, so the later sorting
+        // columns cannot change the order
+        if (1..row_groups.len()).all(|i| statistics.max(i - 1) < statistics.min(i)) {
+            break;
         }
     }
-    num_ordered
+    sorting_columns.len()
 }
 
-/// Returns two arrays with one entry per row group: the values that sort
-/// first and the values that sort last under `sorting_column`. A null entry
-/// means that the value is NULL. Returns `None` if the statistics do not
-/// provide the values.
-fn row_group_sort_bounds(
+/// Returns the min and the max of `sorting_column` in each row group, as two
+/// arrays with one entry per row group. Where a row group has NULLs, the entry
+/// on the side where NULLs sort is NULL. Returns `None` if the statistics do
+/// not provide the values.
+fn row_group_min_max(
     row_groups: &[RowGroupMetaData],
     parquet_schema: &SchemaDescriptor,
     resolver: &LeafResolver,
@@ -1408,17 +1409,14 @@ fn row_group_sort_bounds(
         return None;
     }
 
-    let (first, last) = if sorting_column.descending {
-        (maxes, mins)
-    } else {
-        (mins, maxes)
-    };
-    // Statistics exclude nulls, which sort before or after all values
+    // Statistics exclude nulls, which sort before or after all values. In a
+    // descending column the values that sort first are the maxes.
     let has_nulls = BooleanArray::from_unary(&null_counts, |count| count > 0);
-    if sorting_column.nulls_first {
-        Some((nullif(&first, &has_nulls).ok()?, last))
+    let nulls_on_min = sorting_column.nulls_first != sorting_column.descending;
+    if nulls_on_min {
+        Some((nullif(&mins, &has_nulls).ok()?, maxes))
     } else {
-        Some((first, nullif(&last, &has_nulls).ok()?))
+        Some((mins, nullif(&maxes, &has_nulls).ok()?))
     }
 }
 
