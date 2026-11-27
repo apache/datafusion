@@ -83,6 +83,10 @@ pub struct PullUpCorrelatedExpr {
     /// An `Aggregate` above stops the pull up when this is set. `f_up` visits
     /// the aggregate that sets it before any node above.
     pub pulled_up_scalar_agg: bool,
+    /// Whether the pull up added a correlated column to the `GROUP BY` of an
+    /// aggregate that had none. Unlike [`Self::pulled_up_scalar_agg`], an
+    /// uncorrelated aggregate visited after a correlated filter leaves it unset.
+    regrouped_scalar_agg: bool,
     /// Every correlated conjunct that a `Filter` of the subquery applies,
     /// before `remove_duplicated_filter` drops the ones that the `IN`
     /// predicate already covers. The outer references are kept, so that a
@@ -150,6 +154,7 @@ impl PullUpCorrelatedExpr {
             pull_up_having_expr: None,
             having_like_join_filters: Vec::new(),
             pulled_up_scalar_agg: false,
+            regrouped_scalar_agg: false,
             correlated_filters: Vec::new(),
             column_refs_above: Vec::new(),
             depends_only_on_input_having_rows_above: Vec::new(),
@@ -746,6 +751,7 @@ impl PullUpCorrelatedExpr {
                 }
                 if aggregate.group_expr.is_empty() {
                     self.pulled_up_scalar_agg = true;
+                    self.regrouped_scalar_agg |= !local_correlated_cols.is_empty();
                 }
                 let new_plan = LogicalPlanBuilder::from((*aggregate.input).clone())
                     .aggregate(missing_exprs, aggregate.aggr_expr.to_vec())?
@@ -864,10 +870,14 @@ impl PullUpCorrelatedExpr {
         &mut self,
         plan: LogicalPlan,
     ) -> Result<Transformed<LogicalPlan>> {
-        if plan
-            .inputs()
-            .iter()
-            .any(|input| self.collected_count_expr_map.contains_key(*input))
+        // `EXISTS` retries the pull up without count bug handling, so
+        // `collected_count_expr_map` can be empty while such an aggregate is
+        // below `plan`.
+        if self.regrouped_scalar_agg
+            || plan
+                .inputs()
+                .iter()
+                .any(|input| self.collected_count_expr_map.contains_key(*input))
         {
             self.can_pull_up = false;
         }

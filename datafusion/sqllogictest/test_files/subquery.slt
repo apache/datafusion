@@ -5159,6 +5159,97 @@ SELECT o.a FROM t27691 o WHERE o.a IN (
 1
 2
 
+query II
+SELECT o.a, (
+  SELECT count(*) FROM (SELECT a AS x FROM t27691_i WHERE a = o.a) e
+  ASOF JOIN t27691_u u MATCH_CONDITION (e.x * 10 >= u.b)
+) FROM t27691 o ORDER BY o.a;
+----
+1 1
+2 2
+4 0
+
+# A filter above the join that reads the pulled up column.
+query I
+SELECT o.a FROM t27691 o WHERE EXISTS (
+  SELECT 1 FROM (SELECT a AS x FROM t27691_i WHERE a = o.a) e, t27691_u u
+  WHERE e.x * 10 = u.b
+) ORDER BY o.a;
+----
+1
+2
+
+query I
+SELECT o.a FROM t27691 o WHERE EXISTS (
+  SELECT 1 FROM (SELECT e.x FROM (SELECT a AS x FROM t27691_i WHERE a = o.a) e, t27691_u) e2,
+    t27691_u u2
+) ORDER BY o.a;
+----
+1
+2
+
+# An aggregate without GROUP BY below the join returns a row for every outer
+# row, so the subquery stays correlated. Expected: 1, 2, 4.
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT o.a FROM t27691 o WHERE EXISTS (
+  SELECT 1 FROM (SELECT count(*) c FROM t27691_i WHERE a = o.a) e, t27691_u u
+) ORDER BY o.a;
+
+# Expected: no rows.
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT o.a FROM t27691 o WHERE NOT EXISTS (
+  SELECT 1 FROM (SELECT count(*) c FROM t27691_i WHERE a = o.a) e, t27691_u u
+) ORDER BY o.a;
+
+# Expected: 4 (its count is 0).
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+SELECT o.a FROM t27691 o WHERE o.a - 4 IN (
+  SELECT e.c FROM (SELECT count(*) c FROM t27691_i WHERE a = o.a) e, t27691_u u
+) ORDER BY o.a;
+
+# Expected: (1, true), (2, true), (4, true).
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT o.a, EXISTS (
+  SELECT 1 FROM (SELECT sum(a) s FROM t27691_i WHERE a = o.a) e, t27691_u u
+) FROM t27691 o ORDER BY o.a;
+
+# The same holds for an Unnest. Expected: 1, 2, 4.
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT o.a FROM t27691 o WHERE EXISTS (
+  SELECT unnest(make_array(c, c))
+  FROM (SELECT count(*) c FROM t27691_i WHERE a = o.a) e
+) ORDER BY o.a;
+
+# An aggregate without GROUP BY that reads no outer column does not.
+query I
+SELECT o.a FROM t27691 o WHERE EXISTS (
+  SELECT 1 FROM (SELECT a AS x FROM t27691_i WHERE a = o.a) e,
+    (SELECT count(*) c FROM t27691_u) z
+) ORDER BY o.a;
+----
+1
+2
+
+# A correlated filter below the side an outer join fills with NULLs stays
+# below the join. Expected: (1, 2), (2, 4), (4, 2).
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT o.a, (
+  SELECT count(*) FROM t27691_u u
+  LEFT JOIN (SELECT a AS x FROM t27691_i WHERE a = o.a) e ON true
+) FROM t27691 o ORDER BY o.a;
+
+# The check for a correlated column whose name repeats also holds through the
+# join.
+query error
+SELECT o.a FROM t27691 o WHERE EXISTS (
+  SELECT 1 FROM (SELECT a FROM t27691_i WHERE a = o.a) e, t27691_i
+) ORDER BY o.a;
+----
+DataFusion error: Optimizer rule 'decorrelate_predicate_subquery' failed
+caused by
+Error during planning: Unsupported correlated subquery: correlated column t27691_i.a has the same name as an earlier column of the subquery output
+
+
 # A correlated non-equality filter is not decorrelated.
 query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
 SELECT (
