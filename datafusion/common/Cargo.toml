@@ -38,6 +38,8 @@ force_hash_collisions = []
 recursive_protection = ["dep:recursive"]
 parquet = ["dep:parquet"]
 sql = ["sqlparser"]
+# Lets `test_util::get_data_dir` fall back to the test data in a DataFusion source checkout
+test_utils = []
 
 [[bench]]
 harness = false
@@ -83,6 +85,8 @@ web-time = "1.1.0"
 [dev-dependencies]
 chrono = { workspace = true }
 criterion = { workspace = true }
+# Enables `test_utils` for this crate's own tests and doctests
+datafusion-common = { path = ".", features = ["test_utils"] }
 insta = { workspace = true }
 rand = { workspace = true }
 sqlparser = { workspace = true }
