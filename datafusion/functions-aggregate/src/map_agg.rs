@@ -44,7 +44,8 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, MapArray, StructArray, UInt64Array, new_empty_array,
+    Array, ArrayRef, AsArray, MapArray, StructArray, UInt64Array, make_array,
+    new_empty_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::{SortOptions, cast, concat, take};
@@ -53,6 +54,7 @@ use arrow::row::{RowConverter, SortField};
 
 use crate::array_agg::compact_payload;
 use datafusion_common::cast::as_map_array;
+use datafusion_common::scalar::copy_array_data;
 use datafusion_common::utils::{SingleRowListArrayBuilder, take_function_args};
 use datafusion_common::{
     Result, ScalarValue, assert_eq_or_internal_err, exec_err, internal_err, not_impl_err,
@@ -289,8 +291,8 @@ impl Accumulator for MapAggAccumulator {
         if !indices.is_empty() {
             let indices = UInt64Array::from(indices);
             self.batches.push(
-                values
-                    .iter()
+                [keys, vals]
+                    .into_iter()
                     .map(|array| compact_array(take(array.as_ref(), &indices, None)?))
                     .collect::<Result<_>>()?,
             );
@@ -474,12 +476,15 @@ impl Accumulator for OrderSensitiveMapAggAccumulator {
             return exec_err!("map key cannot be null");
         }
         if !keys.is_empty() {
+            // Compaction alone leaves ordinary slices sharing the source buffers.
+            let copy_and_compact = |array: ArrayRef| {
+                compact_payload(make_array(copy_array_data(&array.to_data())))
+            };
             let mut batch = Vec::with_capacity(values.len());
-
-            batch.push(compact_array(keys)?);
-            batch.push(compact_array(vals)?);
-            for array in &values[2..] {
-                batch.push(compact_array(Arc::clone(array))?);
+            batch.push(copy_and_compact(keys)?);
+            batch.push(copy_and_compact(vals)?);
+            for (array, dtype) in values[2..].iter().zip(&self.ordering_dtypes) {
+                batch.push(copy_and_compact(cast(array, dtype)?)?);
             }
             self.batches.push(batch);
         }
@@ -624,7 +629,8 @@ fn batches_size(batches: &Vec<Vec<ArrayRef>>) -> usize {
 mod tests {
     use super::*;
 
-    use arrow::array::{Int32Array, StringArray};
+    use arrow::array::{Int32Array, RecordBatch, StringArray};
+    use arrow::datatypes::Schema;
 
     fn map_agg_accumulator() -> Result<MapAggAccumulator> {
         MapAggAccumulator::try_new(DataType::Utf8, DataType::Int32)
@@ -658,6 +664,48 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn map_agg_output_and_state_match_declared_schema() -> Result<()> {
+        let key_type = DataType::Utf8;
+        let value_type =
+            DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int32, true)]));
+        let agg = MapAgg::default();
+        let return_field = Arc::new(Field::new(
+            "map_agg",
+            agg.return_type(&[key_type.clone(), value_type.clone()])?,
+            true,
+        ));
+        let state_fields = agg.state_fields(StateFieldsArgs {
+            name: agg.name(),
+            input_fields: &[
+                Arc::new(Field::new("key", key_type.clone(), false)),
+                Arc::new(Field::new("value", value_type.clone(), true)),
+            ],
+            return_field: Arc::clone(&return_field),
+            ordering_fields: &[],
+            is_distinct: false,
+        })?;
+        let mut acc = MapAggAccumulator::try_new(key_type, value_type)?;
+        let values = StructArray::from(vec![(
+            Arc::new(Field::new("n", DataType::Int32, false)),
+            Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+        )]);
+        acc.update_batch(&[Arc::new(StringArray::from(vec!["a"])), Arc::new(values)])?;
+
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![return_field])),
+            vec![acc.evaluate()?.to_array()?],
+        )?;
+        let state = acc
+            .state()?
+            .iter()
+            .map(ScalarValue::to_array)
+            .collect::<Result<Vec<_>>>()?;
+        RecordBatch::try_new(Arc::new(Schema::new(state_fields)), state)?;
+        Ok(())
+    }
+
     #[test]
     fn duplicate_key_handling() -> Result<()> {
         let mut acc = map_agg_accumulator()?;
@@ -812,7 +860,6 @@ mod tests {
         reverse: bool,
         options: SortOptions,
     ) -> Result<OrderSensitiveMapAggAccumulator> {
-        use arrow::datatypes::Schema;
         use datafusion_physical_expr::expressions::Column;
         use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
         use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -866,6 +913,95 @@ mod tests {
         let map_values = map.values().as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(map_values, &Int32Array::from(vec![20, 30]));
 
+        Ok(())
+    }
+
+    fn assert_ordered_map_agg_normalizes_ordering_type(
+        is_input_pre_ordered: bool,
+    ) -> Result<()> {
+        let mut acc = ordered_accumulator(is_input_pre_ordered, false)?;
+        let declared_field = Arc::new(Field::new("n", DataType::Int32, true));
+        acc.ordering_dtypes[0] =
+            DataType::Struct(Fields::from(vec![declared_field.clone()]));
+        let (keys, values, order) = if is_input_pre_ordered {
+            (["a", "b"], [10, 20], [1, 2])
+        } else {
+            (["b", "a"], [20, 10], [2, 1])
+        };
+        let order = StructArray::from(vec![(
+            Arc::new(Field::new("n", DataType::Int32, false)),
+            Arc::new(Int32Array::from(order.to_vec())) as ArrayRef,
+        )]);
+        acc.update_batch(&[
+            Arc::new(StringArray::from(keys.to_vec())),
+            Arc::new(Int32Array::from(values.to_vec())),
+            Arc::new(order),
+        ])?;
+
+        let result = acc.evaluate()?;
+        let ScalarValue::Map(map) = &result else {
+            panic!("expected map scalar");
+        };
+        assert_eq!(
+            map.keys().as_string::<i32>(),
+            &StringArray::from(vec!["a", "b"])
+        );
+        assert_eq!(map.values().as_primitive(), &Int32Array::from(vec![10, 20]));
+
+        let state = acc.state()?;
+        assert_eq!(state[0], result);
+        let orderings = state[1].to_array()?;
+        let entries = orderings.as_list::<i32>().value(0);
+        let expected = StructArray::from(vec![(
+            declared_field,
+            Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+        )]);
+        assert_eq!(entries.as_struct().column(0).as_struct(), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_map_agg_normalizes_presorted_ordering_type() -> Result<()> {
+        assert_ordered_map_agg_normalizes_ordering_type(true)
+    }
+
+    #[test]
+    fn ordered_map_agg_normalizes_unsorted_ordering_type() -> Result<()> {
+        assert_ordered_map_agg_normalizes_ordering_type(false)
+    }
+
+    #[test]
+    fn ordered_map_agg_detaches_input_slices() -> Result<()> {
+        let keys = StringArray::from_iter_values((0..10_000).map(|i| format!("key-{i}")));
+        let values = Int32Array::from_iter_values(0..10_000);
+        let orderings = Int32Array::from_iter_values((0..10_000).rev());
+        let mut acc = ordered_accumulator(false, false)?;
+        acc.update_batch(&[
+            Arc::new(keys.slice(3, 1)),
+            Arc::new(values.slice(3, 1)),
+            Arc::new(orderings.slice(3, 1)),
+        ])?;
+        let size = acc.size();
+        assert!(size < 4_000, "one retained row uses {size} bytes");
+
+        let result = acc.evaluate()?;
+        let ScalarValue::Map(map) = &result else {
+            panic!("expected map scalar");
+        };
+        assert_eq!(
+            map.keys().as_string::<i32>(),
+            &StringArray::from(vec!["key-3"])
+        );
+        assert_eq!(map.values().as_primitive(), &Int32Array::from(vec![3]));
+
+        let state = acc.state()?;
+        assert_eq!(state[0], result);
+        let orderings = state[1].to_array()?;
+        let entries = orderings.as_list::<i32>().value(0);
+        assert_eq!(
+            entries.as_struct().column(0).as_primitive(),
+            &Int32Array::from(vec![9996])
+        );
         Ok(())
     }
 
