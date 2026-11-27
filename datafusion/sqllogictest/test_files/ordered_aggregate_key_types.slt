@@ -11,9 +11,6 @@ statement ok
 SET datafusion.execution.target_partitions = 1;
 
 statement ok
-SET datafusion.execution.enable_migration_aggregate = true;
-
-statement ok
 SET datafusion.optimizer.enable_round_robin_repartition = false;
 
 statement ok
@@ -145,9 +142,6 @@ RESET datafusion.execution.batch_size;
 
 statement ok
 SET datafusion.execution.target_partitions = 4;
-
-statement ok
-RESET datafusion.execution.enable_migration_aggregate;
 
 statement ok
 RESET datafusion.optimizer.enable_round_robin_repartition;

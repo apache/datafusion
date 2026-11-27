@@ -41,9 +41,6 @@ statement ok
 SET datafusion.execution.target_partitions = 1;
 
 statement ok
-SET datafusion.execution.enable_migration_aggregate = false;
-
-statement ok
 CREATE EXTERNAL TABLE grouping_set_ordered (
   a0 INTEGER,
   a INTEGER,
@@ -95,33 +92,6 @@ LIMIT 10;
 3
 4
 4
-
-statement ok
-SET datafusion.execution.enable_migration_aggregate = true;
-
-query I
-SELECT c
-FROM (
-  SELECT b, c, grouping(b, c) AS gid
-  FROM grouping_set_ordered
-  GROUP BY GROUPING SETS ((b, c), (c))
-)
-ORDER BY c
-LIMIT 10;
-----
-0
-0
-1
-1
-2
-2
-3
-3
-4
-4
-
-statement ok
-RESET datafusion.execution.enable_migration_aggregate;
 
 # a = b holds before the aggregate, but not after it: the (a) grouping set
 # outputs b as NULL.

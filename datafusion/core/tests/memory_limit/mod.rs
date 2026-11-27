@@ -213,33 +213,21 @@ mod count_distinct_spill {
     }
 }
 
-/// `GROUP BY` on a single nested key under a memory limit, on both the legacy
-/// `GroupedHashAggregateStream` and the migrated streams. The legacy stream used
-/// to emit duplicate groups after spilling.
+/// `GROUP BY` on a single nested key must not emit duplicate groups after spilling.
 #[tokio::test]
 async fn nested_key_spill_keeps_groups_unique() {
     const NESTED_KEY_ROWS: usize = 200_000;
     const NESTED_KEY_GROUPS: i64 = 16;
     const NESTED_KEY_BATCH_ROWS: usize = 8_192;
 
-    /// Small enough that the final stage must spill its `count(distinct)` state
-    /// under the plan shape each stream implementation runs with, see
-    /// `nested_key_session_config` for why they differ.
-    const LEGACY_MEMORY_LIMIT: usize = 8 * 1024 * 1024;
-    const MIGRATED_MEMORY_LIMIT: usize = 2 * 1024 * 1024;
+    /// Small enough that the final stage must spill its `count(distinct)` state.
+    const MEMORY_LIMIT: usize = 2 * 1024 * 1024;
 
     /// A `FairSpillPool` splits the limit evenly between the spillable consumers
     /// registered at the time of each allocation, so what a stream may hold
-    /// depends on which other streams are still alive. Each implementation gets
-    /// a plan shape under which that does not matter.
+    /// depends on which other streams are still alive.
     ///
-    /// The legacy bug needs several new groups per merged batch: 64 row batches
-    /// over 4 hash partitioned final streams reproduce it, and the legacy replay
-    /// of the merged spill holds at most ~340 KiB, within the ~680 KiB share it
-    /// gets even while all 12 consumers (partials, repartitions and finals) are
-    /// registered.
-    ///
-    /// The migrated final stream replays the merged spill through an ordered
+    /// The final stream replays the merged spill through an ordered
     /// table that accounts for every group of a merged batch before emitting
     /// the completed ones, and one group's `count(distinct)` state here is
     /// ~675 KiB. With 64 row batches over 4 partitions that reached ~2.7 MiB,
@@ -248,19 +236,11 @@ async fn nested_key_spill_keeps_groups_unique() {
     /// single final stream (no hash repartition), which is the only spillable
     /// consumer left once the partials are done, with 8 row batches so a
     /// merged batch holds one or two groups.
-    fn nested_key_session_config(legacy: bool) -> SessionConfig {
-        let config = SessionConfig::new()
+    fn nested_key_session_config() -> SessionConfig {
+        SessionConfig::new()
             .with_target_partitions(4)
-            .set_bool("datafusion.execution.enable_migration_aggregate", !legacy);
-        if legacy {
-            // small batches: the merged spill stream arrives in many batches and
-            // groups span batch boundaries
-            config.with_batch_size(64)
-        } else {
-            config
-                .with_batch_size(8)
-                .set_bool("datafusion.optimizer.repartition_aggregations", false)
-        }
+            .with_batch_size(8)
+            .set_bool("datafusion.optimizer.repartition_aggregations", false)
     }
 
     fn nested_key_struct_fields() -> Fields {
@@ -316,14 +296,14 @@ async fn nested_key_spill_keeps_groups_unique() {
         MemTable::try_new(schema, vec![batches]).unwrap()
     }
 
-    async fn run_nested_key_query(memory_limit: Option<usize>, legacy: bool) -> String {
+    async fn run_nested_key_query(memory_limit: Option<usize>) -> String {
         let mut runtime = RuntimeEnvBuilder::new()
             .with_disk_manager_builder(DiskManagerBuilder::default());
         if let Some(limit) = memory_limit {
             runtime = runtime.with_memory_pool(Arc::new(FairSpillPool::new(limit)));
         }
         let ctx = SessionContext::new_with_config_rt(
-            nested_key_session_config(legacy),
+            nested_key_session_config(),
             runtime.build_arc().unwrap(),
         );
         ctx.register_table("t", Arc::new(nested_key_table()))
@@ -352,22 +332,12 @@ async fn nested_key_spill_keeps_groups_unique() {
         batches_to_sort_string(&batches)
     }
 
-    let expected = run_nested_key_query(None, false).await;
+    let expected = run_nested_key_query(None).await;
     assert_eq!(
-        run_nested_key_query(None, true).await,
+        run_nested_key_query(Some(MEMORY_LIMIT)).await,
         expected,
-        "unbounded, legacy=true"
+        "spilling"
     );
-
-    for (legacy, memory_limit) in
-        [(true, LEGACY_MEMORY_LIMIT), (false, MIGRATED_MEMORY_LIMIT)]
-    {
-        assert_eq!(
-            run_nested_key_query(Some(memory_limit), legacy).await,
-            expected,
-            "spilling, legacy={legacy}"
-        );
-    }
 }
 
 /// A grouped `COUNT(DISTINCT <string>)` gets one accumulator per group, and

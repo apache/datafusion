@@ -136,25 +136,6 @@ SELECT count(*), sum(length(s)) FROM (
 ----
 40000 96120000
 
-# The legacy aggregate stream.
-statement ok
-SET datafusion.execution.enable_migration_aggregate = false
-
-statement ok
-SET datafusion.runtime.memory_limit = '4M'
-
-query II
-SELECT count(*), sum(length(s)) FROM (
-  SELECT k, string_agg(v, ',') AS s
-  FROM (SELECT value % 40000 AS k, repeat('x', 200) AS v FROM generate_series(1, 160000))
-  GROUP BY k
-)
-----
-40000 32120000
-
-statement ok
-RESET datafusion.execution.enable_migration_aggregate
-
 # Restore settings to slt runner defaults
 statement ok
 SET datafusion.execution.target_partitions = 4

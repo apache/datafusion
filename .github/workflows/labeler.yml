@@ -22,6 +22,7 @@ jobs:
   process:
     name: Process
     runs-on: ubuntu-slim
+    timeout-minutes: 10
     if: github.event.workflow_run.event == 'pull_request'
     # The token of a `workflow_run` workflow can update PRs from forks.
     # Previously `pull_request_target` was used for the same reason, see

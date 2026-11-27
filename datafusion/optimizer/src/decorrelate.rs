@@ -22,6 +22,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
+use datafusion_expr::logical_plan::builder::unique_field_aliases;
 use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{collect_subquery_cols, conjunction, split_conjunction};
@@ -111,6 +112,21 @@ pub struct PullUpCorrelatedExpr {
     /// `f_down`'s `Limit` arm reads it: a `Limit` is only dropped from an
     /// `EXISTS` subquery when this holds for every node above it.
     depends_only_on_input_having_rows_above: Vec<bool>,
+    /// For each node on that same path, how many plans [`Self::alias_order`]
+    /// held when `f_down` reached the node. Pushed and popped with
+    /// [`Self::column_refs_above`].
+    aliases_before: Vec<usize>,
+    /// Each `SubqueryAlias` plan `f_up` has returned so far, in the order it
+    /// first did, and whether it has had facts in
+    /// `correlated_subquery_cols_map` or `collected_count_expr_map`.
+    ///
+    /// Both maps are keyed by the plan value, so two equal `SubqueryAlias`
+    /// nodes at different places in the subquery share one entry, and one of
+    /// them reads or replaces the facts of the other. When a node returns a
+    /// `SubqueryAlias` plan that some node outside its own subtree returned
+    /// first, and either of them has facts, the pull up stops. See
+    /// <https://github.com/apache/datafusion/issues/26692>.
+    alias_order: HashMap<LogicalPlan, (usize, bool)>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -137,6 +153,8 @@ impl PullUpCorrelatedExpr {
             correlated_filters: Vec::new(),
             column_refs_above: Vec::new(),
             depends_only_on_input_having_rows_above: Vec::new(),
+            aliases_before: Vec::new(),
+            alias_order: HashMap::new(),
         }
     }
 
@@ -201,6 +219,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
         self.column_refs_above.push(column_refs);
         self.depends_only_on_input_having_rows_above
             .push(depends_only_on_input_having_rows(&plan));
+        self.aliases_before.push(self.alias_order.len());
 
         // This match is exhaustive on purpose. A correlated filter moves above
         // a node only when the node is known to keep the result the same. Add
@@ -321,6 +340,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         // is gone, so only one entry must remain pushed.
                         self.column_refs_above.pop();
                         self.depends_only_on_input_having_rows_above.pop();
+                        self.aliases_before.pop();
                         let mut t = self.f_down((*limit.input).clone())?;
                         t.transformed = true;
                         Ok(t)
@@ -397,7 +417,43 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
         // `column_refs_above` holds only the nodes strictly above `plan`.
         self.column_refs_above.pop();
         self.depends_only_on_input_having_rows_above.pop();
+        let aliases_before = self.aliases_before.pop().unwrap_or(0);
 
+        let transformed = self.pull_up(plan)?;
+        if matches!(transformed.data, LogicalPlan::SubqueryAlias(_)) {
+            let has_facts = self.has_facts(&transformed.data);
+            let next_order = self.alias_order.len();
+            match self.alias_order.get_mut(&transformed.data) {
+                Some((order, had_facts)) => {
+                    if *order < aliases_before && (*had_facts || has_facts) {
+                        self.can_pull_up = false;
+                    }
+                    *had_facts |= has_facts;
+                }
+                None => {
+                    self.alias_order
+                        .insert(transformed.data.clone(), (next_order, has_facts));
+                }
+            }
+        }
+        Ok(transformed)
+    }
+}
+
+impl PullUpCorrelatedExpr {
+    /// Whether `plan` has an entry with something in it in either map.
+    fn has_facts(&self, plan: &LogicalPlan) -> bool {
+        self.correlated_subquery_cols_map
+            .get(plan)
+            .is_some_and(|cols| !cols.is_empty())
+            || self
+                .collected_count_expr_map
+                .get(plan)
+                .is_some_and(|exprs| !exprs.is_empty())
+    }
+
+    /// The `f_up` step for one node, after its children.
+    fn pull_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         // A node that null-extends or regroups rows can put a NULL back into
         // a column that a correlated filter below it rejected, so the filters
         // recorded so far no longer bound what the subquery returns.
@@ -709,6 +765,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 );
                 let mut new_correlated_cols = BTreeSet::new();
                 for col in local_correlated_cols.iter() {
+                    check_alias_keeps_column_name(alias.input.schema(), col)?;
                     new_correlated_cols
                         .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
                 }
@@ -1222,6 +1279,27 @@ pub(crate) fn find_join_exprs(exprs: Vec<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
     (joins, others)
 }
 
+/// Returns an error if `col` would be renamed when `schema` is wrapped in a `SubqueryAlias`.
+///
+/// Wrapping `schema` in a `SubqueryAlias` renames fields that collide with
+/// earlier field names or aliases (`k:1`, ...), so qualifying `col` as
+/// `<alias>.<name>` refers to `col` only when its original name is preserved.
+/// See <https://github.com/apache/datafusion/issues/26234>.
+pub(crate) fn check_alias_keeps_column_name(
+    schema: &DFSchema,
+    col: &Column,
+) -> Result<()> {
+    let Some(index) = schema.maybe_index_of_column(col) else {
+        return Ok(());
+    };
+    if unique_field_aliases(schema.fields())[index].is_some() {
+        return plan_err!(
+            "Unsupported correlated subquery: correlated column {col} has the same name as an earlier column of the subquery output"
+        );
+    }
+    Ok(())
+}
+
 /// Combines join filters and qualifies their inner columns with the subquery alias.
 ///
 /// Aliasing must precede stripping outer references so inner and outer columns
@@ -1229,12 +1307,18 @@ pub(crate) fn find_join_exprs(exprs: Vec<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
 pub(crate) fn build_join_filter<'a>(
     join_filters: Vec<Expr>,
     correlated_cols: impl IntoIterator<Item = &'a Column>,
+    subquery_schema: &DFSchema,
     subquery_alias: &str,
 ) -> Result<Option<Expr>> {
     let correlated_cols = correlated_cols
         .into_iter()
         .cloned()
         .collect::<BTreeSet<_>>();
+
+    for col in &correlated_cols {
+        check_alias_keeps_column_name(subquery_schema, col)?;
+    }
+
     conjunction(join_filters)
         .map(|filter| {
             replace_qualified_name(filter, &correlated_cols, subquery_alias)
@@ -1447,16 +1531,36 @@ mod tests {
 
     #[test]
     fn test_build_join_filter() -> Result<()> {
-        assert_eq!(build_join_filter(vec![], [], "sq")?, None);
+        let empty_schema = DFSchema::empty();
+        assert_eq!(build_join_filter(vec![], [], &empty_schema, "sq")?, None);
 
         let column = Column::from("t.a");
         let outer = out_ref_col(DataType::Int32, "t.a");
         let filters = vec![col("t.a").eq(outer.clone()), outer.gt(lit(1))];
+        let schema = DFSchema::from_unqualified_fields(
+            vec![arrow::datatypes::Field::new("a", DataType::Int32, true)].into(),
+            std::collections::HashMap::new(),
+        )?;
 
         assert_eq!(
-            build_join_filter(filters, [&column, &column], "sq")?,
+            build_join_filter(filters.clone(), [&column, &column], &schema, "sq")?,
             Some(col("sq.a").eq(col("t.a")).and(col("t.a").gt(lit(1))))
         );
+
+        // Under the alias, `one.a` keeps the name `a` and `two.a` becomes `a:1`,
+        // so only `one.a` can be qualified as `sq.a`.
+        let field_a = Arc::new(arrow::datatypes::Field::new("a", DataType::Int32, true));
+        let dup_schema = DFSchema::new_with_metadata(
+            vec![
+                (Some("one".into()), Arc::clone(&field_a)),
+                (Some("two".into()), field_a),
+            ],
+            std::collections::HashMap::new(),
+        )?;
+        let one_a = Column::from("one.a");
+        let two_a = Column::from("two.a");
+        assert!(build_join_filter(vec![], [&one_a], &dup_schema, "sq").is_ok());
+        assert!(build_join_filter(vec![], [&two_a], &dup_schema, "sq").is_err());
         Ok(())
     }
 }

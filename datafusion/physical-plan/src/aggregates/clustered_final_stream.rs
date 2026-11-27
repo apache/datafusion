@@ -576,12 +576,7 @@ mod tests {
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
         let context = Arc::new(
             TaskContext::default()
-                .with_session_config(
-                    SessionConfig::new().with_batch_size(128).set_bool(
-                        "datafusion.execution.enable_migration_aggregate",
-                        true,
-                    ),
-                )
+                .with_session_config(SessionConfig::new().with_batch_size(128))
                 .with_runtime(
                     RuntimeEnvBuilder::new()
                         .with_max_spill_merge_fan_in(2)

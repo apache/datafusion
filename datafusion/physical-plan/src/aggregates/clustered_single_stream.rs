@@ -825,11 +825,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
         let context = TaskContext::default()
-            .with_session_config(
-                SessionConfig::new()
-                    .with_batch_size(4)
-                    .set_bool("datafusion.execution.enable_migration_aggregate", true),
-            )
+            .with_session_config(SessionConfig::new().with_batch_size(4))
             .with_runtime(
                 RuntimeEnvBuilder::new()
                     .with_memory_pool(pool)

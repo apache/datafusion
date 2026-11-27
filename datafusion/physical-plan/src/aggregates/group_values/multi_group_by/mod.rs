@@ -18,13 +18,13 @@ pub mod row_backed;
 use std::mem::{self, size_of};
 use std::sync::Arc;
 
-use crate::aggregates::group_values::GroupValues;
 use crate::aggregates::group_values::multi_group_by::{
     boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
     bytes_view::ByteViewGroupValueBuilder,
     fixed_size_binary::FixedSizeBinaryGroupValueBuilder,
     primitive::PrimitiveGroupValueBuilder, row_backed::RowsGroupColumn,
 };
+use crate::aggregates::group_values::{GroupValues, MISSING_GROUP};
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::array::AsArray;
 use arrow::array::{
@@ -440,7 +440,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///
     /// `Group indices` order are against with their input order, and this will lead to error
     /// in `streaming aggregation`.
-    fn scalarized_intern(
+    fn scalarized_intern<const INSERT: bool>(
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
@@ -497,6 +497,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             let group_idx = match entry {
                 // Existing group_index for this group value
                 Some((_hash, group_idx_view)) => group_idx_view.value() as usize,
+                None if !INSERT => MISSING_GROUP,
                 //  1.2 Need to create new entry for the group
                 None => {
                     // Add new entry to aggr_state and save newly created index
@@ -541,7 +542,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///
     /// The vectorized approach can offer higher performance for avoiding row by row
     /// downcast for `cols` and being able to implement even more optimizations(like simd).
-    fn vectorized_intern(
+    fn vectorized_intern<const INSERT: bool>(
         &mut self,
         cols: &[ArrayRef],
         groups: &mut Vec<usize>,
@@ -550,7 +551,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
         // tracks to which group each of the input rows belongs
         groups.clear();
-        groups.resize(n_rows, usize::MAX);
+        groups.resize(n_rows, MISSING_GROUP);
 
         let mut batch_hashes = mem::take(&mut self.hashes_buffer);
         batch_hashes.clear();
@@ -585,7 +586,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         //
 
         // 1. Collect vectorized context by checking hash values of `cols` in `map`
-        self.collect_vectorized_process_context(&batch_hashes, groups);
+        self.collect_vectorized_process_context::<INSERT>(&batch_hashes, groups);
 
         // 2. Perform `vectorized_append`
         self.vectorized_append(cols)?;
@@ -595,7 +596,12 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
         // 4. Perform scalarized inter for remaining rows
         // (about remaining rows, can see comments for `remaining_row_indices`)
-        self.scalarized_intern_remaining(cols, &batch_hashes, groups)?;
+        //
+        // Without inserts every candidate group was already compared, so the
+        // remaining rows are misses.
+        if INSERT {
+            self.scalarized_intern_remaining(cols, &batch_hashes, groups)?;
+        }
 
         self.hashes_buffer = batch_hashes;
 
@@ -615,7 +621,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///   - Check if the `group index view` is `inlined` or `non_inlined`:
     ///     If it is inlined, add to `vectorized_equal_to_group_indices` directly.
     ///     Otherwise get all group indices from `group_index_lists`, and add them.
-    fn collect_vectorized_process_context(
+    fn collect_vectorized_process_context<const INSERT: bool>(
         &mut self,
         batch_hashes: &[u64],
         groups: &mut [usize],
@@ -634,6 +640,9 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                 .find(target_hash, |(exist_hash, _)| target_hash == *exist_hash);
 
             let Some((_, group_index_view)) = entry else {
+                if !INSERT {
+                    continue;
+                }
                 // 1. Bucket not found case
                 // Build `new inlined group index view`
                 let current_group_idx = self.group_values[0].len()
@@ -1140,8 +1149,13 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     }
 }
 
-impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
+    /// [`GroupValues::intern`] if `INSERT`, else [`GroupValues::lookup`].
+    fn probe<const INSERT: bool>(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+    ) -> Result<()> {
         let normalized: Option<Vec<ArrayRef>> = cols
             .iter()
             .any(|col| col.data_type().is_nested() && has_float_leaf(col.data_type()))
@@ -1162,10 +1176,24 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
             return Ok(());
         }
         if !STREAMING {
-            self.vectorized_intern(cols, groups)
+            self.vectorized_intern::<INSERT>(cols, groups)
         } else {
-            self.scalarized_intern(cols, groups)
+            self.scalarized_intern::<INSERT>(cols, groups)
         }
+    }
+}
+
+impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+        self.probe::<true>(cols, groups)
+    }
+
+    fn lookup(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+        self.probe::<false>(cols, groups)
+    }
+
+    fn supports_lookup(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {
@@ -1213,6 +1241,8 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                 // a real Result rather than panicking.
                 let fresh = Self::build_group_columns(&self.schema)?;
                 let group_values = mem::replace(&mut self.group_values, fresh);
+                self.map.clear();
+                self.group_index_lists.clear();
 
                 group_values
                     .into_iter()
@@ -1385,7 +1415,8 @@ mod tests {
         PrimitiveArray, RecordBatch, StringArray, StringViewArray, UInt32Array,
     };
     use arrow::datatypes::{
-        DataType, Decimal32Type, Decimal64Type, Field, Int8Type, Schema, SchemaRef,
+        DataType, Decimal32Type, Decimal64Type, Field, Int8Type, Int32Type, Schema,
+        SchemaRef,
     };
     use arrow::{
         compute::{concat_batches, take},
@@ -1395,7 +1426,7 @@ mod tests {
     use datafusion_expr::{EmitTo, GroupSelection};
 
     use crate::aggregates::group_values::{
-        GroupValues, multi_group_by::GroupValuesColumn,
+        GroupValues, MISSING_GROUP, multi_group_by::GroupValuesColumn,
     };
 
     use super::{
@@ -2374,6 +2405,44 @@ mod tests {
     }
 
     #[test]
+    fn lookup_single_dictionary_column() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema)?;
+        let dict = |keys: Vec<Option<i32>>, values: &ArrayRef| -> Vec<ArrayRef> {
+            vec![Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(keys),
+                Arc::clone(values),
+            ))]
+        };
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let mut groups = vec![];
+        group_values
+            .intern(&dict(vec![Some(0), Some(1), Some(0)], &values), &mut groups)?;
+        assert_eq!(groups, vec![0, 1, 0]);
+
+        // Every key is cached for this values array, so this takes
+        // `try_map_dictionary_groups`, which returns before the `INSERT` dispatch.
+        group_values.lookup(&dict(vec![Some(1), Some(0)], &values), &mut groups)?;
+        assert_eq!(groups, vec![1, 0]);
+
+        // An unstored value and a null key fall back to the vectorized path.
+        let keys = vec![Some(0), Some(2), None, Some(1)];
+        group_values.lookup(&dict(keys, &values), &mut groups)?;
+        assert_eq!(groups, vec![0, MISSING_GROUP, MISSING_GROUP, 1]);
+
+        // A new values array is hashed again and compared uncached.
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["c", "a"]));
+        group_values.lookup(&dict(vec![Some(0), Some(1)], &values), &mut groups)?;
+        assert_eq!(groups, vec![MISSING_GROUP, 0]);
+        assert_eq!(group_values.len(), 2);
+        Ok(())
+    }
+
+    #[test]
     fn single_dictionary_direct_mapping_after_emit_first_with_null_group() {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "d",
@@ -2497,6 +2566,16 @@ mod tests {
             GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
 
         data_set.load_to_group_values(&mut group_values);
+
+        let num_groups = group_values.len();
+        let (mut interned, mut found) = (vec![], vec![]);
+        for batch in &data_set.test_batches {
+            group_values.intern(batch, &mut interned).unwrap();
+            group_values.lookup(batch, &mut found).unwrap();
+            assert_eq!(found, interned);
+        }
+        assert_eq!(group_values.len(), num_groups);
+
         let actual_batch = group_values.emit(EmitTo::All).unwrap();
         let actual_batch = RecordBatch::try_new(data_set.schema(), actual_batch).unwrap();
 
@@ -2606,6 +2685,45 @@ mod tests {
             expected
         );
         assert_eq!(group_values.len(), data_set.expected_batch.num_rows());
+    }
+
+    #[test]
+    fn intern_after_emit_all_starts_new_groups() -> Result<()> {
+        fn check<const STREAMING: bool>() -> Result<()> {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Utf8, false),
+            ]));
+            let mut group_values = GroupValuesColumn::<STREAMING>::try_new(schema)?;
+            let batch = |a: Vec<i32>, b: Vec<&str>| -> Vec<ArrayRef> {
+                vec![
+                    Arc::new(Int32Array::from(a)),
+                    Arc::new(StringArray::from(b)),
+                ]
+            };
+
+            let mut groups = vec![];
+            group_values
+                .intern(&batch(vec![1, 2, 3], vec!["x", "y", "z"]), &mut groups)?;
+            assert_eq!(groups, vec![0, 1, 2]);
+            let probe = batch(vec![3, 9], vec!["z", "z"]);
+            assert!(group_values.supports_lookup());
+            group_values.lookup(&probe, &mut groups)?;
+            assert_eq!(groups, vec![2, MISSING_GROUP]);
+            assert_eq!(group_values.len(), 3);
+            group_values.emit(EmitTo::All)?;
+            group_values.lookup(&probe, &mut groups)?;
+            assert_eq!(groups, vec![MISSING_GROUP; 2]);
+
+            group_values.intern(&batch(vec![3, 4], vec!["z", "w"]), &mut groups)?;
+            assert_eq!(groups, vec![0, 1]);
+            assert_eq!(group_values.len(), 2);
+            let emitted = group_values.emit(EmitTo::All)?;
+            assert_eq!(emitted[0].as_primitive::<Int32Type>().values(), &[3, 4]);
+            Ok(())
+        }
+        check::<false>()?;
+        check::<true>()
     }
 
     #[test]

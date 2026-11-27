@@ -16,13 +16,12 @@
 //! build the string array itself. It only validates UTF-8 for columns carrying
 //! the `UTF8` logical annotation, which such a column by definition does not,
 //! so invalid bytes surface as an invalid string array rather than an error.
-//! That is long-standing behaviour for top-level and struct fields; it is not
-//! extended to map children, whose positional matching is newer, so binary map
-//! values keep going through the validating cast instead.
+//! This coercion therefore only applies to top-level fields, where it is
+//! long-standing behaviour. Nested binary fields (struct fields, list elements
+//! and map keys and values) are never read as strings: they keep going through
+//! the validating cast instead. The view coercions still apply at every level.
 
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, TimeUnit};
@@ -179,28 +178,25 @@ fn coerce_data_type(
         (BinaryView, Binary | LargeBinary) => Some(BinaryView),
         // Struct children match by name
         (Struct(table_fields), Struct(file_fields)) => {
-            coerce_fields_by_name(table_fields, file_fields, binary_to_string, enable_rle)
+            coerce_fields_by_name(table_fields, file_fields, false, enable_rle)
                 .map(Struct)
         }
         // List-like children match by position, regardless of their names.
         // The container kind and FixedSizeList width always come from the file.
         (List(table_child), List(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle).map(List)
+            coerce_child(table_child, file_child, enable_rle).map(List)
         }
         (LargeList(table_child), LargeList(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
-                .map(LargeList)
+            coerce_child(table_child, file_child, enable_rle).map(LargeList)
         }
         (ListView(table_child), ListView(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
-                .map(ListView)
+            coerce_child(table_child, file_child, enable_rle).map(ListView)
         }
         (LargeListView(table_child), LargeListView(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
-                .map(LargeListView)
+            coerce_child(table_child, file_child, enable_rle).map(LargeListView)
         }
         (FixedSizeList(table_child, _), FixedSizeList(file_child, size)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
+            coerce_child(table_child, file_child, enable_rle)
                 .map(|child| FixedSizeList(child, *size))
         }
         // Map keys and values match by position: Parquet always names them
@@ -220,17 +216,16 @@ fn coerce_data_type(
 }
 
 /// Coerce a single nested child field, keeping everything but its data type
-/// from `file_child`.
+/// from `file_child`. Nested binary is never read as a string (see module docs).
 fn coerce_child(
     table_child: &FieldRef,
     file_child: &FieldRef,
-    binary_to_string: bool,
     enable_rle: bool,
 ) -> Option<FieldRef> {
     coerce_data_type(
         table_child.data_type(),
         file_child.data_type(),
-        binary_to_string,
+        false,
         enable_rle,
     )
     .map(|new_type| field_with_new_type(file_child, new_type))
@@ -257,7 +252,7 @@ fn coerce_map_entries(
     }
 
     let fields = coerce_fields(file_fields, |idx, file_child| {
-        coerce_child(&table_fields[idx], file_child, false, false)
+        coerce_child(&table_fields[idx], file_child, false)
     })?;
 
     Some(field_with_new_type(file_entries, DataType::Struct(fields)))
@@ -427,6 +422,61 @@ pub(crate) fn uniform_dict_schemas(schemas: Vec<Schema>) -> Vec<Schema> {
         .collect()
 }
 
+pub(crate) fn dictionary_reads_enabled(
+    enable_rle_to_dictionary: bool,
+    dictionary_read_max_distinct_values: Option<usize>,
+) -> bool {
+    enable_rle_to_dictionary || dictionary_read_max_distinct_values.is_some()
+}
+
+/// Read the listed top-level string/binary fields as `Dictionary(Int32, _)`.
+pub(crate) fn promote_dictionary_columns(
+    schema: &Schema,
+    dictionary_columns: &HashSet<String>,
+) -> Option<Schema> {
+    let fields = coerce_fields(schema.fields(), |_, field| {
+        if !dictionary_columns.contains(field.name()) {
+            return None;
+        }
+        let value_type = field.data_type();
+        matches!(
+            value_type,
+            DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary
+        )
+        .then(|| {
+            field_with_new_type(
+                field,
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(value_type.clone()),
+                ),
+            )
+        })
+    })?;
+    Some(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
+/// Read top-level string/binary dictionaries named in `plain_columns` as their
+/// value type.
+pub(crate) fn demote_dictionary_columns(
+    schema: &Schema,
+    plain_columns: &HashSet<String>,
+) -> Option<Schema> {
+    let fields = coerce_fields(schema.fields(), |_, field| match field.data_type() {
+        DataType::Dictionary(_, value_type)
+            if plain_columns.contains(field.name())
+                && (value_type.is_string() || value_type.is_binary()) =>
+        {
+            Some(field_with_new_type(field, value_type.as_ref().clone()))
+        }
+        _ => None,
+    })?;
+    Some(Schema::new_with_metadata(fields, schema.metadata().clone()))
+}
+
 /// Coerces the file schema's Timestamps to the provided TimeUnit if the
 /// Parquet schema contains INT96.
 ///
@@ -528,189 +578,95 @@ fn coerce_int96_to_resolution_impl(
     time_unit: &TimeUnit,
     timezone: Option<&Arc<str>>,
 ) -> Option<Schema> {
-    // Traverse the parquet_schema columns looking for int96 physical types. If encountered, insert
-    // the field's full path into a set.
-    let int96_fields: HashSet<_> = parquet_schema
-        .columns()
-        .iter()
-        .filter(|f| f.physical_type() == Type::INT96)
-        .map(|f| f.path().string())
-        .collect();
-
-    if int96_fields.is_empty() {
-        // The schema doesn't contain any int96 fields, so skip the remaining logic.
+    // Whether each leaf column of a top-level field is INT96. arrow-rs maps leaf columns to Arrow
+    // leaves in depth-first order whatever the list or map encoding, so they match by position.
+    let mut int96_leaves: HashMap<&str, Vec<bool>> = HashMap::new();
+    for (index, column) in parquet_schema.columns().iter().enumerate() {
+        int96_leaves
+            .entry(parquet_schema.get_column_root(index).name())
+            .or_default()
+            .push(column.physical_type() == Type::INT96);
+    }
+    if !int96_leaves.values().flatten().any(|&is_int96| is_int96) {
         return None;
     }
 
-    // Do a DFS into the schema using a stack, looking for timestamp(nanos) fields that originated
-    // as int96 to coerce to the provided time_unit.
-
-    type NestedFields = Rc<RefCell<Vec<FieldRef>>>;
-    type StackContext<'a> = (
-        Vec<&'a str>, // The Parquet column path (e.g., "c0.list.element.c1") for the current field.
-        &'a FieldRef, // The current field to be processed.
-        NestedFields, // The parent's fields that this field will be (possibly) type-coerced and
-        // inserted into. All fields have a parent, so this is not an Option type.
-        Option<NestedFields>, // Nested types need to create their own vector of fields for their
-                              // children. For primitive types this will remain None. For nested
-                              // types it is None the first time they are processed. Then, we
-                              // instantiate a vector for its children, push the field back onto the
-                              // stack to be processed again, and DFS into its children. The next
-                              // time we process the field, we know we have DFS'd into the children
-                              // because this field is Some.
-    );
-
-    // This is our top-level fields from which we will construct our schema. We pass this into our
-    // initial stack context as the parent fields, and the DFS populates it.
-    let fields = Rc::new(RefCell::new(Vec::with_capacity(file_schema.fields.len())));
-
-    // TODO: It might be possible to only DFS into nested fields that we know contain an int96 if we
-    // use some sort of LPM data structure to check if we're currently DFS'ing nested types that are
-    // in a column path that contains an int96. That can be a future optimization for large schemas.
-    let transformed_schema = {
-        // Populate the stack with our top-level fields.
-        let mut stack: Vec<StackContext> = file_schema
-            .fields()
-            .iter()
-            .rev()
-            .map(|f| (vec![f.name().as_str()], f, Rc::clone(&fields), None))
-            .collect();
-
-        // Pop fields to DFS into until we have exhausted the stack.
-        while let Some((parquet_path, current_field, parent_fields, child_fields)) =
-            stack.pop()
-        {
-            match (current_field.data_type(), child_fields) {
-                (DataType::Struct(unprocessed_children), None) => {
-                    // This is the first time popping off this struct. We don't yet know the
-                    // correct types of its children (i.e., if they need coercing) so we create
-                    // a vector for child_fields, push the struct node back onto the stack to be
-                    // processed again (see below) after processing all its children.
-                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(
-                        unprocessed_children.len(),
-                    )));
-                    // Note that here we push the struct back onto the stack with its
-                    // parent_fields in the same position, now with Some(child_fields).
-                    stack.push((
-                        parquet_path.clone(),
-                        current_field,
-                        parent_fields,
-                        Some(Rc::clone(&child_fields)),
-                    ));
-                    // Push all the children in reverse to maintain original schema order due to
-                    // stack processing.
-                    for child in unprocessed_children.into_iter().rev() {
-                        let mut child_path = parquet_path.clone();
-                        // Build up a normalized path that we'll use as a key into the original
-                        // int96_fields set above to test if this originated as int96.
-                        child_path.push(".");
-                        child_path.push(child.name());
-                        // Note that here we push the field onto the stack using the struct's
-                        // new child_fields vector as the field's parent_fields.
-                        stack.push((child_path, child, Rc::clone(&child_fields), None));
-                    }
-                }
-                (DataType::Struct(unprocessed_children), Some(processed_children)) => {
-                    // This is the second time popping off this struct. The child_fields vector
-                    // now contains each field that has been DFS'd into, and we can construct
-                    // the resulting struct with correct child types.
-                    let processed_children = processed_children.borrow();
-                    assert_eq!(processed_children.len(), unprocessed_children.len());
-                    let processed_struct = Field::new_struct(
-                        current_field.name(),
-                        processed_children.as_slice(),
-                        current_field.is_nullable(),
-                    )
-                    .with_metadata(current_field.metadata().clone());
-                    parent_fields.borrow_mut().push(Arc::new(processed_struct));
-                }
-                (DataType::List(unprocessed_child), None) => {
-                    // This is the first time popping off this list. See struct docs above.
-                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
-                    stack.push((
-                        parquet_path.clone(),
-                        current_field,
-                        parent_fields,
-                        Some(Rc::clone(&child_fields)),
-                    ));
-                    let mut child_path = parquet_path.clone();
-                    // Spark uses a definition for arrays/lists that results in a group
-                    // named "list" that is not maintained when parsing to Arrow. We just push
-                    // this name into the path.
-                    child_path.push(".list.");
-                    child_path.push(unprocessed_child.name());
-                    stack.push((
-                        child_path.clone(),
-                        unprocessed_child,
-                        Rc::clone(&child_fields),
-                        None,
-                    ));
-                }
-                (DataType::List(_), Some(processed_children)) => {
-                    // This is the second time popping off this list. See struct docs above.
-                    let processed_children = processed_children.borrow();
-                    assert_eq!(processed_children.len(), 1);
-                    let processed_list = Field::new_list(
-                        current_field.name(),
-                        Arc::clone(&processed_children[0]),
-                        current_field.is_nullable(),
-                    )
-                    .with_metadata(current_field.metadata().clone());
-                    parent_fields.borrow_mut().push(Arc::new(processed_list));
-                }
-                (DataType::Map(unprocessed_child, _), None) => {
-                    // This is the first time popping off this map. See struct docs above.
-                    let child_fields = Rc::new(RefCell::new(Vec::with_capacity(1)));
-                    stack.push((
-                        parquet_path.clone(),
-                        current_field,
-                        parent_fields,
-                        Some(Rc::clone(&child_fields)),
-                    ));
-                    let mut child_path = parquet_path.clone();
-                    child_path.push(".");
-                    child_path.push(unprocessed_child.name());
-                    stack.push((
-                        child_path.clone(),
-                        unprocessed_child,
-                        Rc::clone(&child_fields),
-                        None,
-                    ));
-                }
-                (DataType::Map(_, sorted), Some(processed_children)) => {
-                    // This is the second time popping off this map. See struct docs above.
-                    let processed_children = processed_children.borrow();
-                    assert_eq!(processed_children.len(), 1);
-                    let processed_map = Field::new(
-                        current_field.name(),
-                        DataType::Map(Arc::clone(&processed_children[0]), *sorted),
-                        current_field.is_nullable(),
-                    )
-                    .with_metadata(current_field.metadata().clone());
-                    parent_fields.borrow_mut().push(Arc::new(processed_map));
-                }
-                (DataType::Timestamp(TimeUnit::Nanosecond, None), None)
-                    if int96_fields.contains(parquet_path.concat().as_str()) =>
-                // We found a timestamp(nanos) and it originated as int96. Coerce it to the correct
-                // time_unit, optionally attaching the requested timezone.
-                {
-                    parent_fields.borrow_mut().push(field_with_new_type(
-                        current_field,
-                        DataType::Timestamp(*time_unit, timezone.cloned()),
-                    ));
-                }
-                // Other types can be cloned as they are.
-                _ => parent_fields.borrow_mut().push(Arc::clone(current_field)),
+    let fields: Vec<FieldRef> = file_schema
+        .fields()
+        .iter()
+        .map(|field| match int96_leaves.get(field.name().as_str()) {
+            Some(leaves)
+                if leaves.contains(&true)
+                    && leaf_count(field.data_type()) == leaves.len() =>
+            {
+                coerce_int96_leaves(
+                    field,
+                    &mut leaves.iter().copied(),
+                    time_unit,
+                    timezone,
+                )
             }
-        }
-        assert_eq!(fields.borrow().len(), file_schema.fields.len());
-        Schema::new_with_metadata(
-            fields.borrow_mut().clone(),
-            file_schema.metadata.clone(),
-        )
-    };
+            _ => Arc::clone(field),
+        })
+        .collect();
+    Some(Schema::new_with_metadata(
+        fields,
+        file_schema.metadata.clone(),
+    ))
+}
 
-    Some(transformed_schema)
+/// Coerces the `Timestamp(Nanosecond, None)` leaves of `field` that `int96`, read in depth-first
+/// order, marks as INT96.
+fn coerce_int96_leaves(
+    field: &FieldRef,
+    int96: &mut impl Iterator<Item = bool>,
+    time_unit: &TimeUnit,
+    timezone: Option<&Arc<str>>,
+) -> FieldRef {
+    let data_type = match field.data_type() {
+        DataType::Struct(children) => DataType::Struct(
+            children
+                .iter()
+                .map(|child| coerce_int96_leaves(child, int96, time_unit, timezone))
+                .collect(),
+        ),
+        DataType::List(item) => {
+            DataType::List(coerce_int96_leaves(item, int96, time_unit, timezone))
+        }
+        DataType::LargeList(item) => {
+            DataType::LargeList(coerce_int96_leaves(item, int96, time_unit, timezone))
+        }
+        DataType::FixedSizeList(item, size) => DataType::FixedSizeList(
+            coerce_int96_leaves(item, int96, time_unit, timezone),
+            *size,
+        ),
+        DataType::Map(entries, sorted) => DataType::Map(
+            coerce_int96_leaves(entries, int96, time_unit, timezone),
+            *sorted,
+        ),
+        leaf => match (leaf, int96.next()) {
+            (DataType::Timestamp(TimeUnit::Nanosecond, None), Some(true)) => {
+                DataType::Timestamp(*time_unit, timezone.cloned())
+            }
+            _ => return Arc::clone(field),
+        },
+    };
+    field_with_new_type(field, data_type)
+}
+
+/// The number of leaves [`coerce_int96_leaves`] reads under `data_type`.
+fn leaf_count(data_type: &DataType) -> usize {
+    match data_type {
+        DataType::Struct(children) => children
+            .iter()
+            .map(|child| leaf_count(child.data_type()))
+            .sum(),
+        DataType::List(item)
+        | DataType::LargeList(item)
+        | DataType::FixedSizeList(item, _)
+        | DataType::Map(item, _) => leaf_count(item.data_type()),
+        _ => 1,
+    }
 }
 
 /// Create a new field with the specified data type, copying the other
@@ -1279,7 +1235,16 @@ mod tests {
                 true,
             )])
         };
-        for (table_type, file_types) in [
+        let list_schema = |data_type| {
+            Schema::new(vec![Field::new_list(
+                "list",
+                Field::new_list_field(data_type, true),
+                true,
+            )])
+        };
+        // The view coercions apply to nested fields, but nested binary fields
+        // are never read as strings (see module docs)
+        for (table_type, file_types, coerced) in [
             (
                 DataType::Utf8,
                 vec![
@@ -1287,6 +1252,7 @@ mod tests {
                     DataType::LargeBinary,
                     DataType::BinaryView,
                 ],
+                false,
             ),
             (
                 DataType::LargeUtf8,
@@ -1295,6 +1261,7 @@ mod tests {
                     DataType::LargeBinary,
                     DataType::BinaryView,
                 ],
+                false,
             ),
             (
                 DataType::Utf8View,
@@ -1302,22 +1269,29 @@ mod tests {
                     DataType::Binary,
                     DataType::LargeBinary,
                     DataType::BinaryView,
-                    DataType::Utf8,
-                    DataType::LargeUtf8,
                 ],
+                false,
+            ),
+            (
+                DataType::Utf8View,
+                vec![DataType::Utf8, DataType::LargeUtf8],
+                true,
             ),
             (
                 DataType::BinaryView,
                 vec![DataType::Binary, DataType::LargeBinary],
+                true,
             ),
         ] {
             for file_type in file_types {
-                let file_schema = nested_schema(file_type);
-                let table_schema = nested_schema(table_type.clone());
-                assert_eq!(
-                    apply_file_schema_type_coercions(&table_schema, &file_schema),
-                    Some(table_schema)
-                );
+                for schema in [nested_schema, list_schema] {
+                    let file_schema = schema(file_type.clone());
+                    let table_schema = schema(table_type.clone());
+                    assert_eq!(
+                        apply_file_schema_type_coercions(&table_schema, &file_schema),
+                        coerced.then_some(table_schema)
+                    );
+                }
             }
         }
         let file_schema = nested_schema(DataType::Int32);
@@ -1508,6 +1482,93 @@ mod tests {
         ]);
 
         assert_eq!(result, expected_schema);
+    }
+
+    #[test]
+    fn coerce_int96_to_resolution_with_two_level_and_legacy_lists() {
+        // Hive's two-level `array<timestamp>`, parquet-mr Avro's `array` group and a bare repeated
+        // field: lists without the `list` group of the three-level layout
+        let schema = "
+        message spark_schema {
+          optional group hive (LIST) {
+            repeated int96 bag;
+          }
+          repeated int96 bare;
+          optional group avro (LIST) {
+            repeated group array {
+              optional int64 ns (TIMESTAMP(NANOS,false));
+              optional int96 ts;
+              optional int32 id;
+            }
+          }
+          optional group three (LIST) {
+            repeated group list {
+              optional int96 element;
+            }
+          }
+          optional group m (MAP) {
+            repeated group key_value {
+              required int32 key;
+              optional int96 value;
+            }
+          }
+          optional int64 nanos (TIMESTAMP(NANOS,false));
+        }
+        ";
+        let descr = SchemaDescriptor::new(Arc::new(
+            parse_message_type(schema).expect("should parse schema"),
+        ));
+        let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
+        let micros = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let nanos = DataType::Timestamp(TimeUnit::Nanosecond, None);
+
+        let result = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
+            .coerce()
+            .unwrap();
+        let expected = Schema::new(vec![
+            Field::new_list("hive", Field::new("bag", micros.clone(), false), true),
+            Field::new_list("bare", Field::new("bare", micros.clone(), false), false),
+            Field::new_list(
+                "avro",
+                Field::new_struct(
+                    "array",
+                    vec![
+                        Field::new("ns", nanos.clone(), true),
+                        Field::new("ts", micros.clone(), true),
+                        Field::new("id", DataType::Int32, true),
+                    ],
+                    false,
+                ),
+                true,
+            ),
+            Field::new_list("three", Field::new("element", micros.clone(), true), true),
+            Field::new_map(
+                "m",
+                "key_value",
+                Field::new("key", DataType::Int32, false),
+                Field::new("value", micros, true),
+                false,
+                true,
+            ),
+            Field::new("nanos", nanos, true),
+        ]);
+        assert_eq!(result, expected);
+
+        // A projection of the file schema, in another order, matches its fields by name
+        let projected = Schema::new(vec![
+            arrow_schema.field_with_name("m").unwrap().clone(),
+            arrow_schema.field_with_name("hive").unwrap().clone(),
+        ]);
+        let result = Int96Coercer::new(&descr, &projected, &TimeUnit::Microsecond)
+            .coerce()
+            .unwrap();
+        assert_eq!(
+            result,
+            Schema::new(vec![
+                expected.field_with_name("m").unwrap().clone(),
+                expected.field_with_name("hive").unwrap().clone(),
+            ])
+        );
     }
 
     #[test]
@@ -1999,6 +2060,11 @@ mod tests {
 
         assert_eq!(result.field(0).data_type(), &DataType::Utf8);
         assert_eq!(result.field(1).data_type(), &DataType::Utf8);
+
+        let demoted =
+            demote_dictionary_columns(&table_schema, &HashSet::from(["dict_col".into()]))
+                .unwrap();
+        assert_eq!(demoted.field(0).data_type(), &DataType::Utf8);
     }
 
     fn dk(key: DataType) -> DataType {

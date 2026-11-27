@@ -2116,6 +2116,46 @@ physical_plan
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/goose_bay_epochs.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
+# Minute and finer granularities are truncated on the epoch value, so the
+# same transition does not reorder them and no sort is needed.
+query II
+SELECT
+  c,
+  arrow_cast(
+    date_trunc('minute', from_unixtime(c, 'America/Goose_Bay')),
+    'Int64'
+  ) AS truncated
+FROM goose_bay_epochs
+ORDER BY date_trunc('minute', from_unixtime(c, 'America/Goose_Bay'));
+----
+562129259 562129200
+562129260 562129260
+
+query TT
+EXPLAIN SELECT date_trunc('minute', from_unixtime(c, 'America/Goose_Bay')) AS bucket
+FROM goose_bay_epochs
+ORDER BY bucket;
+----
+physical_plan
+01)SortPreservingMergeExec: [bucket@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_trunc(minute, from_unixtime(c@0, America/Goose_Bay)) as bucket]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/goose_bay_epochs.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+# The aggregation can then emit each bucket as soon as the next one starts.
+query TT
+EXPLAIN SELECT date_trunc('minute', from_unixtime(c, 'America/Goose_Bay')) AS bucket, count(*)
+FROM goose_bay_epochs
+GROUP BY bucket;
+----
+physical_plan
+01)ProjectionExec: expr=[date_trunc(Utf8("minute"),from_unixtime(goose_bay_epochs.c,Utf8("America/Goose_Bay")))@0 as bucket, count(Int64(1))@1 as count(*)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[date_trunc(Utf8("minute"),from_unixtime(goose_bay_epochs.c,Utf8("America/Goose_Bay")))@0 as date_trunc(Utf8("minute"),from_unixtime(goose_bay_epochs.c,Utf8("America/Goose_Bay")))], aggr=[count(Int64(1))], group_clustering_mode=Full
+03)----RepartitionExec: partitioning=Hash([date_trunc(Utf8("minute"),from_unixtime(goose_bay_epochs.c,Utf8("America/Goose_Bay")))@0], 4), input_partitions=4, preserve_order=true, sort_exprs=date_trunc(Utf8("minute"),from_unixtime(goose_bay_epochs.c,Utf8("America/Goose_Bay")))@0 ASC NULLS LAST
+04)------AggregateExec: mode=Partial, gby=[date_trunc(minute, from_unixtime(c@0, America/Goose_Bay)) as date_trunc(Utf8("minute"),from_unixtime(goose_bay_epochs.c,Utf8("America/Goose_Bay")))], aggr=[count(Int64(1))], group_clustering_mode=Full
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/goose_bay_epochs.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
+
 statement ok
 DROP TABLE goose_bay_epochs;
 
@@ -3001,11 +3041,11 @@ SELECT TIMESTAMPTZ '2023-03-11 02:00:00 America/Los_Angeles' as ts_geo
 ----
 2023-03-11T10:00:00Z
 
-# will error if provide geo longform with time not possible due to daylight savings
-# Arrow error: Parser error: Error parsing timestamp from '2023-03-12 02:00:00 America/Los_Angeles': error computing timezone offset
-# postgresql: accepts
-statement error
+# Nonexistent local times are shifted forward through daylight savings.
+query P
 SELECT TIMESTAMPTZ '2023-03-12 02:00:00 America/Los_Angeles' as ts_geo
+----
+2023-03-12T10:00:00Z
 
 
 

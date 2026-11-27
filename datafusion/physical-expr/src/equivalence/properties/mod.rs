@@ -19,6 +19,7 @@ use self::dependency::{
     generate_dependency_orderings, referred_dependencies,
 };
 use self::walk::SortKeyWalk;
+use crate::equivalence::ordering::ExplicitNullsOrdering;
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, GroupingEquivalenceClass,
     OrderingEquivalenceClass, ProjectionMapping,
@@ -34,6 +35,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::{Constraint, Constraints, HashMap, HashSet, Result, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 
 use indexmap::IndexSet;
 use itertools::{Either, Itertools};
@@ -368,7 +370,7 @@ use itertools::{Either, Itertools};
 ///
 /// assert_eq!(
 ///     eq_properties.to_string(),
-///     "order: [[a@0 ASC, c@2 DESC]], eq: [{members: [b@1], constant: (heterogeneous)}]"
+///     "order: [a@0 ASC NULLS FIRST, c@2 DESC NULLS FIRST]; constant: b@1 (one value per partition)"
 /// );
 /// ```
 #[derive(Clone, Debug)]
@@ -600,15 +602,18 @@ impl EquivalenceProperties {
         Ok(self)
     }
 
-    /// Clears (empties) the ordering equivalence class within this object.
-    /// Call this method when existing orderings are invalidated.
+    /// Clears ordering and explicit grouping information.
+    ///
+    /// Call this method when existing orderings are invalidated. Grouping
+    /// assertions are also cleared because the operation may split groups.
     pub fn clear_orderings(&mut self) {
         self.oeq_class.clear();
         self.oeq_cache.clear();
+        // Row reordering can also split groups, invalidating their contiguity.
+        self.clear_groupings();
     }
 
-    /// Clears grouping information invalidated by an operation that changes
-    /// row sequence or combines input partitions.
+    /// Clears explicit grouping information without changing orderings.
     pub fn clear_groupings(&mut self) {
         self.geq_class.clear();
         self.geq_cache.clear();
@@ -1146,15 +1151,16 @@ impl EquivalenceProperties {
     /// Checks if the sort expressions are satisfied by any of the table
     /// constraints (primary key or unique). Returns true if any constraint
     /// fully satisfies the expressions (i.e. constraint indices form a valid
-    /// prefix of an existing ordering that matches the expressions). For
-    /// unique constraints, also verifies nullable columns.
+    /// prefix of an existing ordering that matches the expressions).
     fn satisfied_by_constraints_ordering(
         &self,
         normal_exprs: &[PhysicalSortExpr],
     ) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
-                let check_null = matches!(constraint, Constraint::Unique(_));
+                if !constraint.implies_unique_sort_prefix(&self.schema) {
+                    return false;
+                }
                 let normalized_size = normal_exprs.len();
                 indices.len() <= normalized_size
                     && self.oeq_class.iter().any(|ordering| {
@@ -1162,23 +1168,7 @@ impl EquivalenceProperties {
                         if indices.len() > length || normalized_size < length {
                             return false;
                         }
-                        // Build a map of column positions in the ordering:
-                        let mut col_positions = HashMap::with_capacity(length);
-                        for (pos, req) in ordering.iter().enumerate() {
-                            if let Some(col) = req.expr.downcast_ref::<Column>() {
-                                let nullable = col.nullable(&self.schema).unwrap_or(true);
-                                col_positions.insert(col.index(), (pos, nullable));
-                            }
-                        }
-                        // Check if all constraint indices appear in valid positions:
-                        if !indices.iter().all(|idx| {
-                            col_positions.get(idx).is_some_and(|&(pos, nullable)| {
-                                // For unique constraints, verify column is not nullable if it's first/last:
-                                !check_null
-                                    || !nullable
-                                    || (pos != 0 && pos != length - 1)
-                            })
-                        }) {
+                        if !ordering_contains_columns(ordering, indices) {
                             return false;
                         }
                         // Check if this ordering matches the prefix:
@@ -1193,12 +1183,13 @@ impl EquivalenceProperties {
     /// Checks if the sort requirements are satisfied by any of the table
     /// constraints (primary key or unique). Returns true if any constraint
     /// fully satisfies the requirements (i.e. constraint indices form a valid
-    /// prefix of an existing ordering that matches the requirements). For
-    /// unique constraints, also verifies nullable columns.
+    /// prefix of an existing ordering that matches the requirements).
     fn satisfied_by_constraints(&self, normal_reqs: &[PhysicalSortRequirement]) -> bool {
         self.constraints.iter().any(|constraint| match constraint {
             Constraint::PrimaryKey(indices) | Constraint::Unique(indices) => {
-                let check_null = matches!(constraint, Constraint::Unique(_));
+                if !constraint.implies_unique_sort_prefix(&self.schema) {
+                    return false;
+                }
                 let normalized_size = normal_reqs.len();
                 indices.len() <= normalized_size
                     && self.oeq_class.iter().any(|ordering| {
@@ -1206,23 +1197,7 @@ impl EquivalenceProperties {
                         if indices.len() > length || normalized_size < length {
                             return false;
                         }
-                        // Build a map of column positions in the ordering:
-                        let mut col_positions = HashMap::with_capacity(length);
-                        for (pos, req) in ordering.iter().enumerate() {
-                            if let Some(col) = req.expr.downcast_ref::<Column>() {
-                                let nullable = col.nullable(&self.schema).unwrap_or(true);
-                                col_positions.insert(col.index(), (pos, nullable));
-                            }
-                        }
-                        // Check if all constraint indices appear in valid positions:
-                        if !indices.iter().all(|idx| {
-                            col_positions.get(idx).is_some_and(|&(pos, nullable)| {
-                                // For unique constraints, verify column is not nullable if it's first/last:
-                                !check_null
-                                    || !nullable
-                                    || (pos != 0 && pos != length - 1)
-                            })
-                        }) {
+                        if !ordering_contains_columns(ordering, indices) {
                             return false;
                         }
                         // Check if this ordering matches the prefix:
@@ -1441,6 +1416,9 @@ impl EquivalenceProperties {
     fn normalize_mapping(&self, mapping: &ProjectionMapping) -> ProjectionMapping {
         mapping
             .iter()
+            // A volatile source is evaluated again by the projection, so it
+            // does not carry any ordering from the input.
+            .filter(|(source, _)| !is_volatile(source))
             .map(|(source, target)| {
                 let normal_source = self.eq_group.normalize_expr(Arc::clone(source));
                 (normal_source, target.clone())
@@ -1563,9 +1541,26 @@ impl EquivalenceProperties {
 
     /// Projects constraints according to the given projection mapping.
     ///
-    /// This function takes a projection mapping and extracts column indices of
-    /// target columns. It then projects the constraints to only include
-    /// relationships between columns that exist in the projected output.
+    /// A primary key or unique constraint is propagated only when the projection
+    /// includes every column that forms the key as a plain column reference.
+    /// Their indices are remapped to their positions in the output schema.
+    ///
+    /// # Example
+    ///
+    /// The original scan has columns `[a, b]`, with `a` as the primary key.
+    ///
+    /// The required projection is `[b, a]`, so the constraints must be updated.
+    /// Column `a` remains the primary key, but the constraint's physical
+    /// representation is updated to match the projected schema:
+    ///
+    /// ```text
+    /// Original:  [a, b]  constraints=[PrimaryKey([0])]
+    /// Projected: [b, a]  constraints=[PrimaryKey([1])]
+    /// ```
+    ///
+    /// Projecting `[b, a + 1]` instead drops the constraint because `a` is not
+    /// projected directly. This function does not infer constraints on computed
+    /// expressions.
     ///
     /// # Parameters
     ///
@@ -1574,18 +1569,27 @@ impl EquivalenceProperties {
     ///
     /// # Returns
     ///
-    /// Returns an optional `Constraints` object containing only the constraints
-    /// that are valid for the projected columns (if any exists).
+    /// Returns `Some` containing the propagated constraints if at least one
+    /// constraint survives the projection, or `None` if none do.
     fn projected_constraints(&self, mapping: &ProjectionMapping) -> Option<Constraints> {
-        let indices = mapping
-            .iter()
-            .flat_map(|(_, targets)| {
-                targets.iter().filter_map(|(target, _)| {
-                    target.downcast_ref::<Column>().map(|c| c.index())
-                })
-            })
-            .collect::<Vec<_>>();
-        self.constraints.project(&indices)
+        // Source column index of each output column, `usize::MAX` if the
+        // output is not a plain column
+        let mut source_indices = vec![];
+        for (source, targets) in mapping.iter() {
+            let Some(source) = source.downcast_ref::<Column>() else {
+                continue;
+            };
+            for (target, _) in targets.iter() {
+                if let Some(target) = target.downcast_ref::<Column>() {
+                    let index = target.index();
+                    if source_indices.len() <= index {
+                        source_indices.resize(index + 1, usize::MAX);
+                    }
+                    source_indices[index] = source.index();
+                }
+            }
+        }
+        self.constraints.project(&source_indices)
     }
 
     /// Projects these equivalence properties onto `output_schema` according to
@@ -1895,35 +1899,97 @@ impl From<EquivalenceProperties> for OrderingEquivalenceClass {
     }
 }
 
-/// More readable display version of the `EquivalenceProperties`.
+impl EquivalenceProperties {
+    /// The facts this object states about its output, as `(key, value)` pairs.
+    ///
+    /// Orderings always spell out NULL placement. Literal-only constants and
+    /// equivalence classes are skipped, and empty sections are omitted.
+    fn facts(&self) -> Vec<(&'static str, String)> {
+        let is_literal = |expr: &Arc<dyn PhysicalExpr>| expr.is::<Literal>();
+        let mut facts = vec![];
+
+        let orders = self
+            .oeq_class
+            .iter()
+            .map(|ordering| format!("[{}]", ExplicitNullsOrdering(ordering)))
+            .collect::<Vec<_>>();
+        if !orders.is_empty() {
+            facts.push(("order", orders.join(" | ")));
+        }
+        if !self.geq_class.is_empty() {
+            facts.push(("group", self.geq_class.to_string()));
+        }
+
+        let equal = self
+            .eq_group
+            .iter()
+            .filter_map(|class| {
+                let members = class
+                    .iter()
+                    .filter(|expr| !is_literal(expr))
+                    .map(|expr| expr.to_string())
+                    .collect::<Vec<_>>();
+                (members.len() >= 2).then(|| format!("{{{}}}", members.join(", ")))
+            })
+            .collect::<Vec<_>>();
+        if !equal.is_empty() {
+            facts.push(("equal", equal.join(", ")));
+        }
+
+        let constants = self
+            .constants()
+            .into_iter()
+            .filter(|constant| !is_literal(&constant.expr))
+            .map(|constant| match constant.across_partitions {
+                AcrossPartitions::Uniform(Some(value)) => {
+                    format!("{} = {value}", constant.expr)
+                }
+                AcrossPartitions::Uniform(None) => constant.expr.to_string(),
+                AcrossPartitions::Heterogeneous => {
+                    format!("{} (one value per partition)", constant.expr)
+                }
+            })
+            .collect::<Vec<_>>();
+        if !constants.is_empty() {
+            facts.push(("constant", constants.join(", ")));
+        }
+        facts
+    }
+}
+
+/// Readable display of the facts, separated by `; `.
 ///
 /// Format:
 /// ```text
-/// order: [[b@1 ASC NULLS LAST]], group: [[a@0, b@1]], eq: [{members: [a@0], constant: (heterogeneous)}]
+/// order: [a@0 ASC NULLS FIRST] | [b@1 DESC NULLS LAST]; equal: {a@0, c@2}; constant: d@3 (one value per partition)
 /// ```
+///
+/// Prints `none` when there are no facts.
 impl Display for EquivalenceProperties {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let empty_eq_group = self.eq_group.is_empty();
-        let empty_oeq_class = self.oeq_class.is_empty();
-        let empty_geq_class = self.geq_class.is_empty();
-        if empty_oeq_class && empty_geq_class && empty_eq_group {
-            return write!(f, "No properties");
+        let facts = self.facts();
+        if facts.is_empty() {
+            return write!(f, "none");
         }
-
-        let mut separator = "";
-        if !empty_oeq_class {
-            write!(f, "order: {}", self.oeq_class)?;
-            separator = ", ";
-        }
-        if !empty_geq_class {
-            write!(f, "{separator}group: {}", self.geq_class)?;
-            separator = ", ";
-        }
-        if !empty_eq_group {
-            write!(f, "{separator}eq: {}", self.eq_group)?;
-        }
-        Ok(())
+        let text = facts
+            .iter()
+            .map(|(key, value)| format!("{key}: {value}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        f.write_str(&text)
     }
+}
+
+/// Returns `true` if all columns `indices` are columns of `ordering`.
+fn ordering_contains_columns(ordering: &LexOrdering, indices: &[usize]) -> bool {
+    indices.iter().all(|&idx| {
+        ordering.iter().any(|sort_expr| {
+            sort_expr
+                .expr
+                .downcast_ref::<Column>()
+                .is_some_and(|col| col.index() == idx)
+        })
+    })
 }
 
 /// This function examines whether a referring expression directly refers to a
@@ -2048,7 +2114,7 @@ mod tests {
     use super::*;
 
     use crate::equivalence::tests::create_test_params;
-    use crate::expressions::col;
+    use crate::expressions::{col, lit};
 
     use arrow::datatypes::{DataType, Field, Schema};
 
@@ -2082,6 +2148,50 @@ mod tests {
             Field::new("c1", DataType::Int32, true),
             Field::new("d1", DataType::Int32, true),
         ]))
+    }
+
+    #[test]
+    fn test_facts_spell_out_null_placement_and_skip_literals() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+            Field::new("d", DataType::Int32, true),
+        ]));
+        let col_a = col("a", &schema)?;
+        let col_b = col("b", &schema)?;
+        let col_c = col("c", &schema)?;
+        let col_d = col("d", &schema)?;
+        let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+        assert!(eq_properties.facts().is_empty());
+        assert_eq!(eq_properties.to_string(), "none");
+
+        eq_properties.add_ordering([
+            PhysicalSortExpr::new(
+                Arc::clone(&col_a),
+                SortOptions {
+                    descending: false,
+                    nulls_first: true,
+                },
+            ),
+            PhysicalSortExpr::new(
+                Arc::clone(&col_b),
+                SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            ),
+        ]);
+        eq_properties.add_equal_conditions(Arc::clone(&col_a), Arc::clone(&col_c))?;
+        eq_properties.add_constants([
+            ConstExpr::from(Arc::clone(&col_d)),
+            ConstExpr::from(lit(5i32)),
+        ])?;
+        assert_eq!(
+            eq_properties.to_string(),
+            "order: [a@0 ASC NULLS FIRST, b@1 DESC NULLS LAST]; equal: {a@0, c@2}; constant: d@3 (one value per partition)"
+        );
+        Ok(())
     }
 
     #[test]

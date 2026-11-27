@@ -238,16 +238,46 @@ where
         &mut self,
         values: &ArrayRef,
         make_payload_fn: MP,
-        observe_payload_fn: OP,
+        mut observe_payload_fn: OP,
     ) where
         MP: FnMut(Option<&[u8]>) -> V,
         OP: FnMut(V),
+    {
+        self.probe::<true, _, _>(values, make_payload_fn, |payload| {
+            observe_payload_fn(payload.expect("insert stores every value"))
+        })
+    }
+
+    /// Looks up each value from `values` without modifying the map.
+    ///
+    /// `observe_payload_fn` is invoked once for each value in `values`, in
+    /// order, with the payload of the stored entry, or `None` if the value
+    /// (including `NULL`) is not stored.
+    pub fn find<OP>(&mut self, values: &ArrayRef, observe_payload_fn: OP)
+    where
+        OP: FnMut(Option<V>),
+    {
+        self.probe::<false, _, _>(
+            values,
+            |_| unreachable!("lookup does not insert"),
+            observe_payload_fn,
+        )
+    }
+
+    fn probe<const INSERT: bool, MP, OP>(
+        &mut self,
+        values: &ArrayRef,
+        make_payload_fn: MP,
+        observe_payload_fn: OP,
+    ) where
+        MP: FnMut(Option<&[u8]>) -> V,
+        OP: FnMut(Option<V>),
     {
         // Sanity check array type
         match self.output_type {
             OutputType::BinaryView => {
                 assert!(matches!(values.data_type(), DataType::BinaryView));
-                self.insert_if_new_inner::<MP, OP, BinaryViewType>(
+                self.insert_if_new_inner::<INSERT, MP, OP, BinaryViewType>(
                     values,
                     make_payload_fn,
                     observe_payload_fn,
@@ -255,7 +285,7 @@ where
             }
             OutputType::Utf8View => {
                 assert!(matches!(values.data_type(), DataType::Utf8View));
-                self.insert_if_new_inner::<MP, OP, StringViewType>(
+                self.insert_if_new_inner::<INSERT, MP, OP, StringViewType>(
                     values,
                     make_payload_fn,
                     observe_payload_fn,
@@ -273,14 +303,14 @@ where
     /// simpler and understand and reducing code bloat due to duplication.
     ///
     /// See comments on `insert_if_new` for more details
-    fn insert_if_new_inner<MP, OP, B>(
+    fn insert_if_new_inner<const INSERT: bool, MP, OP, B>(
         &mut self,
         values: &ArrayRef,
         mut make_payload_fn: MP,
         mut observe_payload_fn: OP,
     ) where
         MP: FnMut(Option<&[u8]>) -> V,
-        OP: FnMut(V),
+        OP: FnMut(Option<V>),
         B: ByteViewType,
     {
         // step 1: compute hashes
@@ -308,13 +338,15 @@ where
             // handle null value via validity bitmap check
             if values.is_null(i) {
                 let payload = if let Some(&(payload, _offset)) = self.null.as_ref() {
-                    payload
+                    Some(payload)
+                } else if !INSERT {
+                    None
                 } else {
                     let payload = make_payload_fn(None);
                     let null_index = self.views.len();
                     self.views.push(0);
                     self.null = Some((payload, null_index));
-                    payload
+                    Some(payload)
                 };
                 observe_payload_fn(payload);
                 continue;
@@ -331,7 +363,7 @@ where
 
                 self.map
                     .find(hash, |header| {
-                        if header.hash != hash {
+                        if header.hash != hash || header.view as u32 != len {
                             return false;
                         }
 
@@ -367,6 +399,9 @@ where
 
             let payload = if let Some(payload) = maybe_payload {
                 payload
+            } else if !INSERT {
+                observe_payload_fn(None);
+                continue;
             } else {
                 // no existing value, make a new one
                 let (new_view, payload) = if len <= 12 {
@@ -400,7 +435,7 @@ where
                 self.map.insert_unique(hash, new_header, |h| h.hash);
                 payload
             };
-            observe_payload_fn(payload);
+            observe_payload_fn(Some(payload));
         }
     }
 
@@ -1073,10 +1108,45 @@ mod tests {
             Some("🔥🔥🔥🔥🔥🔥"),
         ];
 
+        let probe: ArrayRef = Arc::new(StringViewArray::from(vec![
+            Some("A"),
+            Some("bcdefghijklmnop1234567"),
+            None,
+            Some("Z"),
+            Some("not stored but long"),
+        ]));
+        let mut found = vec![];
         let mut test_map = TestMap::new();
+        test_map
+            .map
+            .find(&probe, |p| found.push(p.map(|p| p.index)));
+        assert_eq!(found, vec![None; 5]);
+        assert!(test_map.map.is_empty());
+
         test_map.insert(&input);
         test_map.insert(&input); // put it in twice
+        found.clear();
+        test_map
+            .map
+            .find(&probe, |p| found.push(p.map(|p| p.index)));
+        assert_eq!(found, vec![Some(0), Some(1), Some(4), None, None]);
+        assert_eq!(test_map.map.len(), input.len());
         let expected_output: ArrayRef = Arc::new(StringViewArray::from(input));
+        assert_eq!(&test_map.into_array(), &expected_output);
+    }
+
+    /// A long value whose hash collides with an inline value sharing its
+    /// 4-byte prefix must not read the inline bytes as a buffer reference.
+    #[cfg(feature = "force_hash_collisions")]
+    #[test]
+    fn test_long_value_colliding_with_inline_value() {
+        let mut test_map = TestMap::new();
+        test_map.insert(&[Some("bcdeXXXXYYYY")]);
+        test_map.insert(&[Some("bcdefghijklmnop1234567")]);
+        let expected_output: ArrayRef = Arc::new(StringViewArray::from(vec![
+            "bcdeXXXXYYYY",
+            "bcdefghijklmnop1234567",
+        ]));
         assert_eq!(&test_map.into_array(), &expected_output);
     }
 }

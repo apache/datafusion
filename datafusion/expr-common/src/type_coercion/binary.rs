@@ -4,6 +4,7 @@
 
 //! Coercion rules for matching argument types for binary operators
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -20,11 +21,12 @@ use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType, Field, FieldRef, Fields,
     TimeUnit,
 };
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{
-    Diagnostic, Result, Span, Spans, exec_err, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err,
+    Diagnostic, Result, Span, Spans, exec_datafusion_err, internal_datafusion_err,
+    not_impl_err, plan_datafusion_err, plan_err,
 };
-use itertools::Itertools;
 
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`
@@ -870,90 +872,155 @@ fn type_union_resolution_coercion(
 
 /// Handle type union resolution including struct type and others.
 pub fn try_type_union_resolution(data_types: &[DataType]) -> Result<Vec<DataType>> {
-    let struct_err = match try_type_union_resolution_with_struct(data_types) {
-        Ok(struct_types) => return Ok(struct_types),
-        Err(e) => e,
+    let common_type = match common_struct_type(data_types)? {
+        Some(data_type) => data_type,
+        None => type_union_resolution(data_types).ok_or_else(|| {
+            exec_datafusion_err!("Fail to find the coerced type for {data_types:?}")
+        })?,
     };
-
-    if let Some(new_type) = type_union_resolution(data_types) {
-        Ok(vec![new_type; data_types.len()])
-    } else {
-        exec_err!("Fail to find the coerced type, errors: {struct_err}")
-    }
+    Ok(vec![common_type; data_types.len()])
 }
 
-// Handle struct where we only change the data type but preserve the field name and nullability.
-// Since field name is the key of the struct, so it shouldn't be updated to the common column name like "c0" or "c1"
+/// Coerce structs with matching field names to one common type, including
+/// child nullability and metadata. Untyped NULL inputs do not contribute fields.
 pub fn try_type_union_resolution_with_struct(
     data_types: &[DataType],
 ) -> Result<Vec<DataType>> {
-    let mut keys_string: Option<String> = None;
-    for data_type in data_types {
-        if let DataType::Struct(fields) = data_type {
-            let keys = fields.iter().map(|f| f.name()).join(",");
-            if let Some(ref k) = keys_string {
-                if *k != keys {
-                    return exec_err!(
-                        "Expect same keys for struct type but got mismatched pair {} and {}",
-                        *k,
-                        keys
-                    );
-                }
-            } else {
-                keys_string = Some(keys);
-            }
-        } else {
-            return exec_err!("Expect to get struct but got {data_type}");
-        }
-    }
+    let common_type = common_struct_type(data_types)?.ok_or_else(|| {
+        exec_datafusion_err!("Expected structs with matching field names")
+    })?;
+    Ok(vec![common_type; data_types.len()])
+}
 
-    let mut struct_types: Vec<DataType> = if let DataType::Struct(fields) = &data_types[0]
-    {
-        fields.iter().map(|f| f.data_type().to_owned()).collect()
-    } else {
-        return internal_err!(
-            "Struct type is checked is the previous function, so this should be unreachable"
-        );
+// None means this is not a compatible set of structs. Metadata conflicts are
+// errors and must not fall back to storage-only type resolution.
+fn common_struct_type(data_types: &[DataType]) -> Result<Option<DataType>> {
+    let Some(structs) = data_types
+        .iter()
+        .filter(|data_type| !data_type.is_null())
+        .map(|data_type| match data_type {
+            DataType::Struct(fields) => Some(fields),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Ok(None);
     };
+    let Some(first) = structs.first() else {
+        return Ok(None);
+    };
+    let same_order = structs.iter().all(|fields| {
+        fields
+            .iter()
+            .map(|f| f.name())
+            .eq(first.iter().map(|f| f.name()))
+    });
 
-    for data_type in data_types.iter().skip(1) {
-        if let DataType::Struct(fields) = data_type {
-            // The order of field is verified above
-            for (lhs_type, rhs_type) in struct_types
-                .iter_mut()
-                .zip(fields.iter().map(|f| f.data_type()))
-            {
-                if let Some(coerced_type) =
-                    type_union_resolution_coercion(lhs_type, rhs_type)
-                {
-                    *lhs_type = coerced_type;
-                } else {
-                    return exec_err!(
-                        "Fail to find the coerced type for {} and {}",
-                        lhs_type,
-                        rhs_type
-                    );
+    // Preserve the existing storage coercion and field-order choices. Ordered
+    // structs fold child types from the first input; reordered structs use
+    // type_union_resolution's later-input ordering.
+    let ordered_fields = same_order
+        .then(|| {
+            first
+                .iter()
+                .enumerate()
+                .map(|(index, field)| {
+                    let data_type = structs.iter().skip(1).try_fold(
+                        field.data_type().clone(),
+                        |common, fields| {
+                            type_union_resolution_coercion(
+                                &common,
+                                fields[index].data_type(),
+                            )
+                        },
+                    )?;
+                    Some(Arc::new(field.as_ref().clone().with_data_type(data_type)))
+                })
+                .collect::<Option<Fields>>()
+        })
+        .flatten();
+    let common_fields =
+        ordered_fields.or_else(|| match type_union_resolution(data_types) {
+            Some(DataType::Struct(fields)) => Some(fields),
+            _ => None,
+        });
+    let Some(common_fields) = common_fields else {
+        return Ok(None);
+    };
+    Ok(Some(DataType::Struct(merge_struct_fields(
+        &structs,
+        &common_fields,
+    )?)))
+}
+
+fn merge_struct_fields(structs: &[&Fields], common_fields: &Fields) -> Result<Fields> {
+    common_fields
+        .iter()
+        .enumerate()
+        .map(|(index, target)| {
+            let inputs = structs
+                .iter()
+                .map(|fields| {
+                    fields
+                        .get(index)
+                        .filter(|field| field.name() == target.name())
+                        .or_else(|| {
+                            fields.iter().find(|field| field.name() == target.name())
+                        })
+                        .map(|field| field.as_ref())
+                        .ok_or_else(|| {
+                            internal_datafusion_err!(
+                                "Struct coercion lost field '{}'",
+                                target.name()
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let data_type = match target.data_type() {
+                DataType::Struct(fields) => {
+                    let nested = inputs
+                        .iter()
+                        .filter_map(|field| match field.data_type() {
+                            DataType::Struct(fields) => Some(fields),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    DataType::Struct(merge_struct_fields(&nested, fields)?)
                 }
-            }
-        } else {
-            return exec_err!("Expect to get struct but got {data_type}");
-        }
-    }
-
-    let mut final_struct_types = Vec::with_capacity(data_types.len());
-    for s in data_types {
-        let mut new_fields = Vec::with_capacity(struct_types.len());
-        if let DataType::Struct(fields) = s {
-            for (i, f) in fields.iter().enumerate() {
-                let field = Arc::unwrap_or_clone(Arc::clone(f))
-                    .with_data_type(struct_types[i].to_owned());
-                new_fields.push(Arc::new(field));
-            }
-        }
-        final_struct_types.push(DataType::Struct(new_fields.into()))
-    }
-
-    Ok(final_struct_types)
+                data_type => data_type.clone(),
+            };
+            let coerced = inputs
+                .iter()
+                .filter(|field| !field.data_type().is_null())
+                .map(|field| {
+                    if field.data_type() == &data_type {
+                        Cow::Borrowed(*field)
+                    } else {
+                        let mut field =
+                            (*field).clone().with_data_type(data_type.clone());
+                        field.metadata_mut().remove(EXTENSION_TYPE_NAME_KEY);
+                        field.metadata_mut().remove(EXTENSION_TYPE_METADATA_KEY);
+                        Cow::Owned(field)
+                    }
+                })
+                .collect::<Vec<_>>();
+            let metadata =
+                coerced_fields_metadata(coerced.iter().map(|field| field.as_ref()))?;
+            let nullable = inputs.iter().any(|field| field.is_nullable());
+            let field = inputs
+                .iter()
+                .find(|field| !field.data_type().is_null())
+                .copied()
+                .unwrap_or_else(|| target.as_ref());
+            Ok(Arc::new(
+                field
+                    .clone()
+                    .with_data_type(data_type)
+                    .with_nullable(nullable)
+                    .with_metadata(metadata.into_inner()),
+            ))
+        })
+        .collect()
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for type unification
