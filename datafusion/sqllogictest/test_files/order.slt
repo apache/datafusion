@@ -2660,3 +2660,77 @@ statement ok
 DROP TABLE volatile_eq_t;
 
 
+
+# ORDER BY an output column whose name is also an unqualified input column
+# read by another SELECT item must sort by the output column.
+# https://github.com/apache/datafusion/issues/27795
+query II
+SELECT price AS old_price, 10 - price AS price
+FROM (SELECT 1 AS price UNION ALL SELECT 5)
+ORDER BY price;
+----
+5 5
+1 9
+
+query II
+SELECT price AS old_price, 10 - price AS price
+FROM (SELECT 1 AS price UNION ALL SELECT 5)
+ORDER BY 2;
+----
+5 5
+1 9
+
+query II
+SELECT price AS old_price, 10 - price AS price
+FROM (SELECT 1 AS price UNION ALL SELECT 5) AS s
+ORDER BY price;
+----
+5 5
+1 9
+
+query II
+SELECT column1 AS column2, column2 AS column1
+FROM (VALUES (1, 20), (2, 10))
+ORDER BY column1;
+----
+2 10
+1 20
+
+query II
+SELECT column1 AS column2, column2 AS column1
+FROM (VALUES (1, 20), (2, 10))
+ORDER BY column2 DESC;
+----
+2 10
+1 20
+
+# ORDER BY an input column that is not in the output still resolves to its alias
+query I
+SELECT price AS old_price
+FROM (SELECT 1 AS price UNION ALL SELECT 5)
+ORDER BY price DESC;
+----
+5
+1
+
+query TT
+EXPLAIN SELECT price AS old_price, 10 - price AS price
+FROM (SELECT 1 AS price UNION ALL SELECT 5)
+ORDER BY price;
+----
+logical_plan
+01)Sort: price ASC NULLS LAST
+02)--Projection: price AS old_price, Int64(10) - price AS price
+03)----Union
+04)------Projection: Int64(1) AS price
+05)--------EmptyRelation: rows=1
+06)------Projection: Int64(5) AS price
+07)--------EmptyRelation: rows=1
+physical_plan
+01)SortPreservingMergeExec: [price@1 ASC NULLS LAST]
+02)--ProjectionExec: expr=[price@0 as old_price, 10 - price@0 as price]
+03)----UnionExec
+04)------ProjectionExec: expr=[1 as price]
+05)--------PlaceholderRowExec
+06)------ProjectionExec: expr=[5 as price]
+07)--------PlaceholderRowExec

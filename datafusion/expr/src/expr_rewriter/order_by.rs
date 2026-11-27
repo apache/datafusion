@@ -9,7 +9,7 @@ use crate::expr_rewriter::normalize_col;
 use crate::{Cast, Expr, LogicalPlan, TryCast, expr::Sort};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, DFSchema, Result};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
 /// For example, `max(x)` is written to `col("max(x)")`
@@ -28,7 +28,12 @@ pub fn rewrite_sort_cols_by_aggs(
         .map(|e| {
             let sort = e.into();
             Ok(Sort::new(
-                rewrite_sort_col_by_aggs(sort.expr, &plan_inputs, &proj_exprs)?,
+                rewrite_sort_col_by_aggs(
+                    sort.expr,
+                    &plan_inputs,
+                    &proj_exprs,
+                    plan.schema(),
+                )?,
                 sort.asc,
                 sort.nulls_first,
             ))
@@ -40,11 +45,12 @@ fn rewrite_sort_col_by_aggs(
     expr: Expr,
     plan_inputs: &[&LogicalPlan],
     proj_exprs: &[Expr],
+    output_schema: &DFSchema,
 ) -> Result<Expr> {
     // Joins, and Unions are not yet handled (should have a projection
     // on top of them)
     if plan_inputs.len() == 1 {
-        rewrite_in_terms_of_projection(expr, proj_exprs, plan_inputs[0])
+        rewrite_in_terms_of_projection(expr, proj_exprs, plan_inputs[0], output_schema)
     } else {
         Ok(expr)
     }
@@ -61,14 +67,27 @@ fn rewrite_sort_col_by_aggs(
 /// Remember that:
 /// 1. given a projection with exprs: [a, b + c]
 /// 2. t produces an output schema with two columns "a", "b + c"
+///
+/// A column that already resolves against `output_schema` is left as is.
+/// Projection expressions are written over the input, so an unqualified
+/// input column can share its name with a different output column (e.g.
+/// `price AS old_price, 10 - price AS price`); matching it against the
+/// projection would sort by the wrong output column.
 fn rewrite_in_terms_of_projection(
     expr: Expr,
     proj_exprs: &[Expr],
     input: &LogicalPlan,
+    output_schema: &DFSchema,
 ) -> Result<Expr> {
     // assumption is that each item in exprs, such as "b + c" is
     // available as an output column named "b + c"
     expr.transform(|expr| {
+        if let Expr::Column(col) = &expr
+            && output_schema.has_column(col)
+        {
+            return Ok(Transformed::no(expr));
+        }
+
         // search for unnormalized names first such as "c1" (such as aliases).
         // Also look inside aliases so e.g. `count(Int64(1))` matches
         // `count(Int64(1)) AS count(*)`.
@@ -277,6 +296,46 @@ mod test {
                 desc: "max(c3) with alias 'max_val' should resolve to col(max_val)",
                 input: sort(max(col("c3"))),
                 expected: sort(col("max_val")),
+            },
+        ];
+
+        for case in cases {
+            case.run(&plan)
+        }
+    }
+
+    /// An output column that shares its name with an unqualified input
+    /// column read by another projection expression must not be rewritten
+    /// to that other expression's alias.
+    /// See <https://github.com/apache/datafusion/issues/27795>
+    #[test]
+    fn output_column_not_matched_against_unqualified_input() {
+        let plan = LogicalPlanBuilder::values(vec![vec![lit(1), lit(20)]])
+            .unwrap()
+            .project(vec![
+                col("column1").alias("column2"),
+                col("column2").alias("column1"),
+                (lit(10) - col("column1")).alias("diff"),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let cases = vec![
+            TestCase {
+                desc: "column1 is an output column and stays column1",
+                input: sort(col("column1")),
+                expected: sort(col("column1")),
+            },
+            TestCase {
+                desc: "column2 is an output column and stays column2",
+                input: sort(col("column2")),
+                expected: sort(col("column2")),
+            },
+            TestCase {
+                desc: "an expression over the input still resolves to its alias",
+                input: sort(lit(10) - col("column1")),
+                expected: sort(col("diff")),
             },
         ];
 
