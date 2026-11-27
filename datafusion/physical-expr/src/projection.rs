@@ -27,7 +27,6 @@ use datafusion_physical_expr_common::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_expr_common::metrics::ExpressionEvaluatorMetrics;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays_with_metrics;
 use indexmap::IndexMap;
 use itertools::Itertools;
 
@@ -1107,6 +1106,26 @@ pub struct Projector {
 }
 
 impl Projector {
+    /// Replace expressions after a rewrite that preserves output field names,
+    /// types, nullability, and metadata. Expression metrics are reset.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
+    pub fn with_new_projection_preserving_schema(
+        &self,
+        projection: ProjectionExprs,
+    ) -> Self {
+        Self {
+            projection,
+            output_schema: Arc::clone(&self.output_schema),
+            expression_metrics: None,
+        }
+    }
+
     /// Construct the projector with metrics. After execution, related metrics will
     /// be tracked inside `ExecutionPlanMetricsSet`
     ///
@@ -1133,11 +1152,27 @@ impl Projector {
     /// or if the output schema of the resulting record batch does not match
     /// the pre-computed output schema of the projector.
     pub fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let arrays = evaluate_expressions_to_arrays_with_metrics(
-            self.projection.exprs.iter().map(|p| &p.expr),
-            batch,
-            self.expression_metrics.as_ref(),
-        )?;
+        let arrays = self
+            .projection
+            .exprs
+            .iter()
+            .enumerate()
+            .map(|(position, projection)| {
+                let _timer = self
+                    .expression_metrics
+                    .as_ref()
+                    .and_then(|metrics| metrics.scoped_timer(position));
+                if let Some(column) = projection.expr.downcast_ref::<Column>()
+                    && let Some(array) = batch.columns().get(column.index())
+                {
+                    return Ok(Arc::clone(array));
+                }
+                projection
+                    .expr
+                    .evaluate(batch)?
+                    .into_array_of_size(batch.num_rows())
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         if arrays.is_empty() {
             let options =

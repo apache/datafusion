@@ -1981,11 +1981,7 @@ impl ExecutionPlan for RepartitionExec {
                 ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
             )?;
             return Ok(Some(Arc::new(
-                ProjectionExec::try_new_with_schema_metadata(
-                    exprs,
-                    repartition,
-                    projection.schema().as_ref(),
-                )?,
+                projection.with_pruned_input(exprs, repartition)?,
             )));
         }
 

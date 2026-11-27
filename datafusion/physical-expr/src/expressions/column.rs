@@ -106,7 +106,7 @@ impl PhysicalExpr for Column {
 
     /// Evaluate the expression
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        self.bounds_check(batch.schema().as_ref())?;
+        self.bounds_check(batch.schema_ref())?;
         Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
     }
 
