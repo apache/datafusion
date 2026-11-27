@@ -2104,6 +2104,47 @@ fn range_join_reference_size_gate() -> Result<()> {
 }
 
 #[test]
+fn hash_join_reference_kept_below_thresholds() -> Result<()> {
+    let bytes = TestConfig::default()
+        .config
+        .optimizer
+        .hash_join_single_partition_threshold;
+    let left = parquet_exec_with_partitioning_and_size(
+        Partitioning::UnknownPartitioning(4),
+        Precision::Absent,
+        Precision::Inexact(bytes * 10),
+    );
+    // More partitions than `target_partitions`, so keeping the reference and
+    // falling back to hash partitioning give different plans.
+    let right = parquet_exec_with_partitioning_and_size(
+        Partitioning::Hash(vec![col("a", &schema())?], 8),
+        Precision::Absent,
+        Precision::Inexact(100),
+    );
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    // The small hash reference is not repartitioned; the large input adopts it.
+    assert!(plan.children()[1].is::<DataSourceExec>());
+    for child in plan.children() {
+        assert!(
+            matches!(child.output_partitioning(), Partitioning::Hash(_, 8)),
+            "got {:?}",
+            child.output_partitioning(),
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn range_requirement_scales_within_sample_resolution() -> Result<()> {
     let ordering = [PhysicalSortExpr::new_default(col("a", &schema())?)].into();
     let samples = (10..=50)

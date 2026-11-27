@@ -1532,10 +1532,12 @@ fn enforce_distribution_relationships(
                 }
             };
 
-        // Do not adapt a child above the `CollectLeft` thresholds to a reference
-        // below them; fall back to hash partitioning instead. Otherwise keep the
-        // reference, so that it is not shuffled as well.
-        let best_satisfied_child = best_satisfied_child.filter(|(ref_idx, _)| {
+        // A small input's range split points can put most rows of a larger input
+        // in one partition, so do not adapt a child above the `CollectLeft`
+        // thresholds to a range reference below them; fall back to hash
+        // partitioning instead. Keep any other reference, so that it is not
+        // shuffled as well: hash partitioning does not depend on the data.
+        let best_satisfied_child = best_satisfied_child.filter(|(ref_idx, part)| {
             let is_small = |idx: usize| {
                 let stats = stats_ctx
                     .compute_arc(&children[idx].context.plan, &StatisticsArgs::new())
@@ -1546,7 +1548,8 @@ fn enforce_distribution_relationships(
                     config.optimizer.hash_join_single_partition_threshold_rows,
                 )
             };
-            is_small(*ref_idx) != Some(true)
+            !matches!(part, Partitioning::Range(_))
+                || is_small(*ref_idx) != Some(true)
                 || !unsatisfied_children
                     .iter()
                     .any(|&child_idx| is_small(child_idx) == Some(false))
