@@ -182,8 +182,7 @@ async fn limited_distinct_aggregate_stream_respects_soft_limit() -> Result<()> {
 
     let cfg = SessionConfig::new()
         .with_target_partitions(2)
-        .with_batch_size(10)
-        .set_bool("datafusion.execution.enable_migration_aggregate", true);
+        .with_batch_size(10);
     let ctx = SessionContext::new_with_config(cfg);
 
     let dataframe = ctx
@@ -313,8 +312,7 @@ async fn single_distinct_aggregate_stream_respects_soft_limit() -> Result<()> {
 
     let cfg = SessionConfig::new()
         .with_target_partitions(1)
-        .with_batch_size(10)
-        .set_bool("datafusion.execution.enable_migration_aggregate", true);
+        .with_batch_size(10);
 
     let ctx = SessionContext::new_with_config(cfg);
 

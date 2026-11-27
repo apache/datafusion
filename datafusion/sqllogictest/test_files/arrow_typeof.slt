@@ -306,8 +306,10 @@ select arrow_cast(interval '30 minutes', 'Duration(Second)');
 ----
 0 days 0 hours 30 mins 0 secs
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*This feature is not implemented: Unsupported CAST from Utf8 to Duration\(s\)
+query ?
 select arrow_cast('30 minutes', 'Duration(Second)');
+----
+0 days 0 hours 30 mins 0 secs
 
 
 ## Timestamptz

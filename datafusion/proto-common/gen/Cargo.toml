@@ -25,4 +25,4 @@ workspace = true
 [dependencies]
 # Pin these dependencies so that the generated output is deterministic
 pbjson-build = "=0.9.0"
-prost-build = "=0.14.4"
+prost-build = "=0.14.6"

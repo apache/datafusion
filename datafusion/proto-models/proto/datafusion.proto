@@ -275,8 +275,9 @@ message JoinNode {
   LogicalExprNode filter = 8;
   bool null_aware = 9;
   // Number of `NOT IN` value keys of a null-aware join (see
-  // `Join::null_aware_value_keys`). Messages predating this field decode it
-  // as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
+  // `Join::null_aware_value_keys`). 0 is an unset count, accepted only for a
+  // single key. Messages predating this field decode it as 0: they can only
+  // hold scalar `NOT IN` joins.
   uint32 null_aware_value_keys = 10;
 }
 
@@ -506,7 +507,7 @@ message LogicalExprNode {
     CastNode cast = 11;
     NegativeNode negative = 13;
     InListNode in_list = 14;
-    Wildcard wildcard = 15;
+    // was  Wildcard wildcard = 15;
     // was  ScalarFunctionNode scalar_function = 16;
     TryCastNode try_cast = 17;
 
@@ -548,10 +549,6 @@ message LogicalExprNode {
     Lambda lambda = 38;
     LambdaVariable lambda_variable = 39;
   }
-}
-
-message Wildcard {
-  TableReference qualifier = 1;
 }
 
 message SubqueryNode {
@@ -746,6 +743,7 @@ message SimilarToNode {
   LogicalExprNode expr = 2;
   LogicalExprNode pattern = 3;
   string escape_char = 4;
+  bool case_insensitive = 5;
 }
 
 message CaseNode {
@@ -1382,6 +1380,10 @@ message ParquetScanExecNode {
 
   // Source-specific footer prefetch size. Absent means no hint.
   optional uint64 metadata_size_hint = 7;
+
+  // Reverse the rows within each row group too, making a reversed scan
+  // exactly ordered. Only meaningful with `reverse_row_groups`.
+  bool reverse_rows = 8;
 }
 
 message CsvScanExecNode {
@@ -1399,12 +1401,15 @@ message CsvScanExecNode {
   bool truncate_rows = 8;
   // Custom one-byte line terminator. Absent means the default newline terminator.
   optional bytes terminator = 9;
+  bool match_columns_by_header = 10;
 }
 
 message JsonScanExecNode {
   FileScanExecConf base_conf = 1;
   // Absent means newline-delimited JSON for compatibility with older payloads.
   optional bool newline_delimited = 2;
+  // Absent means false: a JSON number or boolean in a string column is an error.
+  optional bool coerce_primitive = 3;
 }
 
 message AvroScanExecNode {
@@ -1465,9 +1470,9 @@ message HashJoinExecNode {
   // `None`, which is the correct reading of an older message.
   optional uint64 fetch = 12;
   // Number of `NOT IN` value keys of a null-aware join (see
-  // `HashJoinExec::null_aware_value_keys`). Messages predating this field
-  // decode it as 0, which is read as 1: they can only hold scalar `NOT IN`
-  // joins.
+  // `HashJoinExec::null_aware_value_keys`). 0 is an unset count, accepted
+  // only for a single key. Messages predating this field decode it as 0:
+  // they can only hold scalar `NOT IN` joins.
   uint32 null_aware_value_keys = 13;
 }
 
@@ -1821,6 +1826,12 @@ message SortMergeJoinExecNode {
   repeated SortExprNode sort_options = 6;
   datafusion_common.NullEquality null_equality = 7;
   repeated uint32 projection = 8;
+  // Enables null-aware (`NOT IN`) semantics.
+  // (See `SortMergeJoinExec::null_aware`)
+  //
+  // Currently supported only for uncorrelated `LeftAnti` joins with one
+  // join key and no join filter.
+  bool null_aware = 9;
 }
 
 message PiecewiseMergeJoinExecNode {

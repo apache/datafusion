@@ -12,7 +12,7 @@ use arrow::array::temporal_conversions::{
 };
 use arrow::array::timezone::Tz;
 use arrow::array::{
-    Array, ArrayRef, Float64Array, Int32Array, Int64Array, PrimitiveArray,
+    Array, ArrayRef, Date32Array, Float64Array, Int32Array, Int64Array, PrimitiveArray,
 };
 use arrow::compute::{DatePart, cast, date_part};
 use arrow::datatypes::DataType::{
@@ -317,6 +317,18 @@ impl ScalarUDFImpl for DatePartFunc {
         })
     }
 
+    /// Bounds `date_part('year', d)` for a `Date32` range of `d`. Other parts
+    /// and argument types return an unbounded interval.
+    fn evaluate_bounds(
+        &self,
+        input: &[&interval_arithmetic::Interval],
+    ) -> Result<interval_arithmetic::Interval> {
+        match date32_year_bounds(input) {
+            Some(bounds) => Ok(bounds),
+            None => interval_arithmetic::Interval::make_unbounded(&DataType::Null),
+        }
+    }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
@@ -324,6 +336,44 @@ impl ScalarUDFImpl for DatePartFunc {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+/// The year never decreases as the date increases, so the years of the
+/// endpoints enclose the year of every date in the range. Returns `None`
+/// unless the part is the literal `year` and both endpoints are dates with
+/// a valid year.
+fn date32_year_bounds(
+    input: &[&interval_arithmetic::Interval],
+) -> Option<interval_arithmetic::Interval> {
+    let [part, dates] = input else {
+        return None;
+    };
+    if part.lower() != part.upper() {
+        return None;
+    }
+    let part = part.lower().try_as_str().flatten()?;
+    if !matches!(
+        DatePart::from_str(part_normalization(part)),
+        Ok(DatePart::Year)
+    ) {
+        return None;
+    }
+    let (ScalarValue::Date32(Some(lower)), ScalarValue::Date32(Some(upper))) =
+        (dates.lower(), dates.upper())
+    else {
+        return None;
+    };
+    let years =
+        date_part(&Date32Array::from(vec![*lower, *upper]), DatePart::Year).ok()?;
+    let years = as_primitive_array::<Int32Type>(years.as_ref()).ok()?;
+    if years.null_count() > 0 {
+        return None;
+    }
+    interval_arithmetic::Interval::try_new(
+        ScalarValue::Int32(Some(years.value(0))),
+        ScalarValue::Int32(Some(years.value(1))),
+    )
+    .ok()
 }
 
 fn is_epoch(part: &str) -> bool {
@@ -438,13 +488,19 @@ fn part_normalization(part: &str) -> &str {
         .unwrap_or(part)
 }
 
+/// Seconds in an interval's `months`, as PostgreSQL and DuckDB count them:
+/// each whole year is 365.25 days and each leftover month is 30 days.
+fn months_to_seconds(months: i32) -> f64 {
+    const SECONDS_PER_YEAR: i64 = 31_557_600; // 365.25 days
+    const SECONDS_PER_MONTH: i64 = 2_592_000; // 30 days
+
+    let months = months as i64;
+    // `/` and `%` truncate toward zero, so negative intervals mirror positive ones.
+    (months / 12 * SECONDS_PER_YEAR + months % 12 * SECONDS_PER_MONTH) as f64
+}
+
 fn epoch(array: &dyn Array) -> Result<ArrayRef> {
     const SECONDS_IN_A_DAY: f64 = 86400_f64;
-    // Note: Month-to-second conversion uses 30 days as an approximation.
-    // This matches PostgreSQL's behavior for interval epoch extraction,
-    // but does not represent exact calendar months (which vary 28-31 days).
-    // See: https://doxygen.postgresql.org/datatype_2timestamp_8h.html
-    const DAYS_PER_MONTH: f64 = 30_f64;
 
     let f: Float64Array = match array.data_type() {
         Timestamp(Second, _) => as_timestamp_second_array(array)?.unary(|x| x as f64),
@@ -469,14 +525,15 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
         Time64(Nanosecond) => {
             as_time64_nanosecond_array(array)?.unary(|x| x as f64 / 1_000_000_000_f64)
         }
-        Interval(ArrowIntervalUnit::YearMonth) => as_interval_ym_array(array)?
-            .unary(|x| x as f64 * DAYS_PER_MONTH * SECONDS_IN_A_DAY),
+        Interval(ArrowIntervalUnit::YearMonth) => {
+            as_interval_ym_array(array)?.unary(months_to_seconds)
+        }
         Interval(ArrowIntervalUnit::DayTime) => as_interval_dt_array(array)?.unary(|x| {
             x.days as f64 * SECONDS_IN_A_DAY + x.milliseconds as f64 / 1_000_f64
         }),
         Interval(ArrowIntervalUnit::MonthDayNano) => {
             as_interval_mdn_array(array)?.unary(|x| {
-                x.months as f64 * DAYS_PER_MONTH * SECONDS_IN_A_DAY
+                months_to_seconds(x.months)
                     + x.days as f64 * SECONDS_IN_A_DAY
                     + x.nanoseconds as f64 / 1_000_000_000_f64
             })
@@ -691,10 +748,12 @@ mod tests {
         TimestampNanosecondArray, TimestampSecondArray,
     };
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-    use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+    use arrow::datatypes::{DataType, Date32Type, Field, FieldRef, TimeUnit};
+    use chrono::NaiveDate;
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::as_int32_array;
     use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::interval_arithmetic::Interval;
     use datafusion_expr::{
         ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     };
@@ -986,5 +1045,48 @@ mod tests {
             assert_eq!(field.data_type(), &DataType::Int32);
             assert!(field.is_nullable());
         }
+    }
+
+    fn bounds(part: ScalarValue, lower: ScalarValue, upper: ScalarValue) -> Interval {
+        let part = Interval::try_new(part.clone(), part).unwrap();
+        let dates = Interval::try_new(lower, upper).unwrap();
+        DatePartFunc::new()
+            .evaluate_bounds(&[&part, &dates])
+            .unwrap()
+    }
+
+    fn date(value: &str) -> ScalarValue {
+        let date = value.parse::<NaiveDate>().unwrap();
+        ScalarValue::Date32(Some(Date32Type::from_naive_date(date)))
+    }
+
+    #[test]
+    fn year_bounds_of_date32_range() {
+        let actual = bounds(
+            ScalarValue::from("year"),
+            date("1969-12-31"),
+            date("1970-01-01"),
+        );
+        assert_eq!(actual, Interval::make(Some(1969), Some(1970)).unwrap());
+    }
+
+    #[test]
+    fn other_parts_are_unbounded() {
+        let actual = bounds(
+            ScalarValue::from("month"),
+            date("1992-01-02"),
+            date("1998-12-01"),
+        );
+        assert_eq!(actual, Interval::make_unbounded(&DataType::Null).unwrap());
+    }
+
+    #[test]
+    fn year_outside_kernel_range_is_unbounded() {
+        let actual = bounds(
+            ScalarValue::from("year"),
+            date("1998-12-01"),
+            ScalarValue::Date32(Some(i32::MAX)),
+        );
+        assert_eq!(actual, Interval::make_unbounded(&DataType::Null).unwrap());
     }
 }

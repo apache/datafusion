@@ -318,7 +318,15 @@ git push apache 55.2.0
 
 Open a PR against `main` that adds the release to
 `docs/source/_static/versions.json` immediately after the `Development (main)`
-entry mark it with `"preferred": true`.
+entry and marks it with `"preferred": true` (remove `"preferred"` from the
+previous release).
+
+The version picker only lists the most recent release of each major version.
+If the new release is a minor or patch release (e.g. `55.2.0`), move the
+previous release of the same major version (e.g. `55.1.0`) from `versions.json`
+to `docs/source/_static/old_versions.json`. Releases in `old_versions.json`
+are still built and published under `/versions/<version>/`, so existing links
+keep working, but they are not shown in the version picker.
 
 Once the PR is merged, the
 [Deploy DataFusion versioned docs](../../.github/workflows/docs_versions.yaml)
@@ -344,8 +352,8 @@ Only approved releases of the tarball should be published to
 crates.io, in order to conform to Apache Software Foundation
 governance standards.
 
-An Arrow committer can publish this crate after an official project release has
-been made to crates.io using the following instructions.
+A DataFusion PMC member who owns the crates on crates.io can publish them after
+an official project release has been made, using the following instructions.
 
 Follow [these
 instructions](https://doc.rust-lang.org/cargo/reference/publishing.html) to
@@ -401,7 +409,6 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/core && cargo publish)
 (cd datafusion-cli && cargo publish)
 (cd datafusion/proto && cargo publish)
-(cd datafusion/spark && cargo publish)
 (cd datafusion/substrait && cargo publish)
 (cd datafusion/ffi && cargo publish)
 (cd datafusion/sqllogictest && cargo publish)
@@ -419,6 +426,30 @@ Caused by:
   location searched: crates.io index
   required by package `datafusion-ffi v55.2.0 (/private/tmp/apache-datafusion-55.2.0/datafusion/ffi)`
 ```
+
+#### Add Owners to New Crates
+
+`cargo publish` makes the publisher the only owner of a crate that is published
+for the first time. When a release introduces a new crate, the release manager
+must add all [DataFusion PMC members](https://projects.apache.org/committee.html?datafusion)
+as owners, so that every crate has the same owners.
+
+Before publishing, list the crates that are not on crates.io yet:
+
+```shell
+./dev/release/list-new-crates.sh
+```
+
+After publishing, add the owners to each new crate. Owners are identified by
+their GitHub login. `cargo owner --list datafusion-common` shows the logins of
+the current owners.
+
+```shell
+cargo owner --add <github-login> <new-crate>
+```
+
+Each new owner gets an email invitation and must accept it on
+[crates.io](https://crates.io/me/pending-invites).
 
 ### Publish datafusion-cli on Homebrew
 

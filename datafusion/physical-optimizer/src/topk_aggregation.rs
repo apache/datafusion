@@ -9,21 +9,90 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
+use datafusion_physical_plan::materialized_cte::MaterializedCteExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use itertools::Itertools;
 
-/// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
+/// An optimizer rule that transforms Sort + Limit above a grouped Aggregate to use
+/// a more efficient Grouped TopK aggregation implementation when possible.
+///
+/// For example, a query like
+///
+/// ```sql
+/// SELECT trace_id, MAX(timestamp)
+/// FROM traces
+/// GROUP BY trace_id
+/// ORDER BY MAX(timestamp) DESC
+/// LIMIT 10
+/// ```
+///
+/// is planned as a `SortExec` with a `fetch` above an `AggregateExec` (left).
+/// After this rule, the `AggregateExec` uses a [`GroupedTopKAggregateStream`]
+/// that retains only the best `N` groups (right).
+///
+/// [`GroupedTopKAggregateStream`]: mod@datafusion_physical_plan::aggregates#4-grouped-topk-aggregation
+///
+/// ```text
+///          Before                                        After
+///
+/// ┌────────────────────────────┐             ┌────────────────────────────┐
+/// │ SortExec: TopK(fetch=10)   │             │ SortExec: TopK(fetch=10)   │
+/// │ expr=[max(timestamp) DESC] │             │ expr=[max(timestamp) DESC] │
+/// └────────────────────────────┘             └────────────────────────────┘
+///               ▲                                          ▲
+///               │ every group                              │ at most 10 groups
+///               │                                          │
+/// ┌────────────────────────────┐             ┌────────────────────────────┐
+/// │ AggregateExec              │             │ AggregateExec, lim=[10]    │
+/// │ gby=[trace_id]             │             │ gby=[trace_id]             │
+/// │ aggr=[max(timestamp)]      │  ────────▶  │ aggr=[max(timestamp)]      │
+/// │                            │             │                            │
+/// │ hash table holding         │             │ priority map holding only  │
+/// │ every group                │             │ the 10 best groups         │
+/// └────────────────────────────┘             └────────────────────────────┘
+///               ▲                                          ▲
+///               │                                          │
+/// ┌────────────────────────────┐             ┌────────────────────────────┐
+/// │ input                      │             │ input                      │
+/// └────────────────────────────┘             └────────────────────────────┘
+/// ```
+///
+/// Without this rule, the aggregate computes the aggregates for **all** groups
+/// in the input, and the sort then discards all but `N` of them.
+///
+/// `GroupedTopKAggregateStream` keeps only the best `N` groups in a
+/// priority map rather than a hash table and the `SortExec` simply
+/// enforces the final ordering and row count.
+///
+/// See the "Grouped TopK aggregation" section of the
+/// [`aggregates`](mod@datafusion_physical_plan::aggregates) module documentation
+/// for more details.
+///
+/// This rule is enabled by default and is controlled by the
+/// [`datafusion.optimizer.enable_topk_aggregation`](datafusion_common::config::OptimizerOptions::enable_topk_aggregation)
+/// setting.
+///
+/// # Identifying the optimization in `EXPLAIN` output
+///
+/// When this rule applies, the `AggregateExec` lines in the physical plan show
+/// a `lim=[N]` entry, for example:
+///
+/// ```text
+///     AggregateExec: ... aggr=[max(...)], lim=[10] <-- LIM
+/// ```
 #[derive(Debug)]
 pub struct TopKAggregation {}
 
 impl TopKAggregation {
-    /// Create a new `LimitAggregation`
+    /// Create a new `TopKAggregation`
     pub fn new() -> Self {
         Self {}
     }
@@ -51,7 +120,7 @@ impl TopKAggregation {
         let order = order.iter().exactly_one().ok()?;
         let sort_options = order.options;
         let order = order.expr.downcast_ref::<Column>()?;
-        let mut sort_col_name = order.name().to_string();
+        let mut sort_col = order.clone();
         let limit = sort.fetch()?;
 
         let mut cardinality_preserved = true;
@@ -62,21 +131,30 @@ impl TopKAggregation {
             if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
                 match aggr
                     .clone()
-                    .try_optimize_topk(limit, &sort_col_name, sort_options)
+                    .try_optimize_topk(limit, sort_col.name(), sort_options)
                 {
                     None => cardinality_preserved = false,
                     Some(aggr) => return Ok(Transformed::yes(Arc::new(aggr.data))),
                 }
             } else if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
-                // track renames due to successive projections
-                for proj_expr in proj.expr() {
-                    let Some(src_col) = proj_expr.expr.downcast_ref::<Column>() else {
-                        continue;
-                    };
-                    if proj_expr.alias == sort_col_name {
-                        sort_col_name = src_col.name().to_string();
-                    }
-                }
+                let Some(src_col) = proj
+                    .expr()
+                    .get(sort_col.index())
+                    .and_then(|e| e.expr.downcast_ref::<Column>())
+                else {
+                    // The sort orders by the computed value, whose order can differ
+                    // from the aggregate's (e.g. `-min(x)` reverses it).
+                    cardinality_preserved = false;
+                    return Ok(Transformed::no(plan));
+                };
+                sort_col = src_col.clone();
+            } else if plan.downcast_ref::<MaterializedCteExec>().is_some() {
+                // The output is the continuation, but the first child is the
+                // CTE body, which every reference to the CTE reads in full.
+                // A limit in the body would drop rows that they need. Skip
+                // both children; the flag also keeps later siblings unchanged.
+                cardinality_preserved = false;
+                return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump));
             } else {
                 // or we continue down through types that don't reduce cardinality
                 match plan.cardinality_effect() {
@@ -131,4 +209,4 @@ impl PhysicalOptimizerRule for TopKAggregation {
     }
 }
 
-// see `aggregate.slt` for tests
+// see `aggregates_topk.slt` for tests

@@ -2,6 +2,15 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+//! Equivalence properties: the orderings, equality, constants and
+//! groupings known to hold for the output of a plan node, which the physical
+//! optimizer uses to avoid sorts and repartitions.
+//!
+//! # See Also
+//!
+//! * [`EquivalenceProperties`], which explains the concepts and how the
+//!   pieces below fit together.
+
 use std::borrow::Borrow;
 use std::sync::Arc;
 
@@ -264,6 +273,50 @@ mod tests {
         );
 
         assert!(properties.grouping_satisfy([b, a])?);
+        Ok(())
+    }
+
+    #[test]
+    fn clear_orderings_clears_groupings() -> Result<()> {
+        let schema = create_test_schema()?;
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let ordering = [PhysicalSortExpr::new_default(Arc::clone(&a))];
+        let mut properties =
+            EquivalenceProperties::new_with_orderings(schema, [ordering.clone()]);
+        properties.add_grouping([Arc::clone(&b)]);
+        assert!(properties.grouping_satisfy([Arc::clone(&a)])?);
+        assert!(properties.grouping_satisfy([Arc::clone(&b)])?);
+
+        properties.clear_orderings();
+
+        assert!(properties.oeq_class().is_empty());
+        assert!(properties.geq_class().is_empty());
+        assert!(properties.normalized_geq_class().is_empty());
+        assert!(!properties.ordering_satisfy(ordering)?);
+        assert!(!properties.grouping_satisfy([a])?);
+        assert!(!properties.grouping_satisfy([b])?);
+        Ok(())
+    }
+
+    #[test]
+    fn clear_groupings_preserves_orderings() -> Result<()> {
+        let schema = create_test_schema()?;
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let ordering = [PhysicalSortExpr::new_default(Arc::clone(&a))];
+        let mut properties =
+            EquivalenceProperties::new_with_orderings(schema, [ordering.clone()]);
+        properties.add_grouping([Arc::clone(&b)]);
+        assert!(properties.grouping_satisfy([Arc::clone(&b)])?);
+
+        properties.clear_groupings();
+
+        assert!(properties.geq_class().is_empty());
+        assert!(properties.normalized_geq_class().is_empty());
+        assert!(properties.ordering_satisfy(ordering)?);
+        assert!(properties.grouping_satisfy([a])?);
+        assert!(!properties.grouping_satisfy([b])?);
         Ok(())
     }
 

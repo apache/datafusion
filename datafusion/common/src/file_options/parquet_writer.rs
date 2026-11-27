@@ -226,6 +226,7 @@ impl ParquetOptions {
             pushdown_filters: _,
             reorder_filters: _,
             force_filter_selections: _, // not used for writer props
+            enable_exact_reverse_scan: _, // not used for writer props
             allow_single_file_parallelism: _,
             maximum_parallel_row_group_writers: _,
             maximum_buffered_record_batches_per_stream: _,
@@ -238,6 +239,7 @@ impl ParquetOptions {
             max_predicate_cache_size: _,
             max_in_list_size: _,
             enable_rle_to_dictionary: _,
+            dictionary_read_max_distinct_values: _,
             row_group_range_assignment: _,
         } = self;
 
@@ -391,6 +393,7 @@ mod tests {
             pushdown_filters: defaults.pushdown_filters,
             reorder_filters: defaults.reorder_filters,
             force_filter_selections: defaults.force_filter_selections,
+            enable_exact_reverse_scan: defaults.enable_exact_reverse_scan,
             allow_single_file_parallelism: defaults.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: defaults
                 .maximum_parallel_row_group_writers,
@@ -405,6 +408,8 @@ mod tests {
             max_predicate_cache_size: defaults.max_predicate_cache_size,
             content_defined_chunking: defaults.content_defined_chunking.clone(),
             enable_rle_to_dictionary: defaults.enable_rle_to_dictionary,
+            dictionary_read_max_distinct_values: defaults
+                .dictionary_read_max_distinct_values,
         }
     }
 
@@ -522,6 +527,8 @@ mod tests {
                 pushdown_filters: global_options_defaults.pushdown_filters,
                 reorder_filters: global_options_defaults.reorder_filters,
                 force_filter_selections: global_options_defaults.force_filter_selections,
+                enable_exact_reverse_scan: global_options_defaults
+                    .enable_exact_reverse_scan,
                 allow_single_file_parallelism: global_options_defaults
                     .allow_single_file_parallelism,
                 maximum_parallel_row_group_writers: global_options_defaults
@@ -541,6 +548,8 @@ mod tests {
                 content_defined_chunking: props.content_defined_chunking().into(),
                 enable_rle_to_dictionary: global_options_defaults
                     .enable_rle_to_dictionary,
+                dictionary_read_max_distinct_values: global_options_defaults
+                    .dictionary_read_max_distinct_values,
             },
             column_specific_options,
             key_value_metadata,

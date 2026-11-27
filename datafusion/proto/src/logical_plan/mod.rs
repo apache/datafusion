@@ -483,6 +483,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             .map_err(|e| internal_datafusion_err!("failed to encode logical plan: {e:?}"))
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn try_into_logical_plan(
         &self,
         ctx: &TaskContext,
@@ -1068,16 +1069,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                         NullEquality::from(null_equality),
                         join.null_aware,
                     )?
-                    // Plans encoded before the field existed decode it as 0; they
-                    // could only hold scalar `NOT IN` joins.
-                    .with_null_aware_value_keys(
-                        usize_from_wire(
-                            join.null_aware_value_keys,
-                            "JoinNode",
-                            "null_aware_value_keys",
-                        )?
-                        .max(1),
-                    ),
+                    // `0` is an unset count, which physical planning accepts
+                    // only for a single key. Plans encoded before the field
+                    // existed decode it as 0; they could only hold scalar
+                    // `NOT IN` joins.
+                    .with_null_aware_value_keys(usize_from_wire(
+                        join.null_aware_value_keys,
+                        "JoinNode",
+                        "null_aware_value_keys",
+                    )?),
                 ))
             }
             LogicalPlanType::AsOfJoin(join) => {

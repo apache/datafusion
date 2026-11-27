@@ -43,6 +43,48 @@ SELECT array_transform([1,2,3,4,5], v -> list_repeat("a", v));
 ----
 [[a], [a, a], [a, a, a], [a, a, a, a], [a, a, a, a, a]]
 
+# Element metadata survives an identity transform and reaches the next bound name.
+query ?
+SELECT array_transform(
+    array_transform(
+        array_transform([1], x -> with_metadata(x, 'unit', 'ms')),
+        y -> y
+    ),
+    z -> arrow_metadata(z, 'unit')
+);
+----
+[ms]
+
+# UUID extension metadata follows the same path through the list element field.
+query ?
+SELECT array_transform(
+    array_transform(
+        array_transform(
+            [X'00010203040506070809000102030506'],
+            raw -> CAST(arrow_cast(raw, 'FixedSizeBinary(16)') AS UUID)
+        ),
+        uuid -> uuid
+    ),
+    uuid -> arrow_metadata(uuid, 'ARROW:extension:name')
+);
+----
+[arrow.uuid]
+
+statement ok
+CREATE TABLE metadata_lists AS VALUES ([1]), ([]), (NULL);
+
+query ??
+SELECT
+    array_transform(column1, x -> with_metadata(x, 'k', 'v')),
+    array_transform(
+        arrow_cast(column1, 'LargeList(Int64)'),
+        x -> with_metadata(x, 'k', 'v')
+    )
+FROM metadata_lists
+WHERE cardinality(column1) = 0;
+----
+[] []
+
 # return scalar
 query I?
 SELECT t.number, array_transform([1, 2], e1 -> 24) from t;

@@ -65,7 +65,7 @@ use datafusion_common::{
     internal_err, not_impl_err, plan_err,
 };
 use datafusion_common::{
-    TableReference, assert_eq_or_internal_err, assert_or_internal_err,
+    NullEquality, TableReference, assert_eq_or_internal_err, assert_or_internal_err,
 };
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::memory::MemorySourceConfig;
@@ -83,9 +83,9 @@ use datafusion_expr::physical_planning_context::{
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, MaterializedCte, MaterializedCteId, MaterializedCtePlan,
-    MaterializedCteScan, Operator, RecursiveQuery, Show, ShowKind, SkipType,
-    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    Filter, JoinType, MaterializedCte, MaterializedCteId, MaterializedCtePlan, Operator,
+    RecursiveQuery, Show, ShowKind, SkipType, StringifiedPlan, WindowFrame,
+    WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{
     AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
@@ -285,14 +285,12 @@ fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>>
                     )) if nested.id == old_id => {
                         Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
                     }
-                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(mut scan))
                         if scan.id == old_id =>
                     {
+                        scan.id = new_id;
                         Ok(Transformed::yes(LogicalPlan::MaterializedCte(
-                            MaterializedCtePlan::Scan(MaterializedCteScan {
-                                id: new_id,
-                                ..scan
-                            }),
+                            MaterializedCtePlan::Scan(scan),
                         )))
                     }
                     _ => Ok(Transformed::no(node)),
@@ -381,8 +379,13 @@ impl MaterializedCteBinder {
                 }
                 return internal_err!("MaterializedCteScanExec {} has no CTE", scan.id());
             };
-            let bound =
-                (bind && !scan.is_bound()).then(|| scan.bind(Arc::clone(cte.buffer())));
+            let bound = if bind && !scan.is_bound() {
+                // The scan reads the batches of the body by position.
+                scan.check_body_schema(&cte.body().schema())?;
+                Some(scan.bind(Arc::clone(cte.buffer())))
+            } else {
+                None
+            };
             let scan = bound.as_ref().unwrap_or(scan);
             let scan = match self.body_statistics(scan.id())? {
                 Some(statistics) => scan.with_body_statistics(statistics),
@@ -943,12 +946,18 @@ impl DefaultPhysicalPlanner {
 
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
                 // Unbound until `bind_materialized_cte_scans` runs on the whole plan.
-                Arc::new(MaterializedCteScanExec::new(
+                let exec = MaterializedCteScanExec::new(
                     scan.id.as_u64(),
                     &scan.name,
-                    Arc::clone(scan.schema.inner()),
+                    Arc::clone(scan.schema().inner()),
                     session.config().target_partitions(),
-                ))
+                );
+                match scan.projection() {
+                    Some(projection) => {
+                        Arc::new(exec.with_body_projection(projection.to_vec())?)
+                    }
+                    None => Arc::new(exec),
+                }
             }
 
             // 1 Child
@@ -1042,7 +1051,18 @@ impl DefaultPhysicalPlanner {
                     file_output_mode,
                 };
 
-                let ordering = input_exec.properties().output_ordering().cloned();
+                // For queries like:
+                // `COPY (SELECT * FROM t ORDER BY c1) TO 'ordered.parquet'`
+                // Preserve the explicit sort order as an input ordering requirement,
+                // otherwise it might be lost during optimization.
+                //
+                // Use the explicit ordering from SortExec rather than the child's inferred
+                // output ordering, which may be incorrect at this stage. The plan may still
+                // require a `CoalescePartitionsExec`, inserted later by `EnsureRequirements`,
+                // which can change the inferred output ordering.
+                let ordering = input_exec
+                    .downcast_ref::<SortExec>()
+                    .map(|sort| sort.expr().clone());
 
                 sink_format
                     .create_writer_physical_plan(
@@ -1721,17 +1741,18 @@ impl DefaultPhysicalPlanner {
 
                 let prefer_hash_join =
                     session.config_options().optimizer.prefer_hash_join;
-                // Null-aware joins are pinned to CollectLeft hash joins (see
-                // `HashJoinExec::null_aware`): never repartition them, and
-                // never route them to the sort-merge path below.
+                // Null-aware hash joins require CollectLeft for global NULL tracking,
+                // so they must not be hash-repartitioned.
+                // Supported null-aware LeftAnti joins can instead use the
+                // single-partition sort-merge path below.
                 let can_repartition_join = session.config().target_partitions() > 1
                     && session.config().repartition_joins()
                     && !*null_aware;
 
-                // Only `HashJoinExec` implements null-aware semantics, and it
-                // needs equi-join keys to do so. Without them the join would be
-                // planned as a nested loop (or piecewise merge) join, which
-                // silently ignores the flag and returns wrong results for
+                // Only `HashJoinExec` and the null-aware `LeftAnti` path in `SortMergeJoinExec`
+                // implements null-aware semantics, and those need equi-join keys to do so.
+                // Without them the join would be planned as a nested loop (or piecewise merge)
+                // join, which silently ignores the flag and returns wrong results for
                 // `NOT IN` over a nullable subquery. Fail loudly instead.
                 if *null_aware && join_on.is_empty() {
                     return plan_err!(
@@ -1863,16 +1884,44 @@ impl DefaultPhysicalPlanner {
                             None,
                         )?)
                     }
+                } else if *null_aware
+                    && !prefer_hash_join
+                    && *join_type == JoinType::LeftAnti
+                    && join_on.len() == 1
+                    && join_filter.is_none()
+                    && *null_equality == NullEquality::NullEqualsNothing
+                {
+                    // Use null-aware sort-merge join for single-key LeftAnti joins
+                    // without a filter. Single-partition inputs and NULLS FIRST ordering
+                    // let the stream determine whether the entire RHS is empty or
+                    // contains NULL before emitting any rows.
+                    Arc::new(
+                        SortMergeJoinExec::try_new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            join_filter,
+                            *join_type,
+                            vec![SortOptions::new(false, true)], // ASC NULLS FIRST
+                            *null_equality,
+                        )?
+                        .with_null_aware(true)?,
+                    )
                 } else if session.config().target_partitions() > 1
                     && session.config().repartition_joins()
                     && !prefer_hash_join
                     && !*null_aware
-                // Null-aware joins (e.g. `NOT IN` with a nullable subquery) must
-                // use the CollectLeft HashJoin below: SortMergeJoinExec does not
-                // implement null-aware anti-join semantics and would return wrong
-                // results when the right side contains a null join key.
+                // Null-aware joins (e.g. `NOT IN` with a nullable subquery) that do not
+                // satisfy the conditions above must use the CollectLeft HashJoin below.
+                // SortMergeJoinExec currently supports null-aware semantics only for
+                // single-key LeftAnti joins without a filter, using NullEqualsNothing.
+                // Routing other null-aware joins through the ordinary sort-merge path
+                // would not preserve NOT IN semantics, including when the subquery
+                // contains a NULL key.
                 {
-                    // Use SortMergeJoin if hash join is not preferred
+                    // Use ordinary sort-merge join when hash join is not preferred.
+                    // Null-aware joins not handled above fall back to CollectLeft
+                    // HashJoin because their semantics are not supported by sort-merge join.
                     let join_on_len = join_on.len();
                     Arc::new(SortMergeJoinExec::try_new(
                         physical_left,
@@ -1884,7 +1933,7 @@ impl DefaultPhysicalPlanner {
                         *null_equality,
                     )?)
                 } else {
-                    // Null-aware joins need global probe-side state, so keep
+                    // Remaining null-aware joins need global probe-side state, so keep
                     // them in CollectLeft mode.
                     let partition_mode = if can_repartition_join {
                         PartitionMode::Auto
@@ -3240,6 +3289,7 @@ impl DefaultPhysicalPlanner {
                     FinalPhysicalPlan,
                     displayable(optimized_plan.as_ref())
                         .set_tree_maximum_render_width(config.tree_maximum_render_width)
+                        .set_show_equivalences(config.show_equivalences)
                         .tree_render()
                         .to_string(),
                 ));
@@ -3282,6 +3332,7 @@ impl DefaultPhysicalPlanner {
                         .set_show_statistics(show_statistics)
                         .set_statistics_registry(statistics_registry.clone())
                         .set_show_schema(show_schema)
+                        .set_show_equivalences(config.show_equivalences)
                         .indent(e.verbose)
                         .to_string()
                 };

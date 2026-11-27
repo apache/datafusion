@@ -397,11 +397,52 @@ true true true
 query error lpad requested length 2147483648 too large
 SELECT lpad('hi', column1) FROM (VALUES (2147483648), (1)) AS t(column1);
 
+# a negative length column is treated as 0 on the array path
+query T
+SELECT lpad('hi', column1, 'x') FROM (VALUES (-1), (3)) AS t(column1);
+----
+(empty)
+xhi
+
+# a length column far above i32::MAX is an error on the array path
+query error lpad requested length 9223372036854775807 too large
+SELECT lpad('hi', column1) FROM (VALUES (9223372036854775807), (1)) AS t(column1);
+
 # a large scalar target length skips the scalar fast path
 query I
 SELECT character_length(lpad('x', 16385, 'a'));
 ----
 16385
+
+# a length above i32::MAX is an error only on a row whose string and fill are
+# non-NULL, whether the length is a literal or a column
+query T
+SELECT lpad(s, 2147483648) FROM (VALUES (NULL::text)) AS t(s);
+----
+NULL
+
+query T
+SELECT lpad(s, n) FROM (VALUES (NULL::text, 2147483648)) AS t(s, n);
+----
+NULL
+
+query T
+SELECT lpad(s, 2147483648, f) FROM (VALUES ('a', NULL::text)) AS t(s, f);
+----
+NULL
+
+query T
+SELECT lpad(s, n, f) FROM (VALUES ('a', 2147483648, NULL::text)) AS t(s, n, f);
+----
+NULL
+
+query TT
+SELECT lpad(NULL, 2147483648), lpad('a', 2147483648, NULL);
+----
+NULL NULL
+
+query error lpad requested length 2147483648 too large
+SELECT lpad(s, 2147483648) FROM (VALUES (NULL::text), ('a')) AS t(s);
 
 # invalid argument count/type and excessive target length
 query error 'lpad' does not support zero arguments
@@ -817,11 +858,52 @@ true true true
 query error rpad requested length 2147483648 too large
 SELECT rpad('hi', column1) FROM (VALUES (2147483648), (1)) AS t(column1);
 
+# a negative length column is treated as 0 on the array path
+query T
+SELECT rpad('hi', column1, 'x') FROM (VALUES (-1), (3)) AS t(column1);
+----
+(empty)
+hix
+
+# a length column far above i32::MAX is an error on the array path
+query error rpad requested length 9223372036854775807 too large
+SELECT rpad('hi', column1) FROM (VALUES (9223372036854775807), (1)) AS t(column1);
+
 # a large scalar target length skips the scalar fast path
 query I
 SELECT character_length(rpad('x', 16385, 'a'));
 ----
 16385
+
+# a length above i32::MAX is an error only on a row whose string and fill are
+# non-NULL, whether the length is a literal or a column
+query T
+SELECT rpad(s, 2147483648) FROM (VALUES (NULL::text)) AS t(s);
+----
+NULL
+
+query T
+SELECT rpad(s, n) FROM (VALUES (NULL::text, 2147483648)) AS t(s, n);
+----
+NULL
+
+query T
+SELECT rpad(s, 2147483648, f) FROM (VALUES ('a', NULL::text)) AS t(s, f);
+----
+NULL
+
+query T
+SELECT rpad(s, n, f) FROM (VALUES ('a', 2147483648, NULL::text)) AS t(s, n, f);
+----
+NULL
+
+query TT
+SELECT rpad(NULL, 2147483648), rpad('a', 2147483648, NULL);
+----
+NULL NULL
+
+query error rpad requested length 2147483648 too large
+SELECT rpad(s, 2147483648) FROM (VALUES (NULL::text), ('a')) AS t(s);
 
 # invalid argument count/type and excessive target length
 query error 'rpad' does not support zero arguments

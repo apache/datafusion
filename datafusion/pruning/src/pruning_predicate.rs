@@ -1331,10 +1331,10 @@ fn is_compare_op(op: Operator) -> bool {
     )
 }
 
-// The pruning logic is based on the comparing the min/max bounds.
-// Must make sure the two type has order.
-// For example, casts from string to numbers is not correct.
-// Because the "13" is less than "3" with UTF8 comparison order.
+// Pruning casts the container's min/max statistics and compares them with the
+// literal, which is only sound when the cast keeps the order of the values,
+// e.g. not for strings to numbers ("13" < "3") or timestamps to time of day
+// (wraps at midnight). Ask the same rule that sort elimination uses.
 fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Result<()> {
     // Dictionary casts are always supported as long as the value types are supported
     let from_type = match from_type {
@@ -1349,20 +1349,7 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
         }
         _ => to_type,
     };
-    // Casting a timestamp to a time-of-day wraps at midnight and does not
-    // preserve ordering across day boundaries. Casting timestamp min/max
-    // statistics could therefore produce invalid bounds and prune matches.
-    if matches!(from_type, DataType::Timestamp(_, _))
-        && matches!(to_type, DataType::Time32(_) | DataType::Time64(_))
-    {
-        return plan_err!(
-            "Try Cast/Cast with from type {from_type} to type {to_type} is not supported"
-        );
-    }
-    // If both types are strings or both are not strings (number, timestamp, etc)
-    // then we can compare them.
-    // PruningPredicate does not support casting of strings to numbers and such.
-    if from_type.is_string() == to_type.is_string() {
+    if phys_expr::is_order_preserving_cast(from_type, to_type) {
         Ok(())
     } else {
         plan_err!(
@@ -5093,6 +5080,99 @@ mod tests {
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
+    }
+
+    /// Pruning casts the min/max statistics, so it may only use casts that
+    /// keep the order of the values.
+    #[test]
+    fn row_group_predicate_cast_must_preserve_order() {
+        use TimeUnit::*;
+
+        let new_york = Some(Arc::from("America/New_York"));
+        let dictionary = |value: DataType| {
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(value))
+        };
+        let cases = [
+            // 0 is false while -1 and 1 are true
+            (DataType::Int32, ScalarValue::Boolean(Some(false)), false),
+            (DataType::Float64, ScalarValue::Boolean(Some(false)), false),
+            (
+                dictionary(DataType::Int64),
+                ScalarValue::Boolean(Some(false)),
+                false,
+            ),
+            // little-endian bytes: 256 is [0, 1, ..] and 255 is [255, 0, ..]
+            (DataType::Int64, ScalarValue::Binary(Some(vec![5])), false),
+            // a named timezone can move the local date backwards
+            (
+                DataType::Timestamp(Nanosecond, new_york.clone()),
+                ScalarValue::Date32(Some(0)),
+                false,
+            ),
+            (
+                DataType::Timestamp(Nanosecond, new_york.clone()),
+                ScalarValue::Date64(Some(0)),
+                false,
+            ),
+            // a local time that a transition skips moves past later ones
+            (
+                DataType::Timestamp(Nanosecond, None),
+                ScalarValue::TimestampNanosecond(Some(0), new_york.clone()),
+                false,
+            ),
+            (
+                DataType::Int64,
+                ScalarValue::TimestampNanosecond(Some(0), None),
+                true,
+            ),
+            (DataType::Int32, ScalarValue::Date32(Some(0)), true),
+            // Parquet TIME(MICROS) read as a TIME column
+            (
+                DataType::Time64(Microsecond),
+                ScalarValue::Time64Nanosecond(Some(0)),
+                true,
+            ),
+            (
+                DataType::Utf8,
+                ScalarValue::Utf8View(Some("a".into())),
+                true,
+            ),
+            (dictionary(DataType::Utf8), ScalarValue::from("a"), true),
+            (
+                DataType::FixedSizeBinary(1),
+                ScalarValue::Binary(Some(vec![5])),
+                true,
+            ),
+            (
+                DataType::Timestamp(Nanosecond, None),
+                ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("-05:00"))),
+                true,
+            ),
+            (
+                DataType::Date32,
+                ScalarValue::TimestampSecond(Some(0), new_york),
+                true,
+            ),
+        ];
+        for (source, literal, prunable) in cases {
+            let target = literal.data_type();
+            let schema = Schema::new(vec![Field::new("c1", source.clone(), false)]);
+            for expr in [
+                cast(col("c1"), target.clone()).eq(lit(literal.clone())),
+                try_cast(col("c1"), target.clone()).eq(lit(literal.clone())),
+            ] {
+                let predicate_expr = test_build_predicate_expression(
+                    &expr,
+                    &schema,
+                    &mut RequiredColumns::new(),
+                );
+                assert_eq!(
+                    predicate_expr.to_string() != "true",
+                    prunable,
+                    "{source} -> {target}: {predicate_expr}"
+                );
+            }
+        }
     }
 
     #[test]

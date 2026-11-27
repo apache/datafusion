@@ -594,7 +594,7 @@ Iteration 2 returned 1781686 rows in 1947 ms
 
 Test performance of sorting large datasets
 
-This test sorts a a synthetic dataset generated during the
+This test sorts a synthetic dataset generated during the
 benchmark execution, designed to simulate sorting web server
 access logs. Such sorting is often done during data transformation
 steps.
@@ -1111,7 +1111,8 @@ Benchmarks for sort pushdown optimizations on TPC-H lineitem data (SF=1).
 - q1-q4: ASC queries (sort elimination with `--sorted`)
 - q5-q8: DESC LIMIT queries (reverse scan + TopK optimization with `--sorted`)
 
-**sort_pushdown_inexact** (q1-q4): DESC LIMIT queries on scrambled data
+**sort_pushdown_inexact** (q1-q5): DESC LIMIT queries on scrambled data
+- q5: selective `WHERE` (30 narrow `l_orderkey` ranges) that the page index turns into a row selection, plus TopK
 
 ### Data Generation
 
@@ -1119,6 +1120,8 @@ The inexact/overlap data requires pyarrow (`pip install pyarrow`) to generate
 multi-file parquet with scrambled row group order. DataFusion's COPY cannot produce
 narrow-range RGs in scrambled order because the parquet writer merges rows from
 adjacent chunks at RG boundaries.
+
+The inexact data has the page index and several data pages per RG.
 
 ### Running
 

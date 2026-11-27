@@ -152,6 +152,14 @@ that is omitted from the default explain, as well as all intermediate physical
 plans DataFusion generates before returning. This mode can be very helpful for
 debugging to see why and when DataFusion added and removed operators from a plan.
 
+Each intermediate plan is labeled with the name of the optimizer rule that
+produced it. The rules, and the order in which they run, are listed in the
+documentation of [`Analyzer`], [`Optimizer`], and [`PhysicalOptimizer`].
+
+[`analyzer`]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.Analyzer.html#built-in-analyzer-rules
+[`optimizer`]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.Optimizer.html#built-in-optimizer-rules
+[`physicaloptimizer`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/optimizer/struct.PhysicalOptimizer.html#built-in-physical-optimizer-rules
+
 ## Execution Counters: `EXPLAIN ANALYZE`
 
 During execution, DataFusion operators collect detailed metrics. You can access
