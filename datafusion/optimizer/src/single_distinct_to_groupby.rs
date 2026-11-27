@@ -17,7 +17,7 @@ use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::expr_schema::ExprSchemable;
 use datafusion_expr::{
-    AggregateUDF, Expr, cast, col,
+    AggregateUDF, DistinctHandling, Expr, cast, col,
     expr::AggregateFunction,
     lit,
     logical_plan::{Aggregate, LogicalPlan},
@@ -157,6 +157,14 @@ fn is_single_distinct_agg(
     }
     if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
         return Ok(false);
+    }
+    // Aggregates with DistinctHandling::Unsupported (e.g. stddev, approx_median) cannot
+    // run natively with DISTINCT; they must always be rewritten.
+    if distinct_aggs
+        .iter()
+        .any(|(func, _)| func.distinct_handling() == DistinctHandling::Unsupported)
+    {
+        return Ok(true);
     }
     // With one target partition, a native GroupsAccumulator avoids building an
     // extra aggregate with a row per (group, distinct value) pair. With multiple
@@ -1365,5 +1373,36 @@ mod tests {
 
         assert_eq!(plan.schema().as_ref(), optimized_plan.schema().as_ref());
         Ok(())
+    }
+
+    #[test]
+    fn unsupported_distinct_handling_is_rewritten() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let udf = udfs::DistinctHandlingTestUDAF::new(
+            "unsupported",
+            DistinctHandling::Unsupported,
+        );
+        let func = Arc::new(AggregateUDF::from(udf));
+        let distinct_expr = Expr::AggregateFunction(AggregateFunction::new_udf(
+            func,
+            vec![col("b")],
+            true,
+            None,
+            vec![],
+            None,
+        ));
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![count_star(), distinct_expr])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS count(Int64(1)), unsupported(alias1) AS unsupported(DISTINCT test.b) [a:UInt32, count(Int64(1)):Int64, unsupported(DISTINCT test.b):UInt32;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[sum(alias2), unsupported(alias1)]] [a:UInt32, sum(alias2):Int64;N, unsupported(alias1):UInt32;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[count(Int64(1)) AS alias2]] [a:UInt32, alias1:UInt32, alias2:Int64]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
     }
 }
