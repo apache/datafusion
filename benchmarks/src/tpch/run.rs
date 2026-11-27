@@ -132,7 +132,8 @@ impl RunOpt {
 
         let sql = &get_query_sql_for_scale_factor(query_id, scale_factor)?;
 
-        for i in 0..self.iterations() {
+        let mut sampler = self.common.sampler();
+        while let Some(i) = sampler.next_iteration() {
             let start = Instant::now();
 
             // query 15 is special, with 3 statements. the second statement is the one from which we
@@ -153,6 +154,7 @@ impl RunOpt {
             }
 
             let elapsed = start.elapsed();
+            sampler.record(elapsed);
             let ms = elapsed.as_secs_f64() * 1000.0;
             millis.push(ms);
             info!("output:\n\n{}\n\n", pretty_format_batches(&result)?);
@@ -307,10 +309,6 @@ impl RunOpt {
         Ok(Arc::new(provider))
     }
 
-    fn iterations(&self) -> usize {
-        self.common.iterations
-    }
-
     fn partitions(&self) -> usize {
         self.common
             .partitions
@@ -426,6 +424,9 @@ mod tests {
         let path = get_tpch_data_path()?;
         let common = CommonOpt {
             iterations: 1,
+            max_time: None,
+            target_precision: 0.02,
+            max_iterations: 1000,
             partitions: Some(2),
             batch_size: Some(8192),
             mem_pool_type: "fair".to_string(),
@@ -464,6 +465,9 @@ mod tests {
         let path = get_tpch_data_path()?;
         let common = CommonOpt {
             iterations: 1,
+            max_time: None,
+            target_precision: 0.02,
+            max_iterations: 1000,
             partitions: Some(2),
             batch_size: Some(8192),
             mem_pool_type: "fair".to_string(),
