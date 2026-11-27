@@ -1791,7 +1791,7 @@ impl RowGroupsPrunedParquetOpen {
         let InitialDecoderState {
             decoder,
             rg_plan,
-            has_row_selection,
+            pruner_eligible,
             filter_installed,
             row_filter_context,
         } = {
@@ -1811,9 +1811,14 @@ impl RowGroupsPrunedParquetOpen {
             };
 
             let prepared_access_plan = prepare_access_plan(access_plan)?;
-            let has_row_selection = prepared_access_plan.has_row_selection;
+            let pruner_eligible = runtime_pruning_eligible(
+                prepared.predicate.as_ref(),
+                prepared_access_plan.row_groups.len(),
+            );
             // Move selections into the decoder, retaining only the metadata
-            // needed for pruning, filter toggles, and byte accounting.
+            // needed for pruning, filter toggles, and byte accounting. Only a
+            // pruning rebuild reads `RgPlanEntry::selection`, so a scan
+            // without a pruner does not hold a second copy of each selection.
             let (selections, rg_plan): (Vec<_>, VecDeque<RgPlanEntry>) =
                 prepared_access_plan
                     .row_groups
@@ -1824,6 +1829,9 @@ impl RowGroupsPrunedParquetOpen {
                             rg_index,
                             bytes: row_group_bytes(&rg_metadata[rg_index]),
                             fully_matched: rg.fully_matched,
+                            selection: pruner_eligible
+                                .then(|| rg.selection.selection().cloned())
+                                .flatten(),
                         };
                         (rg.selection, entry)
                     })
@@ -1872,7 +1880,7 @@ impl RowGroupsPrunedParquetOpen {
             InitialDecoderState {
                 decoder: builder.build()?,
                 rg_plan,
-                has_row_selection,
+                pruner_eligible,
                 filter_installed,
                 row_filter_context,
             }
@@ -1924,29 +1932,20 @@ impl RowGroupsPrunedParquetOpen {
         // via the `DynamicFilterTracker` watch channel (#22460), so detecting
         // a threshold change is a single atomic load — not a tree walk per
         // RG check.
-        // Preserve the current policy for scans with selections. Enabling
-        // runtime pruning for them is separate from adopting the local API
-        // and is tracked in https://github.com/apache/datafusion/issues/24358.
-        let row_group_pruner =
-            match (&prepared.predicate, rg_plan.len() > 1, has_row_selection) {
-                (Some(predicate), true, false)
-                    if matches!(
-                        DynamicFilterTracking::classify(predicate),
-                        DynamicFilterTracking::Watching(_)
-                    ) =>
-                {
-                    let pruner = RowGroupPruner::new(
-                        Arc::clone(predicate),
-                        Arc::clone(&prepared.physical_file_schema),
-                        Arc::clone(reader_metadata.metadata()),
-                        prepared.predicate_creation_errors.clone(),
-                        prepared.file_metrics.predicate_evaluation_errors.clone(),
-                        prepared.max_in_list_size,
-                    );
-                    Some(pruner.with_statistics_resolvers(file_statistics_resolvers))
-                }
-                _ => None,
-            };
+        let row_group_pruner = match &prepared.predicate {
+            Some(predicate) if pruner_eligible => Some(
+                RowGroupPruner::new(
+                    Arc::clone(predicate),
+                    Arc::clone(&prepared.physical_file_schema),
+                    Arc::clone(reader_metadata.metadata()),
+                    prepared.predicate_creation_errors.clone(),
+                    prepared.file_metrics.predicate_evaluation_errors.clone(),
+                    prepared.max_in_list_size,
+                )
+                .with_statistics_resolvers(file_statistics_resolvers),
+            ),
+            _ => None,
+        };
         let row_groups_pruned_dynamic = prepared
             .file_metrics
             .row_groups_pruned_dynamic_filter
@@ -2210,6 +2209,23 @@ async fn load_page_index<T: AsyncFileReader>(
         // No need to load the page index again, just return the existing metadata
         Ok(reader_metadata)
     }
+}
+
+/// Whether the scan builds a runtime [`RowGroupPruner`]. It needs a predicate
+/// with a dynamic filter that is not yet complete (static or complete
+/// predicates were fully used at file open), and at least two row groups
+/// (the pruner only acts at a boundary, before a later row group).
+fn runtime_pruning_eligible(
+    predicate: Option<&Arc<dyn PhysicalExpr>>,
+    row_group_count: usize,
+) -> bool {
+    row_group_count > 1
+        && predicate.is_some_and(|predicate| {
+            matches!(
+                DynamicFilterTracking::classify(predicate),
+                DynamicFilterTracking::Watching(_)
+            )
+        })
 }
 
 #[cfg(test)]
@@ -4811,6 +4827,18 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_runtime_pruning_eligible() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let static_predicate = logical2physical(&col("a").lt(lit(200i32)), &schema);
+        let dynamic_predicate = make_dynamic_expr(Arc::clone(&static_predicate));
+
+        assert!(!runtime_pruning_eligible(None, 3));
+        assert!(!runtime_pruning_eligible(Some(&static_predicate), 3));
+        assert!(!runtime_pruning_eligible(Some(&dynamic_predicate), 1));
+        assert!(runtime_pruning_eligible(Some(&dynamic_predicate), 2));
+    }
+
     #[tokio::test]
     async fn test_dynamic_pruning_preserves_external_row_selection() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
@@ -4885,30 +4913,25 @@ mod test {
                 .update(logical2physical(&col("a").lt(lit(50i32)), &schema))
                 .unwrap();
 
-            // Apply the final predicate as the consumer would. Runtime
-            // pruning is best-effort, so RG1 may still be read when the
-            // selection disables it. RG2's unselected rows also satisfy
-            // this predicate and must never reach the consumer.
+            // Apply the final predicate as the consumer would. RG2's
+            // unselected rows (11 and 13) also satisfy it, so they reach the
+            // consumer only if the pruning rebuild drops RG2's selection.
             let remaining: Vec<i32> = collect_int32_values(stream)
                 .await
                 .into_iter()
                 .filter(|&value| value < 50)
                 .collect();
-            if has_selection {
-                // Do not assert that runtime pruning is disabled: enabling it
-                // later must preserve these rows through decoder rebuilds.
-                // Replacing RG2's selection with None would also return 11/13,
-                // which satisfy the predicate but not the external selection.
-                assert_eq!(remaining, vec![10, 12]);
+            let expected = if has_selection {
+                vec![10, 12]
             } else {
-                assert_eq!(remaining, vec![10, 11, 12, 13]);
-                // Control case: prove the late update exercises runtime
-                // pruning rather than only the per-row filter.
-                assert_eq!(
-                    counter_metric_value(&metrics, "row_groups_pruned_dynamic_filter"),
-                    1
-                );
-            }
+                vec![10, 11, 12, 13]
+            };
+            assert_eq!(remaining, expected);
+            // The late update prunes RG1 whether or not RG2 has a selection.
+            assert_eq!(
+                counter_metric_value(&metrics, "row_groups_pruned_dynamic_filter"),
+                1
+            );
         }
     }
 

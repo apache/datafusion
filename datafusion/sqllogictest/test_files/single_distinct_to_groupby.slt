@@ -438,6 +438,20 @@ DROP TABLE join_t;
 statement ok
 DROP TABLE empty_t;
 
+# stddev cannot run DISTINCT natively, so it must be rewritten even with companion count(*)
+query IIR rowsort
+SELECT g, count(*), stddev(DISTINCT xi) FROM t GROUP BY g;
+----
+1 4 7.071067811865
+2 2 NULL
+3 1 NULL
+
+# stddev without GROUP BY is also rewritten
+query IR
+SELECT count(*), stddev(DISTINCT xi) FROM t;
+----
+7 10
+
 statement ok
 DROP TABLE t;
 
