@@ -8,6 +8,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
+import statistics
 from dataclasses import dataclass
 from typing import Dict, List, Any
 from pathlib import Path
@@ -95,6 +97,59 @@ class QueryRun:
             )
 
 
+BOOTSTRAP_RESAMPLES = 2000
+BOOTSTRAP_SEED = 42
+CONFIDENCE = 0.95
+
+
+def bootstrap_median_ratio_ci(
+    baseline: List[float], comparison: List[float]
+) -> tuple[float, float, float]:
+    """Return `(ratio, low, high)` for `median(comparison) / median(baseline)`.
+
+    `low` and `high` bound a percentile bootstrap confidence interval at
+    `CONFIDENCE`. Each resample draws both sides independently with
+    replacement. The RNG uses a fixed seed, so the output is reproducible.
+    """
+    rng = random.Random(BOOTSTRAP_SEED)
+    ratios = []
+    for _ in range(BOOTSTRAP_RESAMPLES):
+        b = statistics.median(rng.choices(baseline, k=len(baseline)))
+        c = statistics.median(rng.choices(comparison, k=len(comparison)))
+        ratios.append(c / b)
+    ratios.sort()
+    tail = (1.0 - CONFIDENCE) / 2
+    low = ratios[int(tail * (BOOTSTRAP_RESAMPLES - 1))]
+    high = ratios[int((1.0 - tail) * (BOOTSTRAP_RESAMPLES - 1))]
+    ratio = statistics.median(comparison) / statistics.median(baseline)
+    return ratio, low, high
+
+
+def classify_change(
+    baseline: QueryRun,
+    comparison: QueryRun,
+    baseline_value: float,
+    comparison_value: float,
+    noise_threshold: float,
+) -> tuple[float, tuple[float, float] | None, bool]:
+    """Return `(ratio, ci, significant)` for one query.
+
+    With at least two iterations on each side, `ratio` is the ratio of the
+    medians. The change is significant only when the bootstrap CI excludes
+    1.0 and `ratio` lies outside `noise_threshold`. With fewer iterations,
+    no CI exists. The verdict then uses `comparison_value / baseline_value`
+    and the threshold alone.
+    """
+    b = [i.elapsed for i in baseline.iterations]
+    c = [i.elapsed for i in comparison.iterations]
+    if len(b) < 2 or len(c) < 2:
+        ratio = comparison_value / baseline_value
+        return ratio, None, abs(ratio - 1.0) > noise_threshold
+    ratio, low, high = bootstrap_median_ratio_ci(b, c)
+    excludes_one = low > 1.0 or high < 1.0
+    return ratio, (low, high), excludes_one and abs(ratio - 1.0) > noise_threshold
+
+
 @dataclass
 class Context:
     benchmark_version: str
@@ -137,6 +192,7 @@ def compare(
     comparison_path: Path,
     noise_threshold: float,
     detailed: bool,
+    show_ci: bool = True,
 ) -> None:
     baseline = BenchmarkRun.load_from_file(baseline_path)
     comparison = BenchmarkRun.load_from_file(comparison_path)
@@ -152,6 +208,10 @@ def compare(
     table.add_column(baseline_header, justify="right", style="dim", no_wrap=True)
     table.add_column(comparison_header, justify="right", style="dim", no_wrap=True)
     table.add_column("Change", justify="right", style="dim", no_wrap=True)
+    if show_ci:
+        table.add_column(
+            f"{CONFIDENCE:.0%} CI (median ratio)", justify="right", style="dim", no_wrap=True
+        )
 
     faster_count = 0
     slower_count = 0
@@ -174,6 +234,7 @@ def compare(
                 "FAIL" if base_failed else baseline_result.execution_time_report(detailed)[1],
                 "FAIL" if comp_failed else comparison_result.execution_time_report(detailed)[1],
                 change_text,
+                *([""] if show_ci else []),
             )
             continue
 
@@ -183,9 +244,15 @@ def compare(
         total_baseline_time += baseline_value
         total_comparison_time += comparison_value
 
-        change = comparison_value / baseline_value
+        change, ci, significant = classify_change(
+            baseline_result,
+            comparison_result,
+            baseline_value,
+            comparison_value,
+            noise_threshold,
+        )
 
-        if (1.0 - noise_threshold) <= change <= (1.0 + noise_threshold):
+        if not significant:
             change_text = "no change"
             no_change_count += 1
         elif change < 1.0:
@@ -200,6 +267,7 @@ def compare(
             baseline_text,
             comparison_text,
             change_text,
+            *([f"[{ci[0]:.2f}, {ci[1]:.2f}]" if ci else "n/a"] if show_ci else []),
         )
 
     console.print(table)
@@ -245,7 +313,8 @@ def main() -> None:
         "--noise-threshold",
         type=float,
         default=0.05,
-        help="The threshold for statistically insignificant results (+/- 5%%).",
+        help="Minimum relative change to report (+/- 5%%). A change must also "
+        "have a bootstrap confidence interval that excludes 1.0.",
     )
     compare_parser.add_argument(
         "--detailed",
@@ -254,9 +323,23 @@ def main() -> None:
         help="Show detailed result comparison instead of minimum runtime.",
     )
 
+    compare_parser.add_argument(
+        "--show-ci",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show a column with the bootstrap confidence interval of the median ratio. "
+        "Use --no-show-ci to hide it.",
+    )
+
     options = parser.parse_args()
 
-    compare(options.baseline_path, options.comparison_path, options.noise_threshold, options.detailed)
+    compare(
+        options.baseline_path,
+        options.comparison_path,
+        options.noise_threshold,
+        options.detailed,
+        options.show_ci,
+    )
 
 
 
