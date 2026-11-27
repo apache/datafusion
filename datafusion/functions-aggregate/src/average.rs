@@ -1628,18 +1628,12 @@ mod tests {
         Ok(())
     }
 
-    // Regression test for https://github.com/apache/datafusion/issues/24894
-    // DurationAvgAccumulator must wrap on overflow like the `sum` aggregate
-    // and the other `avg` accumulators, instead of panicking in debug builds.
     #[test]
     fn avg_duration_accumulator_wraps_on_overflow() -> Result<()> {
         let input_type = DataType::Duration(TimeUnit::Second);
         let return_type = DataType::Duration(TimeUnit::Second);
         let mut acc = avg_accumulator(&input_type, &return_type)?;
 
-        // Ingest the two extreme values in separate calls, mirroring how a
-        // sliding window feeds the accumulator row by row: the running sum
-        // i64::MAX + i64::MAX overflows i64.
         let values: ArrayRef = Arc::new(DurationSecondArray::from(vec![Some(i64::MAX)]));
         acc.update_batch(std::slice::from_ref(&values))?;
         acc.update_batch(std::slice::from_ref(&values))?;
@@ -1651,8 +1645,6 @@ mod tests {
         Ok(())
     }
 
-    // Regression test for https://github.com/apache/datafusion/issues/24894
-    // Same wrapping contract for the merge path of DurationAvgAccumulator.
     #[test]
     fn avg_duration_accumulator_merge_wraps_on_overflow() -> Result<()> {
         let input_type = DataType::Duration(TimeUnit::Second);
@@ -1672,35 +1664,25 @@ mod tests {
         Ok(())
     }
 
-    // Regression test for https://github.com/apache/datafusion/issues/24894
-    // The retract path (used by bounded window frames) must wrap on underflow
-    // rather than panicking in debug builds.
     #[test]
     fn avg_duration_accumulator_retract_wraps_on_underflow() -> Result<()> {
         let input_type = DataType::Duration(TimeUnit::Second);
         let return_type = DataType::Duration(TimeUnit::Second);
         let mut acc = avg_accumulator(&input_type, &return_type)?;
 
-        // Seed the running sum at i64::MIN with a count of 2 so the average
-        // stays observable after the retraction below.
         let seed: ArrayRef =
             Arc::new(DurationSecondArray::from(vec![Some(i64::MIN), Some(0)]));
         acc.update_batch(std::slice::from_ref(&seed))?;
 
-        // Retracting a positive value underflows i64: i64::MIN - 1 wraps to
-        // i64::MAX.
+        // Retracting a positive value underflows i64: i64::MIN - 1 wraps to i64::MAX.
         let leaving: ArrayRef = Arc::new(DurationSecondArray::from(vec![Some(1)]));
         acc.retract_batch(std::slice::from_ref(&leaving))?;
 
-        // count == 1, sum == i64::MAX
         assert_eq!(acc.evaluate()?, ScalarValue::DurationSecond(Some(i64::MAX)));
 
         Ok(())
     }
 
-    // Regression test for https://github.com/apache/datafusion/issues/24894
-    // Retraction must still produce the correct average for ordinary values,
-    // not just on overflow.
     #[test]
     fn avg_duration_accumulator_retract_updates_average() -> Result<()> {
         let input_type = DataType::Duration(TimeUnit::Second);
