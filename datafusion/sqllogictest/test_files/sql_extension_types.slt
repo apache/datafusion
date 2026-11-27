@@ -192,3 +192,41 @@ INSERT INTO t1 VALUES (NULL);
 
 statement ok
 DROP TABLE t1;
+
+statement ok
+CREATE TABLE t (id UUID);
+
+statement ok
+INSERT INTO t VALUES
+  (CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID));
+
+# Verify t.id actually has arrow.uuid metadata
+query T
+SELECT arrow_metadata(id, 'ARROW:extension:name') FROM t;
+----
+arrow.uuid
+
+# UNION and UNION ALL between UUID and a bare Binary literal return a planning error
+statement error UNION types cannot be unified for column 'id'
+SELECT id FROM t
+UNION
+SELECT X'00010203040506070809000102030507';
+
+statement error UNION types cannot be unified for column 'id'
+SELECT id FROM t
+UNION ALL
+SELECT X'00010203040506070809000102030507';
+
+# UNION between two UUID columns works and preserves arrow.uuid
+query T
+SELECT arrow_metadata(id, 'ARROW:extension:name') FROM (
+  SELECT id FROM t
+  UNION
+  SELECT CAST(arrow_cast(X'00010203040506070809000102030507', 'FixedSizeBinary(16)') AS UUID)
+);
+----
+arrow.uuid
+arrow.uuid
+
+statement ok
+DROP TABLE t;
