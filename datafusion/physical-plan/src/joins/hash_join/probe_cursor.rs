@@ -42,9 +42,15 @@ pub(super) struct GroupCursor {
     position: GroupPosition,
 }
 
+/// Position of the next build/probe pair to emit.
+/// For example, if handle 2 refers to build rows `[10, 20]`, then
+/// `(match_index, offset_in_group) = (2, 1)` resumes at build row 20.
 #[derive(Default)]
 struct GroupPosition {
+    /// Index into the parent cursor's `matches` handle array.
     match_index: usize,
+    /// Index of the next build row within this handle's group.
+    /// For a singleton, this stays zero; emitting its pair advances `match_index`.
     offset_in_group: usize,
 }
 
@@ -60,9 +66,20 @@ impl GroupCursor {
         self.position.match_index == self.matches.len()
     }
 
-    /// Expand at most `batch_size` pairs. An empty result still produces a final
-    /// chunk so the processor can emit unmatched outer-join rows. Filtering never
-    /// changes either enumeration coordinate.
+    /// Return the next chunk of at most `batch_size` build/probe row-index pairs,
+    /// resuming from the saved position, which may be partway through a group.
+    ///
+    /// For probe row 7 matching build rows `[10, 20, 30]`, with `batch_size = 2`:
+    ///
+    /// ```text
+    /// first chunk build rows: [10, 20]
+    /// first chunk probe rows: [7, 7]
+    /// next chunk build rows: [30]
+    /// next chunk probe rows: [7]
+    /// ```
+    ///
+    /// An empty result still produces a final chunk so the processor can emit
+    /// unmatched outer-join rows. Filtering never changes the saved position.
     pub(super) fn next_batch(
         &mut self,
         index: &JoinIndexMap,
@@ -110,6 +127,18 @@ impl GroupCursor {
 }
 
 impl GroupPosition {
+    /// Fill empty `output` with up to `batch_size` build/probe pairs, advancing
+    /// `self` to the next pair.
+    ///
+    /// For handle 2 matching probe row 7 to build rows `[10, 20, 30]`,
+    /// with `batch_size = 2`:
+    ///
+    /// ```text
+    /// before self: GroupPosition { match_index: 2, offset_in_group: 1 }
+    /// output.build_rows: [20, 30]
+    /// output.probe_rows: [7, 7]
+    /// after self: GroupPosition { match_index: 3, offset_in_group: 0 }
+    /// ```
     fn expand<T: RowId>(
         &mut self,
         index: &JoinIndexMap,
