@@ -369,10 +369,40 @@ where
         &mut self,
         values: &ArrayRef,
         make_payload_fn: MP,
-        observe_payload_fn: OP,
+        mut observe_payload_fn: OP,
     ) where
         MP: FnMut(Option<&[u8]>) -> V,
         OP: FnMut(V),
+    {
+        self.probe::<true, _, _>(values, make_payload_fn, |payload| {
+            observe_payload_fn(payload.expect("insert stores every value"))
+        })
+    }
+
+    /// Looks up each value from `values` without modifying the map.
+    ///
+    /// `observe_payload_fn` is invoked once for each value in `values`, in
+    /// order, with the payload of the stored entry, or `None` if the value
+    /// (including `NULL`) is not stored.
+    pub fn find<OP>(&mut self, values: &ArrayRef, observe_payload_fn: OP)
+    where
+        OP: FnMut(Option<V>),
+    {
+        self.probe::<false, _, _>(
+            values,
+            |_| unreachable!("lookup does not insert"),
+            observe_payload_fn,
+        )
+    }
+
+    fn probe<const INSERT: bool, MP, OP>(
+        &mut self,
+        values: &ArrayRef,
+        make_payload_fn: MP,
+        observe_payload_fn: OP,
+    ) where
+        MP: FnMut(Option<&[u8]>) -> V,
+        OP: FnMut(Option<V>),
     {
         // Sanity array type
         match self.output_type {
@@ -381,7 +411,7 @@ where
                     values.data_type(),
                     DataType::Binary | DataType::LargeBinary
                 ));
-                self.insert_if_new_inner::<MP, OP, GenericBinaryType<O>>(
+                self.insert_if_new_inner::<INSERT, MP, OP, GenericBinaryType<O>>(
                     values,
                     make_payload_fn,
                     observe_payload_fn,
@@ -392,7 +422,7 @@ where
                     values.data_type(),
                     DataType::Utf8 | DataType::LargeUtf8
                 ));
-                self.insert_if_new_inner::<MP, OP, GenericStringType<O>>(
+                self.insert_if_new_inner::<INSERT, MP, OP, GenericStringType<O>>(
                     values,
                     make_payload_fn,
                     observe_payload_fn,
@@ -410,14 +440,14 @@ where
     /// simpler and understand and reducing code bloat due to duplication.
     ///
     /// See comments on `insert_if_new` for more details
-    fn insert_if_new_inner<MP, OP, B>(
+    fn insert_if_new_inner<const INSERT: bool, MP, OP, B>(
         &mut self,
         values: &ArrayRef,
         mut make_payload_fn: MP,
         mut observe_payload_fn: OP,
     ) where
         MP: FnMut(Option<&[u8]>) -> V,
-        OP: FnMut(V),
+        OP: FnMut(Option<V>),
         B: ByteArrayType,
     {
         // step 1: compute hashes
@@ -439,7 +469,9 @@ where
             // handle null value
             let Some(value) = value else {
                 let payload = if let Some(&(payload, _offset)) = self.null.as_ref() {
-                    payload
+                    Some(payload)
+                } else if !INSERT {
+                    None
                 } else {
                     let payload = make_payload_fn(None);
                     let null_index = self.offsets.len() - 1;
@@ -447,7 +479,7 @@ where
                     let offset = self.buffer.len();
                     self.offsets.push(O::usize_as(offset));
                     self.null = Some((payload, null_index));
-                    payload
+                    Some(payload)
                 };
                 observe_payload_fn(payload);
                 continue;
@@ -474,6 +506,9 @@ where
 
                 if let Some(entry) = entry {
                     entry.payload
+                } else if !INSERT {
+                    observe_payload_fn(None);
+                    continue;
                 }
                 // if no existing entry, make a new one
                 else {
@@ -514,6 +549,9 @@ where
 
                 if let Some(entry) = entry {
                     entry.payload
+                } else if !INSERT {
+                    observe_payload_fn(None);
+                    continue;
                 }
                 // if no existing entry, make a new one
                 else {
@@ -536,7 +574,7 @@ where
                     payload
                 }
             };
-            observe_payload_fn(payload);
+            observe_payload_fn(Some(payload));
         }
         // Check for overflow in offsets (if more data was sent than can be represented)
         assert!(
@@ -1304,9 +1342,29 @@ mod tests {
             Some("🔥🔥🔥🔥🔥🔥"),
         ];
 
+        let probe: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("A"),
+            Some("bcdefghijklmnop"),
+            None,
+            Some("Z"),
+            Some("not stored but long"),
+        ]));
+        let mut found = vec![];
         let mut test_map = TestMap::new();
+        test_map
+            .map
+            .find(&probe, |p| found.push(p.map(|p| p.index)));
+        assert_eq!(found, vec![None; 5]);
+        assert!(test_map.map.is_empty());
+
         test_map.insert(&input);
         test_map.insert(&input); // put it in twice
+        found.clear();
+        test_map
+            .map
+            .find(&probe, |p| found.push(p.map(|p| p.index)));
+        assert_eq!(found, vec![Some(0), Some(1), Some(4), None, None]);
+        assert_eq!(test_map.map.len(), input.len());
         let expected_output: ArrayRef = Arc::new(StringArray::from(input));
         assert_eq!(&test_map.into_array(), &expected_output);
     }
