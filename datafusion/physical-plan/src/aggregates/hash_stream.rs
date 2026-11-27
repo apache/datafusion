@@ -141,7 +141,6 @@ pub(crate) struct PartialHashAggregateStream {
     /// Execution metrics shared with the aggregate plan node.
     baseline_metrics: BaselineMetrics,
 
-    /// Tracks partial aggregation row reduction, matching `GroupedHashAggregateStream`.
     reduction_factor: metrics::RatioMetrics,
 
     /// Number of times accumulated states were emitted due to memory pressure.
@@ -773,11 +772,8 @@ impl FinalHashAggregateStream {
 
         timer.done();
 
-        // Forwards output from the fully ordered stream that consumes the merged
-        // spill runs.
-        //
-        // Not wrapping in a timer and not record output batches since this is now `merge_stream` responsibility
-        // we just pass through
+        // The clustered final stream records elapsed time and output batches
+        // while consuming the merged spill runs, so forwarding does not record them.
         while let Some(batch) = output_stream.next().await.transpose()? {
             emitter.emit(batch).await;
         }
@@ -876,7 +872,7 @@ mod tests {
     use super::*;
     use crate::aggregates::GroupClusteringMode;
     use crate::aggregates::clustered_test_util::collect_under_limit;
-    use crate::aggregates::{AggregateMode, PhysicalGroupBy, StreamType};
+    use crate::aggregates::{AggregateMode, PhysicalGroupBy};
     use crate::common::collect;
     use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
@@ -901,19 +897,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_partial_hash_stream_double_emission_race_condition_bug() -> Result<()> {
-        // Fix for https://github.com/apache/datafusion/issues/18701
-        // This test specifically proves that we have fixed double emission race condition
-        // where emit_early_if_necessary() and switch_to_skip_aggregation()
-        // both emit in the same loop iteration, causing data loss
+        // Switching to skip aggregation must emit each accumulated group once,
+        // even when its hash table exceeds the memory limit.
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("group_col", DataType::Int32, false),
             Field::new("value_col", DataType::Int64, false),
         ]));
 
-        // Create data that will trigger BOTH conditions in the same iteration:
-        // 1. More groups than batch_size (triggers early emission when memory pressure hits)
-        // 2. High cardinality ratio (triggers skip aggregation)
+        // This high-cardinality batch exceeds the probe thresholds and the memory
+        // allowance, and has more groups than one output batch.
         let batch_size = 1024; // We'll set this in session config
         let num_groups = batch_size + 100; // Slightly more than batch_size (1124 groups)
 
@@ -937,11 +930,7 @@ mod tests {
 
         let mut task_ctx = TaskContext::default().with_runtime(runtime);
 
-        // Configure to trigger BOTH conditions:
-        // 1. Low probe threshold (triggers skip probe after few rows)
-        // 2. Low ratio threshold (triggers skip aggregation immediately)
-        // 3. Set batch_size to 1024 so our 1124 groups will trigger early emission
-        // This creates the race condition where both emit paths are triggered
+        // Decide to skip on this batch before attempting an early emit.
         let mut session_config = task_ctx.session_config().clone();
         session_config = session_config.set(
             "datafusion.execution.batch_size",
@@ -1193,7 +1182,7 @@ mod tests {
     }
 
     /// Under a memory limit that forces early emits before the probe threshold,
-    /// both partial streams must skip unique keys but keep aggregating keys
+    /// partial aggregation must skip unique keys but keep aggregating keys
     /// that the table still reduces.
     #[tokio::test]
     async fn test_partial_aggregation_skip_probe_after_early_emits() -> Result<()> {
@@ -1234,66 +1223,52 @@ mod tests {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            for enable_migration_aggregate in [true, false] {
-                let session_config = SessionConfig::new()
-                    .with_batch_size(batch_rows)
-                    .set_usize(
-                        "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-                        probe_batches * batch_rows,
-                    )
-                    .set_bool(
-                        "datafusion.execution.enable_migration_aggregate",
-                        enable_migration_aggregate,
-                    );
-                let runtime = RuntimeEnvBuilder::default()
-                    .with_memory_limit(64 * 1024, 1.0)
-                    .build_arc()?;
-                let task_ctx = Arc::new(
-                    TaskContext::default()
-                        .with_runtime(runtime)
-                        .with_session_config(session_config),
+            let session_config =
+                SessionConfig::new().with_batch_size(batch_rows).set_usize(
+                    "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                    probe_batches * batch_rows,
                 );
-                let input = TestMemoryExec::try_new_exec(
-                    std::slice::from_ref(&batches),
-                    Arc::clone(&schema),
-                    None,
-                )?;
-                let aggregate_exec = AggregateExec::try_new(
-                    AggregateMode::Partial,
-                    group_by.clone(),
-                    aggr_expr.clone(),
-                    vec![None],
-                    input,
-                    Arc::clone(&schema),
-                )?;
+            let runtime = RuntimeEnvBuilder::default()
+                .with_memory_limit(64 * 1024, 1.0)
+                .build_arc()?;
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_runtime(runtime)
+                    .with_session_config(session_config),
+            );
+            let input = TestMemoryExec::try_new_exec(
+                std::slice::from_ref(&batches),
+                Arc::clone(&schema),
+                None,
+            )?;
+            let aggregate_exec = AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by.clone(),
+                aggr_expr.clone(),
+                vec![None],
+                input,
+                Arc::clone(&schema),
+            )?;
 
-                let stream = aggregate_exec.execute_typed(0, &task_ctx)?;
-                assert_eq!(
-                    matches!(stream, StreamType::GroupedHash(_)),
-                    !enable_migration_aggregate
-                );
-                let output = collect(stream.into()).await?;
-                // Every input row is counted once, whether skipped or aggregated.
-                let counted: i64 = output
-                    .iter()
-                    .filter_map(|b| {
-                        arrow::compute::sum(b.column(1).as_primitive::<Int64Type>())
-                    })
-                    .sum();
-                assert_eq!(counted, (num_batches * batch_rows) as i64);
+            let stream = aggregate_exec.execute_typed(0, &task_ctx)?;
+            let output = collect(stream.into()).await?;
+            // Every input row is counted once, whether skipped or aggregated.
+            let counted: i64 = output
+                .iter()
+                .filter_map(|b| {
+                    arrow::compute::sum(b.column(1).as_primitive::<Int64Type>())
+                })
+                .sum();
+            assert_eq!(counted, (num_batches * batch_rows) as i64);
 
-                let metrics = aggregate_exec.metrics().unwrap();
-                let metric = |name| metrics.sum_by_name(name).map_or(0, |m| m.as_usize());
-                // Only the new stream reports early emits.
-                if enable_migration_aggregate {
-                    assert!(metric("early_emit_count") > 0, "expected early emits");
-                }
-                assert_eq!(
-                    metric("skipped_aggregation_rows"),
-                    expected_skipped,
-                    "key_repeats={key_repeats} enable_migration_aggregate={enable_migration_aggregate}"
-                );
-            }
+            let metrics = aggregate_exec.metrics().unwrap();
+            let metric = |name| metrics.sum_by_name(name).map_or(0, |m| m.as_usize());
+            assert!(metric("early_emit_count") > 0, "expected early emits");
+            assert_eq!(
+                metric("skipped_aggregation_rows"),
+                expected_skipped,
+                "key_repeats={key_repeats}"
+            );
         }
         Ok(())
     }
