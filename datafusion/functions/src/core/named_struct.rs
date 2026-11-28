@@ -115,19 +115,14 @@ impl ScalarUDFImpl for NamedStructFunc {
                 )
             )
             .collect::<Result<Vec<_>>>()?;
-        let types = args
-            .arg_fields
-            .iter()
-            .skip(1)
-            .step_by(2)
-            .map(|f| f.data_type())
-            .collect::<Vec<_>>();
-
+        let value_fields = args.arg_fields.iter().skip(1).step_by(2);
         let return_fields = names
             .into_iter()
-            .zip(types)
-            .map(|(name, data_type)| Ok(Field::new(name, data_type.to_owned(), true)))
-            .collect::<Result<Vec<Field>>>()?;
+            .zip(value_fields)
+            .map(|(name, field)| {
+                field.as_ref().clone().with_name(name).with_nullable(true)
+            })
+            .collect::<Vec<_>>();
 
         // The constructed struct row is never NULL: `invoke_with_args` builds
         // the `StructArray` without a null buffer, so the output field is

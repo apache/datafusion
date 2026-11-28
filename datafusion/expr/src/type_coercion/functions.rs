@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::binary::binary_numeric_coercion;
+use super::binary::{binary_numeric_coercion, same_storage_type};
 use crate::{
     AggregateUDF, HigherOrderTypeSignature, HigherOrderUDF, ScalarUDF, Signature,
     TypeSignature, ValueOrLambda, WindowUDF,
@@ -12,6 +12,7 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::internal_datafusion_err;
 use datafusion_common::types::LogicalType;
 use datafusion_common::utils::{
@@ -135,9 +136,20 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
         .iter()
         .zip(updated_types)
         .map(|(current_field, new_type)| {
-            current_field.as_ref().clone().with_data_type(new_type)
+            if current_field.data_type() == &new_type {
+                return Arc::clone(current_field);
+            }
+            let storage_changed =
+                !same_storage_type(current_field.data_type(), &new_type);
+            // An implicit storage conversion has the metadata semantics of a
+            // type-only cast, including when a literal is materialized early.
+            let mut field = current_field.as_ref().clone().with_data_type(new_type);
+            if storage_changed {
+                field.metadata_mut().remove(EXTENSION_TYPE_NAME_KEY);
+                field.metadata_mut().remove(EXTENSION_TYPE_METADATA_KEY);
+            }
+            Arc::new(field)
         })
-        .map(Arc::new)
         .collect())
 }
 
@@ -1543,6 +1555,102 @@ mod tests {
         fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
             unimplemented!()
         }
+    }
+
+    #[test]
+    fn test_coerced_argument_metadata() -> Result<()> {
+        let metadata = arrow::datatypes::Metadata::from([
+            ("ARROW:extension:name".to_string(), "example.id".to_string()),
+            ("ARROW:extension:metadata".to_string(), "{}".to_string()),
+            ("origin".to_string(), "input".to_string()),
+        ]);
+        let fields = vec![
+            Arc::new(
+                Field::new("a", DataType::Int32, false).with_metadata(metadata.clone()),
+            ),
+            Arc::new(
+                Field::new("b", DataType::Int32, true).with_metadata(metadata.clone()),
+            ),
+        ];
+        let signature = Signature::exact(
+            vec![DataType::Int64, DataType::Int32],
+            Volatility::Immutable,
+        );
+        let coerced = fields_with_udf(&fields, &MockUdf(signature))?;
+        assert_eq!(
+            coerced[0].as_ref(),
+            &Field::new("a", DataType::Int64, false).with_metadata(
+                arrow::datatypes::Metadata::from([(
+                    "origin".to_string(),
+                    "input".to_string(),
+                )]),
+            ),
+        );
+        assert_eq!(coerced[1], fields[1]);
+
+        struct TargetUdf {
+            signature: Signature,
+            target: DataType,
+        }
+        impl UDFCoercionExt for TargetUdf {
+            fn name(&self) -> &str {
+                "target_udf"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+                Ok(vec![self.target.clone()])
+            }
+        }
+
+        let ordinary = arrow::datatypes::Metadata::from([(
+            "origin".to_string(),
+            "input".to_string(),
+        )]);
+        let source_struct = DataType::Struct(
+            vec![Field::new("v", DataType::Int32, false).with_metadata(
+                arrow::datatypes::Metadata::from([("a".to_string(), "1".to_string())]),
+            )]
+            .into(),
+        );
+        let source_field = Arc::new(
+            Field::new("s", source_struct, false).with_metadata(metadata.clone()),
+        );
+
+        let metadata_only_target = DataType::Struct(
+            vec![Field::new("v", DataType::Int32, false).with_metadata(
+                arrow::datatypes::Metadata::from([
+                    ("a".to_string(), "1".to_string()),
+                    ("b".to_string(), "1".to_string()),
+                ]),
+            )]
+            .into(),
+        );
+        let renamed_target =
+            DataType::Struct(vec![Field::new("other", DataType::Int32, false)].into());
+        let widened_nullable_target =
+            DataType::Struct(vec![Field::new("v", DataType::Int32, true)].into());
+        let promoted_child_target =
+            DataType::Struct(vec![Field::new("v", DataType::Int64, false)].into());
+
+        for (target, expected_metadata) in [
+            (metadata_only_target, metadata),
+            (renamed_target, ordinary.clone()),
+            (widened_nullable_target, ordinary.clone()),
+            (promoted_child_target, ordinary),
+        ] {
+            let udf = TargetUdf {
+                signature: Signature::user_defined(Volatility::Immutable),
+                target: target.clone(),
+            };
+            let coerced = fields_with_udf(std::slice::from_ref(&source_field), &udf)?;
+            assert_eq!(
+                coerced[0].as_ref(),
+                &Field::new("s", target, false).with_metadata(expected_metadata),
+            );
+        }
+        Ok(())
     }
 
     #[test]

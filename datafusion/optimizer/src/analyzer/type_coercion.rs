@@ -12,10 +12,11 @@ use std::sync::{Arc, LazyLock};
 use crate::analyzer::AnalyzerRule;
 use crate::utils::{NamePreserver, merge_into_schema};
 
-use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::metadata::merge_metadata_for_union;
+use datafusion_common::metadata::{FieldMetadata, merge_metadata_for_union};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -1442,12 +1443,12 @@ fn coerce_arguments_for_signature<F: UDFCoercionExt>(
     schema: &DFSchema,
     func: &F,
 ) -> Result<Vec<Expr>> {
-    let coerced_types = coerced_argument_types(&expressions, schema, func)?;
+    let coerced_fields = coerced_argument_fields(&expressions, schema, func)?;
 
     expressions
         .into_iter()
-        .zip(coerced_types)
-        .map(|(expr, data_type)| expr.cast_to(&data_type, schema))
+        .zip(coerced_fields)
+        .map(|(expr, field)| expr.cast_to(field.data_type(), schema))
         .collect()
 }
 
@@ -1460,60 +1461,79 @@ fn coerce_scalar_function_arguments_for_signature<F: UDFCoercionExt>(
     schema: &DFSchema,
     func: &F,
 ) -> Result<Vec<Expr>> {
-    let coerced_types = coerced_argument_types(&expressions, schema, func)?;
+    let coerced_fields = coerced_argument_fields(&expressions, schema, func)?;
 
     expressions
         .into_iter()
-        .zip(coerced_types)
-        .map(|(expr, data_type)| {
-            coerce_scalar_function_argument(expr, &data_type, schema)
-        })
+        .zip(coerced_fields)
+        .map(|(expr, field)| coerce_scalar_function_argument(expr, &field, schema))
         .collect()
 }
 
-fn coerced_argument_types<F: UDFCoercionExt>(
+fn coerced_argument_fields<F: UDFCoercionExt>(
     expressions: &[Expr],
     schema: &DFSchema,
     func: &F,
-) -> Result<Vec<DataType>> {
+) -> Result<Vec<FieldRef>> {
     let current_fields = expressions
         .iter()
         .map(|e| e.to_field(schema).map(|(_, f)| f))
         .collect::<Result<Vec<_>>>()?;
 
-    fields_with_udf(&current_fields, func).map(|fields| {
-        fields
-            .into_iter()
-            .map(|field| field.data_type().clone())
-            .collect()
-    })
+    fields_with_udf(&current_fields, func)
 }
 
 fn coerce_scalar_function_argument(
     expr: Expr,
-    data_type: &DataType,
+    target_field: &FieldRef,
     schema: &DFSchema,
 ) -> Result<Expr> {
+    let data_type = target_field.data_type();
     if matches!(&expr, Expr::Cast(_) | Expr::TryCast(_))
         && expr.get_type(schema)? == *data_type
     {
         return Ok(expr);
     }
 
-    let Expr::Literal(value, metadata) = expr else {
-        return expr.cast_to(data_type, schema);
+    let expr = match expr {
+        Expr::Literal(value, metadata) => {
+            if value.data_type() != *data_type
+                && let Ok(value) = value.cast_to(data_type)
+            {
+                let metadata =
+                    metadata.map(|_| FieldMetadata::new_from_field(target_field));
+                return Ok(Expr::Literal(value, metadata));
+            }
+            // A failed value cast remains an expression cast so execution produces the
+            // same error as before. Since it is no longer a literal at the coerced type,
+            // it is reported as `None` in `ReturnFieldArgs::scalar_arguments`.
+            Expr::Literal(value, metadata).cast_to(data_type, schema)?
+        }
+        expr => expr.cast_to(data_type, schema)?,
     };
 
-    if value.data_type() != *data_type
-        && let Ok(value) = value.cast_to(data_type)
-    {
-        return Ok(Expr::Literal(value, metadata));
+    let has_extension = target_field
+        .metadata()
+        .contains_key(EXTENSION_TYPE_NAME_KEY)
+        || target_field
+            .metadata()
+            .contains_key(EXTENSION_TYPE_METADATA_KEY);
+    if !has_extension {
+        return Ok(expr);
     }
 
-    // A failed value cast remains an expression cast so execution produces the
-    // same error as before. Since it is no longer a literal at the coerced type,
-    // it is reported as `None` in `ReturnFieldArgs::scalar_arguments`.
-    Expr::Literal(value, metadata).cast_to(data_type, schema)
+    Ok(match expr {
+        Expr::Cast(cast) => {
+            Expr::Cast(Cast::new_from_field(cast.expr, Arc::clone(target_field)))
+        }
+        expr if expr.to_field(schema)?.1.metadata() != target_field.metadata() => {
+            Expr::Cast(Cast::new_from_field(
+                Box::new(expr),
+                Arc::clone(target_field),
+            ))
+        }
+        expr => expr,
+    })
 }
 
 fn coerce_case_expression(
@@ -1810,7 +1830,7 @@ mod test {
     use std::sync::Arc;
 
     use arrow::datatypes::DataType::Utf8;
-    use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Metadata, Schema, SchemaBuilder, TimeUnit};
     use insta::assert_snapshot;
 
     use crate::analyzer::type_coercion::{
@@ -1819,6 +1839,7 @@ mod test {
     use crate::analyzer::{Analyzer, AnalyzerRule};
     use crate::assert_analyzed_plan_with_config_eq_snapshot;
     use datafusion_common::config::ConfigOptions;
+    use datafusion_common::metadata::FieldMetadata;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{
         DFSchema, DFSchemaRef, Result, ScalarValue, Spans, TableReference,
@@ -3702,5 +3723,118 @@ mod test {
           EmptyRelation: rows=0
         "#,
         )
+    }
+
+    #[test]
+    fn literal_coercion_preserves_metadata_presence() -> Result<()> {
+        use arrow::array::{Int32Array, Int64Array, StructArray};
+
+        struct TargetUdf {
+            signature: Signature,
+            target: DataType,
+        }
+        impl super::UDFCoercionExt for TargetUdf {
+            fn name(&self) -> &str {
+                "target_udf"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+                Ok(vec![self.target.clone()])
+            }
+        }
+
+        let extension = Metadata::new()
+            .with("ARROW:extension:name", "example.id")
+            .with("ARROW:extension:metadata", "{}");
+        let int64_udf = TargetUdf {
+            signature: Signature::exact(vec![DataType::Int64], Volatility::Immutable),
+            target: DataType::Int64,
+        };
+        for (metadata, expected) in [
+            (None, None),
+            (
+                Some(FieldMetadata::new_empty()),
+                Some(FieldMetadata::new_empty()),
+            ),
+            (
+                Some(FieldMetadata::from(extension.clone())),
+                Some(FieldMetadata::new_empty()),
+            ),
+            (
+                Some(FieldMetadata::from(extension.clone().with("origin", "lit"))),
+                Some(FieldMetadata::from(Metadata::new().with("origin", "lit"))),
+            ),
+        ] {
+            let mut coerced = super::coerce_scalar_function_arguments_for_signature(
+                vec![Expr::Literal(ScalarValue::Int32(Some(1)), metadata)],
+                &DFSchema::empty(),
+                &int64_udf,
+            )?;
+            assert_eq!(
+                coerced.pop().unwrap(),
+                Expr::Literal(ScalarValue::Int64(Some(1)), expected),
+            );
+        }
+
+        let ext_and_ordinary = FieldMetadata::from(extension.with("origin", "lit"));
+        let source_struct = ScalarValue::Struct(Arc::new(StructArray::new(
+            vec![
+                Field::new("v", DataType::Int32, true)
+                    .with_metadata(Metadata::new().with("a", "1")),
+            ]
+            .into(),
+            vec![Arc::new(Int32Array::from(vec![Some(7)]))],
+            None,
+        )));
+        let reconciled_field = Field::new("v", DataType::Int32, true)
+            .with_metadata(Metadata::new().with("a", "1").with("b", "1"));
+        let expected_reconciled = ScalarValue::Struct(Arc::new(StructArray::new(
+            vec![reconciled_field.clone()].into(),
+            vec![Arc::new(Int32Array::from(vec![Some(7)]))],
+            None,
+        )));
+        let reconciled_udf = TargetUdf {
+            signature: Signature::user_defined(Volatility::Immutable),
+            target: DataType::Struct(vec![reconciled_field].into()),
+        };
+        let mut coerced = super::coerce_scalar_function_arguments_for_signature(
+            vec![Expr::Literal(
+                source_struct.clone(),
+                Some(ext_and_ordinary.clone()),
+            )],
+            &DFSchema::empty(),
+            &reconciled_udf,
+        )?;
+        assert_eq!(
+            coerced.pop().unwrap(),
+            Expr::Literal(expected_reconciled, Some(ext_and_ordinary.clone())),
+        );
+
+        let promoted_field = Field::new("v", DataType::Int64, true)
+            .with_metadata(Metadata::new().with("a", "1"));
+        let expected_promoted = ScalarValue::Struct(Arc::new(StructArray::new(
+            vec![promoted_field.clone()].into(),
+            vec![Arc::new(Int64Array::from(vec![Some(7)]))],
+            None,
+        )));
+        let promoted_udf = TargetUdf {
+            signature: Signature::user_defined(Volatility::Immutable),
+            target: DataType::Struct(vec![promoted_field].into()),
+        };
+        let mut coerced = super::coerce_scalar_function_arguments_for_signature(
+            vec![Expr::Literal(source_struct, Some(ext_and_ordinary))],
+            &DFSchema::empty(),
+            &promoted_udf,
+        )?;
+        assert_eq!(
+            coerced.pop().unwrap(),
+            Expr::Literal(
+                expected_promoted,
+                Some(FieldMetadata::from(Metadata::new().with("origin", "lit"))),
+            ),
+        );
+        Ok(())
     }
 }

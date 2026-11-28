@@ -2462,6 +2462,7 @@ name = "datafusion-optimizer"
 version = "57.0.0-dev"
 dependencies = [
  "arrow",
+ "arrow-schema",
  "async-trait",
  "chrono",
  "criterion",
