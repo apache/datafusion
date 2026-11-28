@@ -898,8 +898,13 @@ impl HashJoinStream {
                 self.join_type,
             )?)?;
             timer.done();
-            self.output_buffer.push_batch(result)?;
-            self.state = HashJoinStreamState::FetchProbeBatch;
+            self.state = match self.output_buffer.push_batch(result)? {
+                PushBatchStatus::LimitReached => {
+                    self.output_buffer.finish()?;
+                    HashJoinStreamState::Completed
+                }
+                PushBatchStatus::Continue => HashJoinStreamState::FetchProbeBatch,
+            };
 
             return Ok(StatefulStreamResult::Continue);
         }
