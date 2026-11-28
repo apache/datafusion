@@ -1,0 +1,27 @@
+name Q11
+group grouped_count_distinct
+
+load sql_benchmarks/grouped_count_distinct/init/load.sql
+
+assert I
+WITH actual AS (
+  SELECT many_g AS g, count(DISTINCT x % 2) AS n
+  FROM grouped_distinct GROUP BY many_g
+), expected AS (
+  SELECT g, count(x) AS n
+  FROM (SELECT DISTINCT many_g AS g, x % 2 AS x FROM grouped_distinct)
+  GROUP BY g
+)
+SELECT NOT EXISTS (SELECT * FROM actual EXCEPT SELECT * FROM expected)
+   AND NOT EXISTS (SELECT * FROM expected EXCEPT SELECT * FROM actual);
+----
+true
+
+expect_plan AggregateExec
+
+run
+-- Int64, 1M groups, at most two distinct values per group at 4M rows.
+SELECT many_g, count(DISTINCT x % 2)
+FROM grouped_distinct GROUP BY many_g;
+
+cleanup sql_benchmarks/grouped_count_distinct/init/cleanup.sql

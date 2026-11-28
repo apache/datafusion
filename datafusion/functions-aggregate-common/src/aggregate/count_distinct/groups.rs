@@ -19,10 +19,16 @@ use std::sync::Arc;
 
 use crate::aggregate::groups_accumulator::accumulate::accumulate;
 
+// Limit inline checks when the average number of additional distinct values grows.
+const INLINE_AVERAGE_DISTINCT_LIMIT: usize = 8;
+
 pub struct PrimitiveDistinctCountGroupsAccumulator<T: ArrowPrimitiveType>
 where
     T::Native: Eq + Hash,
 {
+    // While present, this buffer keeps each group's first non-null value out of
+    // `seen`. None means all values have been promoted into the hash set.
+    first_values: Option<Vec<T::Native>>,
     seen: HashSet<(usize, T::Native), RandomState>,
     counts: Vec<i64>,
 }
@@ -33,8 +39,44 @@ where
 {
     pub fn new() -> Self {
         Self {
+            first_values: Some(Vec::new()),
             seen: HashSet::default(),
             counts: Vec::new(),
+        }
+    }
+
+    fn insert_inline(
+        first_value: &mut T::Native,
+        count: &mut i64,
+        seen: &mut HashSet<(usize, T::Native), RandomState>,
+        group_idx: usize,
+        value: T::Native,
+    ) {
+        if *count == 0 {
+            *first_value = value;
+            *count = 1;
+        } else if *first_value != value && seen.insert((group_idx, value)) {
+            *count += 1;
+        }
+    }
+
+    fn promote_inline_values(&mut self) {
+        if self.seen.len()
+            > self
+                .counts
+                .len()
+                .saturating_mul(INLINE_AVERAGE_DISTINCT_LIMIT)
+            && let Some(first_values) = self.first_values.take()
+        {
+            // Pay for moving the first values once, then use the hash-only loop
+            // for subsequent batches with large distinct sets.
+            for (group_idx, (value, count)) in
+                first_values.into_iter().zip(&self.counts).enumerate()
+            {
+                if *count > 0 {
+                    self.seen.insert((group_idx, value));
+                }
+            }
         }
     }
 }
@@ -63,16 +105,33 @@ where
         debug_assert_eq!(values.len(), 1);
         self.counts.resize(total_num_groups, 0);
         let arr = values[0].as_primitive::<T>();
-        accumulate(group_indices, arr, opt_filter, |group_idx, value| {
-            if self.seen.insert((group_idx, value)) {
-                self.counts[group_idx] += 1;
-            }
-        });
+        if let Some(first_values) = &mut self.first_values {
+            first_values.resize(total_num_groups, T::Native::default());
+            accumulate(group_indices, arr, opt_filter, |group_idx, value| {
+                Self::insert_inline(
+                    &mut first_values[group_idx],
+                    &mut self.counts[group_idx],
+                    &mut self.seen,
+                    group_idx,
+                    value,
+                );
+            });
+            self.promote_inline_values();
+        } else {
+            accumulate(group_indices, arr, opt_filter, |group_idx, value| {
+                if self.seen.insert((group_idx, value)) {
+                    self.counts[group_idx] += 1;
+                }
+            });
+        }
         Ok(())
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> datafusion_common::Result<ArrayRef> {
         let counts = emit_to.take_needed(&mut self.counts);
+        if let Some(first_values) = &mut self.first_values {
+            let _ = emit_to.take_needed(first_values);
+        }
 
         match emit_to {
             EmitTo::All => {
@@ -80,6 +139,7 @@ where
                 // capacity, and the aggregate streams rely on it dropping after
                 // emitting everything.
                 self.seen = HashSet::default();
+                self.first_values = Some(Vec::new());
             }
             EmitTo::First(n) => {
                 let mut remaining = HashSet::default();
@@ -121,13 +181,29 @@ where
         let mut offsets = Vec::with_capacity(num_emitted + 1);
         offsets.push(0i32);
         let mut total = 0i32;
+        let mut seen_emitted = 0;
         for &c in &self.counts[..num_emitted] {
             total += c as i32;
             offsets.push(total);
+            seen_emitted += if self.first_values.is_some() {
+                (c as usize).saturating_sub(1)
+            } else {
+                c as usize
+            };
         }
 
         let mut all_values = vec![T::Native::default(); total as usize];
         let mut cursors: Vec<i32> = offsets[..num_emitted].to_vec();
+        if let Some(first_values) = &mut self.first_values {
+            let first_values = emit_to.take_needed(first_values);
+            for (group_idx, value) in first_values.into_iter().enumerate() {
+                if self.counts[group_idx] > 0 {
+                    let pos = cursors[group_idx] as usize;
+                    all_values[pos] = value;
+                    cursors[group_idx] += 1;
+                }
+            }
+        }
 
         if matches!(emit_to, EmitTo::All) {
             for (group_idx, value) in self.seen.drain() {
@@ -138,9 +214,10 @@ where
             // Release the capacity, see `evaluate`.
             self.seen = HashSet::default();
             self.counts = Vec::new();
+            self.first_values = Some(Vec::new());
         } else {
             let mut remaining = HashSet::with_capacity_and_hasher(
-                self.seen.len().saturating_sub(total as usize),
+                self.seen.len().saturating_sub(seen_emitted),
                 RandomState::default(),
             );
             for (group_idx, value) in self.seen.drain() {
@@ -178,6 +255,9 @@ where
     ) -> datafusion_common::Result<()> {
         debug_assert_eq!(values.len(), 1);
         self.counts.resize(total_num_groups, 0);
+        if let Some(first_values) = &mut self.first_values {
+            first_values.resize(total_num_groups, T::Native::default());
+        }
         let list_array = values[0].as_list::<i32>();
         let inner = list_array.values().as_primitive::<T>();
         let inner_values = inner.values();
@@ -186,13 +266,26 @@ where
         for (row_idx, &group_idx) in group_indices.iter().enumerate() {
             let start = offsets[row_idx] as usize;
             let end = offsets[row_idx + 1] as usize;
-            for &value in &inner_values[start..end] {
-                if self.seen.insert((group_idx, value)) {
-                    self.counts[group_idx] += 1;
+            if let Some(first_values) = &mut self.first_values {
+                for &value in &inner_values[start..end] {
+                    Self::insert_inline(
+                        &mut first_values[group_idx],
+                        &mut self.counts[group_idx],
+                        &mut self.seen,
+                        group_idx,
+                        value,
+                    );
+                }
+            } else {
+                for &value in &inner_values[start..end] {
+                    if self.seen.insert((group_idx, value)) {
+                        self.counts[group_idx] += 1;
+                    }
                 }
             }
         }
 
+        self.promote_inline_values();
         Ok(())
     }
 
@@ -222,6 +315,10 @@ where
     }
     fn size(&self) -> usize {
         size_of::<Self>()
+            + self
+                .first_values
+                .as_ref()
+                .map_or(0, |values| values.capacity() * size_of::<T::Native>())
             + self.seen.capacity() * (size_of::<(usize, T::Native)>() + size_of::<u64>())
             + self.counts.capacity() * size_of::<i64>()
     }
@@ -229,10 +326,184 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::mem::size_of_val;
+
     use super::*;
     use arrow::array::Int32Array;
     use arrow::datatypes::Int32Type;
     use datafusion_common::Result;
+
+    #[test]
+    fn promoted_values_survive_partial_emission_and_merge() -> Result<()> {
+        let mut accumulator = PrimitiveDistinctCountGroupsAccumulator::<Int32Type>::new();
+        let values = Arc::new(Int32Array::from_iter(
+            (0..128).map(Some).chain([Some(7), None]),
+        ));
+        let groups = vec![0; 128].into_iter().chain([1, 2]).collect::<Vec<_>>();
+        accumulator.update_batch(&[values], &groups, None, 3)?;
+        assert!(accumulator.first_values.is_none());
+        assert_eq!(
+            accumulator
+                .evaluate_preserving(GroupSelection::all(3))?
+                .as_primitive::<arrow::datatypes::Int64Type>(),
+            &Int64Array::from(vec![128, 1, 0])
+        );
+
+        let states = accumulator.state(EmitTo::First(1))?;
+        let mut merged = PrimitiveDistinctCountGroupsAccumulator::<Int32Type>::new();
+        merged.merge_batch(&states, &[0], 1)?;
+        assert!(merged.first_values.is_none());
+        merged.merge_batch(&states, &[0], 1)?;
+        merged.merge_batch(&states, &[1], 2)?;
+        assert_eq!(
+            merged
+                .evaluate(EmitTo::All)?
+                .as_primitive::<arrow::datatypes::Int64Type>(),
+            &Int64Array::from(vec![128, 128])
+        );
+
+        // The promoted singleton and empty group now have indices 0 and 1.
+        let values = Arc::new(Int32Array::from(vec![Some(7), Some(9), None]));
+        accumulator.update_batch(&[values], &[0, 0, 1], None, 2)?;
+        assert_eq!(
+            accumulator
+                .evaluate(EmitTo::First(1))?
+                .as_primitive::<arrow::datatypes::Int64Type>(),
+            &Int64Array::from(vec![2])
+        );
+        let values = Arc::new(Int32Array::from(vec![7, 7]));
+        accumulator.update_batch(&[values], &[0, 0], None, 1)?;
+        let states = accumulator.state(EmitTo::All)?;
+        assert_eq!(accumulator.size(), size_of_val(&accumulator));
+        merged.merge_batch(&states, &[0], 1)?;
+        assert_eq!(
+            merged
+                .evaluate(EmitTo::All)?
+                .as_primitive::<arrow::datatypes::Int64Type>(),
+            &Int64Array::from(vec![1])
+        );
+
+        let values = Arc::new(Int32Array::from(vec![0, 0]));
+        accumulator.update_batch(&[values], &[0, 0], None, 1)?;
+        assert!(accumulator.first_values.is_some());
+        assert_eq!(
+            accumulator
+                .evaluate(EmitTo::All)?
+                .as_primitive::<arrow::datatypes::Int64Type>(),
+            &Int64Array::from(vec![1])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn partial_evaluation_keeps_first_values_aligned() -> Result<()> {
+        let mut accumulator = PrimitiveDistinctCountGroupsAccumulator::<Int32Type>::new();
+        let values = Arc::new(Int32Array::from(vec![
+            None,
+            Some(0),
+            Some(0),
+            Some(1),
+            Some(7),
+            Some(7),
+            Some(-1),
+            Some(0),
+            Some(2),
+            None,
+        ]));
+        accumulator.update_batch(&[values], &[0, 1, 1, 1, 2, 2, 3, 3, 3, 4], None, 5)?;
+
+        assert_eq!(
+            accumulator
+                .evaluate(EmitTo::First(2))?
+                .as_primitive::<arrow::datatypes::Int64Type>(),
+            &Int64Array::from(vec![0, 2])
+        );
+
+        // The former groups 2, 3 and 4 now have indices 0, 1 and 2.
+        let values = Arc::new(Int32Array::from(vec![7, 8, -1, 5, 0, 9, 9]));
+        accumulator.update_batch(&[values], &[0, 0, 1, 1, 2, 3, 3], None, 4)?;
+        assert_eq!(
+            accumulator
+                .evaluate(EmitTo::All)?
+                .as_primitive::<arrow::datatypes::Int64Type>(),
+            &Int64Array::from(vec![2, 4, 1, 1])
+        );
+        assert_eq!(accumulator.size(), size_of_val(&accumulator));
+
+        let values = Arc::new(Int32Array::from(vec![0, 0]));
+        accumulator.update_batch(&[values], &[0, 0], None, 1)?;
+        assert_eq!(
+            accumulator
+                .evaluate(EmitTo::All)?
+                .as_primitive::<arrow::datatypes::Int64Type>(),
+            &Int64Array::from(vec![1])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn partial_state_roundtrips_with_overlapping_values() -> Result<()> {
+        let mut accumulator = PrimitiveDistinctCountGroupsAccumulator::<Int32Type>::new();
+        let values = Arc::new(Int32Array::from(vec![
+            None,
+            Some(0),
+            Some(1),
+            Some(7),
+            Some(8),
+            None,
+        ]));
+        accumulator.update_batch(&[values], &[0, 1, 1, 2, 2, 3], None, 4)?;
+
+        // Emit both an empty state and a state with inline and hashed values.
+        let states = accumulator.state(EmitTo::First(2))?;
+        let mut merged = PrimitiveDistinctCountGroupsAccumulator::<Int32Type>::new();
+        let values = Arc::new(Int32Array::from(vec![1, 2]));
+        merged.update_batch(&[values], &[1, 1], None, 2)?;
+        merged.merge_batch(&states, &[0, 1], 2)?;
+        merged.merge_batch(&states, &[0, 1], 2)?;
+        assert_eq!(
+            merged
+                .evaluate(EmitTo::All)?
+                .as_primitive::<arrow::datatypes::Int64Type>(),
+            &Int64Array::from(vec![0, 3])
+        );
+
+        // Update the shifted groups, preserving an all-NULL group's empty state.
+        let values = Arc::new(Int32Array::from(vec![Some(7), Some(9), None]));
+        accumulator.update_batch(&[values], &[0, 0, 1], None, 2)?;
+        let states = accumulator.state(EmitTo::All)?;
+        assert_eq!(accumulator.size(), size_of_val(&accumulator));
+        merged.merge_batch(&states, &[0, 1], 2)?;
+        assert_eq!(
+            merged
+                .evaluate(EmitTo::All)?
+                .as_primitive::<arrow::datatypes::Int64Type>(),
+            &Int64Array::from(vec![3, 0])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn singleton_values_are_accounted_for() -> Result<()> {
+        let mut accumulator = PrimitiveDistinctCountGroupsAccumulator::<Int32Type>::new();
+        let values = Arc::new(Int32Array::from(vec![0; 64]));
+        let groups = (0..64).collect::<Vec<_>>();
+        accumulator.update_batch(&[values], &groups, None, 64)?;
+        assert!(
+            accumulator.size()
+                >= size_of_val(&accumulator) + 64 * (size_of::<i32>() + size_of::<i64>())
+        );
+        let states = accumulator.state(EmitTo::All)?;
+        assert_eq!(accumulator.size(), size_of_val(&accumulator));
+        accumulator.merge_batch(&states, &groups, 64)?;
+        assert_eq!(
+            accumulator
+                .evaluate(EmitTo::All)?
+                .as_primitive::<arrow::datatypes::Int64Type>(),
+            &Int64Array::from(vec![1; 64])
+        );
+        Ok(())
+    }
 
     #[test]
     fn preserving_reads_keep_distinct_state() -> Result<()> {
