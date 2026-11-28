@@ -262,6 +262,7 @@ impl Unparser<'_> {
                             partition_by,
                             order_by,
                             window_frame,
+                            window_frame_explicit,
                             filter,
                             distinct,
                             null_treatment,
@@ -291,11 +292,12 @@ impl Unparser<'_> {
                 let start_bound = self.convert_bound(&window_frame.start_bound)?;
                 let end_bound = self.convert_bound(&window_frame.end_bound)?;
 
-                let window_frame = if self.dialect.window_func_support_window_frame(
-                    func_name,
-                    &start_bound,
-                    &end_bound,
-                ) {
+                let window_frame = if *window_frame_explicit
+                    && self.dialect.window_func_support_window_frame(
+                        func_name,
+                        &start_bound,
+                        &end_bound,
+                    ) {
                     Some(ast::WindowFrame {
                         units,
                         start_bound,
@@ -2326,12 +2328,13 @@ mod tests {
                         partition_by: vec![],
                         order_by: vec![],
                         window_frame: WindowFrame::new(None),
+                        window_frame_explicit: false,
                         null_treatment: None,
                         distinct: false,
                         filter: None,
                     },
                 }),
-                r#"row_number(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
+                r#"row_number(col) OVER ()"#,
             ),
             (
                 Expr::from(WindowFunction {
@@ -2349,6 +2352,7 @@ mod tests {
                                 ScalarValue::UInt32(Some(2)),
                             ),
                         ),
+                        window_frame_explicit: true,
                         null_treatment: None,
                         distinct: false,
                         filter: Some(Box::new(col("a").gt(lit(100)))),
@@ -3749,6 +3753,7 @@ mod tests {
             let func = WindowFunctionDefinition::WindowUDF(rank_udwf());
             let mut window_func = WindowFunction::new(func, vec![]);
             window_func.params.order_by = vec![Sort::new(col("a"), true, true)];
+            window_func.params.window_frame_explicit = true;
             let expr = Expr::from(window_func);
             let ast = unparser.expr_to_sql(&expr)?;
 
@@ -4414,6 +4419,7 @@ mod tests {
                 partition_by: vec![],
                 order_by: vec![Sort::new(col("b"), true, true)],
                 window_frame: WindowFrame::new(None),
+                window_frame_explicit: true,
                 null_treatment: Some(NullTreatment::IgnoreNulls),
                 distinct: false,
                 filter: None,
@@ -4428,6 +4434,7 @@ mod tests {
                 partition_by: vec![],
                 order_by: vec![Sort::new(col("b"), true, true)],
                 window_frame: WindowFrame::new(None),
+                window_frame_explicit: true,
                 null_treatment: Some(NullTreatment::RespectNulls),
                 distinct: false,
                 filter: None,
@@ -4442,6 +4449,7 @@ mod tests {
                 partition_by: vec![],
                 order_by: vec![Sort::new(col("b"), true, true)],
                 window_frame: WindowFrame::new(None),
+                window_frame_explicit: true,
                 null_treatment: None,
                 distinct: false,
                 filter: None,
