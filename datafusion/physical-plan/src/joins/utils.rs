@@ -443,6 +443,8 @@ pub(crate) fn estimate_join_statistics(
     } else {
         None
     };
+    let empty_output =
+        join_output_is_empty(join_type, &left_stats.num_rows, &right_stats.num_rows);
     let join_stats =
         estimate_join_cardinality(join_type, left_stats, right_stats, on, null_equality);
     let (num_rows, total_byte_size, column_statistics) = match join_stats {
@@ -459,11 +461,35 @@ pub(crate) fn estimate_join_statistics(
             Statistics::unknown_column(schema),
         ),
     };
+    let (num_rows, total_byte_size) = if empty_output {
+        (Precision::Exact(0), Precision::Exact(0))
+    } else {
+        (num_rows, total_byte_size)
+    };
     Ok(Statistics {
         num_rows,
         total_byte_size,
         column_statistics,
     })
+}
+
+/// Returns true when the join cannot produce any row because an input that every
+/// output row depends on is known to be empty.
+fn join_output_is_empty(
+    join_type: &JoinType,
+    left_rows: &Precision<usize>,
+    right_rows: &Precision<usize>,
+) -> bool {
+    let left_empty = *left_rows == Precision::Exact(0);
+    let right_empty = *right_rows == Precision::Exact(0);
+    match join_type {
+        JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi => {
+            left_empty || right_empty
+        }
+        JoinType::Left | JoinType::LeftAnti | JoinType::LeftMark => left_empty,
+        JoinType::Right | JoinType::RightAnti | JoinType::RightMark => right_empty,
+        JoinType::Full => left_empty && right_empty,
+    }
 }
 
 fn estimate_join_filter_selectivity(
@@ -3548,6 +3574,67 @@ mod tests {
             Some(&filter),
         )?;
         assert_eq!(with_filter.num_rows, Inexact(49));
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_with_empty_input_is_exactly_empty() -> Result<()> {
+        let (left_stats, right_stats, on, _, _, _) = residual_join_test_inputs();
+        let empty = |stats: &Statistics| Statistics {
+            num_rows: Exact(0),
+            total_byte_size: Exact(0),
+            column_statistics: stats.column_statistics.clone(),
+        };
+        let left_empty = empty(&left_stats);
+        let right_empty = empty(&right_stats);
+        // (join type, empty when left is empty, empty when right is empty)
+        let cases = [
+            (JoinType::Inner, true, true),
+            (JoinType::LeftSemi, true, true),
+            (JoinType::RightSemi, true, true),
+            (JoinType::Left, true, false),
+            (JoinType::LeftAnti, true, false),
+            (JoinType::LeftMark, true, false),
+            (JoinType::Right, false, true),
+            (JoinType::RightAnti, false, true),
+            (JoinType::RightMark, false, true),
+            (JoinType::Full, false, false),
+        ];
+        let left_schema = Schema::new(vec![
+            Field::new("left_key", DataType::Int64, false),
+            Field::new("left_value", DataType::Int64, false),
+        ]);
+        let right_schema = Schema::new(vec![
+            Field::new("right_key", DataType::Int64, false),
+            Field::new("right_value", DataType::Int64, false),
+        ]);
+        for (join_type, empty_if_left, empty_if_right) in cases {
+            let (schema, _) = build_join_schema(&left_schema, &right_schema, &join_type);
+            let estimate = |left: &Statistics, right: &Statistics| {
+                estimate_join_statistics(
+                    left.clone(),
+                    right.clone(),
+                    &on,
+                    NullEquality::NullEqualsNothing,
+                    &join_type,
+                    &schema,
+                    None,
+                )
+            };
+            for (left, right, expect_empty) in [
+                (&left_empty, &right_stats, empty_if_left),
+                (&left_stats, &right_empty, empty_if_right),
+                (&left_empty, &right_empty, true),
+            ] {
+                let stats = estimate(left, right)?;
+                if expect_empty {
+                    assert_eq!(stats.num_rows, Exact(0), "{join_type}");
+                    assert_eq!(stats.total_byte_size, Exact(0), "{join_type}");
+                } else {
+                    assert_ne!(stats.num_rows, Exact(0), "{join_type}");
+                }
+            }
+        }
         Ok(())
     }
 
