@@ -14,6 +14,7 @@ use arrow::array::{
 use arrow::compute::{SortOptions, cast, take_record_batch};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::common::JoinSide;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -41,6 +42,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 use itertools::Itertools;
 use rand::Rng;
+use rand::seq::SliceRandom;
 use rand::{SeedableRng, rngs::StdRng};
 use test_utils::stagger_batch_with_seed;
 
@@ -1779,6 +1781,7 @@ fn pwmj_plan(
     right: Arc<dyn ExecutionPlan>,
     op: Operator,
     join_type: JoinType,
+    projection: Option<Vec<usize>>,
 ) -> Arc<dyn ExecutionPlan> {
     // Matches `PiecewiseMergeJoinExec::required_input_ordering`: descending for `<`/`<=`,
     // ascending for `>`/`>=`, reversing NULL placement too. Right existence joins require no
@@ -1805,7 +1808,10 @@ fn pwmj_plan(
     // `num_partitions` is 1 while the streamed side has up to 3: the final-pass counter must
     // come from the streamed side's partition count, not from this argument.
     Arc::new(
-        PiecewiseMergeJoinExec::try_new(buffered, right, on, op, join_type, 1).unwrap(),
+        PiecewiseMergeJoinExec::try_new(buffered, right, on, op, join_type, 1)
+            .unwrap()
+            .with_projection(projection)
+            .unwrap(),
     )
 }
 
@@ -1814,6 +1820,7 @@ fn pwmj_nlj_oracle_plan<K: PwmjFuzzKey>(
     right: Arc<dyn ExecutionPlan>,
     op: Operator,
     join_type: JoinType,
+    projection: Option<Vec<usize>>,
 ) -> Arc<dyn ExecutionPlan> {
     let intermediate_schema = Schema::new(vec![
         arrow::datatypes::Field::new("k", K::data_type(), true),
@@ -1836,7 +1843,8 @@ fn pwmj_nlj_oracle_plan<K: PwmjFuzzKey>(
     ];
     let filter = JoinFilter::new(expr, column_indices, Arc::new(intermediate_schema));
     Arc::new(
-        NestedLoopJoinExec::try_new(left, right, Some(filter), &join_type, None).unwrap(),
+        NestedLoopJoinExec::try_new(left, right, Some(filter), &join_type, projection)
+            .unwrap(),
     )
 }
 
@@ -2047,6 +2055,12 @@ async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(
         // Staggered streamed batches mix rows that can and cannot match, so the classic joins
         // set some aside before the sort and map the rest back to their rows.
         let stagger_seed = Some(seed);
+        // An embedded projection for the classic joins: any subset of the six join columns
+        // `[l.id, l.k, l.p, r.id, r.k, r.p]`, in any order, possibly empty. Drawn last, so
+        // the inputs above are the ones each seed drew before.
+        let mut projection: Vec<usize> = (0..6).collect();
+        projection.shuffle(&mut rng);
+        projection.truncate(rng.random_range(0..=6));
 
         for op in ops {
             for join_type in join_types {
@@ -2082,6 +2096,7 @@ async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(
                             ),
                             op,
                             join_type,
+                            None,
                         ),
                         Arc::clone(task_ctx),
                         payload,
@@ -2093,6 +2108,7 @@ async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(
                             pwmj_single_exec(&right_ids, &right_keys, payload),
                             op,
                             join_type,
+                            None,
                         ),
                         Arc::clone(task_ctx),
                         payload,
@@ -2122,6 +2138,7 @@ async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(
                         ),
                         op,
                         join_type,
+                        None,
                     ),
                     Arc::clone(task_ctx),
                     payload,
@@ -2133,6 +2150,7 @@ async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(
                         pwmj_single_exec(&right_ids, &right_keys, payload),
                         op,
                         join_type,
+                        None,
                     ),
                     Arc::clone(task_ctx),
                     payload,
@@ -2147,9 +2165,88 @@ async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(
                      left_keys={left_keys:?} right_keys={right_keys:?}",
                     std::any::type_name::<K>(),
                 );
+
+                if !matches!(
+                    join_type,
+                    JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full
+                ) {
+                    continue;
+                }
+                let got = pwmj_plan(
+                    pwmj_single_exec(&left_ids, &left_keys, payload),
+                    pwmj_parts_exec(
+                        &right_ids,
+                        &right_keys,
+                        nparts,
+                        stagger_seed,
+                        payload,
+                    ),
+                    op,
+                    join_type,
+                    Some(projection.clone()),
+                );
+                let want = pwmj_nlj_oracle_plan::<K>(
+                    pwmj_single_exec(&left_ids, &left_keys, payload),
+                    pwmj_single_exec(&right_ids, &right_keys, payload),
+                    op,
+                    join_type,
+                    Some(projection.clone()),
+                );
+                let context = format!(
+                    "key_type={} payload={payload} seed={seed} op={op:?} join_type={join_type:?} \
+                     nparts={nparts} projection={projection:?} \
+                     left_keys={left_keys:?} right_keys={right_keys:?}",
+                    std::any::type_name::<K>(),
+                );
+                assert_eq!(got.schema(), want.schema(), "schema mismatch {context}");
+                assert_eq!(
+                    pwmj_collect_rows(got, Arc::clone(task_ctx)).await,
+                    pwmj_collect_rows(want, Arc::clone(task_ctx)).await,
+                    "projected mismatch {context}"
+                );
             }
         }
     }
+}
+
+/// Executes every output partition concurrently and returns the join's rows formatted as
+/// strings, sorted so partition interleaving does not affect the comparison. Unlike
+/// [`pwmj_collect_id_pairs`] it assumes no column layout, so it compares any projection;
+/// a zero-column output still yields one (empty) string per row, so its row count counts.
+async fn pwmj_collect_rows(
+    plan: Arc<dyn ExecutionPlan>,
+    task_ctx: Arc<TaskContext>,
+) -> Vec<String> {
+    let streams = (0..plan.output_partitioning().partition_count())
+        .map(|partition| plan.execute(partition, Arc::clone(&task_ctx)).unwrap())
+        .collect::<Vec<_>>();
+    let per_partition =
+        futures::future::join_all(streams.into_iter().map(|stream| {
+            SpawnedTask::spawn(async move { common::collect(stream).await })
+        }))
+        .await;
+
+    let options = FormatOptions::default().with_null("NULL");
+    let mut rows = Vec::new();
+    for batches in per_partition {
+        for batch in batches.unwrap().unwrap() {
+            let formatters = batch
+                .columns()
+                .iter()
+                .map(|column| ArrayFormatter::try_new(column.as_ref(), &options).unwrap())
+                .collect::<Vec<_>>();
+            for row in 0..batch.num_rows() {
+                rows.push(
+                    formatters
+                        .iter()
+                        .map(|f| f.value(row).to_string())
+                        .join("|"),
+                );
+            }
+        }
+    }
+    rows.sort_unstable();
+    rows
 }
 
 /// A named, deterministic companion to [`fuzz_pwmj_matches_nested_loop`] for the two join
@@ -2258,6 +2355,7 @@ async fn pwmj_watermark_nulls_duplicates_multi_partition() {
                     ),
                     Operator::Lt,
                     join_type,
+                    None,
                 ),
                 Arc::clone(&task_ctx),
                 &DataType::Utf8View,

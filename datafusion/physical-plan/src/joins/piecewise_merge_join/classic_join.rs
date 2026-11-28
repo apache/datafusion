@@ -30,7 +30,9 @@ use std::task::ready;
 use std::{sync::Arc, task::Poll};
 
 use crate::handle_state;
-use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadyState};
+use crate::joins::piecewise_merge_join::exec::{
+    BufferedSide, BufferedSideReadyState, JoinProjection,
+};
 use crate::joins::piecewise_merge_join::utils::{
     first_match, is_match, matches_on_equal, need_produce_result_in_final, non_null_range,
 };
@@ -95,8 +97,11 @@ pub(super) struct ClassicPWMJStream {
     pub operator: Operator,
     // Streamed batch
     pub streamed: SendableRecordBatchStream,
-    // Streamed schema
+    // Streamed schema, narrowed to the projection's streamed columns when there is one
     streamed_schema: SchemaRef,
+    // The embedded projection; each streamed batch is narrowed to its streamed columns
+    // once its join key has been evaluated
+    projection: Option<Arc<JoinProjection>>,
     // Buffered side data
     buffered_side: BufferedSide,
     // Tracks the state of the `PiecewiseMergeJoin`
@@ -140,24 +145,30 @@ impl ClassicPWMJStream {
         join_type: JoinType,
         operator: Operator,
         streamed: SendableRecordBatchStream,
+        projection: Option<Arc<JoinProjection>>,
         buffered_side: BufferedSide,
         state: PiecewiseMergeJoinStreamState,
         sort_option: SortOptions,
         join_metrics: BuildProbeJoinMetrics,
         batch_size: usize,
     ) -> Self {
+        let streamed_schema = match &projection {
+            Some(projection) => Arc::clone(&projection.streamed_schema),
+            None => streamed.schema(),
+        };
         Self {
             schema: Arc::clone(&schema),
             on_streamed,
             join_type,
             operator,
-            streamed_schema: streamed.schema(),
+            streamed_schema,
+            projection: projection.clone(),
             streamed,
             buffered_side,
             state,
             sort_option,
             join_metrics,
-            batch_process_state: BatchProcessState::new(schema, batch_size),
+            batch_process_state: BatchProcessState::new(schema, projection, batch_size),
             buffered_extreme: None,
         }
     }
@@ -246,6 +257,10 @@ impl ClassicPWMJStream {
                     .on_streamed
                     .evaluate(&batch)?
                     .into_array(batch.num_rows())?;
+                let batch = match &self.projection {
+                    Some(projection) => batch.project(&projection.streamed_columns)?,
+                    None => batch,
+                };
 
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
@@ -424,9 +439,13 @@ struct BatchProcessState {
 }
 
 impl BatchProcessState {
-    pub(crate) fn new(schema: Arc<Schema>, batch_size: usize) -> Self {
+    pub(crate) fn new(
+        schema: Arc<Schema>,
+        projection: Option<Arc<JoinProjection>>,
+        batch_size: usize,
+    ) -> Self {
         Self {
-            output_batches: OutputBuffer::new(schema, batch_size),
+            output_batches: OutputBuffer::new(schema, projection, batch_size),
             start_buffer_idx: 0,
             start_stream_idx: 0,
             continue_process: true,
@@ -447,6 +466,9 @@ impl BatchProcessState {
 /// over all its runs and gathers each streamed column once.
 struct OutputBuffer {
     schema: SchemaRef,
+    // Its `reorder` maps the buffered-then-streamed columns a batch is built from onto
+    // `schema`; with no projection, or no `reorder`, they are already in its order
+    projection: Option<Arc<JoinProjection>>,
     batch_size: usize,
     // The buffered batch's columns, set once the buffered side is ready. Held as
     // `ArrayData` so a flush doesn't convert them again.
@@ -459,9 +481,14 @@ struct OutputBuffer {
 }
 
 impl OutputBuffer {
-    fn new(schema: SchemaRef, batch_size: usize) -> Self {
+    fn new(
+        schema: SchemaRef,
+        projection: Option<Arc<JoinProjection>>,
+        batch_size: usize,
+    ) -> Self {
         Self {
             schema,
+            projection,
             batch_size,
             buffered_columns: vec![],
             buffered_runs: Vec::with_capacity(batch_size),
@@ -596,6 +623,11 @@ impl OutputBuffer {
     }
 
     fn push_columns(&mut self, columns: Vec<ArrayRef>, num_rows: usize) -> Result<()> {
+        let reorder = self.projection.as_ref().and_then(|p| p.reorder.as_ref());
+        let columns = match reorder {
+            Some(reorder) => reorder.iter().map(|&i| Arc::clone(&columns[i])).collect(),
+            None => columns,
+        };
         let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
         self.completed.push_back(RecordBatch::try_new_with_options(
             Arc::clone(&self.schema),
@@ -877,7 +909,8 @@ fn split_off_never_matching(
 mod tests {
     use super::*;
     use crate::{
-        DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, common,
+        ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+        PlanProperties, ReplaceChildrenOptions, common,
         joins::PiecewiseMergeJoinExec,
         metrics::MetricsSet,
         stream::RecordBatchStreamAdapter,
@@ -1025,6 +1058,45 @@ mod tests {
         let batches = common::collect(stream).await?;
         let metrics = join.metrics().expect("metrics should be available");
         Ok((columns, batches, metrics))
+    }
+
+    #[test]
+    fn projection_composes_and_survives_recompute() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![5, 3, 1]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b2", &vec![2, 4, 0]),
+            ("c2", &vec![70, 80, 90]),
+        );
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        );
+        // Two calls compose: `[c2, b1]` of `[a1, b1, c1, a2, b2, c2]` via `[b1, c1, c2]`.
+        let join = join(left, right, on, Operator::Lt, JoinType::Full)?
+            .with_projection(Some(vec![1, 2, 5]))?
+            .with_projection(Some(vec![2, 0]))?;
+
+        // `Recompute` rebuilds through `try_new`, which alone would drop the projection.
+        let join: Arc<dyn ExecutionPlan> = Arc::new(join);
+        let children = join.children().into_iter().cloned().collect();
+        let rebuilt = join.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let rebuilt_join = rebuilt
+            .downcast_ref::<PiecewiseMergeJoinExec>()
+            .expect("still a PiecewiseMergeJoinExec");
+        assert_eq!(
+            rebuilt_join.projection().map(|p| p.to_vec()),
+            Some(vec![5, 1])
+        );
+        assert_eq!(columns(&rebuilt.schema()), ["c2", "b1"]);
+        Ok(())
     }
 
     #[tokio::test]
@@ -1223,6 +1295,55 @@ mod tests {
         assert!(batches.is_empty());
 
         assert_join_metrics!(metrics, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn projected_buffered_side_reports_only_what_it_holds() -> Result<()> {
+        use datafusion_common::utils::memory::get_record_batch_memory_size;
+
+        // Two input batches, so the buffered side is a copy. Once it is concatenated and
+        // narrowed to `a1`, the join holds only that column and the `b1` keys: the input
+        // batches and `c1` are gone, and neither the reservation nor the metric still
+        // counts them.
+        let keys: Vec<i32> = (0..1000).rev().collect();
+        let (first, second) = keys.split_at(500);
+        let batches = [
+            build_table_i32(
+                ("a1", &first.to_vec()),
+                ("b1", &first.to_vec()),
+                ("c1", &first.to_vec()),
+            ),
+            build_table_i32(
+                ("a1", &second.to_vec()),
+                ("b1", &second.to_vec()),
+                ("c1", &second.to_vec()),
+            ),
+        ];
+        let schema = batches[0].schema();
+        let held = arrow::compute::concat_batches(&schema, &batches)?;
+        let expected = get_record_batch_memory_size(&held.project(&[0])?)
+            + held.column(1).get_array_memory_size();
+        let left = TestMemoryExec::try_new_exec(&[batches.to_vec()], schema, None)?;
+        let right =
+            build_table(("a2", &vec![10]), ("b2", &vec![2000]), ("c2", &vec![70]));
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        );
+        let join = join(left, right, on, Operator::Lt, JoinType::Inner)?
+            .with_projection(Some(vec![0, 3]))?;
+
+        let batches =
+            common::collect(join.execute(0, Arc::new(TaskContext::default()))?).await?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1000);
+        let build_mem_used = join
+            .metrics()
+            .expect("metrics")
+            .sum_by_name("build_mem_used")
+            .expect("build_mem_used metric")
+            .as_usize();
+        assert_eq!(build_mem_used, expected);
         Ok(())
     }
 

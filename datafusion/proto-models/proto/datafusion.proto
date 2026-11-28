@@ -1844,6 +1844,9 @@ message PiecewiseMergeJoinExecNode {
   string operator = 5;
   datafusion_common.JoinType join_type = 6;
   uint64 num_partitions = 7;
+  // Embedded projection over the join schema, encoded as for `NestedLoopJoinExecNode`:
+  // empty = none, `[u32::MAX]` = zero columns.
+  repeated uint32 projection = 8;
 }
 
 message AsOfJoinExecNode {

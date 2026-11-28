@@ -1100,6 +1100,58 @@ fn piecewise_merge_join_existence_wire_layout() -> Result<()> {
     assert_eq!(join.operator, "Gt");
     assert_eq!(join.join_type, protobuf::JoinType::Leftsemi as i32);
     assert_eq!(join.num_partitions, 7);
+    // No embedded projection travels as an empty list.
+    assert!(join.projection.is_empty());
+    Ok(())
+}
+
+/// An embedded projection is the only operator state not derived by `try_new`, so it
+/// travels on the wire, with the same three states as on `NestedLoopJoinExecNode`:
+/// absent, empty (`[u32::MAX]`, as `count(*)` embeds), and a column list. The encoding
+/// does not depend on the join type. The list is asserted on the wire as well, since a
+/// round trip alone cannot see an encoding mistake that the decoder mirrors.
+#[test]
+fn roundtrip_piecewise_merge_join_projection() -> Result<()> {
+    let schemas = piecewise_schemas();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+
+    // Over `[pad0, pad1, a] ++ [b, pad2]`: both keys; a reorder across the sides; nothing.
+    for (projection, wire) in [
+        (vec![2, 3], vec![2, 3]),
+        (vec![4, 0], vec![4, 0]),
+        (vec![], vec![u32::MAX]),
+    ] {
+        let join = PiecewiseMergeJoinExec::try_new(
+            Arc::new(EmptyExec::new(Arc::clone(&schemas.0))),
+            Arc::new(EmptyExec::new(Arc::clone(&schemas.1))),
+            (
+                Arc::new(Column::new("a", 2)) as _,
+                Arc::new(Column::new("b", 0)) as _,
+            ),
+            Operator::Lt,
+            JoinType::Full,
+            7,
+        )?
+        .with_projection(Some(projection))?;
+        let join: Arc<dyn ExecutionPlan> = Arc::new(join);
+
+        let bytes = physical_plan_to_bytes_with_proto_converter(
+            Arc::clone(&join),
+            &codec,
+            &proto_converter,
+        )?;
+        let node = protobuf::PhysicalPlanNode::decode(bytes.as_ref())
+            .expect("a plan encoded by try_to_proto must decode as a PhysicalPlanNode");
+        let Some(PhysicalPlanType::PiecewiseMergeJoin(node)) = node.physical_plan_type
+        else {
+            panic!("expected a PiecewiseMergeJoin node");
+        };
+        assert_eq!(node.projection, wire);
+
+        // Compares the `Debug` output, which includes the projection and the schema.
+        roundtrip_test(join)?;
+    }
     Ok(())
 }
 

@@ -589,6 +589,125 @@ SELECT l.lid, l.lv, r.rid, r.rv FROM cj_lsl l FULL JOIN cj_lsr r ON l.lv >= r.rv
 NULL NULL 5 [{x: 7, y: NULL}]
 NULL NULL 6 NULL
 
+# ------------------------------------------------------------------
+# Embedded projection, under each select list shape: partial (some columns of both
+# sides, reordered, with same-typed `p`/`q` so a swapped column is wrong rather than an
+# error), one side only (the other side is narrowed to zero columns), and none
+# (`count(*)`, both sides narrowed to zero). FULL alone reaches every path the projection
+# touches: matched rows, unmatched streamed rows and unmatched buffered rows, all ending
+# in `push_columns`. join_fuzz.rs draws random projections for every classic join type.
+# pj_r is inserted as three batches, the first with no matchable row, so it is settled
+# whole; NULL keys on both sides leave unmatched rows for the outer joins.
+statement ok
+CREATE TABLE pj_l(a INT, p INT, s VARCHAR);
+
+statement ok
+INSERT INTO pj_l VALUES (1, 10, 'a'), (3, 30, 'c'), (3, 31, 'cc'), (5, 50, 'e'), (NULL, 70, 'n'), (9, 90, 'i');
+
+statement ok
+CREATE TABLE pj_r(b INT, q INT, t VARCHAR);
+
+statement ok
+INSERT INTO pj_r VALUES (0, 100, 'z'), (NULL, 900, 'm');
+
+statement ok
+INSERT INTO pj_r VALUES (2, 200, 'x'), (4, 400, 'y'), (4, 401, 'yy');
+
+statement ok
+INSERT INTO pj_r VALUES (6, 600, 'w'), (NULL, 901, 'mm');
+
+# FULL, partial
+query IIT rowsort
+SELECT r.q, l.p, r.t FROM pj_l l FULL JOIN pj_r r ON l.a < r.b;
+----
+100 NULL z
+200 10 x
+400 10 y
+400 30 y
+400 31 y
+401 10 yy
+401 30 yy
+401 31 yy
+600 10 w
+600 30 w
+600 31 w
+600 50 w
+900 NULL m
+901 NULL mm
+NULL 70 NULL
+NULL 90 NULL
+
+# FULL, buffered side only
+query TI rowsort
+SELECT l.s, l.p FROM pj_l l FULL JOIN pj_r r ON l.a < r.b;
+----
+NULL NULL
+NULL NULL
+NULL NULL
+a 10
+a 10
+a 10
+a 10
+c 30
+c 30
+c 30
+cc 31
+cc 31
+cc 31
+e 50
+i 90
+n 70
+
+# FULL, streamed side only
+query TI rowsort
+SELECT r.t, r.q FROM pj_l l FULL JOIN pj_r r ON l.a < r.b;
+----
+NULL NULL
+NULL NULL
+m 900
+mm 901
+w 600
+w 600
+w 600
+w 600
+x 200
+y 400
+y 400
+y 400
+yy 401
+yy 401
+yy 401
+z 100
+
+# FULL, none
+query I
+SELECT count(*) FROM pj_l l FULL JOIN pj_r r ON l.a < r.b;
+----
+16
+
+# Identity: one column from each side, already in join-schema order, so the output
+# needs no reorder. The cases above reorder, except `count(*)`, which embeds `[]` and
+# needs none either.
+query II rowsort
+SELECT l.p, r.q FROM pj_l l FULL JOIN pj_r r ON l.a < r.b;
+----
+10 200
+10 400
+10 401
+10 600
+30 400
+30 401
+30 600
+31 400
+31 401
+31 600
+50 600
+70 NULL
+90 NULL
+NULL 100
+NULL 900
+NULL 901
+
 # ==================================================================
 # Part 2: Existence joins (LeftSemi / LeftAnti; Right/Mark fall back to NLJ)
 # ==================================================================

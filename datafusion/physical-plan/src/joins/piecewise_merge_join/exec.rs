@@ -9,14 +9,19 @@ use arrow::{
 };
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{JoinSide, Result, internal_datafusion_err, internal_err};
+use datafusion_common::{
+    JoinSide, Result, internal_datafusion_err, internal_err, not_impl_err, project_schema,
+};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{
     SendableRecordBatchStream,
     memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation},
 };
 use datafusion_expr::{JoinType, Operator};
-use datafusion_physical_expr::equivalence::join_equivalence_properties;
+use datafusion_physical_expr::equivalence::{
+    ProjectionMapping, join_equivalence_properties,
+};
+use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{
     Distribution, LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalExprRef,
     PhysicalSortExpr,
@@ -27,6 +32,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
+use crate::common::can_project;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 
 use crate::joins::piecewise_merge_join::classic_join::{
@@ -37,8 +43,9 @@ use crate::joins::piecewise_merge_join::existence_join::{
 };
 use crate::joins::piecewise_merge_join::right_existence_join::RightExistencePWMJStream;
 use crate::joins::piecewise_merge_join::utils::is_right_existence_join;
-use crate::joins::utils::asymmetric_join_output_partitioning;
+use crate::joins::utils::{asymmetric_join_output_partitioning, is_existence_join};
 use crate::metrics::MetricsSet;
+use crate::projection::{EmbeddedProjection, ProjectionExec, try_embed_projection};
 use crate::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
     ReplaceChildrenOptions, validate_child_count,
@@ -279,8 +286,11 @@ pub struct PiecewiseMergeJoinExec {
     pub operator: Operator,
     /// How the join is performed
     pub join_type: JoinType,
-    /// The schema once the join is applied
+    /// The schema once the join is applied, before `projection`, which indexes into it.
+    /// The output schema is `self.schema()`.
     schema: SchemaRef,
+    /// Output columns embedded from a parent `ProjectionExec`, classic joins only
+    projection: Option<Arc<JoinProjection>>,
     /// Buffered data, collected once and shared by every streamed partition. Unused by right
     /// existence joins, which take `buffered_extreme_fut` instead.
     buffered_fut: OnceAsync<BufferedSideData>,
@@ -375,6 +385,7 @@ impl PiecewiseMergeJoinExec {
             operator,
             join_type,
             schema,
+            projection: None,
             buffered_fut: Default::default(),
             buffered_extreme_fut: Default::default(),
             metrics: ExecutionPlanMetricsSet::new(),
@@ -404,6 +415,72 @@ impl PiecewiseMergeJoinExec {
     /// Reference to sort options
     pub fn sort_options(&self) -> &SortOptions {
         &self.sort_options
+    }
+
+    /// The embedded projection, as indices into the unprojected join schema
+    pub fn projection(&self) -> Option<&ProjectionRef> {
+        self.projection.as_ref().map(|p| &p.indices)
+    }
+
+    /// Whether a parent projection has been embedded into this join.
+    pub fn contains_projection(&self) -> bool {
+        self.projection.is_some()
+    }
+
+    /// Returns a copy of this join whose output is `projection` of its current output.
+    ///
+    /// Only Inner/Left/Right/Full joins take one: the existence joins emit one side (plus
+    /// a `mark` column) through streams that do not narrow their input.
+    pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        let projection: Option<ProjectionRef> = projection.map(Into::into);
+        can_project(&self.schema(), projection.as_deref())?;
+        let projection = combine_projections(projection.as_ref(), self.projection())?;
+
+        Self::try_new(
+            Arc::clone(&self.buffered),
+            Arc::clone(&self.streamed),
+            self.on.clone(),
+            self.operator,
+            self.join_type,
+            self.num_partitions,
+        )?
+        .project(projection)
+    }
+
+    /// Embeds `indices`, if any, into a join that has no projection yet.
+    fn project(mut self, indices: Option<ProjectionRef>) -> Result<Self> {
+        let Some(indices) = indices else {
+            return Ok(self);
+        };
+        if is_existence_join(self.join_type) {
+            return not_impl_err!(
+                "PiecewiseMergeJoinExec cannot embed a projection for {} joins",
+                self.join_type
+            );
+        }
+
+        let schema = project_schema(&self.schema, Some(indices.as_ref()))?;
+        let mapping = ProjectionMapping::from_indices(&indices, &self.schema)?;
+        let eq_properties = self.cache.equivalence_properties();
+        let partitioning = self
+            .cache
+            .output_partitioning()
+            .project(&mapping, eq_properties);
+        let eq_properties = eq_properties.project(&mapping, schema);
+        let cache = self
+            .cache
+            .as_ref()
+            .clone()
+            .with_partitioning(partitioning)
+            .with_eq_properties(eq_properties);
+
+        self.projection = Some(Arc::new(JoinProjection::try_new(
+            indices,
+            &self.schema,
+            &self.streamed.schema(),
+        )?));
+        self.cache = Arc::new(cache);
+        Ok(self)
     }
 
     /// Get probe side (streamed side) for the PiecewiseMergeJoin
@@ -508,6 +585,7 @@ impl PiecewiseMergeJoinExec {
             Ok(build_buffered_data(
                 buffered_stream,
                 Arc::clone(on_buffered),
+                self.projection.clone(),
                 metrics.clone(),
                 reservation,
                 streamed_partitions,
@@ -618,6 +696,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                     operator: self.operator,
                     join_type: self.join_type,
                     schema: Arc::clone(&self.schema),
+                    projection: self.projection.clone(),
                     left_child_plan_required_order: self
                         .left_child_plan_required_order
                         .clone(),
@@ -633,14 +712,20 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 }))
             }
             ChildrenPropertiesMode::Recompute => match &children[..] {
-                [left, right] => Ok(Arc::new(PiecewiseMergeJoinExec::try_new(
-                    Arc::clone(left),
-                    Arc::clone(right),
-                    self.on.clone(),
-                    self.operator,
-                    self.join_type,
-                    self.num_partitions,
-                )?)),
+                [left, right] => {
+                    // `try_new` knows nothing of the projection; dropping it here would
+                    // hand the parent a wider schema than its column indices were bound to.
+                    let join = PiecewiseMergeJoinExec::try_new(
+                        Arc::clone(left),
+                        Arc::clone(right),
+                        self.on.clone(),
+                        self.operator,
+                        self.join_type,
+                        self.num_partitions,
+                    )?
+                    .project(self.projection().cloned())?;
+                    Ok(Arc::new(join))
+                }
                 _ => internal_err!(
                     "PiecewiseMergeJoin should have 2 children, found {}",
                     children.len()
@@ -676,6 +761,16 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
             vec![buffered, streamed],
             ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
         )
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.contains_projection() || is_existence_join(self.join_type) {
+            return Ok(None);
+        }
+        try_embed_projection(projection, self)
     }
 
     fn execute(
@@ -732,7 +827,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
             let streamed = self.streamed.execute(partition, Arc::clone(&context))?;
 
             return Ok(Box::pin(RightExistencePWMJStream::try_new(
-                Arc::clone(&self.schema),
+                self.schema(),
                 on_streamed,
                 self.join_type,
                 self.operator,
@@ -754,7 +849,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 let streamed = self.streamed.execute(partition, Arc::clone(&context))?;
 
                 Ok(Box::pin(ExistencePWMJStream::try_new(
-                    Arc::clone(&self.schema),
+                    self.schema(),
                     on_streamed,
                     self.join_type,
                     self.operator,
@@ -775,11 +870,12 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                 let streamed = self.streamed.execute(partition, Arc::clone(&context))?;
 
                 Ok(Box::pin(ClassicPWMJStream::try_new(
-                    Arc::clone(&self.schema),
+                    self.schema(),
                     on_streamed,
                     self.join_type,
                     self.operator,
                     streamed,
+                    self.projection.clone(),
                     buffered_side,
                     PiecewiseMergeJoinStreamState::WaitBufferedSide,
                     self.sort_options,
@@ -818,6 +914,8 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
             num_partitions,
             // derived from the children's schemas by `try_new` on decode
             schema: _,
+            // encoded as its `indices`; the rest is derived from them on decode
+            projection: _,
             // buffered side collected at execution time, not part of the plan
             buffered_fut: _,
             // buffered-side extreme collected at execution time for right existence
@@ -841,6 +939,12 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         let on_buffered = ctx.encode_expr(on_buffered)?;
         let on_streamed = ctx.encode_expr(on_streamed)?;
         let join_type = crate::joins::proto::join_type_to_proto(*join_type);
+        // Same three states as `NestedLoopJoinExecNode::projection`.
+        let projection = match self.projection() {
+            None => Vec::new(),
+            Some(indices) if indices.is_empty() => vec![u32::MAX],
+            Some(indices) => indices.iter().map(|&i| i as u32).collect(),
+        };
 
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
@@ -855,6 +959,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                         operator: format!("{operator:?}"),
                         join_type: join_type.into(),
                         num_partitions: *num_partitions as u64,
+                        projection,
                     }),
                 ),
             ),
@@ -893,6 +998,7 @@ impl PiecewiseMergeJoinExec {
             operator,
             join_type,
             num_partitions,
+            projection,
         } = &**join;
 
         let buffered = ctx.decode_required_child(
@@ -937,14 +1043,22 @@ impl PiecewiseMergeJoinExec {
                 )
             })?;
 
-        Ok(Arc::new(Self::try_new(
-            buffered,
-            streamed,
-            (on_buffered, on_streamed),
-            operator,
-            join_type,
-            num_partitions,
-        )?))
+        let projection: Option<ProjectionRef> = match projection.as_slice() {
+            [] => None,
+            [u32::MAX] => Some(Arc::from([])),
+            indices => Some(indices.iter().map(|&i| i as usize).collect()),
+        };
+        Ok(Arc::new(
+            Self::try_new(
+                buffered,
+                streamed,
+                (on_buffered, on_streamed),
+                operator,
+                join_type,
+                num_partitions,
+            )?
+            .project(projection)?,
+        ))
     }
 }
 
@@ -963,7 +1077,15 @@ impl DisplayAs for PiecewiseMergeJoinExec {
                     f,
                     "PiecewiseMergeJoin: operator={:?}, join_type={:?}, on={}",
                     self.operator, self.join_type, on_str
-                )
+                )?;
+                if let Some(indices) = self.projection() {
+                    let columns = indices
+                        .iter()
+                        .map(|&i| format!("{}@{i}", self.schema.field(i).name()))
+                        .collect::<Vec<_>>();
+                    write!(f, ", projection=[{}]", columns.join(", "))?;
+                }
+                Ok(())
             }
 
             DisplayFormatType::TreeRender => {
@@ -977,9 +1099,75 @@ impl DisplayAs for PiecewiseMergeJoinExec {
     }
 }
 
+impl EmbeddedProjection for PiecewiseMergeJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
+    }
+}
+
+/// An embedded projection split per side, so each side is narrowed as it arrives instead
+/// of every column being materialized into the output and dropped afterwards.
+///
+/// The classic stream builds each output batch's columns as `buffered_columns ++
+/// streamed_columns`; `reorder` then puts them into `indices` order, zero-copy.
+///
+/// The kept columns are every column the stream reads after the join key is evaluated,
+/// which today is only the output columns. A residual join filter evaluated on candidate
+/// pairs would have to add its columns to the kept set and let `reorder` drop them, and
+/// swapping the inputs would have to remap `indices` (`swap_join_projection`) and rebuild
+/// this split.
+#[derive(Debug)]
+pub(super) struct JoinProjection {
+    /// Indices into the unprojected join schema, as embedded
+    indices: ProjectionRef,
+    /// Buffered columns kept, ascending
+    buffered_columns: Vec<usize>,
+    /// Streamed columns kept, ascending
+    pub(super) streamed_columns: Vec<usize>,
+    /// The streamed input's schema narrowed to `streamed_columns`
+    pub(super) streamed_schema: SchemaRef,
+    /// Maps `buffered_columns ++ streamed_columns` onto the output, or `None` when they
+    /// are already in output order
+    pub(super) reorder: Option<Vec<usize>>,
+}
+
+impl JoinProjection {
+    fn try_new(
+        indices: ProjectionRef,
+        join_schema: &SchemaRef,
+        streamed_schema: &SchemaRef,
+    ) -> Result<Self> {
+        let num_buffered = join_schema.fields().len() - streamed_schema.fields().len();
+
+        // Sorted, `kept` is also the order the stream builds columns in: the kept
+        // buffered columns, then the kept streamed ones.
+        let mut kept = indices.to_vec();
+        kept.sort_unstable();
+        kept.dedup();
+        let reorder: Option<Vec<usize>> = (kept[..] != indices[..]).then(|| {
+            indices
+                .iter()
+                .map(|i| kept.partition_point(|k| k < i))
+                .collect()
+        });
+        let split = kept.partition_point(|&i| i < num_buffered);
+        let streamed_columns: Vec<usize> =
+            kept.drain(split..).map(|i| i - num_buffered).collect();
+
+        Ok(Self {
+            streamed_schema: Arc::new(streamed_schema.project(&streamed_columns)?),
+            reorder,
+            indices,
+            buffered_columns: kept,
+            streamed_columns,
+        })
+    }
+}
+
 async fn build_buffered_data(
     buffered: SendableRecordBatchStream,
     on_buffered: PhysicalExprRef,
+    projection: Option<Arc<JoinProjection>>,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
     remaining_partitions: usize,
@@ -1002,18 +1190,24 @@ async fn build_buffered_data(
         .await?;
 
     let single_batch = concat_batches(&schema, batches.iter())?;
+    drop(batches);
 
     // Evaluate physical expression on the buffered side.
     let buffered_values = on_buffered
         .evaluate(&single_batch)?
         .into_array(single_batch.num_rows())?;
+    // The key is stored apart from the batch, so the columns it was computed from can go.
+    let single_batch = match &projection {
+        Some(projection) => single_batch.project(&projection.buffered_columns)?,
+        None => single_batch,
+    };
 
-    // We add the single batch size + the memory of the join keys
-    // size of the size estimation
+    // The input batches and the unkept columns are gone, so the reservation and the
+    // metric come down to what the join holds from here on: the batch and its keys.
     let size_estimation = get_record_batch_memory_size(&single_batch)
         + buffered_values.get_array_memory_size();
-    reservation.try_grow(size_estimation)?;
-    metrics.build_mem_used.add(size_estimation);
+    reservation.try_resize(size_estimation)?;
+    metrics.build_mem_used.set(size_estimation);
 
     let buffered_data = BufferedSideData::new(
         single_batch,
