@@ -2136,6 +2136,95 @@ impl ConfigField for Option<ConfigTimeZone> {
     }
 }
 
+/// A [`chrono`] format string that is known to render a date, used for
+/// [`FormatOptions::date_format`].
+///
+/// # Examples
+/// ```
+/// # use datafusion_common::config::ConfigDateFormat;
+/// let format: ConfigDateFormat = "%d/%m/%Y".parse().unwrap();
+/// assert_eq!(format.as_str(), "%d/%m/%Y");
+///
+/// // `%H` is a valid directive, but a date has no hour to render
+/// assert!("%H".parse::<ConfigDateFormat>().is_err());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigDateFormat(String);
+
+impl ConfigDateFormat {
+    /// Returns the format string as it was written.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for ConfigDateFormat {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Parsing validates directives, but some directives require fields
+        // that a date does not have (for example, `%H`). Chrono only reports
+        // those errors while formatting.
+        let renders = chrono::format::StrftimeItems::new(s)
+            .parse()
+            .is_ok_and(|items| {
+                chrono::NaiveDate::from_ymd_opt(2001, 2, 3)
+                    .expect("valid sample date")
+                    .format_with_items(items.iter())
+                    .write_to(&mut String::new())
+                    .is_ok()
+            });
+        if renders {
+            Ok(Self(s.to_string()))
+        } else {
+            _config_err!(
+                "Invalid date format: {s}. The format must render a date, e.g. %Y-%m-%d"
+            )
+        }
+    }
+}
+
+impl Display for ConfigDateFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// `ConfigField` for `Option<ConfigDateFormat>` parses before assigning so an
+/// invalid value leaves the current setting unchanged.
+impl ConfigField for Option<ConfigDateFormat> {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        match self {
+            Some(format) => v.some(key, format, description),
+            None => v.none(key, description),
+        }
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        if !key.is_empty() {
+            return _config_err!(
+                "Config field is a scalar Option<ConfigDateFormat> and does not have nested field \"{}\"",
+                key
+            );
+        }
+
+        *self = Some(ConfigDateFormat::from_str(value)?);
+        Ok(())
+    }
+
+    fn reset(&mut self, key: &str) -> Result<()> {
+        if key.is_empty() {
+            *self = None;
+            Ok(())
+        } else {
+            _config_err!(
+                "Config field is a scalar Option<ConfigDateFormat> and does not have nested field \"{}\"",
+                key
+            )
+        }
+    }
+}
+
 config_namespace! {
     /// Options controlling the format of output when printing record batches
     /// Copies [`arrow::util::display::FormatOptions`]
@@ -2146,7 +2235,7 @@ config_namespace! {
         /// Format string for nulls
         pub null: String, default = "".into()
         /// Date format for date arrays
-        pub date_format: Option<String>, default = Some("%Y-%m-%d".to_string())
+        pub date_format: Option<ConfigDateFormat>, default = Some(ConfigDateFormat("%Y-%m-%d".to_string()))
         /// Format for DateTime arrays
         pub datetime_format: Option<String>, default = Some("%Y-%m-%dT%H:%M:%S%.f".to_string())
         /// Timestamp format for timestamp arrays
@@ -2166,7 +2255,6 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
     type Error = DataFusionError;
     fn try_from(options: &'a FormatOptions) -> Result<Self> {
         for (name, format) in [
-            ("date_format", options.date_format.as_deref()),
             ("datetime_format", options.datetime_format.as_deref()),
             ("timestamp_format", options.timestamp_format.as_deref()),
             (
@@ -2186,13 +2274,9 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
 
                 // Parsing validates directives, but some directives require fields
                 // that are absent from a particular temporal type (for example,
-                // `%H` for a date). Chrono reports those errors while formatting.
+                // `%Y` for a time). Chrono reports those errors while formatting.
                 let mut rendered = String::new();
                 let result = match name {
-                    "date_format" => chrono::NaiveDate::from_ymd_opt(2001, 2, 3)
-                        .expect("valid sample date")
-                        .format_with_items(items.iter())
-                        .write_to(&mut rendered),
                     "datetime_format" | "timestamp_format" => {
                         chrono::NaiveDate::from_ymd_opt(2001, 2, 3)
                             .expect("valid sample date")
@@ -2224,7 +2308,7 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
         Ok(Self::new()
             .with_display_error(options.safe)
             .with_null(&options.null)
-            .with_date_format(options.date_format.as_deref())
+            .with_date_format(options.date_format.as_ref().map(ConfigDateFormat::as_str))
             .with_datetime_format(options.datetime_format.as_deref())
             .with_timestamp_format(options.timestamp_format.as_deref())
             .with_timestamp_tz_format(options.timestamp_tz_format.as_deref())
@@ -4344,13 +4428,6 @@ mod tests {
 
         let invalid_options = [
             (
-                "date_format",
-                FormatOptions {
-                    date_format: Some("%".to_owned()),
-                    ..Default::default()
-                },
-            ),
-            (
                 "datetime_format",
                 FormatOptions {
                     datetime_format: Some("%".to_owned()),
@@ -4396,13 +4473,6 @@ mod tests {
                 "time_format",
                 FormatOptions {
                     time_format: Some("%Y".to_owned()),
-                    ..Default::default()
-                },
-            ),
-            (
-                "date_format",
-                FormatOptions {
-                    date_format: Some("%H".to_owned()),
                     ..Default::default()
                 },
             ),
@@ -4462,6 +4532,27 @@ mod tests {
             formatted.contains("1970-01-01T00:00:00+00:00"),
             "unexpected formatted output: {formatted}"
         );
+    }
+
+    #[test]
+    fn invalid_date_format_is_rejected_at_set() {
+        use crate::config::FormatOptions;
+
+        let mut options = FormatOptions::default();
+        options.set("date_format", "%d/%m/%Y").unwrap();
+
+        for format in ["%", "%Q", "%H"] {
+            let error = options.set("date_format", format).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("Invalid date format: {format}.")),
+                "unexpected validation error: {error}"
+            );
+        }
+
+        let date_format = options.date_format.as_ref().map(|f| f.as_str());
+        assert_eq!(date_format, Some("%d/%m/%Y"));
     }
     use std::any::Any;
     use std::collections::HashMap;
