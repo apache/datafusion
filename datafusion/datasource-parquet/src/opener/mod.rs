@@ -1458,17 +1458,15 @@ impl RowGroupsPrunedParquetOpen {
         // page index exists before attempting to read it.
         let arrow_schema = &self.prepared.loaded.prepared.physical_file_schema;
         let parquet_schema = parquet_metadata.file_metadata().schema_descr();
-        Ok(page_pruning_predicate.predicate_column_names().any(|name| {
-            let Some((leaf_idx, _)) = parquet_column(parquet_schema, arrow_schema, name)
-            else {
-                return false;
-            };
-            row_groups.row_group_indexes().any(|rg_idx| {
-                let column = parquet_metadata.row_group(rg_idx).column(leaf_idx);
-                column.column_index_offset().is_some()
-                    && column.offset_index_offset().is_some()
-            })
-        }))
+        Ok(page_pruning_predicate
+            .predicate_leaf_indexes(arrow_schema, parquet_schema)
+            .any(|leaf_idx| {
+                row_groups.row_group_indexes().any(|rg_idx| {
+                    let column = parquet_metadata.row_group(rg_idx).column(leaf_idx);
+                    column.column_index_offset().is_some()
+                        && column.offset_index_offset().is_some()
+                })
+            }))
     }
 
     /// Load the page index if pruning requires it and metadata did not include it.

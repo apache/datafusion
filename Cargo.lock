@@ -2686,6 +2686,7 @@ dependencies = [
  "datafusion-datasource",
  "datafusion-expr",
  "datafusion-expr-common",
+ "datafusion-functions",
  "datafusion-functions-nested",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",

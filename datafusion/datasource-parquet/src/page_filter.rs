@@ -4,6 +4,7 @@
 
 //! Contains code to filter entire pages
 
+use crate::leaf_resolver::struct_field_leaf;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -170,7 +171,7 @@ impl PagePruningAccessPlanFilter {
                 continue;
             }
 
-            if pp.required_columns().single_column().is_none() {
+            if pp.required_columns().single_field().is_none() {
                 debug!("Ignoring multi-column page pruning predicate: {predicate}");
                 all_predicates_supported = false;
                 continue;
@@ -256,7 +257,7 @@ impl PagePruningAccessPlanFilter {
                         let inverted = build_inverted_predicate(predicate, arrow_schema)?;
                         inverted
                             .required_columns()
-                            .single_column()
+                            .single_field()
                             .is_some()
                             .then_some(inverted)
                     })
@@ -471,14 +472,20 @@ impl PagePruningAccessPlanFilter {
         self.predicates.len()
     }
 
-    /// Returns the names of the columns referenced by the page pruning
-    /// predicates (each predicate references exactly one column, see
-    /// [`Self::new`]).
-    pub(crate) fn predicate_column_names(&self) -> impl Iterator<Item = &str> {
-        self.predicates
-            .iter()
-            .filter_map(|p| p.required_columns().single_column())
-            .map(|c| c.name())
+    /// Returns the Parquet leaf column indexes read by the page pruning
+    /// predicates (each predicate reads exactly one column or struct field,
+    /// see [`Self::new`]).
+    pub(crate) fn predicate_leaf_indexes<'a>(
+        &'a self,
+        arrow_schema: &'a Schema,
+        parquet_schema: &'a SchemaDescriptor,
+    ) -> impl Iterator<Item = usize> + 'a {
+        self.predicates.iter().filter_map(move |p| {
+            let (column, path) = p.required_columns().single_field()?;
+            field_converter(column.name(), path, arrow_schema, parquet_schema)
+                .ok()?
+                .parquet_column_index()
+        })
     }
 }
 
@@ -605,9 +612,9 @@ fn prune_pages_for_predicate(
     #[cfg(test)]
     tests::PAGE_PREDICATE_CALLS.set(tests::PAGE_PREDICATE_CALLS.get() + 1);
 
-    let column = predicate.required_columns().single_column()?;
+    let (column, path) = predicate.required_columns().single_field()?;
     let converter =
-        match StatisticsConverter::try_new(column.name(), arrow_schema, parquet_schema) {
+        match field_converter(column.name(), path, arrow_schema, parquet_schema) {
             Ok(converter) => converter,
             Err(e) => {
                 debug!(
@@ -625,6 +632,28 @@ fn prune_pages_for_predicate(
         parquet_metadata,
         metrics,
     )
+}
+
+/// A [`StatisticsConverter`] for `column`, or for the struct field reached
+/// from it by `path` when `path` is not empty.
+fn field_converter<'a>(
+    column: &str,
+    path: &[String],
+    arrow_schema: &'a Schema,
+    parquet_schema: &'a SchemaDescriptor,
+) -> parquet::errors::Result<StatisticsConverter<'a>> {
+    if path.is_empty() {
+        return StatisticsConverter::try_new(column, arrow_schema, parquet_schema);
+    }
+    let Some((leaf, field)) =
+        struct_field_leaf(arrow_schema, parquet_schema, column, path)
+    else {
+        return Err(parquet::errors::ParquetError::General(format!(
+            "No Parquet leaf for struct field {column}.{}",
+            path.join(".")
+        )));
+    };
+    StatisticsConverter::from_column_index(leaf, field, parquet_schema)
 }
 
 /// Returns a [`RowSelection`] for the rows in this row group to scan, in addition to a vec of
@@ -816,6 +845,32 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
 
     fn num_containers(&self) -> usize {
         self.page_offsets.len()
+    }
+
+    // One converter reads one leaf, so the struct field methods return the
+    // same statistics as the column methods.
+    fn min_values_for_field(
+        &self,
+        column: &datafusion_common::Column,
+        _path: &[String],
+    ) -> Option<ArrayRef> {
+        self.min_values(column)
+    }
+
+    fn max_values_for_field(
+        &self,
+        column: &datafusion_common::Column,
+        _path: &[String],
+    ) -> Option<ArrayRef> {
+        self.max_values(column)
+    }
+
+    fn null_counts_for_field(
+        &self,
+        column: &datafusion_common::Column,
+        _path: &[String],
+    ) -> Option<ArrayRef> {
+        self.null_counts(column)
     }
 
     fn null_counts(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
