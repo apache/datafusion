@@ -4,6 +4,7 @@
 
 //! A memory-conscious aggregation implementation that limits group buckets to a fixed number
 
+use crate::SendableRecordBatchStream;
 use crate::aggregates::group_values::{AggregateArgumentMetrics, GroupByMetrics};
 use crate::aggregates::topk::priority_map::PriorityMap;
 use crate::aggregates::{
@@ -11,28 +12,23 @@ use crate::aggregates::{
     evaluate_group_by,
 };
 use crate::metrics::BaselineMetrics;
-use crate::stream::EmptyRecordBatchStream;
-use crate::{RecordBatchStream, SendableRecordBatchStream};
+use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use arrow::array::{Array, ArrayRef, RecordBatch, new_null_array};
 use arrow::compute::concat;
 use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::print_batches;
 use datafusion_common::Result;
-use datafusion_execution::TaskContext;
+use datafusion_execution::{TaskContext, async_try_stream};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::metrics::RecordOutput;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
-use futures::stream::{Stream, StreamExt};
+use futures::StreamExt;
 use log::{Level, trace};
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 pub struct GroupedTopKAggregateStream {
     partition: usize,
     row_count: usize,
-    started: bool,
-    done: bool,
     schema: SchemaRef,
     input: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
@@ -45,6 +41,8 @@ pub struct GroupedTopKAggregateStream {
     priority_map: PriorityMap,
     /// Whether a NULL group key has been seen for a group-by-only aggregation.
     null_group_seen: bool,
+    /// Maximum number of rows emitted in a single output batch.
+    batch_size: usize,
 }
 
 impl GroupedTopKAggregateStream {
@@ -58,6 +56,7 @@ impl GroupedTopKAggregateStream {
         let agg_schema = Arc::clone(&aggr.schema);
         let group_by = Arc::clone(aggr.group_by());
         let input = aggr.input.execute(partition, Arc::clone(context))?;
+        let batch_size = context.session_config().batch_size();
         let baseline_metrics = BaselineMetrics::new(&aggr.metrics, partition);
         let group_by_metrics = GroupByMetrics::new_topk(&aggr.metrics, partition);
         let aggregate_argument_metrics = AggregateArgumentMetrics::new(
@@ -87,8 +86,6 @@ impl GroupedTopKAggregateStream {
 
         Ok(GroupedTopKAggregateStream {
             partition,
-            started: false,
-            done: false,
             row_count: 0,
             schema: agg_schema,
             input,
@@ -99,13 +96,8 @@ impl GroupedTopKAggregateStream {
             group_by,
             priority_map,
             null_group_seen: false,
+            batch_size,
         })
-    }
-}
-
-impl RecordBatchStream for GroupedTopKAggregateStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
     }
 }
 
@@ -183,109 +175,87 @@ impl GroupedTopKAggregateStream {
         }
         Ok(())
     }
-}
 
-impl Stream for GroupedTopKAggregateStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        if self.done {
-            return Poll::Ready(None);
-        }
-        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        while let Poll::Ready(res) = self.input.poll_next_unpin(cx) {
-            let _timer = elapsed_compute.timer();
-            match res {
-                // got a batch, convert to rows and append to our TreeMap
-                Some(Ok(batch)) => {
-                    self.started = true;
-                    trace!(
-                        "partition {} has {} rows and got batch with {} rows",
-                        self.partition,
-                        self.row_count,
-                        batch.num_rows()
-                    );
-                    if log::log_enabled!(Level::Trace) && batch.num_rows() < 20 {
-                        print_batches(std::slice::from_ref(&batch))?;
-                    }
-                    self.row_count += batch.num_rows();
-                    let group_by_values =
-                        self.group_by_metrics.time_group_key_preparation(|| {
-                            evaluate_group_by(&self.group_by, &batch)
-                        })?;
-                    assert_eq!(
-                        group_by_values.len(),
-                        1,
-                        "Exactly 1 group value required"
-                    );
-                    assert_eq!(
-                        group_by_values[0].len(),
-                        1,
-                        "Exactly 1 group value required"
-                    );
-                    let group_by_values = Arc::clone(&group_by_values[0][0]);
-                    let input_values = if self.is_group_by_only() {
-                        // GROUP BY-only case: use group key as both key and value
-                        Arc::clone(&group_by_values)
-                    } else {
-                        // MIN/MAX case: evaluate aggregate expressions
-                        let input_values =
-                            self.group_by_metrics.time_aggregate_arguments(|| {
-                                self.aggregate_arguments
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(idx, expr)| {
-                                        self.aggregate_argument_metrics.time(idx, || {
-                                            evaluate_expressions_to_arrays(expr, &batch)
-                                        })
-                                    })
-                                    .collect::<Result<Vec<_>>>()
-                            })?;
-                        assert_eq!(input_values.len(), 1, "Exactly 1 input required");
-                        assert_eq!(input_values[0].len(), 1, "Exactly 1 input required");
-                        Arc::clone(&input_values[0][0])
-                    };
-
-                    // iterate over each column of group_by values
-                    (*self).intern(&group_by_values, &input_values)?;
+    pub(crate) fn into_stream(mut self) -> SendableRecordBatchStream {
+        let schema = Arc::clone(&self.schema);
+        let stream = async_try_stream(|mut emitter| async move {
+            let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+            while let Some(batch) = self.input.next().await.transpose()? {
+                let _timer = elapsed_compute.timer();
+                trace!(
+                    "partition {} has {} rows and got batch with {} rows",
+                    self.partition,
+                    self.row_count,
+                    batch.num_rows()
+                );
+                if log::log_enabled!(Level::Trace) && batch.num_rows() < 20 {
+                    print_batches(std::slice::from_ref(&batch))?;
                 }
-                // inner is done, emit all rows and switch to producing output
-                None => {
-                    // Release the input pipeline's resources before emitting.
-                    let input_schema = self.input.schema();
-                    self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-                    if self.priority_map.is_empty() && !self.null_group_seen {
-                        trace!("partition {} emit None", self.partition);
-                        self.done = true;
-                        return Poll::Ready(None);
-                    }
-                    let group_by_metrics = self.group_by_metrics.clone();
-                    let batch = group_by_metrics.time_emitting(|| {
-                        let cols = self.emit_columns()?;
-                        RecordBatch::try_new(Arc::clone(&self.schema), cols)
+                self.row_count += batch.num_rows();
+                let group_by_values =
+                    self.group_by_metrics.time_group_key_preparation(|| {
+                        evaluate_group_by(&self.group_by, &batch)
                     })?;
-                    let batch = batch.record_output(&self.baseline_metrics);
-                    trace!(
-                        "partition {} emit batch with {} rows",
-                        self.partition,
-                        batch.num_rows()
-                    );
-                    if log::log_enabled!(Level::Trace) {
-                        print_batches(std::slice::from_ref(&batch))?;
-                    }
-                    self.done = true;
-                    return Poll::Ready(Some(Ok(batch)));
-                }
-                // inner had error, return to caller
-                Some(Err(e)) => {
-                    return Poll::Ready(Some(Err(e)));
-                }
+                assert_eq!(group_by_values.len(), 1, "Exactly 1 group value required");
+                assert_eq!(
+                    group_by_values[0].len(),
+                    1,
+                    "Exactly 1 group value required"
+                );
+                let group_by_values = Arc::clone(&group_by_values[0][0]);
+                let input_values = if self.is_group_by_only() {
+                    Arc::clone(&group_by_values)
+                } else {
+                    let input_values =
+                        self.group_by_metrics.time_aggregate_arguments(|| {
+                            self.aggregate_arguments
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, expr)| {
+                                    self.aggregate_argument_metrics.time(idx, || {
+                                        evaluate_expressions_to_arrays(expr, &batch)
+                                    })
+                                })
+                                .collect::<Result<Vec<_>>>()
+                        })?;
+                    assert_eq!(input_values.len(), 1, "Exactly 1 input required");
+                    assert_eq!(input_values[0].len(), 1, "Exactly 1 input required");
+                    Arc::clone(&input_values[0][0])
+                };
+                self.intern(&group_by_values, &input_values)?;
             }
-        }
-        Poll::Pending
+            let input_schema = self.input.schema();
+            drop(std::mem::replace(
+                &mut self.input,
+                Box::pin(EmptyRecordBatchStream::new(input_schema)),
+            ));
+            if self.priority_map.is_empty() && !self.null_group_seen {
+                trace!("partition {} emit None", self.partition);
+                return Ok(());
+            }
+            let group_by_metrics = self.group_by_metrics.clone();
+            let output = group_by_metrics.time_emitting(|| {
+                let cols = self.emit_columns()?;
+                RecordBatch::try_new(Arc::clone(&self.schema), cols)
+            })?;
+            for offset in (0..output.num_rows()).step_by(self.batch_size) {
+                let len = self.batch_size.min(output.num_rows() - offset);
+                let batch = output.slice(offset, len);
+                trace!(
+                    "partition {} emit batch with {} rows",
+                    self.partition,
+                    batch.num_rows()
+                );
+                if log::log_enabled!(Level::Trace) {
+                    print_batches(std::slice::from_ref(&batch))?;
+                }
+                emitter
+                    .emit(batch.record_output(&self.baseline_metrics))
+                    .await;
+            }
+            Ok(())
+        });
+        Box::pin(RecordBatchStreamAdapter::new(schema, stream))
     }
 }
 
@@ -305,6 +275,66 @@ mod tests {
     use datafusion_functions_aggregate::min_max::min_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
+
+    #[tokio::test]
+    async fn output_respects_batch_size() -> Result<()> {
+        use datafusion_execution::config::SessionConfig;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::UInt32, false),
+            Field::new("a", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6])),
+                Arc::new(Float64Array::from(vec![6.0, 5.0, 4.0, 3.0, 2.0, 1.0])),
+            ],
+        )?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".to_string())]);
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("MIN(a)")
+                .build()?,
+        );
+        let aggregate_exec = Arc::new(
+            AggregateExec::try_new(
+                AggregateMode::Single,
+                group_by,
+                vec![aggregate],
+                vec![None],
+                input,
+                schema,
+            )?
+            .try_optimize_topk(5, "MIN(a)", SortOptions::new(false, false))
+            .unwrap()
+            .data,
+        );
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(2)),
+        );
+
+        let batches = collect(Arc::clone(&aggregate_exec) as _, context).await?;
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![2, 2, 1]
+        );
+        let metrics = aggregate_exec.metrics().expect("aggregate metrics");
+        assert_eq!(metrics.output_rows(), Some(5));
+        let output_batches = metrics
+            .sum(|m| matches!(m.value(), MetricValue::OutputBatches(_)))
+            .expect("output batch metric");
+        assert_eq!(output_batches.as_usize(), 3);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_topk_aggregate_argument_metrics() -> Result<()> {

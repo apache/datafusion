@@ -830,53 +830,6 @@ impl Display for ConfigFilterSelectivity {
     }
 }
 
-/// Policy for handling duplicate keys in Spark-compatible map-construction
-/// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`). Mirrors
-/// Spark's [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum MapKeyDedupPolicy {
-    /// Raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
-    #[default]
-    Exception,
-    /// Keep the last occurrence of each duplicate key.
-    LastWin,
-}
-
-impl FromStr for MapKeyDedupPolicy {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_uppercase().as_str() {
-            "EXCEPTION" => Ok(Self::Exception),
-            "LAST_WIN" => Ok(Self::LastWin),
-            other => Err(DataFusionError::Configuration(format!(
-                "Invalid MapKeyDedupPolicy: {other}. Expected one of: EXCEPTION, LAST_WIN"
-            ))),
-        }
-    }
-}
-
-impl ConfigField for MapKeyDedupPolicy {
-    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
-        v.some(key, self, description)
-    }
-
-    fn set(&mut self, _: &str, value: &str) -> Result<()> {
-        *self = MapKeyDedupPolicy::from_str(value)?;
-        Ok(())
-    }
-}
-
-impl Display for MapKeyDedupPolicy {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let str = match self {
-            Self::Exception => "EXCEPTION",
-            Self::LastWin => "LAST_WIN",
-        };
-        write!(f, "{str}")
-    }
-}
-
 impl From<SpillCompression> for Option<CompressionType> {
     fn from(c: SpillCompression) -> Self {
         match c {
@@ -965,17 +918,6 @@ config_namespace! {
         /// This is used to workaround bugs in the planner that are now caught by
         /// the new schema verification step.
         pub skip_physical_aggregate_schema_check: bool, default = false
-
-        /// Whether aggregation uses the implementation from the major refactor
-        /// completed in the 56.0.0 release. When set to `false`, aggregation
-        /// falls back to the implementation used before 55.0.0.
-        ///
-        /// The fallback exists only as a workaround for bugs in the new
-        /// implementation and will be removed, together with this option, after
-        /// the 56.0.0 release.
-        ///
-        /// See <https://github.com/apache/datafusion/issues/22710> for details.
-        pub enable_migration_aggregate: bool, default = true
 
         /// Whether inner, left outer, right outer, and full outer hash joins use
         /// the refactored probe implementation. When set to `false`, these joins
@@ -1907,11 +1849,15 @@ config_namespace! {
         pub enable_piecewise_merge_join: bool, default = false
 
         /// The maximum estimated size in bytes for one input side of a HashJoin
-        /// will be collected into a single partition
+        /// will be collected into a single partition. Partitioned joins also use
+        /// it: an input below it is not used as the co-partitioning reference for
+        /// an input above it.
         pub hash_join_single_partition_threshold: usize, default = 4 * 1024 * 1024
 
         /// The maximum estimated size in rows for one input side of a HashJoin
-        /// will be collected into a single partition
+        /// will be collected into a single partition. Partitioned joins also use
+        /// it: an input below it is not used as the co-partitioning reference for
+        /// an input above it.
         pub hash_join_single_partition_threshold_rows: usize, default = 1024 * 128
 
         /// Maximum size in bytes for the build side of a hash join to be pushed down as an InList expression for dynamic filtering.
@@ -2288,24 +2234,6 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
     }
 }
 
-config_namespace! {
-    /// Options controlling DataFusion's Spark-compatibility layer (the
-    /// `datafusion-spark` crate). Keys here mirror their `spark.sql.*`
-    /// equivalents in Apache Spark.
-    pub struct SparkOptions {
-        /// Policy for handling duplicate keys in Spark-compatible map-construction
-        /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`).
-        ///
-        /// Mirrors Spark's
-        /// [`spark.sql.mapKeyDedupPolicy`](https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961):
-        /// - `EXCEPTION` (default): raise `[DUPLICATED_MAP_KEY]` at runtime on any duplicate key.
-        /// - `LAST_WIN`: keep the last occurrence of each duplicate key.
-        ///
-        /// Values are case-insensitive.
-        pub map_key_dedup_policy: MapKeyDedupPolicy, default = MapKeyDedupPolicy::Exception
-    }
-}
-
 /// A key value pair, with a corresponding description
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ConfigEntry {
@@ -2337,8 +2265,6 @@ pub struct ConfigOptions {
     pub extensions: Extensions,
     /// Formatting options when printing batches
     pub format: FormatOptions,
-    /// Spark-compatibility options (the `datafusion-spark` crate)
-    pub spark: SparkOptions,
 }
 
 impl ConfigField for ConfigOptions {
@@ -2349,7 +2275,6 @@ impl ConfigField for ConfigOptions {
         self.explain.visit(v, "datafusion.explain", "");
         self.sql_parser.visit(v, "datafusion.sql_parser", "");
         self.format.visit(v, "datafusion.format", "");
-        self.spark.visit(v, "datafusion.spark", "");
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
@@ -2362,7 +2287,6 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.set(rem, value),
             "sql_parser" => self.sql_parser.set(rem, value),
             "format" => self.format.set(rem, value),
-            "spark" => self.spark.set(rem, value),
             _ => _config_err!("Config value \"{key}\" not found on ConfigOptions"),
         }
     }
@@ -2402,7 +2326,6 @@ impl ConfigField for ConfigOptions {
             "explain" => self.explain.reset(rem),
             "sql_parser" => self.sql_parser.reset(rem),
             "format" => self.format.reset(rem),
-            "spark" => self.spark.reset(rem),
             other => _config_err!("Config value \"{other}\" not found on ConfigOptions"),
         }
     }

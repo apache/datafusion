@@ -660,35 +660,23 @@ fn build_five_thousand_row_rgs(schema: &Arc<Schema>) -> Vec<RecordBatch> {
         .collect()
 }
 
-/// Regression test for <https://github.com/apache/datafusion/issues/24355>:
-/// when a page-index `RowSelection` is live, the runtime dynamic row-group
-/// pruner is intentionally **not built**, so its `into_builder` rebuild can
-/// never drop a row group without slicing the carried selection (which would
-/// silently return wrong rows). Correctness is bought at the cost of the
-/// dynamic-pruning optimization for this scan.
-///
-/// The behavior asserted below (pruner disabled →
-/// `row_groups_pruned_dynamic_filter == 0`) is expected to change once the
-/// proper upstream fix lands, which keeps both mechanisms:
-/// <https://github.com/apache/arrow-rs/issues/10624> (tracked on the
-/// DataFusion side in <https://github.com/apache/datafusion/issues/24358>).
+/// Runtime dynamic row-group pruning runs while a page-index `RowSelection`
+/// is live. Each row group carries its own local selection, and a pruning
+/// rebuild passes the survivors' selections back to the decoder. See
+/// <https://github.com/apache/datafusion/issues/24355> for the bug that a
+/// single file-wide selection caused.
 ///
 /// Layout: 5 RGs × 1000 rows, with `data_page_row_count_limit=100` so
 /// each RG has 10 pages of 100 rows.
 ///
 /// Query: `SELECT v FROM t WHERE v >= 500 ORDER BY v DESC LIMIT 5`.
 /// - `v >= 500` engages the page index: in RG 0 (values 0..1000) the
-///   first 5 pages (values 0..500) are pruned, the last 5 (500..1000)
-///   are scanned. RGs 1..4 keep all their pages (every page has
-///   `max >= 500`). The decoder receives a `RowSelection` that masks
-///   out those first 5 pages of RG 0 — its presence is what suppresses
-///   the runtime pruner.
-/// - `ORDER BY v DESC LIMIT 5` would let the tightened TopK threshold
-///   (≥ 4995) prune RGs 0..3, but because a row selection is present the
-///   runtime pruner is never created, so `row_groups_pruned_dynamic_filter`
-///   stays 0. Results are still correct and page-index pruning still runs.
+///   first 5 pages (values 0..500) are pruned, and the last 5 are scanned.
+///   RGs 1..4 keep all their pages.
+/// - `ORDER BY v DESC LIMIT 5` tightens the TopK threshold to `>= 4995`,
+///   which proves the other row groups unwinnable once RG 4 is read.
 #[tokio::test]
-async fn dynamic_rg_pruning_disabled_when_page_index_row_selection_present() {
+async fn dynamic_rg_pruning_with_page_index_row_selection() {
     let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
     let batches = build_five_thousand_row_rgs(&schema);
 
@@ -717,9 +705,7 @@ async fn dynamic_rg_pruning_disabled_when_page_index_row_selection_present() {
         );
     }
 
-    // Page-index pruning still engages: RG 0's first 5 pages are entirely
-    // < 500. #24355 only suppresses the *runtime* row-group pruner, not
-    // page-index pruning, so this must remain non-zero.
+    // Page-index pruning engages: RG 0's first 5 pages are entirely < 500.
     let pages_pruned = output.metric_value("page_index_pages_pruned").unwrap_or(0);
     assert!(
         pages_pruned >= 5,
@@ -728,18 +714,13 @@ async fn dynamic_rg_pruning_disabled_when_page_index_row_selection_present() {
         output.description(),
     );
 
-    // The runtime dynamic pruner must be disabled while a page-index row
-    // selection is live (#24355): with no pruner there is no rebuild that
-    // could misapply the carried selection. Before the fix the pruner ran
-    // and this metric was >= 1.
     let pruned = output
         .row_groups_pruned_dynamic_filter()
         .expect("`row_groups_pruned_dynamic_filter` metric must be registered");
-    assert_eq!(
-        pruned,
-        0,
-        "runtime row-group pruning must be skipped when a page-index row \
-         selection is present; pruned={pruned}\n{}",
+    assert!(
+        pruned >= 1,
+        "runtime row-group pruning must run with a page-index row selection; \
+         pruned={pruned}\n{}",
         output.description(),
     );
 }
@@ -1108,10 +1089,7 @@ async fn topk_pushdown_does_not_reread_delivered_row_group() {
     // enables `pushdown_filters`, required for the dynamic filter to reach the
     // parquet scan. Page-index reading is disabled: this test exercises the
     // #24352 empty-row-group / rg_plan-sync path, which is row-filter-driven and
-    // does not need the page index. With the page index on, `search_phrase <> ''`
-    // produces an intra-row-group `RowSelection`, and #24355 disables the runtime
-    // pruner whenever a row selection is present — which would stop this test
-    // from exercising the dynamic pruner at all.
+    // does not need the page index.
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.enable_page_index = false;
     let mut ctx = ContextWithParquet::with_config(
