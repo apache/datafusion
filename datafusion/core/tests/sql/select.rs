@@ -638,14 +638,14 @@ async fn test_coalesce_struct_field_metadata() -> Result<()> {
         ]))],
         Some(NullBuffer::from(vec![false, true, true, false])),
     ));
+    let null_child_metadata = Metadata::new()
+        .with("ARROW:extension:name", "example.null")
+        .with("origin", "null_child")
+        .with("null_only", "1");
     let null_child: ArrayRef = Arc::new(StructArray::new(
         vec![
-            Field::new("v", DataType::Null, true).with_metadata(
-                Metadata::new()
-                    .with("ARROW:extension:name", "example.null")
-                    .with("origin", "ignored")
-                    .with("null_only", "ignored"),
-            ),
+            Field::new("v", DataType::Null, true)
+                .with_metadata(null_child_metadata.clone()),
         ]
         .into(),
         vec![Arc::new(NullArray::new(4))],
@@ -754,6 +754,22 @@ async fn test_coalesce_struct_field_metadata() -> Result<()> {
                 .into(),
                 vec![Arc::new(Int32Array::from(vec![Some(1), None, None, None]))],
                 Some(NullBuffer::from(vec![true, false, true, false])),
+            ),
+        ),
+        (
+            [
+                "SELECT coalesce(NULL, null_child, null_child) FROM t",
+                "SELECT coalesce(volatile_null_child(null_child), null_child) FROM t",
+            ],
+            true,
+            StructArray::new(
+                vec![
+                    Field::new("v", DataType::Null, true)
+                        .with_metadata(null_child_metadata),
+                ]
+                .into(),
+                vec![Arc::new(NullArray::new(4))],
+                Some(NullBuffer::from(vec![false, false, true, false])),
             ),
         ),
     ];

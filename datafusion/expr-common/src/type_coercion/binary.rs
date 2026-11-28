@@ -19,7 +19,7 @@ use arrow::datatypes::{
     DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION,
     DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType, Field, FieldRef, Fields,
-    TimeUnit,
+    Metadata, TimeUnit,
 };
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::metadata::coerced_fields_metadata;
@@ -1004,8 +1004,14 @@ fn merge_struct_fields(structs: &[&Fields], common_fields: &Fields) -> Result<Fi
                     }
                 })
                 .collect::<Vec<_>>();
-            let metadata =
-                coerced_fields_metadata(coerced.iter().map(|field| field.as_ref()))?;
+            // Untyped NULL children defer to typed contributors. A child that is
+            // NULL in every input has none, so it keeps the NULL inputs' metadata.
+            let metadata = if coerced.is_empty() {
+                null_fields_metadata(&inputs)
+            } else {
+                coerced_fields_metadata(coerced.iter().map(|field| field.as_ref()))?
+                    .into_inner()
+            };
             let nullable = inputs.iter().any(|field| field.is_nullable());
             let field = inputs
                 .iter()
@@ -1017,10 +1023,36 @@ fn merge_struct_fields(structs: &[&Fields], common_fields: &Fields) -> Result<Fi
                     .clone()
                     .with_data_type(data_type)
                     .with_nullable(nullable)
-                    .with_metadata(metadata.into_inner()),
+                    .with_metadata(metadata),
             ))
         })
         .collect()
+}
+
+/// Merge metadata from untyped NULL fields, with earlier fields taking
+/// precedence. The extension name and its metadata are taken together from the
+/// first field that declares an extension type.
+fn null_fields_metadata(fields: &[&Field]) -> Metadata {
+    let mut merged = Metadata::new();
+    if let Some(field) = fields
+        .iter()
+        .find(|field| field.metadata().contains_key(EXTENSION_TYPE_NAME_KEY))
+    {
+        for key in [EXTENSION_TYPE_NAME_KEY, EXTENSION_TYPE_METADATA_KEY] {
+            if let Some(value) = field.metadata().get(key) {
+                merged.insert(key, value.clone());
+            }
+        }
+    }
+    for (key, value) in fields.iter().flat_map(|field| field.metadata()) {
+        if key != EXTENSION_TYPE_NAME_KEY
+            && key != EXTENSION_TYPE_METADATA_KEY
+            && !merged.contains_key(key)
+        {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    merged
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for type unification
