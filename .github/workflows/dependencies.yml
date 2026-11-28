@@ -40,7 +40,7 @@ jobs:
           . ci/scripts/utils/tool_versions.sh
           echo "CARGO_MACHETE_VERSION=${CARGO_MACHETE_VERSION}" >> "$GITHUB_ENV"
       - name: Install cargo-machete
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21  # v2.90.4
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c  # v2.90.7
         with:
           tool: cargo-machete@${{ env.CARGO_MACHETE_VERSION }}
       - name: Detect unused dependencies
