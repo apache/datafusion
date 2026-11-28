@@ -1649,6 +1649,14 @@ fn coerce_case_expression(
     Ok(Case::new(case_expr, when_then, else_expr))
 }
 
+/// Returns `true` if two fields have the same extension type (name, metadata,
+/// and underlying storage type).
+fn extension_types_equal(left: &Field, right: &Field) -> bool {
+    left.extension_type_name() == right.extension_type_name()
+        && left.extension_type_metadata() == right.extension_type_metadata()
+        && left.data_type() == right.data_type()
+}
+
 /// Get a common schema that is compatible with all inputs of UNION.
 ///
 /// This method presumes that the wildcard expansion is unneeded, or has already
@@ -1735,21 +1743,16 @@ fn coerce_union_schema_with_schema(
                 .iter()
                 .find(|f| f.extension_type_name().is_some())
             {
-                let ext_name = ext_field.extension_type_name();
-                let ext_meta = ext_field.extension_type_metadata();
                 for other in &input_fields {
                     if matches!(other.data_type(), DataType::Null) {
                         continue;
                     }
-                    if other.extension_type_name() != ext_name
-                        || other.extension_type_metadata() != ext_meta
-                        || other.data_type() != ext_field.data_type()
-                    {
+                    if !extension_types_equal(ext_field, other) {
                         return plan_err!(
                             "UNION types cannot be unified for column '{}': \
-                             extension type '{}' ({}) is incompatible with {}",
+                            extension type '{}' ({}) is incompatible with {}",
                             field.name(),
-                            ext_name.unwrap_or_default(),
+                            ext_field.extension_type_name().unwrap_or_default(),
                             ext_field.data_type(),
                             match other.extension_type_name() {
                                 Some(other_ext) => {
@@ -2071,7 +2074,7 @@ mod test {
         let right_plan = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(DFSchema::from_unqualified_fields(
-                vec![Field::new("id", DataType::Binary, false)].into(),
+                vec![Field::new("id", DataType::FixedSizeBinary(16), false)].into(),
                 std::collections::HashMap::new(),
             )?),
         }));

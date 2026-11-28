@@ -228,26 +228,27 @@ SELECT with_metadata(
 );
 
 # Same extension name and storage type but different extension payload also fails
-statement error UNION types cannot be unified for column 'id'
+# (e.g. arrow.fixed_shape_tensor with incompatible shapes [2, 5] vs [5, 2])
+statement error UNION types cannot be unified for column 'tensor'
 SELECT with_metadata(
   with_metadata(
-    arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)'),
+    arrow_cast([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 'FixedSizeList(10, Int64)'),
     'ARROW:extension:name',
-    'arrow.uuid'
+    'arrow.fixed_shape_tensor'
   ),
   'ARROW:extension:metadata',
-  '{"shape":"v1"}'
-) AS id
+  '{"shape":[2,5]}'
+) AS tensor
 UNION
 SELECT with_metadata(
   with_metadata(
-    arrow_cast(X'00010203040506070809000102030507', 'FixedSizeBinary(16)'),
+    arrow_cast([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 'FixedSizeList(10, Int64)'),
     'ARROW:extension:name',
-    'arrow.uuid'
+    'arrow.fixed_shape_tensor'
   ),
   'ARROW:extension:metadata',
-  '{"shape":"v2"}'
-) AS id;
+  '{"shape":[5,2]}'
+) AS tensor;
 
 # NULL branch does not force incompatibility and preserves extension metadata
 query T
