@@ -22,6 +22,7 @@ use super::aggregate_hash_table::{
     PartialSkipMarker,
 };
 use super::order::GroupClusteringMode;
+use super::restore_group_key_stream;
 use super::skip_partial::SkipAggregationProbe;
 use super::spill::AggregateSpill;
 use super::{AggregateExec, incoming_state_batch_reservation_bytes};
@@ -272,8 +273,12 @@ impl PartialHashAggregateStream {
 
     pub(crate) fn into_stream(self) -> SendableRecordBatchStream {
         let schema = Arc::clone(&self.schema);
+        let batch_size = self.batch_size;
 
-        Box::pin(RecordBatchStreamAdapter::new(schema, self.create_stream()))
+        restore_group_key_stream(
+            Box::pin(RecordBatchStreamAdapter::new(schema, self.create_stream())),
+            batch_size,
+        )
     }
 
     /// Entry point for the partial hash aggregate state machine.
