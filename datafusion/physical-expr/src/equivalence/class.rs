@@ -16,7 +16,7 @@ use crate::scalar_subquery::ScalarSubqueryExpr;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{JoinType, Result, ScalarValue};
+use datafusion_common::{HashMap, JoinType, Result, ScalarValue};
 use datafusion_expr::sort_properties::SortProperties;
 use datafusion_physical_expr_common::physical_expr::{
     format_physical_expr_list, is_volatile,
@@ -683,9 +683,16 @@ impl EquivalenceGroup {
 
     /// Projects `expr` through its children or an equivalent expression in the
     /// mapping, preferring to preserve its structure.
+    ///
+    /// If `equivalents` is given and `expr` still cannot be projected, this
+    /// projects another member of the class of `expr` in that group. `tried`
+    /// holds the result of that step for each class, keyed by its index in
+    /// `equivalents`, for one top-level call.
     fn project_expr_indirect(
         aug_mapping: &AugmentedMapping,
         expr: &Arc<dyn PhysicalExpr>,
+        equivalents: Option<&Self>,
+        tried: &mut HashMap<usize, Option<Arc<dyn PhysicalExpr>>>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
         // These leaves do not read columns from the projected input schema.
         if expr.is::<Literal>() || expr.is::<ScalarSubqueryExpr>() {
@@ -707,7 +714,12 @@ impl EquivalenceGroup {
                         let (target, _) = targets.first();
                         Some(Arc::clone(target))
                     } else {
-                        Self::project_expr_indirect(aug_mapping, child)
+                        Self::project_expr_indirect(
+                            aug_mapping,
+                            child,
+                            equivalents,
+                            tried,
+                        )
                     }
                 })
                 .collect::<Option<Vec<_>>>();
@@ -728,7 +740,25 @@ impl EquivalenceGroup {
                 return Some(Arc::clone(target));
             }
         }
-        None
+        // Members of a class are equal on every row, so a projectable member
+        // stands in for `expr`.
+        let group = equivalents?;
+        let &idx = group.map.get(expr)?;
+        if let Some(known) = tried.get(&idx) {
+            return known.clone();
+        }
+        // Until the class has a result, `None` stops cycles such as `x = f(y)`,
+        // `y = g(x)`. The stored result then serves every later member of the
+        // class, such as the second `x` in `x * x`.
+        tried.insert(idx, None);
+        let projected = group.classes[idx]
+            .iter()
+            .filter(|member| *member != expr)
+            .find_map(|member| {
+                Self::project_expr_indirect(aug_mapping, member, equivalents, tried)
+            });
+        tried.insert(idx, projected.clone());
+        projected
     }
 
     fn augment_projection_mapping<'a>(
@@ -754,6 +784,23 @@ impl EquivalenceGroup {
             .collect()
     }
 
+    /// Projects `expr` through the mapping, or else projects another member of
+    /// its equivalence class.
+    ///
+    /// The members of a class are equal on every row, so a projected member
+    /// describes the same partitioning or ordering as `expr`. For example, if
+    /// `x` is in a class with `get_field(s, 'k')`, a projection that keeps `s`
+    /// but drops `x` projects `x` to `get_field(s, 'k')`. This also applies to
+    /// the children of `expr`, so `x || 'z'` projects to
+    /// `get_field(s, 'k') || 'z'`.
+    fn project_expr_or_equivalent(
+        &self,
+        aug_mapping: &AugmentedMapping,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Option<Arc<dyn PhysicalExpr>> {
+        Self::project_expr_indirect(aug_mapping, expr, Some(self), &mut HashMap::new())
+    }
+
     /// Projects `expr` according to the given projection mapping.
     /// If the resulting expression is invalid after projection, returns `None`.
     pub fn project_expr(
@@ -767,7 +814,7 @@ impl EquivalenceGroup {
             Some(Arc::clone(target))
         } else {
             let aug_mapping = self.augment_projection_mapping(mapping);
-            Self::project_expr_indirect(&aug_mapping, expr)
+            self.project_expr_or_equivalent(&aug_mapping, expr)
         }
     }
 
@@ -789,7 +836,7 @@ impl EquivalenceGroup {
             } else {
                 let aug_mapping = aug_mapping
                     .get_or_insert_with(|| self.augment_projection_mapping(mapping));
-                Self::project_expr_indirect(aug_mapping, expr)
+                self.project_expr_or_equivalent(aug_mapping, expr)
             }
         })
     }
@@ -832,7 +879,12 @@ impl EquivalenceGroup {
             if !source.children().is_empty() {
                 let augmented = augmented
                     .get_or_insert_with(|| self.augment_projection_mapping(mapping));
-                if let Some(projected) = Self::project_expr_indirect(augmented, source) {
+                if let Some(projected) = Self::project_expr_indirect(
+                    augmented,
+                    source,
+                    None,
+                    &mut HashMap::new(),
+                ) {
                     cls.push(projected);
                 }
             }
@@ -1542,6 +1594,50 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_project_dropped_column_through_equivalent_expression() -> Result<()> {
+        // - columns: [a, b, c, d], with a = b + c.
+        // - a projection that keeps b and c but drops a projects a to b + c,
+        //   as a join that drops its hashed key column needs for its partitioning.
+        let schema = abc_schema();
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(
+            col("a", &schema)?,
+            binary(
+                col("b", &schema)?,
+                Operator::Plus,
+                col("c", &schema)?,
+                &schema,
+            )?,
+        );
+        let mapping = ProjectionMapping::from_indices(&[1, 2], &schema)?;
+        let projected_schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let expected = binary(
+            col("b", &projected_schema)?,
+            Operator::Plus,
+            col("c", &projected_schema)?,
+            &projected_schema,
+        )?;
+
+        let projected = group.project_expr(&mapping, &col("a", &schema)?);
+        assert!(projected.is_some_and(|expr| expr.eq(&expected)));
+        let projected = group
+            .project_expressions(&mapping, [&col("a", &schema)?])
+            .next()
+            .flatten();
+        assert!(projected.is_some_and(|expr| expr.eq(&expected)));
+
+        // Without the equivalence, a dropped column has no projection.
+        let projected =
+            EquivalenceGroup::default().project_expr(&mapping, &col("a", &schema)?);
+        assert!(projected.is_none());
+
+        Ok(())
+    }
+
     /// Builds a group from a list of equated column pairs.
     fn group_of(schema: &SchemaRef, pairs: &[(&str, &str)]) -> Result<EquivalenceGroup> {
         let mut group = EquivalenceGroup::default();
@@ -1549,6 +1645,108 @@ mod tests {
             group.add_equal_conditions(col(lhs, schema)?, col(rhs, schema)?);
         }
         Ok(group)
+    }
+
+    #[test]
+    fn test_project_dropped_child_through_equivalent_expression() -> Result<()> {
+        // - columns: [a, b, c, d], with a = b + c and d = a * 2.
+        // - a projection that keeps b and c projects d to (b + c) * 2, which
+        //   needs a's equivalent inside d's equivalent.
+        let schema = abc_schema();
+        let a = col("a", &schema)?;
+        let b_plus_c = binary(
+            col("b", &schema)?,
+            Operator::Plus,
+            col("c", &schema)?,
+            &schema,
+        )?;
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(Arc::clone(&a), b_plus_c);
+        group.add_equal_conditions(
+            col("d", &schema)?,
+            binary(a, Operator::Multiply, lit(2), &schema)?,
+        );
+        let mapping = ProjectionMapping::from_indices(&[1, 2], &schema)?;
+        let projected_schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let expected = binary(
+            binary(
+                col("b", &projected_schema)?,
+                Operator::Plus,
+                col("c", &projected_schema)?,
+                &projected_schema,
+            )?,
+            Operator::Multiply,
+            lit(2),
+            &projected_schema,
+        )?;
+
+        let projected = group.project_expr(&mapping, &col("d", &schema)?);
+        assert!(projected.is_some_and(|expr| expr.eq(&expected)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_cyclic_equivalent_expressions_terminates() -> Result<()> {
+        // a = b + 1 and b = a + 1 refer to each other; a projection that keeps
+        // only c cannot project a, and must not recurse forever.
+        let schema = abc_schema();
+        let (a, b) = (col("a", &schema)?, col("b", &schema)?);
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(
+            Arc::clone(&a),
+            binary(Arc::clone(&b), Operator::Plus, lit(1), &schema)?,
+        );
+        group.add_equal_conditions(
+            Arc::clone(&b),
+            binary(Arc::clone(&a), Operator::Plus, lit(1), &schema)?,
+        );
+        let mapping = ProjectionMapping::from_indices(&[2], &schema)?;
+        assert!(group.project_expr(&mapping, &a).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_dropped_child_used_twice() -> Result<()> {
+        // - columns: [a, b, c, d], with a = b + c.
+        // - a projection that keeps b and c projects a * a to
+        //   (b + c) * (b + c): both uses of a need its equivalent.
+        let schema = abc_schema();
+        let a = col("a", &schema)?;
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(
+            Arc::clone(&a),
+            binary(
+                col("b", &schema)?,
+                Operator::Plus,
+                col("c", &schema)?,
+                &schema,
+            )?,
+        );
+        let a_squared = binary(Arc::clone(&a), Operator::Multiply, a, &schema)?;
+        let mapping = ProjectionMapping::from_indices(&[1, 2], &schema)?;
+        let projected_schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let b_plus_c = binary(
+            col("b", &projected_schema)?,
+            Operator::Plus,
+            col("c", &projected_schema)?,
+            &projected_schema,
+        )?;
+        let expected = binary(
+            Arc::clone(&b_plus_c),
+            Operator::Multiply,
+            b_plus_c,
+            &projected_schema,
+        )?;
+
+        let projected = group.project_expr(&mapping, &a_squared);
+        assert!(projected.is_some_and(|expr| expr.eq(&expected)));
+        Ok(())
     }
 
     fn abc_schema() -> SchemaRef {
