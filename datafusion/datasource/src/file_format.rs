@@ -197,6 +197,17 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
     /// # Arguments
     /// * `table_schema` - The table schema to use for the FileSource (includes partition columns)
     fn file_source(&self, table_schema: crate::TableSchema) -> Arc<dyn FileSource>;
+
+    /// Whether pruning files by their collected statistics is currently
+    /// enabled for this format.
+    ///
+    /// A format whose statistics-based pruning is disabled by configuration
+    /// (for example Parquet's `datafusion.execution.parquet.pruning`) returns
+    /// `false`, so skipping files by their collected statistics is avoided
+    /// during planning as well. Defaults to `true`.
+    fn statistics_pruning_enabled(&self) -> bool {
+        true
+    }
 }
 
 impl dyn FileFormat {

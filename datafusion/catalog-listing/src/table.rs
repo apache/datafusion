@@ -1031,7 +1031,14 @@ impl ListingTable {
         ctx: &dyn Session,
         filters: &[Expr],
     ) -> Option<Arc<datafusion_pruning::PruningPredicate>> {
-        if !ctx.config().collect_statistics() || self.expr_adapter_factory.is_some() {
+        if !ctx.config().collect_statistics()
+            || self.expr_adapter_factory.is_some()
+            // The format's own pruning setting must be respected here too:
+            // a user who disabled statistics pruning (for example
+            // `datafusion.execution.parquet.pruning = false`) expects files
+            // with untrusted statistics not to be skipped at planning either.
+            || !self.options.format.statistics_pruning_enabled()
+        {
             return None;
         }
         // Custom adapters can change values relative to file statistics, and volatile

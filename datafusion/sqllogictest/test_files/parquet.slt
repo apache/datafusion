@@ -1136,3 +1136,47 @@ RESET datafusion.catalog.create_default_catalog_and_schema;
 
 statement ok
 DROP TABLE t;
+
+# `datafusion.execution.parquet.pruning = false` must also stop file pruning
+# from collected statistics, both during planning (`ListingTable` replacing
+# the scan with `EmptyExec`) and at runtime (`FilePruner` skipping the file
+# once opened). NaN statistics prove the need: min/max pruning on them drops
+# matching rows, which is exactly what disabling pruning is for (#27622).
+statement ok
+SET datafusion.execution.parquet.pruning = false;
+
+statement ok
+SET datafusion.execution.parquet.enable_page_index = false;
+
+statement ok
+SET datafusion.execution.parquet.bloom_filter_on_read = false;
+
+statement ok
+COPY (
+  SELECT column1 AS id, column2 AS f
+  FROM (VALUES (1, CAST('NaN' AS DOUBLE)), (2, CAST('NaN' AS DOUBLE)), (3, CAST('0.0' AS DOUBLE)), (4, CAST('1.0' AS DOUBLE)))
+) TO 'test_files/scratch/parquet/nan_stats/data.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE nan_stats STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/nan_stats/data.parquet';
+
+# Both NaN rows are returned instead of 0 rows from statistics pruning.
+query IR
+SELECT id, f FROM nan_stats WHERE f = CAST('NaN' AS DOUBLE);
+----
+1 NaN
+2 NaN
+
+statement ok
+DROP TABLE nan_stats;
+
+statement ok
+reset datafusion.execution.parquet.pruning;
+
+statement ok
+reset datafusion.execution.parquet.enable_page_index;
+
+statement ok
+reset datafusion.execution.parquet.bloom_filter_on_read;
