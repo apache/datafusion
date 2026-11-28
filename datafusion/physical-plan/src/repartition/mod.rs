@@ -1812,12 +1812,15 @@ impl ExecutionPlan for RepartitionExec {
                     .remove(&partition)
                     .expect("partition not used yet");
 
-                (
-                    rx,
-                    reservation,
-                    spill_readers,
-                    Arc::clone(&state.abort_helper),
-                )
+                // The last output partition takes the handle. Otherwise the plan node
+                // keeps the input tasks alive after every output stream drops.
+                let abort_helper = if state.channels.is_empty() {
+                    std::mem::take(&mut state.abort_helper)
+                } else {
+                    Arc::clone(&state.abort_helper)
+                };
+
+                (rx, reservation, spill_readers, abort_helper)
             };
 
             trace!(
@@ -4488,6 +4491,38 @@ mod tests {
         assert_is_pending(&mut fut);
         drop(fut);
         assert_strong_count_converges_to_zero(refs).await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drop_all_outputs_cancel() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+
+        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 2));
+        let refs = blocking_exec.refs();
+        let repartition_exec: Arc<RepartitionExec> = Arc::new(RepartitionExec::try_new(
+            blocking_exec,
+            Partitioning::RoundRobinBatch(2),
+        )?);
+
+        let mut stream0 = repartition_exec.execute(0, Arc::clone(&task_ctx))?;
+        let mut stream1 = repartition_exec.execute(1, Arc::clone(&task_ctx))?;
+        assert!(futures::poll!(stream0.next()).is_pending());
+        assert!(futures::poll!(stream1.next()).is_pending());
+        drop(stream0);
+        drop(stream1);
+
+        // Wait for for everything to get dropped
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while std::sync::Weak::strong_count(&refs) > 1 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("input streams must drop while the plan is alive");
 
         Ok(())
     }
