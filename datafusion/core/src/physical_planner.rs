@@ -83,9 +83,9 @@ use datafusion_expr::physical_planning_context::{
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
-    Filter, JoinType, MaterializedCte, MaterializedCteId, MaterializedCtePlan, Operator,
-    RecursiveQuery, Show, ShowKind, SkipType, StringifiedPlan, WindowFrame,
-    WindowFrameBound, WriteOp,
+    Filter, JoinType, MaterializedCtePlan, Operator, RecursiveQuery, Show, ShowKind,
+    SkipType, StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
+    renumber_materialized_ctes,
 };
 use datafusion_physical_expr::aggregate::{
     AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
@@ -227,84 +227,15 @@ impl DefaultPhysicalPlanner {
         {
             return Ok(plan);
         }
-        let renumbered = renumber_materialized_ctes(logical_plan)?;
-        let logical_plan = renumbered.as_ref().unwrap_or(logical_plan);
+        // The ids must be new for each planning run. See
+        // `renumber_materialized_ctes`.
+        let logical_plan = renumber_materialized_ctes(logical_plan.clone())?.data;
+        let logical_plan = &logical_plan;
         let plan = self
             .create_initial_plan(logical_plan, session_state)
             .await?;
         self.optimize_physical_plan(plan, session_state, |_, _| {})
     }
-}
-
-/// Give each occurrence of a [`MaterializedCte`] in `plan` a new id, and
-/// update the scans in its continuation, including the scans in subqueries.
-///
-/// The id is copied when a logical plan is cloned, so one CTE can occur more
-/// than once, for example when a view that declares it is referenced two
-/// times, or when a DataFrame is joined to itself. Each occurrence is a
-/// separate CTE, as in PostgreSQL.
-///
-/// The ids must also be new for each planning run, not only unique within
-/// `plan`. A table provider can plan a saved logical plan in its `scan`, as a
-/// [`ViewTable`] that is not inlined does. Each such scan is a separate
-/// planning run of the same saved plan, and its CTEs end up in the same
-/// physical plan as the CTEs of the outer run.
-///
-/// Returns `None` when `plan` has no materialized CTE.
-///
-/// [`ViewTable`]: crate::datasource::ViewTable
-fn renumber_materialized_ctes(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
-    let mut has_cte = false;
-    plan.apply_with_subqueries(|node| {
-        if matches!(
-            node,
-            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(_))
-        ) {
-            has_cte = true;
-            return Ok(TreeNodeRecursion::Stop);
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-    if !has_cte {
-        return Ok(None);
-    }
-
-    plan.clone()
-        .transform_down_with_subqueries(|node| {
-            let LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) = node else {
-                return Ok(Transformed::no(node));
-            };
-            let old_id = cte.id;
-            let new_id = MaterializedCteId::next();
-            let continuation = Arc::unwrap_or_clone(cte.continuation)
-                .transform_down_with_subqueries(|node| match node {
-                    // A nested occurrence of the same CTE owns the scans below
-                    // it, and is renumbered on its own.
-                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-                        ref nested,
-                    )) if nested.id == old_id => {
-                        Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
-                    }
-                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(mut scan))
-                        if scan.id == old_id =>
-                    {
-                        scan.id = new_id;
-                        Ok(Transformed::yes(LogicalPlan::MaterializedCte(
-                            MaterializedCtePlan::Scan(scan),
-                        )))
-                    }
-                    _ => Ok(Transformed::no(node)),
-                })?
-                .data;
-            Ok(Transformed::yes(LogicalPlan::MaterializedCte(
-                MaterializedCtePlan::Cte(MaterializedCte {
-                    id: new_id,
-                    continuation: Arc::new(continuation),
-                    ..cte
-                }),
-            )))
-        })
-        .map(|t| Some(t.data))
 }
 
 /// Points every [`MaterializedCteScanExec`] at the buffer of the
@@ -947,8 +878,8 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
                 // Unbound until `bind_materialized_cte_scans` runs on the whole plan.
                 let exec = MaterializedCteScanExec::new(
-                    scan.id.as_u64(),
-                    &scan.name,
+                    scan.id().as_u64(),
+                    scan.name(),
                     Arc::clone(scan.schema().inner()),
                     session.config().target_partitions(),
                 );
@@ -2036,7 +1967,7 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
                 let [body, continuation] = children.two()?;
                 // A CTE that nothing reads is never evaluated.
-                if cte.scans()?.is_empty() {
+                if !cte.is_read()? {
                     return Ok(continuation);
                 }
                 // The body is fully buffered before a scan yields a row, so an
@@ -2044,11 +1975,11 @@ impl DefaultPhysicalPlanner {
                 if body.boundedness().is_unbounded() {
                     return plan_err!(
                         "MATERIALIZED CTE {} reads an unbounded source, which cannot be materialized",
-                        cte.name
+                        cte.name()
                     );
                 }
                 let buffer =
-                    Arc::new(MaterializedCteBuffer::new(cte.id.as_u64(), &cte.name));
+                    Arc::new(MaterializedCteBuffer::new(cte.id().as_u64(), cte.name()));
                 Arc::new(MaterializedCteExec::new(body, continuation, buffer))
             }
 

@@ -2,9 +2,12 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::logical_plan::MaterializedCtePlan;
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use crate::logical_plan::{MaterializedCteId, MaterializedCtePlan};
 use datafusion_common::{
-    DFSchemaRef, Result, assert_or_internal_err, plan_err,
+    DFSchemaRef, Result, assert_or_internal_err, internal_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
 };
 
@@ -98,26 +101,82 @@ fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
     Ok(())
 }
 
-/// Returns an error if a scan of a materialized CTE does not have the names
-/// and types of the columns that it reads from the body of the CTE.
+/// Returns an error if a scan of a materialized CTE is not in the
+/// continuation of its CTE, or does not have the names and types of the
+/// columns that it reads from the body of the CTE.
+///
+/// The id of a CTE is in scope only in its continuation, also in subquery
+/// expressions there. It is not in scope in the body of the CTE or above the
+/// CTE. A nested CTE with the same id owns the scans below it.
 ///
 /// A scan whose CTE is not in `plan` is not checked, because `plan` can be a
 /// part of a larger plan.
 fn assert_materialized_cte_scans_are_valid(plan: &LogicalPlan) -> Result<()> {
+    let mut ids = HashSet::new();
     plan.apply_with_subqueries(|node| {
         if let LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) = node {
-            for scan in cte.scans()? {
-                scan.check_body_schema(cte.body().schema()).map_err(|e| {
-                    e.context(format!(
-                        "A scan of the materialized CTE {} does not match the CTE",
-                        cte.name()
-                    ))
-                })?;
-            }
+            ids.insert(cte.id());
         }
         Ok(TreeNodeRecursion::Continue)
-    })
-    .map(|_| ())
+    })?;
+    if ids.is_empty() {
+        return Ok(());
+    }
+    check_materialized_cte_scope(plan, &ids, &mut vec![])
+}
+
+/// The id and body schema of each CTE whose continuation contains the
+/// current node, innermost last. It holds owned values because
+/// `apply_subqueries` hands out temporary plans.
+type MaterializedCteScope = Vec<(MaterializedCteId, DFSchemaRef)>;
+
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+fn check_materialized_cte_scope(
+    plan: &LogicalPlan,
+    ids: &HashSet<MaterializedCteId>,
+    scope: &mut MaterializedCteScope,
+) -> Result<()> {
+    match plan {
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+            check_materialized_cte_scope(cte.body(), ids, scope)?;
+            scope.push((cte.id(), Arc::clone(cte.body().schema())));
+            let result = check_materialized_cte_scope(cte.continuation(), ids, scope);
+            scope.pop();
+            return result;
+        }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+            if ids.contains(&scan.id()) =>
+        {
+            let Some((_, body_schema)) =
+                scope.iter().rev().find(|(id, _)| *id == scan.id())
+            else {
+                return internal_err!(
+                    "A scan of the materialized CTE {} is not in the continuation of the CTE",
+                    scan.name()
+                );
+            };
+            return scan.check_body_schema(body_schema).map_err(|e| {
+                e.context(format!(
+                    "A scan of the materialized CTE {} does not match the CTE",
+                    scan.name()
+                ))
+            });
+        }
+        _ => {}
+    }
+    for input in plan.inputs() {
+        check_materialized_cte_scope(input, ids, scope)?;
+    }
+    let mut result = Ok(());
+    plan.apply_subqueries(|subquery| {
+        result = check_materialized_cte_scope(subquery, ids, scope);
+        Ok(if result.is_ok() {
+            TreeNodeRecursion::Jump
+        } else {
+            TreeNodeRecursion::Stop
+        })
+    })?;
+    result
 }
 
 /// Returns an error if the plan does not have the expected schema.

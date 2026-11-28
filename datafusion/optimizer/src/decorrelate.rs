@@ -28,8 +28,8 @@ use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{collect_subquery_cols, conjunction, split_conjunction};
 use datafusion_expr::{
     Aggregate, BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, FetchType,
-    LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCtePlan, Operator,
-    SkipType, Window, expr, lit,
+    LogicalPlan, LogicalPlanBuilder, MaterializedCtePlan, Operator, SkipType, Window,
+    expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -233,7 +233,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
             }
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref cte))
-                if !cte.cte.all_out_ref_exprs().is_empty() =>
+                if !cte.body().all_out_ref_exprs().is_empty() =>
             {
                 // A correlated body would have to run once per outer row.
                 Ok(self.stop_pull_up(plan))
@@ -241,16 +241,11 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
                 // Only the continuation can hold correlated expressions. Rewrite
                 // it alone, so that the body shared by every scan keeps its schema.
-                let continuation =
-                    Arc::unwrap_or_clone(cte.continuation).rewrite(self)?;
+                let cte =
+                    cte.map_continuation(|continuation| continuation.rewrite(self))?;
                 Ok(Transformed::new(
-                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-                        MaterializedCte {
-                            continuation: Arc::new(continuation.data),
-                            ..cte
-                        },
-                    )),
-                    continuation.transformed,
+                    cte.data.into(),
+                    cte.transformed,
                     TreeNodeRecursion::Jump,
                 ))
             }
