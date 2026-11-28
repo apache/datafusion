@@ -1571,3 +1571,519 @@ query I
 SELECT count(*) FROM (SELECT * FROM (SELECT a FROM sorted_offset_t OFFSET 2) ORDER BY a LIMIT 3);
 ----
 3
+
+# https://github.com/apache/datafusion/issues/27457: a fetch on a sort that
+# keeps more than one partition bounds each of those partitions, not what the
+# window above reads, so the window numbers a group's later rows from 1. The
+# first two shapes returned a row (5, 2, 1) in every run before this was fixed.
+#
+# Which rows a `LIMIT` returns here is up to the partitions' timing, so each
+# shape asserts that every row it does return is a row of the full result.
+
+statement ok
+SET datafusion.execution.batch_size = 1;
+
+statement ok
+SET datafusion.optimizer.repartition_file_scans = false;
+
+statement ok
+CREATE TABLE w27457_two_partitions (a INT, b INT) AS VALUES (5, 1), (0, 1), (0, 2), (0, 3);
+
+statement ok
+CREATE TABLE w27457_one_partition (a INT, b INT) AS VALUES (5, 2);
+
+# A subset check is vacuous on an empty result, so pin the row count first.
+query I
+SELECT count(*) FROM (
+  SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+  FROM (SELECT * FROM w27457_two_partitions UNION ALL SELECT * FROM w27457_one_partition)
+  LIMIT 3
+);
+----
+3
+
+# `TopKRepartition` copies the TopK below the shuffle, where it keeps the first
+# rows of each input partition: the first table drops (5, 1).
+query I
+SELECT count(*) FROM (
+  SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+  FROM (SELECT * FROM w27457_two_partitions UNION ALL SELECT * FROM w27457_one_partition)
+  LIMIT 3
+) l WHERE NOT EXISTS (
+  SELECT 1 FROM (
+    SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM (SELECT * FROM w27457_two_partitions UNION ALL SELECT * FROM w27457_one_partition)
+  ) f WHERE f.a = l.a AND f.b = l.b AND f.rn = l.rn
+);
+----
+0
+
+query TT
+EXPLAIN
+SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+FROM (SELECT * FROM w27457_two_partitions UNION ALL SELECT * FROM w27457_one_partition)
+LIMIT 3;
+----
+logical_plan
+01)Projection: a, b, row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+02)--Limit: skip=0, fetch=3
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------Union
+05)--------TableScan: w27457_two_partitions projection=[a, b]
+06)--------TableScan: w27457_one_partition projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, b@1 as b, row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn]
+02)--CoalescePartitionsExec: fetch=3
+03)----LocalLimitExec: fetch=3
+04)------BoundedWindowAggExec: wdw=[row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+05)--------SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=2
+07)------------UnionExec
+08)--------------DataSourceExec: partitions=1, partition_sizes=[4]
+09)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The partitions of one `SortExec` also share a TopK threshold, so the same
+# wrong value comes back with `TopKRepartition` off. The rows arrive as
+# (5,2), (0,1), (0,2), (0,3), 1000 x (9,9), (5,1): the group a = 0 sets the
+# threshold to (0,3) before (5,1) arrives.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE w27457_shared_threshold AS SELECT a, b FROM (
+            SELECT 1 AS seq, 5 AS a, 2 AS b
+  UNION ALL SELECT 2, 0, 1
+  UNION ALL SELECT 3, 0, 2
+  UNION ALL SELECT 4, 0, 3
+  UNION ALL SELECT 4 + value, 9, 9 FROM generate_series(1, 1000)
+  UNION ALL SELECT 2000, 5, 1
+) ORDER BY seq;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+SET datafusion.optimizer.enable_topk_repartition = false;
+
+query I
+SELECT count(*) FROM (
+  SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+  FROM w27457_shared_threshold LIMIT 3
+);
+----
+3
+
+query I
+SELECT count(*) FROM (
+  SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+  FROM w27457_shared_threshold LIMIT 3
+) l WHERE NOT EXISTS (
+  SELECT 1 FROM (
+    SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM w27457_shared_threshold
+  ) f WHERE f.a = l.a AND f.b = l.b AND f.rn = l.rn
+);
+----
+0
+
+query TT
+EXPLAIN
+SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+FROM w27457_shared_threshold LIMIT 3;
+----
+logical_plan
+01)Projection: w27457_shared_threshold.a, w27457_shared_threshold.b, row_number() PARTITION BY [w27457_shared_threshold.a] ORDER BY [w27457_shared_threshold.b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+02)--Limit: skip=0, fetch=3
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [w27457_shared_threshold.a] ORDER BY [w27457_shared_threshold.b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: w27457_shared_threshold projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, b@1 as b, row_number() PARTITION BY [w27457_shared_threshold.a] ORDER BY [w27457_shared_threshold.b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn]
+02)--CoalescePartitionsExec: fetch=3
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [w27457_shared_threshold.a] ORDER BY [w27457_shared_threshold.b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [w27457_shared_threshold.a] ORDER BY [w27457_shared_threshold.b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+06)----------DataSourceExec: partitions=1, partition_sizes=[1005]
+
+statement ok
+RESET datafusion.optimizer.enable_topk_repartition;
+
+# An ordered merge above the window bounds what it reads only when it orders
+# the window's partitions apart; here it orders by `a` alone while the window
+# partitions by `a, b`. Rows arrive as (1,5,2), (1,6,2), (1,7,2), (1,8,2),
+# (1,0,1..3), 1000 x (1,9,9), then (1,5,1), (1,6,1), (1,7,1), (1,8,1): the
+# group b = 0 sets the threshold to (1,0,3), which drops every late row, and
+# the groups b = 5..8 number their early row from 1.
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE w27457_merge_key_too_short AS SELECT a, b, c FROM (
+            SELECT 1 AS seq, 1 AS a, 5 AS b, 2 AS c
+  UNION ALL SELECT 2, 1, 6, 2
+  UNION ALL SELECT 3, 1, 7, 2
+  UNION ALL SELECT 4, 1, 8, 2
+  UNION ALL SELECT 5, 1, 0, 1
+  UNION ALL SELECT 6, 1, 0, 2
+  UNION ALL SELECT 7, 1, 0, 3
+  UNION ALL SELECT 7 + value, 1, 9, 9 FROM generate_series(1, 1000)
+  UNION ALL SELECT 2001, 1, 5, 1
+  UNION ALL SELECT 2002, 1, 6, 1
+  UNION ALL SELECT 2003, 1, 7, 1
+  UNION ALL SELECT 2004, 1, 8, 1
+) ORDER BY seq;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+query I
+SELECT count(*) FROM (
+  SELECT a, b, c, row_number() OVER (PARTITION BY a, b ORDER BY c ROWS UNBOUNDED PRECEDING) AS rn
+  FROM w27457_merge_key_too_short ORDER BY a LIMIT 3
+);
+----
+3
+
+query I
+SELECT count(*) FROM (
+  SELECT a, b, c, row_number() OVER (PARTITION BY a, b ORDER BY c ROWS UNBOUNDED PRECEDING) AS rn
+  FROM w27457_merge_key_too_short ORDER BY a LIMIT 3
+) l WHERE NOT EXISTS (
+  SELECT 1 FROM (
+    SELECT a, b, c, row_number() OVER (PARTITION BY a, b ORDER BY c ROWS UNBOUNDED PRECEDING) AS rn
+    FROM w27457_merge_key_too_short
+  ) f WHERE f.a = l.a AND f.b = l.b AND f.c = l.c AND f.rn = l.rn
+);
+----
+0
+
+query TT
+EXPLAIN
+SELECT a, b, c, row_number() OVER (PARTITION BY a, b ORDER BY c ROWS UNBOUNDED PRECEDING) AS rn
+FROM w27457_merge_key_too_short ORDER BY a LIMIT 3;
+----
+logical_plan
+01)Sort: w27457_merge_key_too_short.a ASC NULLS LAST, fetch=3
+02)--Projection: w27457_merge_key_too_short.a, w27457_merge_key_too_short.b, w27457_merge_key_too_short.c, row_number() PARTITION BY [w27457_merge_key_too_short.a, w27457_merge_key_too_short.b] ORDER BY [w27457_merge_key_too_short.c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [w27457_merge_key_too_short.a, w27457_merge_key_too_short.b] ORDER BY [w27457_merge_key_too_short.c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: w27457_merge_key_too_short projection=[a, b, c]
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=3
+02)--ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c, row_number() PARTITION BY [w27457_merge_key_too_short.a, w27457_merge_key_too_short.b] ORDER BY [w27457_merge_key_too_short.c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [w27457_merge_key_too_short.a, w27457_merge_key_too_short.b] ORDER BY [w27457_merge_key_too_short.c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [w27457_merge_key_too_short.a, w27457_merge_key_too_short.b] ORDER BY [w27457_merge_key_too_short.c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+06)----------DataSourceExec: partitions=1, partition_sizes=[1011]
+
+# The same with a constant in the way: `a` is constant under the filter, so the
+# merge's two ordering columns separate the groups by `b` alone while the window
+# partitions by `b, c`.
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE w27457_constant_merge_key AS SELECT a, b, c, d FROM (
+            SELECT 1 AS seq, 1 AS a, 5 AS b, 1 AS c, 2 AS d
+  UNION ALL SELECT 2, 1, 5, 2, 2
+  UNION ALL SELECT 3, 1, 5, 3, 2
+  UNION ALL SELECT 4, 1, 5, 4, 2
+  UNION ALL SELECT 5, 1, 5, 5, 2
+  UNION ALL SELECT 6, 1, 5, 6, 2
+  UNION ALL SELECT 7, 1, 5, 7, 2
+  UNION ALL SELECT 8, 1, 5, 8, 2
+  UNION ALL SELECT 9,  1, 5, 0, 1
+  UNION ALL SELECT 10, 1, 5, 0, 2
+  UNION ALL SELECT 11, 1, 5, 0, 3
+  UNION ALL SELECT 11 + value, 1, 5, 9, 9 FROM generate_series(1, 1000)
+  UNION ALL SELECT 2001, 1, 5, 1, 1
+  UNION ALL SELECT 2002, 1, 5, 2, 1
+  UNION ALL SELECT 2003, 1, 5, 3, 1
+  UNION ALL SELECT 2004, 1, 5, 4, 1
+  UNION ALL SELECT 2005, 1, 5, 5, 1
+  UNION ALL SELECT 2006, 1, 5, 6, 1
+  UNION ALL SELECT 2007, 1, 5, 7, 1
+  UNION ALL SELECT 2008, 1, 5, 8, 1
+) ORDER BY seq;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+query I
+SELECT count(*) FROM (
+  SELECT b, c, d, row_number() OVER (PARTITION BY b, c ORDER BY d ROWS UNBOUNDED PRECEDING) AS rn
+  FROM w27457_constant_merge_key WHERE a = 1 ORDER BY a, b LIMIT 3
+);
+----
+3
+
+query I
+SELECT count(*) FROM (
+  SELECT b, c, d, row_number() OVER (PARTITION BY b, c ORDER BY d ROWS UNBOUNDED PRECEDING) AS rn
+  FROM w27457_constant_merge_key WHERE a = 1 ORDER BY a, b LIMIT 3
+) l WHERE NOT EXISTS (
+  SELECT 1 FROM (
+    SELECT b, c, d, row_number() OVER (PARTITION BY b, c ORDER BY d ROWS UNBOUNDED PRECEDING) AS rn
+    FROM w27457_constant_merge_key WHERE a = 1
+  ) f WHERE f.b = l.b AND f.c = l.c AND f.d = l.d AND f.rn = l.rn
+);
+----
+0
+
+query TT
+EXPLAIN
+SELECT b, c, d, row_number() OVER (PARTITION BY b, c ORDER BY d ROWS UNBOUNDED PRECEDING) AS rn
+FROM w27457_constant_merge_key WHERE a = 1 ORDER BY a, b LIMIT 3;
+----
+logical_plan
+01)Projection: w27457_constant_merge_key.b, w27457_constant_merge_key.c, w27457_constant_merge_key.d, rn
+02)--Sort: w27457_constant_merge_key.a ASC NULLS LAST, w27457_constant_merge_key.b ASC NULLS LAST, fetch=3
+03)----Projection: w27457_constant_merge_key.b, w27457_constant_merge_key.c, w27457_constant_merge_key.d, row_number() PARTITION BY [w27457_constant_merge_key.b, w27457_constant_merge_key.c] ORDER BY [w27457_constant_merge_key.d ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, w27457_constant_merge_key.a
+04)------WindowAggr: windowExpr=[[row_number() PARTITION BY [w27457_constant_merge_key.b, w27457_constant_merge_key.c] ORDER BY [w27457_constant_merge_key.d ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------Filter: w27457_constant_merge_key.a = Int64(1)
+06)----------TableScan: w27457_constant_merge_key projection=[a, b, c, d]
+physical_plan
+01)ProjectionExec: expr=[b@0 as b, c@1 as c, d@2 as d, rn@3 as rn]
+02)--SortPreservingMergeExec: [a@4 ASC NULLS LAST, b@0 ASC NULLS LAST], fetch=3
+03)----ProjectionExec: expr=[b@1 as b, c@2 as c, d@3 as d, row_number() PARTITION BY [w27457_constant_merge_key.b, w27457_constant_merge_key.c] ORDER BY [w27457_constant_merge_key.d ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as rn, a@0 as a]
+04)------BoundedWindowAggExec: wdw=[row_number() PARTITION BY [w27457_constant_merge_key.b, w27457_constant_merge_key.c] ORDER BY [w27457_constant_merge_key.d ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [w27457_constant_merge_key.b, w27457_constant_merge_key.c] ORDER BY [w27457_constant_merge_key.d ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+05)--------SortExec: expr=[b@1 ASC NULLS LAST, c@2 ASC NULLS LAST, d@3 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------RepartitionExec: partitioning=Hash([b@1, c@2], 4), input_partitions=4
+07)------------FilterExec: a@0 = 1
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1019]
+
+# Two orderings over a window partitioned by `a, d` that separate nothing:
+# `a, a AS a2` orders by `a` twice, and `a, floor(d)` leaves rows whose `d`
+# differs tied. With the fetch on the four-partition sort both returned a row
+# whose `rn` is 1 where the full result says 2 -- the first in 17 to 19 of 20
+# runs, the second in 6 to 19. The unit tests on the rule pin both plans.
+
+statement ok
+CREATE TABLE w27457_alias_in_merge_key (a INT, d INT, b INT) AS VALUES (1, 2, 3), (1, 1, 1), (1, 1, 2), (1, 1, 3);
+
+statement ok
+CREATE TABLE w27457_alias_in_merge_key_late (a INT, d INT, b INT) AS VALUES (1, 2, 5);
+
+query I
+SELECT count(*) FROM (
+  SELECT a, a2, d, b, rn FROM (
+    SELECT a, a AS a2, d, b, row_number() OVER (PARTITION BY a, d ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM (SELECT * FROM w27457_alias_in_merge_key UNION ALL SELECT * FROM w27457_alias_in_merge_key_late)
+  ) ORDER BY a, a2 LIMIT 3
+);
+----
+3
+
+query I
+SELECT count(*) FROM (
+  SELECT a, a2, d, b, rn FROM (
+    SELECT a, a AS a2, d, b, row_number() OVER (PARTITION BY a, d ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM (SELECT * FROM w27457_alias_in_merge_key UNION ALL SELECT * FROM w27457_alias_in_merge_key_late)
+  ) ORDER BY a, a2 LIMIT 3
+) l WHERE NOT EXISTS (
+  SELECT 1 FROM (
+    SELECT a, d, b, row_number() OVER (PARTITION BY a, d ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM (SELECT * FROM w27457_alias_in_merge_key UNION ALL SELECT * FROM w27457_alias_in_merge_key_late)
+  ) f WHERE f.a = l.a AND f.d = l.d AND f.b = l.b AND f.rn = l.rn
+);
+----
+0
+
+statement ok
+CREATE TABLE w27457_function_in_merge_key (a INT, d DOUBLE, b INT) AS VALUES (1, 1.3, 3), (1, 1.0, 1), (1, 1.0, 2), (1, 1.0, 3);
+
+statement ok
+CREATE TABLE w27457_function_in_merge_key_late (a INT, d DOUBLE, b INT) AS VALUES (1, 1.3, 5);
+
+query I
+SELECT count(*) FROM (
+  SELECT a, d, b, rn FROM (
+    SELECT a, d, b, row_number() OVER (PARTITION BY a, d ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM (SELECT * FROM w27457_function_in_merge_key UNION ALL SELECT * FROM w27457_function_in_merge_key_late)
+  ) ORDER BY a, floor(d) LIMIT 3
+);
+----
+3
+
+query I
+SELECT count(*) FROM (
+  SELECT a, d, b, rn FROM (
+    SELECT a, d, b, row_number() OVER (PARTITION BY a, d ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM (SELECT * FROM w27457_function_in_merge_key UNION ALL SELECT * FROM w27457_function_in_merge_key_late)
+  ) ORDER BY a, floor(d) LIMIT 3
+) l WHERE NOT EXISTS (
+  SELECT 1 FROM (
+    SELECT a, d, b, row_number() OVER (PARTITION BY a, d ORDER BY b ROWS UNBOUNDED PRECEDING) AS rn
+    FROM (SELECT * FROM w27457_function_in_merge_key UNION ALL SELECT * FROM w27457_function_in_merge_key_late)
+  ) f WHERE f.a = l.a AND f.d = l.d AND f.b = l.b AND f.rn = l.rn
+);
+----
+0
+
+# An ordering that does cover the `PARTITION BY` keeps the fetch: the window
+# reads each of its groups whole within one partition, so the rows it numbers
+# wrong all sort after the merge's own fetch. `main` plans the same TopK for
+# all three -- a constant key the sort drops, a hash on part of the key, and a
+# window above a window.
+
+statement ok
+CREATE TABLE w27457_covered (a INT, b INT, c INT) AS VALUES (1, 1, 1), (1, 2, 2), (2, 1, 3);
+
+statement ok
+CREATE TABLE w27457_covered_late (a INT, b INT, c INT) AS VALUES (1, 1, 6);
+
+query TT
+EXPLAIN
+SELECT a, b, c, row_number() OVER (PARTITION BY a, b ORDER BY c ROWS UNBOUNDED PRECEDING) AS rn
+FROM (SELECT * FROM w27457_covered UNION ALL SELECT * FROM w27457_covered_late)
+WHERE a = 1 ORDER BY a, b LIMIT 3;
+----
+logical_plan
+01)Sort: a ASC NULLS LAST, b ASC NULLS LAST, fetch=3
+02)--Projection: a, b, c, row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------Union
+05)--------Filter: w27457_covered.a = Int32(1)
+06)----------TableScan: w27457_covered projection=[a, b, c]
+07)--------Filter: w27457_covered_late.a = Int32(1)
+08)----------TableScan: w27457_covered_late projection=[a, b, c]
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], fetch=3
+02)--ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c, row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=3), expr=[b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=5
+06)----------UnionExec
+07)------------FilterExec: a@0 = 1
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------DataSourceExec: partitions=1, partition_sizes=[3]
+10)------------FilterExec: a@0 = 1
+11)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN
+SELECT b, m, row_number() OVER (PARTITION BY m, b ORDER BY m ROWS UNBOUNDED PRECEDING) AS rn
+FROM (
+  SELECT b, max(c) AS m
+  FROM (SELECT * FROM w27457_covered UNION ALL SELECT * FROM w27457_covered_late)
+  GROUP BY b
+) ORDER BY m, b LIMIT 3;
+----
+logical_plan
+01)Sort: m ASC NULLS LAST, b ASC NULLS LAST, fetch=3
+02)--Projection: b, m, row_number() PARTITION BY [m, b] ORDER BY [m ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [m, b] ORDER BY [m ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------Projection: b, max(c) AS m
+05)--------Aggregate: groupBy=[[b]], aggr=[[max(c)]]
+06)----------Union
+07)------------TableScan: w27457_covered projection=[b, c]
+08)------------TableScan: w27457_covered_late projection=[b, c]
+physical_plan
+01)SortPreservingMergeExec: [m@1 ASC NULLS LAST, b@0 ASC NULLS LAST], fetch=3
+02)--ProjectionExec: expr=[b@0 as b, m@1 as m, row_number() PARTITION BY [m, b] ORDER BY [m ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn]
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [m, b] ORDER BY [m ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [m, b] ORDER BY [m ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------ProjectionExec: expr=[b@0 as b, max(c)@1 as m]
+05)--------SortExec: TopK(fetch=3), expr=[max(c)@1 ASC NULLS LAST, b@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[max(c)]
+07)------------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
+08)--------------AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[max(c)]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+10)------------------UnionExec
+11)--------------------DataSourceExec: partitions=1, partition_sizes=[3]
+12)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN
+SELECT a, b, c,
+  row_number() OVER (PARTITION BY a ORDER BY b ROWS UNBOUNDED PRECEDING) AS r1,
+  row_number() OVER (PARTITION BY a ORDER BY b, c ROWS UNBOUNDED PRECEDING) AS r2
+FROM (SELECT * FROM w27457_covered UNION ALL SELECT * FROM w27457_covered_late)
+ORDER BY a LIMIT 3;
+----
+logical_plan
+01)Sort: a ASC NULLS LAST, fetch=3
+02)--Projection: a, b, c, row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r1, row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST, c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r2
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------WindowAggr: windowExpr=[[row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST, c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------Union
+06)----------TableScan: w27457_covered projection=[a, b, c]
+07)----------TableScan: w27457_covered_late projection=[a, b, c]
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=3
+02)--ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c, row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as r1, row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST, c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as r2]
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------BoundedWindowAggExec: wdw=[row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST, c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST, c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+05)--------SortExec: TopK(fetch=3), expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=2
+07)------------SortExec: TopK(fetch=3), expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[true]
+08)--------------UnionExec
+09)----------------DataSourceExec: partitions=1, partition_sizes=[3]
+10)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The ordering only has to cover the merge's input partitioning, not every
+# `PARTITION BY`: a hash on part of the key keeps each group whole, and a key
+# the filter fixes to one value cannot split rows that tie. `main` plans the
+# same TopK for both.
+
+query TT
+EXPLAIN
+SELECT a, b, c,
+  row_number() OVER (PARTITION BY a ORDER BY b, c ROWS UNBOUNDED PRECEDING) AS r1,
+  row_number() OVER (PARTITION BY a, b ORDER BY c ROWS UNBOUNDED PRECEDING) AS r2
+FROM (SELECT * FROM w27457_covered UNION ALL SELECT * FROM w27457_covered_late)
+ORDER BY a LIMIT 3;
+----
+logical_plan
+01)Sort: a ASC NULLS LAST, fetch=3
+02)--Projection: a, b, c, row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST, c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r1, row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r2
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------WindowAggr: windowExpr=[[row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST, c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+05)--------Union
+06)----------TableScan: w27457_covered projection=[a, b, c]
+07)----------TableScan: w27457_covered_late projection=[a, b, c]
+physical_plan
+01)SortPreservingMergeExec: [a@0 ASC NULLS LAST], fetch=3
+02)--ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c, row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST, c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as r1, row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@4 as r2]
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------BoundedWindowAggExec: wdw=[row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST, c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [a] ORDER BY [b ASC NULLS LAST, c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+05)--------SortExec: TopK(fetch=3), expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=2
+07)------------SortExec: TopK(fetch=3), expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[true]
+08)--------------UnionExec
+09)----------------DataSourceExec: partitions=1, partition_sizes=[3]
+10)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN
+SELECT a, b, c, row_number() OVER (PARTITION BY a, b ORDER BY c ROWS UNBOUNDED PRECEDING) AS rn
+FROM (SELECT * FROM w27457_covered UNION ALL SELECT * FROM w27457_covered_late)
+WHERE a = 1 ORDER BY b LIMIT 3;
+----
+logical_plan
+01)Sort: b ASC NULLS LAST, fetch=3
+02)--Projection: a, b, c, row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------Union
+05)--------Filter: w27457_covered.a = Int32(1)
+06)----------TableScan: w27457_covered projection=[a, b, c]
+07)--------Filter: w27457_covered_late.a = Int32(1)
+08)----------TableScan: w27457_covered_late projection=[a, b, c]
+physical_plan
+01)SortPreservingMergeExec: [b@1 ASC NULLS LAST], fetch=3
+02)--ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c, row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as rn]
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [a, b] ORDER BY [c ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: TopK(fetch=3), expr=[b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=5
+06)----------UnionExec
+07)------------FilterExec: a@0 = 1
+08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------DataSourceExec: partitions=1, partition_sizes=[3]
+10)------------FilterExec: a@0 = 1
+11)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.optimizer.repartition_file_scans;
+
+statement ok
+RESET datafusion.execution.batch_size;
