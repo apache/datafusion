@@ -643,6 +643,51 @@ async fn roundtrip_logical_plan_limit_skip() -> Result<()> {
     Ok(())
 }
 
+/// A listing scan in the Avro format decodes when the `avro` feature is
+/// enabled, and returns an error rather than panicking when it is not.
+#[tokio::test]
+async fn listing_scan_avro_format_decode() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    let plan = ctx.table("t1").await?.into_optimized_plan()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let mut node = protobuf::LogicalPlanNode::decode(bytes.as_ref())
+        .map_err(|e| internal_datafusion_err!("{e}"))?;
+    let Some(protobuf::logical_plan_node::LogicalPlanType::ListingScan(scan)) =
+        node.logical_plan_type.as_mut()
+    else {
+        unreachable!("expected a ListingScan")
+    };
+    scan.file_format_type = Some(
+        protobuf::listing_table_scan_node::FileFormatType::Avro(protobuf::AvroFormat {}),
+    );
+
+    let result = logical_plan_from_bytes(&node.encode_to_vec(), &ctx.task_ctx());
+    #[cfg(feature = "avro")]
+    {
+        use datafusion_catalog::default_table_source::source_as_provider;
+        use datafusion_datasource_avro::file_format::AvroFormat;
+
+        let LogicalPlan::TableScan(scan) = result? else {
+            unreachable!("expected a TableScan");
+        };
+        let provider = source_as_provider(&scan.source)?;
+        let listing_table = provider
+            .downcast_ref::<ListingTable>()
+            .expect("expected a ListingTable");
+        assert!(listing_table.options().format.is::<AvroFormat>());
+    }
+    #[cfg(not(feature = "avro"))]
+    datafusion_common::assert_contains!(
+        result.unwrap_err().to_string(),
+        "`avro` feature is not enabled"
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn roundtrip_logical_plan_dml() -> Result<()> {
     let ctx = SessionContext::new();
