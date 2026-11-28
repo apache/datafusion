@@ -947,6 +947,26 @@ SELECT CAST(NULL::STRUCT(b INT, a INT) AS STRUCT(a INT, b INT));
 ----
 NULL
 
+# TRY_CAST accepts the same struct casts as CAST (fields matched by name)
+query ?
+SELECT TRY_CAST({a: 1} AS STRUCT(a INT, b INT));
+----
+{a: 1, b: NULL}
+
+# A field value that cannot be cast becomes NULL
+query ?
+SELECT TRY_CAST({a: 'x', b: 1} AS STRUCT(a INT, b INT, c INT));
+----
+{a: NULL, b: 1, c: NULL}
+
+query ?
+SELECT TRY_CAST(make_array({a: 1}, {a: 2}) AS STRUCT(a INT, b INT)[]);
+----
+[{a: 1, b: NULL}, {a: 2, b: NULL}]
+
+statement error DataFusion error: This feature is not implemented: Unsupported TRY_CAST from Struct\("c0": Int64, "c1": Utf8, "c2": Utf8\) to Struct\("a": Int32, "b": Utf8View\)
+SELECT TRY_CAST(struct(1, 'x', 'y') AS STRUCT(a INT, b VARCHAR));
+
 ############################
 # Implicit Coercion Tests with CREATE TABLE AS VALUES
 ############################
