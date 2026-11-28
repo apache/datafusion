@@ -274,6 +274,54 @@ drop table strings
 statement ok
 drop table dict_table
 
+# LIKE also uses run-end encoded Utf8 and Dictionary(_, Utf8) values directly
+statement ok
+create table ree_table as
+select
+  arrow_cast(column1, 'RunEndEncoded("run_ends": non-null Int32, "values": Utf8)') as ree,
+  arrow_cast(arrow_cast(column1, 'Dictionary(Int32, Utf8)'),
+    'RunEndEncoded("run_ends": non-null Int32, "values": Dictionary(Int32, Utf8))') as ree_dict,
+  arrow_cast(arrow_cast(column1, 'Dictionary(Int32, Utf8)'),
+    'Dictionary(Int32, RunEndEncoded("run_ends": non-null Int32, "values": Utf8))') as dict_ree
+from (values ('Foo_Bar'), ('Foo_Bar'), ('FooBar'), (NULL), ('Baz'));
+
+query BBBBBBBB
+select
+  ree LIKE 'Foo\_%', ree NOT LIKE 'Foo\_%', ree ILIKE 'foo\_%', ree NOT ILIKE 'foo\_%',
+  ree_dict LIKE 'Foo\_%', ree_dict NOT LIKE 'Foo\_%', ree_dict ILIKE 'foo\_%', ree_dict NOT ILIKE 'foo\_%'
+from ree_table;
+----
+true false true false true false true false
+true false true false true false true false
+false true false true false true false true
+NULL NULL NULL NULL NULL NULL NULL NULL
+false true false true false true false true
+
+# plan should not cast the run-end encoded columns
+query TT
+explain select ree LIKE 'Foo\_%', ree_dict NOT ILIKE 'foo\_%' from ree_table;
+----
+logical_plan
+01)Projection: ree_table.ree LIKE Utf8("Foo\_%"), ree_table.ree_dict NOT ILIKE Utf8("foo\_%")
+02)--TableScan: ree_table projection=[ree, ree_dict]
+physical_plan
+01)ProjectionExec: expr=[ree@0 LIKE Foo\_% as ree_table.ree LIKE Utf8("Foo\_%"), ree_dict@1 NOT ILIKE foo\_% as ree_table.ree_dict NOT ILIKE Utf8("foo\_%")]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# a dictionary around REE, or a pattern that is not Utf8, still casts
+query TT
+explain select dict_ree LIKE 'Foo\_%', ree LIKE arrow_cast('Foo\_%', 'Utf8View') from ree_table;
+----
+logical_plan
+01)Projection: CAST(ree_table.dict_ree AS Utf8) LIKE Utf8("Foo\_%"), CAST(ree_table.ree AS Utf8View) LIKE Utf8View("Foo\_%") AS ree_table.ree LIKE arrow_cast(Utf8("Foo\_%"),Utf8("Utf8View"))
+02)--TableScan: ree_table projection=[ree, dict_ree]
+physical_plan
+01)ProjectionExec: expr=[CAST(dict_ree@1 AS Utf8) LIKE Foo\_% as ree_table.dict_ree LIKE Utf8("Foo\_%"), CAST(ree@0 AS Utf8View) LIKE Foo\_% as ree_table.ree LIKE arrow_cast(Utf8("Foo\_%"),Utf8("Utf8View"))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table ree_table
+
 # Dict value types that themselves need further coercion against the literal
 statement ok
 create table dict_inner as
