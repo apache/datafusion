@@ -263,7 +263,7 @@ impl<'a> TopKHeapBoundary<'a> {
         sort_exprs: &[PhysicalSortExpr],
     ) -> Result<Vec<ScalarValue>> {
         let mut scalar_values = Vec::with_capacity(sort_exprs.len());
-        let row = self.batch.slice(self.row.index, 1);
+        let row = self.batch.slice(self.row.index as usize, 1);
         for sort_expr in sort_exprs {
             let value = sort_expr.expr.evaluate(&row)?;
 
@@ -513,7 +513,7 @@ impl TopK {
                 Some(max_row) if row.as_ref() >= max_row.row() => {}
                 // don't yet have k items or new item is lower than the currently k low values
                 None | Some(_) => {
-                    self.heap.add(batch_entry, row, index);
+                    self.heap.add(batch_entry, row, index as u32);
                     replacements += 1;
                 }
             }
@@ -808,7 +808,7 @@ impl TopK {
         self.append_common_prefix_row(
             prefix_converter,
             boundary.batch,
-            boundary.row.index,
+            boundary.row.index as usize,
             &mut scratch,
         )?;
         Ok(Some(scratch.row(0).as_ref().to_vec()))
@@ -981,7 +981,7 @@ impl TopKHeap {
         &mut self,
         batch_entry: &mut RecordBatchEntry,
         row: impl AsRef<[u8]>,
-        index: usize,
+        index: u32,
     ) {
         let batch_id = batch_entry.id;
         batch_entry.uses += 1;
@@ -1037,7 +1037,7 @@ impl TopKHeap {
 
         let indices: Vec<_> = topk_rows
             .iter()
-            .map(|k| (batch_id_array_pos[&k.batch_id], k.index))
+            .map(|k| (batch_id_array_pos[&k.batch_id], k.index as usize))
             .collect();
 
         // At this point `indices` contains indexes within the
@@ -1089,7 +1089,7 @@ impl TopKHeap {
         // position do not change
         for (i, topk_row) in topk_rows.iter_mut().enumerate() {
             topk_row.batch_id = batch_entry.id;
-            topk_row.index = i;
+            topk_row.index = i as u32;
         }
         self.insert_batch_entry(batch_entry);
         // restore the heap
@@ -1120,13 +1120,13 @@ struct TopKRow {
     row: Vec<u8>,
     /// the RecordBatch this row came from: an id into a [`RecordBatchStore`]
     batch_id: u32,
-    /// the index in this record batch the row came from
-    index: usize,
+    /// the index of a row inside one Arrow batch; a batch cannot exceed the i32 offset limit, so `u32` is sufficient and keeps the struct at 32 bytes instead of 40
+    index: u32,
 }
 
 impl TopKRow {
     /// Create a new TopKRow with new allocation
-    fn new(row: impl AsRef<[u8]>, batch_id: u32, index: usize) -> Self {
+    fn new(row: impl AsRef<[u8]>, batch_id: u32, index: u32) -> Self {
         Self {
             row: row.as_ref().to_vec(),
             batch_id,
@@ -1135,7 +1135,7 @@ impl TopKRow {
     }
 
     // Replace the existing row capacity with new values
-    fn replace_with(&mut self, new_row: impl AsRef<[u8]>, batch_id: u32, index: usize) {
+    fn replace_with(&mut self, new_row: impl AsRef<[u8]>, batch_id: u32, index: u32) {
         self.row.clear();
         self.row.extend_from_slice(new_row.as_ref());
 
@@ -3613,7 +3613,7 @@ mod tests {
         )
     }
 
-    fn heap_snapshot(topk: &TopK) -> Vec<(Vec<u8>, u32, usize)> {
+    fn heap_snapshot(topk: &TopK) -> Vec<(Vec<u8>, u32, u32)> {
         topk.heap
             .inner
             .iter()
