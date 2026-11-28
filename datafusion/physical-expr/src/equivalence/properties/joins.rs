@@ -26,6 +26,10 @@ pub fn join_equivalence_properties(
         left_size,
         on,
     )?)?;
+    if *join_type == JoinType::Inner {
+        result
+            .add_functional_dependencies(left.inner_join_functional_dependencies(&right));
+    }
 
     let EquivalenceProperties {
         oeq_class: left_oeq_class,
