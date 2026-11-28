@@ -311,7 +311,15 @@ impl Unparser<'_> {
         select: &mut SelectBuilder,
         fully_absorbed: bool,
     ) -> Result<bool> {
-        let mut exprs = p.expr.clone();
+        // A projection of no columns (e.g. under `count(*)` once
+        // `optimize_projections` has pruned every input column) gets the
+        // same fallback as an empty table scan projection, so dialects
+        // that reject `SELECT FROM` receive `SELECT 1 FROM`.
+        let mut exprs = if p.expr.is_empty() {
+            self.empty_projection_fallback()
+        } else {
+            p.expr.clone()
+        };
 
         // If an Unnest node is found within the select, find and unproject the unnest column
         let flatten_alias = select.current_flatten_alias();
