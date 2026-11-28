@@ -2156,6 +2156,32 @@ physical_plan
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/goose_bay_epochs.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
+# Day buckets keep the order in zones whose transitions never cross local
+# midnight, such as New York, so no sort is needed.
+query TT
+EXPLAIN SELECT date_trunc('day', from_unixtime(c, 'America/New_York')) AS bucket
+FROM goose_bay_epochs
+ORDER BY bucket;
+----
+physical_plan
+01)SortPreservingMergeExec: [bucket@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[date_trunc(day, from_unixtime(c@0, America/New_York)) as bucket]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/goose_bay_epochs.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
+
+# Goose_Bay fell back from 00:01 to 23:01 the previous day, so the sort stays.
+query TT
+EXPLAIN SELECT date_trunc('day', from_unixtime(c, 'America/Goose_Bay')) AS bucket
+FROM goose_bay_epochs
+ORDER BY bucket;
+----
+physical_plan
+01)SortPreservingMergeExec: [bucket@0 ASC NULLS LAST]
+02)--SortExec: expr=[bucket@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[date_trunc(day, from_unixtime(c@0, America/Goose_Bay)) as bucket]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/timestamps/goose_bay_epochs.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
+
 statement ok
 DROP TABLE goose_bay_epochs;
 
