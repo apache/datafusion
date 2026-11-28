@@ -248,12 +248,14 @@ impl RunOpt {
             ));
         }
 
-        for i in 0..self.common.iterations {
+        let mut sampler = self.common.sampler();
+        while let Some(i) = sampler.next_iteration() {
             let start = Instant::now();
 
             let row_count = Self::execute_sql_without_result_buffering(sql, ctx).await?;
 
             let elapsed = start.elapsed();
+            sampler.record(elapsed);
 
             println!(
                 "Query {query_name} iteration {i} returned {row_count} rows in {elapsed:?}"

@@ -154,36 +154,66 @@ select column1, column2, column3, column4, column5, column6, column7, column8, c
 statement ok
 create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar);
 
-# https://github.com/apache/datafusion/issues/9714
-## Until the partition by parsing uses ColumnDef, this test is meaningless since it becomes an overfit. Even in
-## CREATE EXTERNAL TABLE, there is a schema mismatch, this should be an issue.
-#
-#query TTT
-#insert into test VALUES ('a', 'x', 'aa'), ('b','y', 'bb'), ('c', 'z', 'cc')
-#----
-#3
-#
-#query T
-#select "'test'" from test
-#----
-#a
-#b
-#c
-#
-# # Note to place a single ' inside of a literal string escape by putting two ''
-#query TTT
-#copy test to 'test_files/scratch/copy/escape_quote' STORED AS CSV;
-#----
-#3
-#
-#statement ok
-#CREATE EXTERNAL TABLE validate_partitioned_escape_quote STORED AS CSV
-#LOCATION 'test_files/scratch/copy/escape_quote/' PARTITIONED BY ("'test2'", "'test3'");
-#
-# This triggers a panic (index out of bounds)
-# https://github.com/apache/datafusion/issues/9269
-#query
-#select * from validate_partitioned_escape_quote;
+query I
+insert into test VALUES ('a', 'x', 'aa'), ('b','y', 'bb'), ('c', 'z', 'cc')
+----
+3
+
+query T
+select "'test'" from test order by 1
+----
+a
+b
+c
+
+# Quoted partition column names keep their exact spelling
+query I
+copy test to 'test_files/scratch/copy/escape_quote/' STORED AS PARQUET PARTITIONED BY ("'test2'", "'test3'");
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_escape_quote STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/escape_quote/' PARTITIONED BY ("'test2'", "'test3'");
+
+query TTT
+select "'test'", "'test2'", "'test3'" from validate_partitioned_escape_quote order by 1
+----
+a x aa
+b y bb
+c z cc
+
+# Unquoted partition column names are normalized like other identifiers
+query I
+COPY source_table TO 'test_files/scratch/copy/partitioned_upper_ident/' STORED AS PARQUET PARTITIONED BY (COL2);
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_upper_ident STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_upper_ident/' PARTITIONED BY (COL2);
+
+query IT
+select col1, col2 from validate_partitioned_upper_ident order by col1
+----
+1 Foo
+2 Bar
+
+# Quoted mixed-case partition column names match the directory keys exactly
+query I
+COPY (SELECT col1 AS "Id", col2 AS "Part" FROM source_table) TO 'test_files/scratch/copy/partitioned_mixed_case/' STORED AS PARQUET PARTITIONED BY ("Part");
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_mixed_case STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_mixed_case/' PARTITIONED BY ("Part");
+
+query IT
+select "Id", "Part" from validate_partitioned_mixed_case order by "Id"
+----
+1 Foo
+2 Bar
 
 query TT
 EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' STORED AS PARQUET OPTIONS ('format.compression' 'zstd(10)');

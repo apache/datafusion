@@ -297,7 +297,8 @@ impl RunOpt {
         let mut millis = vec![];
         // run benchmark
         let mut query_results = vec![];
-        for i in 0..self.iterations() {
+        let mut sampler = self.common.sampler();
+        while let Some(i) = sampler.next_iteration() {
             let start = Instant::now();
 
             let query_id_str = map_query_id_to_str(query_id);
@@ -310,6 +311,7 @@ impl RunOpt {
             }
 
             let elapsed = start.elapsed(); //.as_secs_f64() * 1000.0;
+            sampler.record(elapsed);
             let ms = elapsed.as_secs_f64() * 1000.0;
             millis.push(ms);
             info!("output:\n\n{}\n\n", pretty_format_batches(&result)?);
@@ -448,10 +450,6 @@ impl RunOpt {
         )))
     }
 
-    fn iterations(&self) -> usize {
-        self.common.iterations
-    }
-
     fn partitions(&self) -> usize {
         self.common
             .partitions
@@ -492,6 +490,9 @@ mod tests {
         let path = get_imdb_data_path()?;
         let common = CommonOpt {
             iterations: 1,
+            max_time: None,
+            target_precision: 0.02,
+            max_iterations: 1000,
             partitions: Some(2),
             batch_size: Some(8192),
             mem_pool_type: "fair".to_string(),
@@ -528,6 +529,9 @@ mod tests {
         let path = get_imdb_data_path()?;
         let common = CommonOpt {
             iterations: 1,
+            max_time: None,
+            target_precision: 0.02,
+            max_iterations: 1000,
             partitions: Some(2),
             batch_size: Some(8192),
             mem_pool_type: "fair".to_string(),

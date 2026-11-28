@@ -283,7 +283,6 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{AsArray, RecordBatch, record_batch};
-    use arrow::datatypes as arrow_schema;
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use datafusion_common::{DFSchema, ScalarValue, config::ConfigOptions};
     use datafusion_expr::{

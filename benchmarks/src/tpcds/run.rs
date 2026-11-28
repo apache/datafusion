@@ -224,7 +224,8 @@ impl RunOpt {
             println!("=== SQL for query {query_id} ===\n{}\n", sql.join(";\n"));
         }
 
-        for i in 0..self.iterations() {
+        let mut sampler = self.common.sampler();
+        while let Some(i) = sampler.next_iteration() {
             let start = Instant::now();
 
             // query 15 is special, with 3 statements. the second statement is the one from which we
@@ -236,6 +237,7 @@ impl RunOpt {
             }
 
             let elapsed = start.elapsed();
+            sampler.record(elapsed);
             let ms = elapsed.as_secs_f64() * 1000.0;
             millis.push(ms);
             info!("output:\n\n{}\n\n", pretty_format_batches(&result)?);
@@ -367,10 +369,6 @@ impl RunOpt {
             .with_cache(ctx.runtime_env().cache_manager.get_file_statistic_cache());
 
         Ok(Arc::new(provider))
-    }
-
-    fn iterations(&self) -> usize {
-        self.common.iterations
     }
 
     fn partitions(&self) -> usize {

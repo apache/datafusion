@@ -2,6 +2,72 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+//! Grouped aggregate tables.
+//!
+//! # Design Goals
+//!
+//! These tables are designed so that updating the aggregates can be
+//! vectorized (done in a tight loop) without allocations. The
+//! accumulator state is *not* stored inline with the group values and
+//! instead is delegated to the individual
+//! accumulators which have type specialized inner loops that perform
+//! the aggregation.
+//!
+//! # Architecture
+//!
+//! ```text
+//!
+//!     Assigns a consecutive group           internally stores aggregate values
+//!     index for each unique set                     for all groups
+//!         of group values
+//!
+//!         ┌────────────┐              ┌──────────────┐       ┌──────────────┐
+//!         │ ┌────────┐ │              │┌────────────┐│       │┌────────────┐│
+//!         │ │  "A"   │ │              ││accumulator ││       ││accumulator ││
+//!         │ ├────────┤ │              ││     0      ││       ││     N      ││
+//!         │ │  "Z"   │ │              ││ ┌────────┐ ││       ││ ┌────────┐ ││
+//!         │ └────────┘ │              ││ │ state  │ ││       ││ │ state  │ ││
+//!         │            │              ││ │┌─────┐ │ ││  ...  ││ │┌─────┐ │ ││
+//!         │    ...     │              ││ │├─────┤ │ ││       ││ │├─────┤ │ ││
+//!         │            │              ││ │└─────┘ │ ││       ││ │└─────┘ │ ││
+//!         │            │              ││ │        │ ││       ││ │        │ ││
+//!         │ ┌────────┐ │              ││ │  ...   │ ││       ││ │  ...   │ ││
+//!         │ │  "Q"   │ │              ││ │        │ ││       ││ │        │ ││
+//!         │ └────────┘ │              ││ │┌─────┐ │ ││       ││ │┌─────┐ │ ││
+//!         │            │              ││ │└─────┘ │ ││       ││ │└─────┘ │ ││
+//!         └────────────┘              ││ └────────┘ ││       ││ └────────┘ ││
+//!                                     │└────────────┘│       │└────────────┘│
+//!                                     └──────────────┘       └──────────────┘
+//!
+//!         group_values                             accumulators
+//!
+//! ```
+//!
+//! For example, given a query like `COUNT(x), SUM(y) ... GROUP BY z`,
+//! [`GroupValues`] will store the distinct values of `z`. There will
+//! be one accumulator for `COUNT(x)`, specialized for the data type
+//! of `x` and one accumulator for `SUM(y)`, specialized for the data
+//! type of `y`.
+//!
+//! # Discussion
+//!
+//! [`GroupValues`] does not store any aggregate state inline. It only
+//! assigns "group indices", one for each (distinct) group value. The
+//! accumulators manage the in-progress aggregate state for each
+//! group, while the group values themselves are stored in
+//! [`GroupValues`] at the corresponding group index.
+//!
+//! The accumulator state (e.g partial sums) is managed by and stored
+//! by a [`GroupsAccumulator`] accumulator. There is one accumulator
+//! per aggregate expression (COUNT, AVG, etc) in the
+//! table. Internally, each `GroupsAccumulator` manages the state for
+//! multiple groups, and is passed `group_indices` during update. Note
+//! that the accumulator state is not stored inline with the group values.
+//!
+//! [`GroupValues`]: crate::aggregates::group_values::GroupValues
+//! [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
+//!
+
 mod clustered_final_table;
 mod clustered_partial_table;
 mod clustered_single_table;
@@ -86,7 +152,7 @@ impl AggregateTableMetrics {
 
 pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialReduceMarker,
-    PartialSkipMarker, SingleMarker, create_group_accumulator,
+    PartialSkipMarker, SingleMarker,
 };
 pub(super) use common_clustered::{
     ClusteredAggregateTable, ClusteredAggregateTableMetrics,

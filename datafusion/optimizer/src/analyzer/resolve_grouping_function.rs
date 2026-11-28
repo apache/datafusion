@@ -248,8 +248,7 @@ fn grouping_function_on_id(
         // Mask the ordinal bits above position `n` so only the semantic bitmask is visible.
         // checked_shl returns None when n >= 64 (all bits are semantic), mapping to u64::MAX.
         let semantic_mask: u64 = 1u64.checked_shl(n as u32).map_or(u64::MAX, |m| m - 1);
-        let masked_id =
-            bitwise_and(grouping_id_column.clone(), literal(semantic_mask as usize));
+        let masked_id = bitwise_and(grouping_id_column, literal(semantic_mask as usize));
         return Ok(cast(masked_id, DataType::Int32));
     }
 

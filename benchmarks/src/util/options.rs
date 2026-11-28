@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use clap::Args;
 use datafusion::{
@@ -20,6 +20,7 @@ use datafusion::{
 use datafusion_common::{DataFusionError, Result};
 use object_store::local::LocalFileSystem;
 
+use super::sampler::Sampler;
 use super::simulated_object_store::{
     BYTES_PER_SECOND, MAX_CONNECTIONS, SimulatedObjectStore,
 };
@@ -28,9 +29,23 @@ use super::simulated_object_store::{
 // shows up in help files)
 #[derive(Debug, Args, Clone)]
 pub struct CommonOpt {
-    /// Number of iterations of each test run
+    /// Number of iterations of each test run. With --max-time, the minimum number of iterations
     #[arg(short = 'i', long = "iterations", default_value = "3", env)]
     pub iterations: usize,
+
+    /// Run each query adaptively for up to this many seconds: keep iterating after --iterations
+    /// until the median converges to --target-precision or --max-iterations is reached
+    #[arg(long = "max-time", env)]
+    pub max_time: Option<f64>,
+
+    /// With --max-time, stop once the 95% confidence interval of the median is within this
+    /// fraction of the median (0.02 = +/-2%)
+    #[arg(long = "target-precision", default_value = "0.02", env)]
+    pub target_precision: f64,
+
+    /// With --max-time, the maximum number of iterations of each query
+    #[arg(long = "max-iterations", default_value = "1000", env)]
+    pub max_iterations: usize,
 
     /// Number of partitions to process in parallel. Defaults to number of available cores.
     #[arg(short = 'n', long = "partitions")]
@@ -109,6 +124,19 @@ impl QueryOpt {
 }
 
 impl CommonOpt {
+    /// Returns the [`Sampler`] that controls the iteration loop of one query.
+    pub fn sampler(&self) -> Sampler {
+        match self.max_time {
+            None => Sampler::fixed(self.iterations),
+            Some(secs) => Sampler::adaptive(
+                self.iterations,
+                self.max_iterations,
+                Duration::from_secs_f64(secs),
+                self.target_precision,
+            ),
+        }
+    }
+
     /// Return an appropriately configured `SessionConfig`
     pub fn config(&self) -> Result<SessionConfig> {
         SessionConfig::from_env().map(|config| self.update_config(config))
@@ -342,6 +370,9 @@ mod tests {
         // when no CLI --memory-limit is provided
         let opt = CommonOpt {
             iterations: 3,
+            max_time: None,
+            target_precision: 0.02,
+            max_iterations: 1000,
             partitions: None,
             batch_size: None,
             mem_pool_type: "fair".to_string(),
