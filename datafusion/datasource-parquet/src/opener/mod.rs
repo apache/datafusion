@@ -456,6 +456,10 @@ struct PreparedParquetOpen {
     output_schema: SchemaRef,
     projection: ProjectionExprs,
     predicate: Option<Arc<dyn PhysicalExpr>>,
+    /// Predicate used for row-group metadata pruning. Unlike `predicate`, this
+    /// does not replace columns that file-level statistics prove constant, so
+    /// row-group statistics can still evaluate the original column references.
+    pruning_expr: Option<Arc<dyn PhysicalExpr>>,
     /// Per-scan virtual-column state, Arc-cloned from [`ParquetMorselizer`] so
     /// each file shares validated fields, precomputed null replacements, and
     /// the logical-with-virtual schema. `None` when no virtual columns were
@@ -888,6 +892,25 @@ impl ParquetMorselizer {
             .zip(partitioned_file.partition_values.iter())
             .map(|(field, value)| (field.name().clone(), value.clone()))
             .collect();
+        // Preserve the predicate used for row-group pruning before adding
+        // constants derived from file-level statistics. Partition values are
+        // valid for every row group, but a file-level constant substitution can
+        // remove column references that row-group statistics need for pruning.
+        let pruning_expr = if literal_columns.is_empty() {
+            self.predicate.clone()
+        } else {
+            let table_schema = self.table_schema.table_schema();
+            self.predicate
+                .clone()
+                .map(|predicate| {
+                    replace_columns_with_literals_keeping_metadata(
+                        predicate,
+                        &literal_columns,
+                        table_schema,
+                    )
+                })
+                .transpose()?
+        };
         // Add constant columns from file statistics.
         // Note that if there are statistics for partition columns there will be overlap,
         // but since we use a HashMap, we'll just overwrite the partition values with the
@@ -1003,6 +1026,7 @@ impl ParquetMorselizer {
             output_schema,
             projection,
             predicate,
+            pruning_expr,
             virtual_state: self.virtual_state.as_ref().map(Arc::clone),
             reorder_predicates: self.reorder_filters,
             pushdown_filters: self.pushdown_filters,
@@ -1222,6 +1246,10 @@ impl MetadataLoadedParquetOpen {
                 .predicate
                 .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
                 .transpose()?;
+            prepared.pruning_expr = prepared
+                .pruning_expr
+                .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
+                .transpose()?;
             prepared.projection = prepared
                 .projection
                 .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
@@ -1248,7 +1276,7 @@ impl MetadataLoadedParquetOpen {
 
         // Build predicates for this specific file
         let pruning_predicate = build_pruning_predicates(
-            prepared.predicate.as_ref(),
+            prepared.pruning_expr.as_ref(),
             &physical_file_schema,
             &prepared.predicate_creation_errors,
             prepared.max_in_list_size,

@@ -33,6 +33,19 @@ COPY (
 TO 'test_files/scratch/parquet_mixed_predicate_pruning/cannot_match.parquet'
 STORED AS PARQUET;
 
+# One file with two row groups prevents file-level statistics from deciding the
+# predicate. Row-group statistics must retain tid = 1 and prune tid = 9.
+statement ok
+COPY (
+  SELECT * FROM (VALUES
+    (CAST(NULL AS VARCHAR), CAST(1 AS BIGINT), make_array('', '')),
+    (CAST(NULL AS VARCHAR), CAST(9 AS BIGINT), make_array('', ''))
+  ) AS t(body, tid, seps) ORDER BY tid
+)
+TO 'test_files/scratch/parquet_mixed_predicate_pruning/multiple_row_groups.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '1');
+
 # Run the same scenarios with and without collected file statistics. External
 # tables are recreated after changing the setting because their statistics are
 # gathered when the table is created.
@@ -56,6 +69,10 @@ statement ok
 CREATE EXTERNAL TABLE t_cannot_match STORED AS PARQUET
 LOCATION 'test_files/scratch/parquet_mixed_predicate_pruning/cannot_match.parquet';
 
+statement ok
+CREATE EXTERNAL TABLE t_multiple_row_groups STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_mixed_predicate_pruning/multiple_row_groups.parquet';
+
 # The three scenarios have distinct outcomes:
 # * a matching row is retained and returned;
 # * a row whose unsupported expression is false is retained, then filtered;
@@ -66,6 +83,7 @@ SELECT tid FROM t_all
 WHERE body = 'x'
    OR (body IS NULL AND tid = 1 AND array_element(seps, 1) = '');
 ----
+1
 1
 
 query I
@@ -87,8 +105,15 @@ WHERE body = 'x'
    OR (body IS NULL AND tid = 1 AND array_element(seps, 1) = '');
 ----
 
-# Without collected file statistics, all three files open. Footer statistics
-# retain two row groups and prune the impossible one.
+query I
+SELECT tid FROM t_multiple_row_groups
+WHERE body = 'x'
+   OR (body IS NULL AND tid = 1 AND array_element(seps, 1) = '');
+----
+1
+
+# Without collected file statistics, all four files open. Footer statistics
+# retain three row groups and prune the two impossible row groups.
 query TT
 EXPLAIN ANALYZE SELECT tid FROM t_all
 WHERE body = 'x'
@@ -96,8 +121,19 @@ WHERE body = 'x'
 ----
 Plan with Metrics
 <slt:ignore>
+02)--DataSourceExec: <slt:ignore>row_groups_pruned_statistics=5 total → 3 matched<slt:ignore>files_opened=4<slt:ignore>
+
+# The mixed predicate retains the matching row group and prunes the tid = 9
+# row group, even though array_element cannot be evaluated from statistics.
+query TT
+EXPLAIN ANALYZE SELECT tid FROM t_multiple_row_groups
+WHERE body = 'x'
+   OR (body IS NULL AND tid = 1 AND array_element(seps, 1) = '');
+----
+Plan with Metrics
 <slt:ignore>
-03)----DataSourceExec: <slt:ignore>row_groups_pruned_statistics=3 total → 2 matched<slt:ignore>files_opened=3<slt:ignore>
+<slt:ignore>
+03)----DataSourceExec: <slt:ignore>row_groups_pruned_statistics=2 total → 1 matched<slt:ignore>files_opened=1<slt:ignore>
 
 # Statistics cannot evaluate array_element, so this row group must be retained
 # even though normal row filtering eventually rejects its row.
@@ -136,6 +172,9 @@ statement ok
 DROP TABLE t_cannot_match;
 
 statement ok
+DROP TABLE t_multiple_row_groups;
+
+statement ok
 SET datafusion.execution.collect_statistics = true;
 
 statement ok
@@ -154,11 +193,16 @@ statement ok
 CREATE EXTERNAL TABLE t_cannot_match STORED AS PARQUET
 LOCATION 'test_files/scratch/parquet_mixed_predicate_pruning/cannot_match.parquet';
 
+statement ok
+CREATE EXTERNAL TABLE t_multiple_row_groups STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_mixed_predicate_pruning/multiple_row_groups.parquet';
+
 query I
 SELECT tid FROM t_all
 WHERE body = 'x'
    OR (body IS NULL AND tid = 1 AND array_element(seps, 1) = '');
 ----
+1
 1
 
 query I
@@ -180,8 +224,16 @@ WHERE body = 'x'
    OR (body IS NULL AND tid = 1 AND array_element(seps, 1) = '');
 ----
 
+query I
+SELECT tid FROM t_multiple_row_groups
+WHERE body = 'x'
+   OR (body IS NULL AND tid = 1 AND array_element(seps, 1) = '');
+----
+1
+
 # Collected file statistics remove the impossible file before its Parquet
-# opener runs, so only the two conservatively retained files are scanned.
+# opener runs. Row-group statistics then prune tid = 9 from the multi-group
+# file, retaining three of the four row groups that reach the opener.
 query TT
 EXPLAIN ANALYZE SELECT tid FROM t_all
 WHERE body = 'x'
@@ -190,7 +242,20 @@ WHERE body = 'x'
 Plan with Metrics
 <slt:ignore>
 <slt:ignore>
-03)----DataSourceExec: <slt:ignore>row_groups_pruned_statistics=2 total → 2 matched<slt:ignore>files_opened=2<slt:ignore>
+03)----DataSourceExec: <slt:ignore>row_groups_pruned_statistics=4 total → 3 matched<slt:ignore>files_opened=3<slt:ignore>
+
+# File-level statistics know body is always NULL but cannot decide tid = 1 for
+# the whole file. The original column references must remain available to the
+# row-group pruning predicate.
+query TT
+EXPLAIN ANALYZE SELECT tid FROM t_multiple_row_groups
+WHERE body = 'x'
+   OR (body IS NULL AND tid = 1 AND array_element(seps, 1) = '');
+----
+Plan with Metrics
+<slt:ignore>
+<slt:ignore>
+03)----DataSourceExec: <slt:ignore>row_groups_pruned_statistics=2 total → 1 matched<slt:ignore>files_opened=1<slt:ignore>
 
 # The unsupported-false scenario is still retained and filtered normally.
 query TT
@@ -213,6 +278,21 @@ WHERE body = 'x'
 Plan with Metrics
 <slt:ignore>
 02)--EmptyExec, metrics=[]
+
+statement ok
+DROP TABLE t_all;
+
+statement ok
+DROP TABLE t_matches;
+
+statement ok
+DROP TABLE t_unsupported_does_not_match;
+
+statement ok
+DROP TABLE t_cannot_match;
+
+statement ok
+DROP TABLE t_multiple_row_groups;
 
 statement ok
 RESET datafusion.execution.collect_statistics;
