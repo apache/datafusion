@@ -724,13 +724,19 @@ STORED AS PARQUET
 WITH ORDER (a ASC NULLS LAST)
 LOCATION 'test_files/scratch/parquet_sorted_statistics/cast_bounds';
 
+statement ok
+CREATE TABLE dynamic_bounds_filter (b BIGINT) AS VALUES (2), (4);
+
 query I
-SELECT p.x FROM (VALUES (2), (4)) AS s(b)
+SELECT p.x FROM dynamic_bounds_filter AS s
 JOIN (SELECT a + 1 AS x FROM dynamic_bounds) p ON p.x = s.b
 ORDER BY p.x;
 ----
 2
 4
+
+statement ok
+DROP TABLE dynamic_bounds_filter;
 
 statement ok
 DROP TABLE dynamic_bounds;
