@@ -23,12 +23,18 @@ pub fn rewrite_sort_cols_by_aggs(
     } else {
         vec![]
     };
+    let shadowed = shadowed_output_columns(plan);
     sorts
         .into_iter()
         .map(|e| {
             let sort = e.into();
             Ok(Sort::new(
-                rewrite_sort_col_by_aggs(sort.expr, &plan_inputs, &proj_exprs)?,
+                rewrite_sort_col_by_aggs(
+                    sort.expr,
+                    &plan_inputs,
+                    &proj_exprs,
+                    &shadowed,
+                )?,
                 sort.asc,
                 sort.nulls_first,
             ))
@@ -40,14 +46,33 @@ fn rewrite_sort_col_by_aggs(
     expr: Expr,
     plan_inputs: &[&LogicalPlan],
     proj_exprs: &[Expr],
+    shadowed: &[Column],
 ) -> Result<Expr> {
     // Joins, and Unions are not yet handled (should have a projection
     // on top of them)
     if plan_inputs.len() == 1 {
-        rewrite_in_terms_of_projection(expr, proj_exprs, plan_inputs[0])
+        rewrite_in_terms_of_projection(expr, proj_exprs, plan_inputs[0], shadowed)
     } else {
         Ok(expr)
     }
+}
+
+/// Output columns that may mean something different above `plan` than the
+/// same name means inside its expressions (e.g. `price` in
+/// `10 - price AS price`). A projection's pass-through column means the same
+/// on both sides; other plans can alias too (`Aggregate`, `DistinctOn`), so
+/// all of their output columns count.
+fn shadowed_output_columns(plan: &LogicalPlan) -> Vec<Column> {
+    let LogicalPlan::Projection(projection) = plan else {
+        return plan.schema().columns();
+    };
+    projection
+        .expr
+        .iter()
+        .zip(projection.schema.columns())
+        .filter(|(expr, out)| !matches!(expr, Expr::Column(c) if c == out))
+        .map(|(_, out)| out)
+        .collect()
 }
 
 /// Rewrites a sort expression in terms of the output of the previous [`LogicalPlan`]
@@ -61,14 +86,33 @@ fn rewrite_sort_col_by_aggs(
 /// Remember that:
 /// 1. given a projection with exprs: [a, b + c]
 /// 2. t produces an output schema with two columns "a", "b + c"
+///
+/// An expression that references a `shadowed` output column is left as is: the column already names an output column,
+/// and the expression is evaluated over the output. Projection expressions
+/// are written over the input, so an unqualified input column can share its
+/// name with a different output column (e.g.
+/// `price AS old_price, 10 - price AS price`); matching such an expression
+/// against the projection would read the input column instead.
+/// Sub-expressions that reference only input columns, such as `min(c2)` in
+/// `c1 + min(c2)`, are still rewritten.
 fn rewrite_in_terms_of_projection(
     expr: Expr,
     proj_exprs: &[Expr],
     input: &LogicalPlan,
+    shadowed: &[Column],
 ) -> Result<Expr> {
     // assumption is that each item in exprs, such as "b + c" is
     // available as an output column named "b + c"
     expr.transform(|expr| {
+        if expr.column_refs().iter().any(|col| {
+            shadowed.iter().any(|out| {
+                out.name == col.name
+                    && (col.relation.is_none() || col.relation == out.relation)
+            })
+        }) {
+            return Ok(Transformed::no(expr));
+        }
+
         // search for unnormalized names first such as "c1" (such as aliases).
         // Also look inside aliases so e.g. `count(Int64(1))` matches
         // `count(Int64(1)) AS count(*)`.
@@ -283,6 +327,162 @@ mod test {
         for case in cases {
             case.run(&plan)
         }
+    }
+
+    /// A sort key that references an output column must use that output
+    /// column, even when an unqualified input column of the same name is
+    /// read by another projection expression.
+    /// See <https://github.com/apache/datafusion/issues/27795>
+    #[test]
+    fn output_column_not_matched_against_unqualified_input() {
+        let plan = LogicalPlanBuilder::values(vec![vec![lit(1), lit(20)]])
+            .unwrap()
+            .project(vec![
+                col("column1").alias("column2"),
+                col("column2").alias("column1"),
+                (lit(10) - col("column1")).alias("diff"),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let cases = vec![
+            TestCase {
+                desc: "column1 is an output column and stays column1",
+                input: sort(col("column1")),
+                expected: sort(col("column1")),
+            },
+            TestCase {
+                desc: "column2 is an output column and stays column2",
+                input: sort(col("column2")),
+                expected: sort(col("column2")),
+            },
+            TestCase {
+                desc: "column1 inside an expression is the output column too,                        so the expression is not matched to diff",
+                input: sort(lit(10) - col("column1")),
+                expected: sort(lit(10) - col("column1")),
+            },
+            TestCase {
+                desc: "same for a cast of the output column",
+                input: sort(cast(col("column1"), DataType::Int64)),
+                expected: sort(cast(col("column1"), DataType::Int64)),
+            },
+        ];
+
+        for case in cases {
+            case.run(&plan)
+        }
+    }
+
+    /// Parts of a sort key that reference only input columns are still
+    /// rewritten to the projection's output columns.
+    #[test]
+    fn input_only_columns_still_resolve_to_aliases() {
+        let plan = LogicalPlanBuilder::values(vec![vec![lit(1), lit(20)]])
+            .unwrap()
+            .project(vec![
+                col("column1"),
+                (lit(10) - col("column2")).alias("diff"),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+        TestCase {
+            desc: "an expression over an input-only column resolves to its alias",
+            input: sort(lit(10) - col("column2")),
+            expected: sort(col("diff")),
+        }
+        .run(&plan);
+
+        let plan = LogicalPlanBuilder::values(vec![vec![lit(1), lit(20)]])
+            .unwrap()
+            .project(vec![col("column1"), col("column2").alias("b")])
+            .unwrap()
+            .build()
+            .unwrap();
+        TestCase {
+            desc: "an input-only column inside a mixed expression is rewritten",
+            input: sort(col("column1") + col("column2")),
+            expected: sort(col("column1") + col("b")),
+        }
+        .run(&plan);
+    }
+
+    /// A column passed through unchanged means the same above and below the
+    /// projection, so an expression using it still matches a SELECT item.
+    #[test]
+    fn pass_through_column_still_matches_projection() {
+        let plan = LogicalPlanBuilder::values(vec![vec![lit(1), lit(20)]])
+            .unwrap()
+            .project(vec![
+                col("column1"),
+                (col("column1") + col("column2")).alias("s"),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+        TestCase {
+            desc: "column1 + column2 resolves to s",
+            input: sort(col("column1") + col("column2")),
+            expected: sort(col("s")),
+        }
+        .run(&plan);
+    }
+
+    /// An aggregate alias can reuse an input column name too.
+    #[test]
+    fn aggregate_alias_not_matched_against_unqualified_input() {
+        let plan = LogicalPlanBuilder::values(vec![vec![lit(1), lit(20)]])
+            .unwrap()
+            .aggregate(
+                vec![col("column1").alias("k")],
+                vec![sum(col("column2")).alias("column1")],
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+        TestCase {
+            desc: "column1 is the sum, not the group key k",
+            input: sort(col("column1")),
+            expected: sort(col("column1")),
+        }
+        .run(&plan);
+    }
+
+    /// A shadowed output column is matched by qualifier, as
+    /// `DFSchema::has_column` does.
+    #[test]
+    fn shadowed_output_column_matched_by_qualifier() {
+        let plan = LogicalPlanBuilder::values(vec![vec![lit(1), lit(20)]])
+            .unwrap()
+            .project(vec![
+                col("column1").alias("k"),
+                (lit(10) - col("column1")).alias_qualified(Some("u"), "column1"),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+        TestCase {
+            desc: "unqualified column1 is the output u.column1, not k",
+            input: sort(col("column1")),
+            expected: sort(col("column1")),
+        }
+        .run(&plan);
+
+        let plan = make_input()
+            .project(vec![
+                col("t.c1").alias("old_c1"),
+                (lit(10) - col("t.c1")).alias("c1"),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+        TestCase {
+            desc: "qualified t.c1 is the input column, so it resolves to old_c1",
+            input: sort(col("t.c1")),
+            expected: sort(col("old_c1")),
+        }
+        .run(&plan);
     }
 
     #[test]
