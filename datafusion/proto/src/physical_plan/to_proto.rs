@@ -7,24 +7,20 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::StreamWriter;
-use datafusion_common::{Result, internal_datafusion_err, internal_err, not_impl_err};
+use datafusion_common::{Result, internal_err};
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_expr::WindowFrame;
-use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr::{HigherOrderFunctionExpr, ScalarFunctionExpr};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::proto::ExecutionPlanEncodeCtx;
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
-use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
+use datafusion_physical_plan::windows::encode_physical_window_expr;
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 
 use super::{
     ConverterPlanEncoder, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
     PhysicalProtoConverterExtension, encode_human_display_alias,
 };
-use crate::protobuf::{
-    self, PhysicalSortExprNode, physical_aggregate_expr_node, physical_window_expr_node,
-};
+use crate::protobuf::{self, PhysicalSortExprNode, physical_aggregate_expr_node};
 
 #[expect(clippy::needless_pass_by_value)]
 pub fn serialize_physical_aggr_expr(
@@ -66,105 +62,16 @@ pub fn serialize_physical_aggr_expr(
     })
 }
 
-fn serialize_physical_window_aggr_expr(
-    aggr_expr: &AggregateFunctionExpr,
-    _window_frame: &WindowFrame,
-    codec: &dyn PhysicalExtensionCodec,
-) -> Result<(physical_window_expr_node::WindowFunction, Option<Vec<u8>>)> {
-    // Distinct and ignore_nulls are now supported in window expressions
-
-    let mut buf = Vec::new();
-    codec.try_encode_udaf(aggr_expr.fun(), &mut buf)?;
-    Ok((
-        physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(
-            aggr_expr.fun().name().to_string(),
-        ),
-        (!buf.is_empty()).then_some(buf),
-    ))
-}
-
 pub fn serialize_physical_window_expr(
     window_expr: &Arc<dyn WindowExpr>,
     codec: &dyn PhysicalExtensionCodec,
     proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<protobuf::PhysicalWindowExprNode> {
-    let expr = window_expr.as_any();
-    let mut args = window_expr.expressions().to_vec();
-    let window_frame = window_expr.get_window_frame();
-
-    let (window_function, fun_definition, ignore_nulls, distinct) =
-        if let Some(plain_aggr_window_expr) =
-            expr.downcast_ref::<PlainAggregateWindowExpr>()
-        {
-            let aggr_expr = plain_aggr_window_expr.get_aggregate_expr();
-            let (window_function, fun_definition) =
-                serialize_physical_window_aggr_expr(aggr_expr, window_frame, codec)?;
-            (
-                window_function,
-                fun_definition,
-                aggr_expr.ignore_nulls(),
-                aggr_expr.is_distinct(),
-            )
-        } else if let Some(sliding_aggr_window_expr) =
-            expr.downcast_ref::<SlidingAggregateWindowExpr>()
-        {
-            let aggr_expr = sliding_aggr_window_expr.get_aggregate_expr();
-            let (window_function, fun_definition) =
-                serialize_physical_window_aggr_expr(aggr_expr, window_frame, codec)?;
-            (
-                window_function,
-                fun_definition,
-                aggr_expr.ignore_nulls(),
-                aggr_expr.is_distinct(),
-            )
-        } else if let Some(udf_window_expr) = expr.downcast_ref::<StandardWindowExpr>() {
-            if let Some(expr) = udf_window_expr
-                .get_standard_func_expr()
-                .as_any()
-                .downcast_ref::<WindowUDFExpr>()
-            {
-                let mut buf = Vec::new();
-                codec.try_encode_udwf(expr.fun(), &mut buf)?;
-                args = expr.args().to_vec();
-                (
-                    physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(
-                        expr.fun().name().to_string(),
-                    ),
-                    (!buf.is_empty()).then_some(buf),
-                    false, // WindowUDFExpr doesn't have ignore_nulls/distinct
-                    false,
-                )
-            } else {
-                return not_impl_err!(
-                    "User-defined window function not supported: {window_expr:?}"
-                );
-            }
-        } else {
-            return not_impl_err!("WindowExpr not supported: {window_expr:?}");
-        };
-
-    let args = serialize_physical_exprs(&args, codec, proto_converter)?;
-    let partition_by =
-        serialize_physical_exprs(window_expr.partition_by(), codec, proto_converter)?;
-    let order_by = serialize_physical_sort_exprs(
-        window_expr.order_by().to_vec(),
+    let encoder = ConverterPlanEncoder {
         codec,
         proto_converter,
-    )?;
-    let window_frame = protobuf::WindowFrame::try_from(window_frame.as_ref())
-        .map_err(|e| internal_datafusion_err!("{e}"))?;
-
-    Ok(protobuf::PhysicalWindowExprNode {
-        args,
-        partition_by,
-        order_by,
-        window_frame: Some(window_frame),
-        window_function: Some(window_function),
-        name: window_expr.name().to_string(),
-        fun_definition,
-        ignore_nulls,
-        distinct,
-    })
+    };
+    encode_physical_window_expr(window_expr, &ExecutionPlanEncodeCtx::new(&encoder))
 }
 
 pub fn serialize_physical_sort_exprs<I>(
