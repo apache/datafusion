@@ -6598,3 +6598,28 @@ DROP TABLE subquery_projection;
 
 statement ok
 reset datafusion.optimizer.prefer_hash_join;
+
+# A perfect hash join over a key range too large to allocate uses the hash map
+# instead of panicking (https://github.com/apache/datafusion/issues/27727)
+statement ok
+CREATE TABLE huge_range_a AS SELECT * FROM (VALUES (arrow_cast(0, 'UInt64')), (arrow_cast(4611686018427387904, 'UInt64'))) t(k);
+
+statement ok
+CREATE TABLE huge_range_b AS SELECT * FROM (VALUES (arrow_cast(0, 'UInt64'))) t(k);
+
+statement ok
+set datafusion.execution.perfect_hash_join_min_key_density = 0;
+
+query II
+SELECT * FROM huge_range_a JOIN huge_range_b ON huge_range_a.k = huge_range_b.k;
+----
+0 0
+
+statement ok
+reset datafusion.execution.perfect_hash_join_min_key_density;
+
+statement ok
+DROP TABLE huge_range_a;
+
+statement ok
+DROP TABLE huge_range_b;

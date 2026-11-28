@@ -226,6 +226,14 @@ fn array_map_key_range(
         return Ok(None);
     }
 
+    // An `ArrayMap` over a range this large can never be allocated (#27727)
+    if (range + 1)
+        .checked_mul(size_of::<u32>() as u64)
+        .is_none_or(|bytes| bytes > isize::MAX as u64)
+    {
+        return Ok(None);
+    }
+
     let dense_ratio = (num_rows as f64) / ((range + 1) as f64);
 
     if range >= perfect_hash_join_small_build_threshold as u64
