@@ -144,20 +144,65 @@ fn visit_referenced_indices(
     Ok(())
 }
 
-/// Returns true if `expr` contains all columns in `schema_cols`
+/// Returns true if every `Expr::Column` in `expr` and every column referenced
+/// via `Subquery::outer_ref_columns` of an embedded subquery (`Exists`,
+/// `InSubquery`, `SetComparison`, `ScalarSubquery`) is present in `schema_cols`.
+///
+/// Direct top-level `Expr::OuterReferenceColumn` nodes are intentionally
+/// ignored because they are bound by an enclosing query outside the current
+/// node's scope (for example, a join inside a correlated subquery), whereas
+/// `outer_ref_columns` on an embedded subquery correlate to the current scope
+/// (any grandparent reference there is conservatively rejected). Relies on
+/// `Subquery::outer_ref_columns` as populated on the subquery node, matching
+/// [`for_each_referenced_index`].
 pub(crate) fn has_all_column_refs(
     expr: &Expr,
     schema_cols: &HashSet<ColumnReference>,
 ) -> bool {
-    let column_refs = expr.column_refs();
-    // note can't use HashSet::intersect because of different types (owned vs References)
-    column_refs
-        .iter()
-        .filter(|c| {
-            schema_cols.contains(&ColumnReference::new(c.relation.as_ref(), c.name()))
-        })
-        .count()
-        == column_refs.len()
+    has_all_column_refs_inner(expr, schema_cols, false)
+}
+
+fn has_all_column_refs_inner(
+    expr: &Expr,
+    schema_cols: &HashSet<ColumnReference>,
+    check_outer_ref_columns: bool,
+) -> bool {
+    let mut all_present = true;
+    expr.apply(|e| {
+        match e {
+            Expr::Column(c) => {
+                if !schema_cols
+                    .contains(&ColumnReference::new(c.relation.as_ref(), c.name()))
+                {
+                    all_present = false;
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+            }
+            Expr::OuterReferenceColumn(_, c) if check_outer_ref_columns => {
+                if !schema_cols
+                    .contains(&ColumnReference::new(c.relation.as_ref(), c.name()))
+                {
+                    all_present = false;
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+            }
+            Expr::Exists(Exists { subquery, .. })
+            | Expr::InSubquery(InSubquery { subquery, .. })
+            | Expr::SetComparison(SetComparison { subquery, .. })
+            | Expr::ScalarSubquery(subquery) => {
+                for outer in &subquery.outer_ref_columns {
+                    if !has_all_column_refs_inner(outer, schema_cols, true) {
+                        all_present = false;
+                        return Ok(TreeNodeRecursion::Stop);
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("traversal is infallible");
+    all_present
 }
 
 pub(crate) fn replace_qualified_name(
@@ -438,6 +483,93 @@ mod tests {
             let actual =
                 is_restrict_null_predicate(predicate.clone(), join_cols_of_predicate)?;
             assert_eq!(actual, expected, "{predicate}");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn has_all_column_refs_checks_subquery_outer_refs_and_ignores_top_level_outer_refs()
+    -> Result<()> {
+        use datafusion_expr::out_ref_col;
+
+        let t1 = test_table_scan_with_name("t1")?;
+        let t1_cols = schema_columns(t1.schema());
+        let t2_plan = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("t2")?)
+                .project(vec![col("t2.a")])?
+                .build()?,
+        );
+
+        let make_subquery = |outer_refs: Vec<Expr>| Subquery {
+            subquery: Arc::clone(&t2_plan),
+            outer_ref_columns: outer_refs,
+            spans: Spans::new(),
+        };
+
+        let in_t1 = out_ref_col(DataType::UInt32, "t1.a");
+        let outside_t1 = out_ref_col(DataType::UInt32, "t0.a");
+
+        // Top-level OuterReferenceColumn is ignored (plain comparison and subquery LHS).
+        assert!(has_all_column_refs(
+            &col("t1.a").eq(outside_t1.clone()),
+            &t1_cols
+        ));
+        assert!(has_all_column_refs(
+            &Expr::InSubquery(InSubquery::new(
+                Box::new(outside_t1.clone()),
+                make_subquery(vec![in_t1.clone()]),
+                false,
+            )),
+            &t1_cols,
+        ));
+        assert!(has_all_column_refs(
+            &Expr::SetComparison(SetComparison::new(
+                Box::new(outside_t1.clone()),
+                make_subquery(vec![in_t1.clone()]),
+                Operator::Eq,
+                SetQuantifier::Any,
+            )),
+            &t1_cols,
+        ));
+
+        // Embedded subquery outer_ref_columns are checked for all four subquery forms.
+        let make_variants = |outer_refs: Vec<Expr>| {
+            let sq = make_subquery(outer_refs);
+            vec![
+                Expr::Exists(Exists::new(sq.clone(), false)),
+                Expr::InSubquery(InSubquery::new(
+                    Box::new(col("t1.a")),
+                    sq.clone(),
+                    false,
+                )),
+                Expr::SetComparison(SetComparison::new(
+                    Box::new(col("t1.a")),
+                    sq.clone(),
+                    Operator::Gt,
+                    SetQuantifier::Any,
+                )),
+                Expr::ScalarSubquery(sq),
+            ]
+        };
+
+        for expr in make_variants(vec![in_t1.clone()]) {
+            assert!(
+                has_all_column_refs(&expr, &t1_cols),
+                "expected true for {expr}"
+            );
+        }
+        for expr in make_variants(vec![outside_t1.clone()]) {
+            assert!(
+                !has_all_column_refs(&expr, &t1_cols),
+                "expected false for {expr}"
+            );
+        }
+        for expr in make_variants(vec![in_t1, outside_t1]) {
+            assert!(
+                !has_all_column_refs(&expr, &t1_cols),
+                "expected false when any outer ref is missing for {expr}"
+            );
         }
 
         Ok(())

@@ -41,12 +41,12 @@ SELECT t1.t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE t2.t2_id = t1.t1_id
 44
 
 # exists_in_inner_join_on_reading_both_inputs
-# Fails today. Expected (DuckDB):
-# 11
-# 22
-# 44
-query error Schema error: No field named t2\.t2_id
+query I rowsort
 SELECT t1.t1_id FROM t1 JOIN t2 ON EXISTS (SELECT 1 FROM t3 WHERE t3.t3_id = t1.t1_id AND t3.t3_id = t2.t2_id);
+----
+11
+22
+44
 
 # exists_in_scalar_subquery_correlated_to_both_levels
 # Fails today. Expected (DuckDB):
