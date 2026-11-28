@@ -1949,6 +1949,131 @@ ORDER BY simple_struct.id;
 # (https://github.com/apache/datafusion/issues/20430)
 # =========================================================================
 
+# A prefix alone does not make an alias an extraction. In particular, moving
+# this division below the filter would evaluate it on the zero row as well.
+statement ok
+CREATE TABLE extracted_alias_names AS
+SELECT * FROM (VALUES (0), (1)) AS v(id);
+
+query I
+SELECT 10 / id AS __datafusion_extracted_manual
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+query I
+SELECT 10 / id AS __datafusion_extracted
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+query I
+SELECT 10 / id AS __datafusion_extracted_1x
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+query I
+SELECT 10 / id AS "__datafusion_extracted_+1"
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+query I
+SELECT 10 / id AS __datafusion_extracted_0
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+query I
+SELECT 10 / id AS __datafusion_extracted_01
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+query I
+SELECT 10 / id AS __datafusion_extracted_1
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+statement ok
+DROP TABLE extracted_alias_names;
+
+# Combine id > 0 with a struct-field extraction predicate where both rows match
+# s['a'] = 1: leaf extraction pushes get_field(s, 'a') below the filter while
+# keeping guarded division above it for both canonical and manual aliases.
+statement ok
+COPY (
+    SELECT column1 AS id, column2 AS s
+    FROM VALUES (0, {a: 1}), (1, {a: 1})
+) TO 'test_files/scratch/projection_pushdown/extracted_alias_names_struct.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE extracted_alias_names_struct
+STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/extracted_alias_names_struct.parquet';
+
+query TT
+EXPLAIN SELECT 10 / id AS __datafusion_extracted_1
+FROM extracted_alias_names_struct
+WHERE id > 0 AND s['a'] = 1;
+----
+logical_plan
+01)Projection: Int64(10) / extracted_alias_names_struct.id AS __datafusion_extracted_1
+02)--Filter: extracted_alias_names_struct.id > Int64(0) AND __datafusion_extracted_2 = Int64(1)
+03)----Projection: get_field(extracted_alias_names_struct.s, Utf8("a")) AS __datafusion_extracted_2, extracted_alias_names_struct.id
+04)------TableScan: extracted_alias_names_struct projection=[id, s], partial_filters=[extracted_alias_names_struct.id > Int64(0), get_field(extracted_alias_names_struct.s, Utf8("a")) = Int64(1)]
+physical_plan
+01)ProjectionExec: expr=[10 / id@0 as __datafusion_extracted_1]
+02)--FilterExec: id@1 > 0 AND __datafusion_extracted_2@0 = 1, projection=[id@1]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/extracted_alias_names_struct.parquet]]}, projection=[get_field(s@1, a) as __datafusion_extracted_2, id], file_type=parquet, predicate=id@0 > 0 AND get_field(s@1, a) = 1, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 0, required_guarantees=[]
+
+query I
+SELECT 10 / id AS __datafusion_extracted_1
+FROM extracted_alias_names_struct
+WHERE id > 0 AND s['a'] = 1;
+----
+10
+
+query I
+SELECT 10 / id AS __datafusion_extracted_manual
+FROM extracted_alias_names_struct
+WHERE id > 0 AND s['a'] = 1;
+----
+10
+
+statement ok
+DROP TABLE extracted_alias_names_struct;
+
+# The filter reads the input column while the projection gives the extracted
+# struct field the same name.
+statement ok
+CREATE TABLE review_alias_collision AS
+SELECT column1 AS __datafusion_extracted_manual, column2 AS s
+FROM VALUES (0, {a: 1}), (1, {a: 2});
+
+query I
+SELECT s['a'] AS __datafusion_extracted_manual
+FROM review_alias_collision AS t
+WHERE t.__datafusion_extracted_manual > 0;
+----
+2
+
+query I
+SELECT result.__datafusion_extracted_manual
+FROM (
+    SELECT s['a'] AS __datafusion_extracted_manual
+    FROM review_alias_collision AS t
+    WHERE t.__datafusion_extracted_manual > 0
+) AS result;
+----
+2
+
+statement ok
+DROP TABLE review_alias_collision;
+
 statement ok
 COPY ( select {f1: 1, f2: 2} as s
 ) TO 'test_files/scratch/projection_pushdown/test.parquet'
