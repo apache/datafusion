@@ -139,6 +139,7 @@ simplify_predicate_disjunctions.slt
 slt_features.slt
 sort_merge_join.slt
 sort_merge_join_spill.slt
+spill_batch_bound.slt
 sql_extension_types.slt
 string/dictionary_utf8.slt
 string/large_string.slt
