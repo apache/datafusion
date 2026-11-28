@@ -3,6 +3,10 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! DataFusion Join implementations
+//!
+//! See [`JoinType`] for information on the different join types.
+//!
+//! [`JoinType`]: datafusion_common::JoinType
 
 use core::fmt;
 use std::fmt::{Display, Formatter};
