@@ -4,6 +4,7 @@
 
 //! Evaluation of aggregate function arguments against input batches.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
@@ -13,6 +14,7 @@ use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::utils::scatter;
@@ -151,6 +153,20 @@ pub(in crate::aggregates) struct AggregateFilter {
     selected_schema: Option<(SchemaRef, SchemaRef)>,
 }
 
+/// The rows of a batch that an [`AggregateFilter`] selects.
+///
+/// A filter often selects every row of a batch or none of them, for example
+/// when its predicate is a literal or returns a scalar. Then neither a
+/// [`BooleanArray`] nor a copy of the selected rows is needed.
+pub(in crate::aggregates) enum AggregateSelection {
+    /// Every row is selected.
+    All,
+    /// No row is selected.
+    Empty,
+    /// The rows where the array is true: at least one row, but not all.
+    Rows(BooleanArray),
+}
+
 impl AggregateFilter {
     pub(in crate::aggregates) fn new(
         predicate: Arc<dyn PhysicalExpr>,
@@ -174,16 +190,53 @@ impl AggregateFilter {
         &self.predicate
     }
 
-    /// Evaluates the filter predicate for every row of `batch`.
+    /// Evaluates the filter predicate for `batch` and returns the rows it
+    /// selects. A null rejects its row, like `false`.
+    ///
+    /// The predicate is evaluated for every batch, even if it returns a
+    /// scalar: a runtime scalar, such as the result of a UDF, can change
+    /// between batches.
     pub(in crate::aggregates) fn evaluate(
         &self,
         batch: &RecordBatch,
-    ) -> Result<BooleanArray> {
-        let selection = self
-            .predicate
-            .evaluate(batch)?
-            .into_array(batch.num_rows())?;
-        Ok(as_boolean_array(&selection)?.clone())
+    ) -> Result<AggregateSelection> {
+        let selection = match self.predicate.evaluate(batch)? {
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {
+                return Ok(AggregateSelection::All);
+            }
+            ColumnarValue::Scalar(ScalarValue::Boolean(_)) => {
+                return Ok(AggregateSelection::Empty);
+            }
+            value => value.into_array(batch.num_rows())?,
+        };
+        let selection = as_boolean_array(&selection)?;
+        // Nulls are counted neither by `has_true` nor by `has_false`.
+        Ok(if !selection.has_true() {
+            AggregateSelection::Empty
+        } else if selection.null_count() == 0 && !selection.has_false() {
+            AggregateSelection::All
+        } else {
+            AggregateSelection::Rows(selection.clone())
+        })
+    }
+
+    /// Returns the rows of `batch` that `selection` selects, for evaluating
+    /// the arguments of the aggregate, or `None` if no row is selected.
+    ///
+    /// If every row is selected, `batch` itself is returned. Otherwise the
+    /// rows are copied by [`Self::select`].
+    pub(in crate::aggregates) fn selected_batch<'a>(
+        &mut self,
+        batch: &'a RecordBatch,
+        selection: &AggregateSelection,
+    ) -> Result<Option<Cow<'a, RecordBatch>>> {
+        Ok(match selection {
+            AggregateSelection::All => Some(Cow::Borrowed(batch)),
+            AggregateSelection::Empty => None,
+            AggregateSelection::Rows(selection) => {
+                Some(Cow::Owned(self.select(batch, selection)?))
+            }
+        })
     }
 
     /// Returns the rows of `batch` where `selection` is true, for evaluating
@@ -372,6 +425,72 @@ mod tests {
         assert_eq!(
             second.as_primitive::<Int32Type>(),
             &Int32Array::from(vec![0, 1])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn filter_selection_is_normalized() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("p", DataType::Boolean, true)]));
+        let batch = |values: Vec<Option<bool>>| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(BooleanArray::from(values))],
+            )
+        };
+        let argument = AggregateArgument::try_new(col("p", &schema)?, &schema)?;
+        let filter =
+            |predicate| AggregateFilter::new(predicate, std::slice::from_ref(&argument));
+        let kind = |selection: &AggregateSelection| match selection {
+            AggregateSelection::All => "all",
+            AggregateSelection::Empty => "empty",
+            AggregateSelection::Rows(_) => "rows",
+        };
+
+        let null = lit(ScalarValue::Boolean(None));
+        let column = col("p", &schema)?;
+        let cases = [
+            // A scalar selects or rejects every row; a null rejects.
+            (lit(true), vec![Some(false), None], "all"),
+            (lit(false), vec![Some(true)], "empty"),
+            (null, vec![Some(true)], "empty"),
+            // So does an array that is all true, or has no true value.
+            (Arc::clone(&column), vec![Some(true), Some(true)], "all"),
+            (Arc::clone(&column), vec![Some(false), None], "empty"),
+            (Arc::clone(&column), vec![], "empty"),
+            // A null rejects its row.
+            (Arc::clone(&column), vec![Some(true), None], "rows"),
+            (Arc::clone(&column), vec![Some(false), Some(true)], "rows"),
+        ];
+        for (predicate, values, expected) in cases {
+            let selection = filter(predicate).evaluate(&batch(values.clone())?)?;
+            assert_eq!(kind(&selection), expected, "{values:?}");
+        }
+
+        let batch = batch(vec![Some(true), None, Some(false)])?;
+        let mut filter = filter(column);
+        let selection = filter.evaluate(&batch)?;
+        let AggregateSelection::Rows(rows) = &selection else {
+            panic!("expected rows");
+        };
+        assert_eq!(
+            rows,
+            &BooleanArray::from(vec![Some(true), None, Some(false)])
+        );
+        let Some(Cow::Owned(selected)) = filter.selected_batch(&batch, &selection)?
+        else {
+            panic!("expected a copy of the selected rows");
+        };
+        assert_eq!(selected.num_rows(), 1);
+        assert!(matches!(
+            filter.selected_batch(&batch, &AggregateSelection::All)?,
+            Some(Cow::Borrowed(all)) if std::ptr::eq(all, &raw const batch)
+        ));
+        assert!(
+            filter
+                .selected_batch(&batch, &AggregateSelection::Empty)?
+                .is_none()
         );
         Ok(())
     }

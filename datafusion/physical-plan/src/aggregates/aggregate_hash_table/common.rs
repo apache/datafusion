@@ -8,6 +8,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, new_null_array};
+use arrow::buffer::BooleanBuffer;
 use arrow::compute::prep_null_mask_filter;
 use arrow::datatypes::SchemaRef;
 use arrow::downcast_dictionary_array;
@@ -21,7 +22,9 @@ use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use log::debug;
 
 use crate::PhysicalExpr;
-use crate::aggregates::aggregate_argument::{AggregateArgument, AggregateFilter};
+use crate::aggregates::aggregate_argument::{
+    AggregateArgument, AggregateFilter, AggregateSelection,
+};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
@@ -486,7 +489,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 .iter()
                 .map(|acc| CompactedAccumulatorArgs {
                     arguments: acc.null_arguments(0),
-                    selection: None,
+                    selection: AggregateSelection::All,
                 })
                 .collect::<Vec<_>>();
             group_by_metrics.time_aggregation(|| {
@@ -538,7 +541,7 @@ pub(super) type AggregateAccumulator = HashAggregateAccumulator;
 ///
 /// Arguments:
 /// * accumulator to update.
-/// * accumulator's compacted arguments and optional row-aligned selection.
+/// * accumulator's compacted arguments and optional selection.
 /// * one group index per input row, mapping each row to its interned group.
 /// * total number of groups currently interned in that buffer, including newly
 ///   interned groups.
@@ -563,15 +566,17 @@ pub(super) struct CompactedAccumulatorArgs {
     /// Argument arrays containing only selected rows. Some aggregate functions take
     /// multiple arguments.
     pub(super) arguments: Vec<ArrayRef>,
-    /// Original row-aligned selection used only to compact the matching group IDs.
-    pub(super) selection: Option<BooleanArray>,
+    /// Selected rows, used only to compact the matching group IDs. Without a
+    /// filter, every row is selected.
+    pub(super) selection: AggregateSelection,
 }
 
 /// Evaluated aggregate arguments that preserve one output row per input row.
 pub(super) struct RowAlignedAccumulatorArgs {
     /// Row-aligned argument arrays. Rejected rows are represented as nulls.
     pub(super) arguments: Vec<ArrayRef>,
-    /// Original row-aligned filter passed through to state conversion.
+    /// Row-aligned filter passed through to state conversion, `None` if every
+    /// row is selected.
     pub(super) filter: Option<BooleanArray>,
 }
 
@@ -785,17 +790,11 @@ impl HashAggregateAccumulator {
         batch: &RecordBatch,
     ) -> Result<CompactedAccumulatorArgs> {
         let (selection, argument_batch) = match &mut self.filter {
-            None => (None, Some(Cow::Borrowed(batch))),
+            None => (AggregateSelection::All, Some(Cow::Borrowed(batch))),
             Some(filter) => {
                 let selection = filter.evaluate(batch)?;
-                let argument_batch = match selection.true_count() {
-                    0 => None,
-                    selected_rows if selected_rows == batch.num_rows() => {
-                        Some(Cow::Borrowed(batch))
-                    }
-                    _ => Some(Cow::Owned(filter.select(batch, &selection)?)),
-                };
-                (Some(selection), argument_batch)
+                let argument_batch = filter.selected_batch(batch, &selection)?;
+                (selection, argument_batch)
             }
         };
         let arguments = self
@@ -826,36 +825,38 @@ impl HashAggregateAccumulator {
         batch: &RecordBatch,
     ) -> Result<RowAlignedAccumulatorArgs> {
         let Some(filter) = &mut self.filter else {
-            let arguments = self
-                .arguments
-                .iter_mut()
-                .map(|argument| argument.evaluate(batch))
-                .collect::<Result<_>>()?;
             return Ok(RowAlignedAccumulatorArgs {
-                arguments,
+                arguments: self.evaluate_arguments(batch)?,
                 filter: None,
             });
         };
-
-        let selection = filter.evaluate(batch)?;
-        if !selection.has_true() {
-            // No argument will be evaluated, so avoid constructing an empty
-            // selected batch (or slicing every unused input column).
-            return Ok(RowAlignedAccumulatorArgs {
-                arguments: self.null_arguments(batch.num_rows()),
-                filter: Some(selection),
-            });
-        }
-        let selected = filter.select(batch, &selection)?;
-        let arguments = self
-            .arguments
-            .iter_mut()
-            .map(|argument| argument.evaluate_selection(batch, &selection, &selected))
-            .collect::<Result<_>>()?;
+        let (arguments, selection) = match filter.evaluate(batch)? {
+            AggregateSelection::All => (self.evaluate_arguments(batch)?, None),
+            AggregateSelection::Empty => {
+                // No argument is evaluated, but state conversion still needs
+                // the filter to reject every row: aggregates such as
+                // `array_agg` keep null arguments.
+                let num_rows = batch.num_rows();
+                let rejected =
+                    BooleanArray::new(BooleanBuffer::new_unset(num_rows), None);
+                (self.null_arguments(num_rows), Some(rejected))
+            }
+            AggregateSelection::Rows(selection) => {
+                let selected = filter.select(batch, &selection)?;
+                let arguments = self
+                    .arguments
+                    .iter_mut()
+                    .map(|argument| {
+                        argument.evaluate_selection(batch, &selection, &selected)
+                    })
+                    .collect::<Result<_>>()?;
+                (arguments, Some(selection))
+            }
+        };
 
         Ok(RowAlignedAccumulatorArgs {
             arguments,
-            filter: Some(selection),
+            filter: selection,
         })
     }
 
@@ -874,11 +875,15 @@ impl HashAggregateAccumulator {
         group_indices: &[usize],
         total_num_groups: usize,
     ) -> Result<()> {
-        let filtered_group_indices = values
-            .selection
-            .as_ref()
-            .and_then(|selection| compact_group_indices(group_indices, selection));
-        let group_indices = filtered_group_indices.as_deref().unwrap_or(group_indices);
+        let compacted;
+        let group_indices = match &values.selection {
+            AggregateSelection::All => group_indices,
+            AggregateSelection::Empty => &[],
+            AggregateSelection::Rows(selection) => {
+                compacted = compact_group_indices(group_indices, selection);
+                compacted.as_deref().unwrap_or(group_indices)
+            }
+        };
         self.accumulator.update_batch(
             &values.arguments,
             group_indices,
@@ -893,7 +898,7 @@ impl HashAggregateAccumulator {
         group_indices: &[usize],
         total_num_groups: usize,
     ) -> Result<()> {
-        debug_assert!(values.selection.is_none());
+        debug_assert!(matches!(values.selection, AggregateSelection::All));
         self.accumulator
             .merge_batch(&values.arguments, group_indices, total_num_groups)
     }
@@ -926,6 +931,14 @@ impl HashAggregateAccumulator {
     ) -> Result<Vec<ArrayRef>> {
         self.accumulator
             .convert_to_state(&values.arguments, values.filter.as_ref())
+    }
+
+    /// Evaluates every argument for every row of `batch`.
+    fn evaluate_arguments(&mut self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
+        self.arguments
+            .iter_mut()
+            .map(|argument| argument.evaluate(batch))
+            .collect()
     }
 
     pub(super) fn null_arguments(&self, num_rows: usize) -> Vec<ArrayRef> {

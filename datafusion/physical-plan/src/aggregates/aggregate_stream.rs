@@ -524,13 +524,16 @@ fn aggregate_batch(
                 let batch = match filter {
                     Some(filter) => {
                         let selection = filter.evaluate(batch)?;
-                        Cow::Owned(filter.select(batch, &selection)?)
+                        filter.selected_batch(batch, &selection)?
                     }
-                    None => Cow::Borrowed(batch),
+                    None => Some(Cow::Borrowed(batch)),
                 };
                 arguments
                     .iter_mut()
-                    .map(|argument| argument.evaluate(batch.as_ref()))
+                    .map(|argument| match &batch {
+                        Some(batch) => argument.evaluate(batch.as_ref()),
+                        None => Ok(argument.null_array(0)),
+                    })
                     .collect::<Result<Vec<_>>>()
             })?;
 
