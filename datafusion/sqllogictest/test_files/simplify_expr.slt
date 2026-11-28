@@ -413,6 +413,32 @@ physical_plan
 01)FilterExec: price38_24@0 = 4.000000000000000000000000 OR price38_24@0 = 5.000000000000000000000000
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
+# A dictionary-encoded column takes its common type from its value type, so the
+# unwrapped literal has to go back under the dictionary
+statement ok
+create table dict_prices as
+select arrow_cast(price38_24, 'Dictionary(Int32, Decimal128(38, 24))') as price38_24
+from decimal_prices;
+
+query ?
+select price38_24 from dict_prices where price38_24 in (4, 5) order by price38_24;
+----
+4.000000000000000000000000
+5.000000000000000000000000
+
+query TT
+explain select price38_24 from dict_prices where price38_24 in (4, 5);
+----
+logical_plan
+01)Filter: dict_prices.price38_24 = Dictionary(Int32, Decimal128(4.000000000000000000000000,38,24)) OR dict_prices.price38_24 = Dictionary(Int32, Decimal128(5.000000000000000000000000,38,24))
+02)--TableScan: dict_prices projection=[price38_24]
+physical_plan
+01)FilterExec: price38_24@0 = 4.000000000000000000000000 OR price38_24@0 = 5.000000000000000000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table dict_prices;
+
 statement ok
 drop table decimal_prices;
 
