@@ -268,6 +268,22 @@ CREATE TABLE test(
 statement error Did you mean 'arrow_typeof'?
 SELECT arrowtypeof(v1) from test;
 
+# Scalar function with tied short candidates should deterministically suggest close match
+query error
+SELECT date('1995-03-15');
+----
+DataFusion error: Error during planning: Invalid function 'date'.
+Did you mean 'to_date'?
+
+
+# Unrelated function name should not emit a "Did you mean" suggestion
+query error
+SELECT zzzzzzzzzz();
+----
+DataFusion error: Error during planning: Invalid function 'zzzzzzzzzz'.
+
+
+
 # Scalar function
 statement error Did you mean 'to_timestamp_seconds'?
 SELECT to_TIMESTAMPS_second(v2) from test;
