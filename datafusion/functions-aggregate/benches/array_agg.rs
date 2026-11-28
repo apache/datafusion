@@ -418,6 +418,69 @@ fn distinct_array_agg_groups_benchmark(c: &mut Criterion) {
     }
 }
 
+/// The final stage of a grouped `ARRAY_AGG`: merges eight partial states of
+/// 8 192 values each into the groups accumulator, then emits every group.
+/// Fewer groups means longer lists per group in each partial state.
+fn array_agg_groups_merge_benchmark(c: &mut Criterion) {
+    let schema = Schema::new(vec![Field::new("value", DataType::Int64, true)]);
+    let value_expr = col("value", &schema).unwrap();
+    let value_field = value_expr.return_field(&schema).unwrap();
+    let return_field: FieldRef = Field::new(
+        "array_agg",
+        DataType::List(Field::new_list_field(DataType::Int64, true).into()),
+        true,
+    )
+    .into();
+    let args = AccumulatorArgs {
+        return_field,
+        schema: &schema,
+        expr_fields: std::slice::from_ref(&value_field),
+        ignore_nulls: false,
+        order_bys: &[],
+        is_reversed: false,
+        name: "array_agg(value)",
+        is_distinct: false,
+        exprs: std::slice::from_ref(&value_expr),
+    };
+    let array_agg = ArrayAgg::default();
+
+    let values_per_state = 8192;
+    for num_groups in [64, 128, 256, 512, 1024, 8192] {
+        let list_len = values_per_state / num_groups;
+        let states: Vec<ArrayRef> = (0..8)
+            .map(|_| {
+                let values = create_primitive_array::<Int64Type>(values_per_state, 0.0);
+                let offsets = OffsetBuffer::from_lengths(vec![list_len; num_groups]);
+                let field = Arc::new(Field::new_list_field(DataType::Int64, true));
+                Arc::new(ListArray::new(field, offsets, Arc::new(values), None))
+                    as ArrayRef
+            })
+            .collect();
+        let group_indices: Vec<usize> = (0..num_groups).collect();
+
+        c.bench_function(
+            &format!(
+                "array_agg groups merge {num_groups} groups, list length {list_len}"
+            ),
+            |b| {
+                b.iter(|| {
+                    let mut acc =
+                        array_agg.create_groups_accumulator(args.clone()).unwrap();
+                    for state in &states {
+                        acc.merge_batch(
+                            std::slice::from_ref(state),
+                            &group_indices,
+                            num_groups,
+                        )
+                        .unwrap();
+                    }
+                    black_box(acc.evaluate(EmitTo::All).unwrap())
+                })
+            },
+        );
+    }
+}
+
 /// Precomputes the schema, physical expressions, sort expression, and aggregate
 /// metadata so each benchmark iteration can focus on accumulator operations.
 struct OrderedArrayAggBenchFixture {
@@ -641,6 +704,7 @@ criterion_group!(
     array_agg_benchmark,
     distinct_array_agg_benchmark,
     distinct_array_agg_groups_benchmark,
+    array_agg_groups_merge_benchmark,
     ordered_array_agg_benchmark,
     ordered_array_agg_wide_utf8_benchmark
 );
