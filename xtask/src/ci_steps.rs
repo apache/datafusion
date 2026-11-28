@@ -124,6 +124,15 @@ impl StepContext {
         }
     }
 
+    /// Appends a `/`-separated path to the workspace root. Unlike [`Path::join`],
+    /// this never inserts `\`, so `--explain` output is the same on Windows.
+    fn root_path(&self, relative: &str) -> PathBuf {
+        let mut path = self.root.clone().into_os_string();
+        path.push("/");
+        path.push(relative);
+        PathBuf::from(path)
+    }
+
     fn run(&self, args: &[String]) -> Result<()> {
         match args {
             [] => {
@@ -334,8 +343,9 @@ impl StepContext {
                 cmd_builder.env("SORT_AXIS_ROWS", "200000");
                 cmd_builder.env(
                     "CLICKBENCH_DATA_PATH",
-                    self.root
-                        .join("datafusion/core/tests/data/clickbench_hits_10.parquet"),
+                    self.root_path(
+                        "datafusion/core/tests/data/clickbench_hits_10.parquet",
+                    ),
                 );
                 cmd_builder.program("cargo").args([
                     "test",
@@ -358,7 +368,7 @@ impl StepContext {
                 ]);
             }
             "benchmark-plan" => {
-                let tpch_data = self.root.join(TPCH_DATA_DIR);
+                let tpch_data = self.root_path(TPCH_DATA_DIR);
                 cmd_builder
                     .program("cargo")
                     .args([
@@ -380,7 +390,7 @@ impl StepContext {
                     );
             }
             "benchmark-sqllogic" => {
-                let tpch_data = self.root.join(TPCH_DATA_DIR);
+                let tpch_data = self.root_path(TPCH_DATA_DIR);
                 cmd_builder
                     .program("cargo")
                     .args([
@@ -415,7 +425,7 @@ impl StepContext {
                         "--test",
                         "sqllogictests",
                     ])
-                    .current_dir(self.root.join("datafusion/sqllogictest"))
+                    .current_dir(self.root_path("datafusion/sqllogictest"))
                     .env("PG_COMPAT", "true")
                     .env_template(
                         "PG_URI",
@@ -543,7 +553,7 @@ impl StepContext {
                         "--tests",
                         "--features=force_hash_collisions,avro",
                     ])
-                    .current_dir(self.root.join("datafusion"))
+                    .current_dir(self.root_path("datafusion"))
                     .env("RUST_BACKTRACE", "1");
             }
             "sqlite" => {
