@@ -195,3 +195,8 @@ name = "unnest"
 [[bench]]
 harness = false
 name = "ordered_group_values"
+
+[[bench]]
+harness = false
+name = "join_materialize"
+required-features = ["test_utils"]

@@ -1563,6 +1563,54 @@ fn new_empty_schema_batch(schema: &SchemaRef, row_count: usize) -> Result<Record
     )?)
 }
 
+/// Returns `Some((start, len))` if `indices` has no nulls and contains the
+/// contiguous sequence `[start, start + 1, ..., start + len - 1]`.
+#[inline]
+fn contiguous_range_u32(indices: &UInt32Array) -> Option<(usize, usize)> {
+    if indices.null_count() != 0 {
+        return None;
+    }
+    let values = indices.values();
+    let len = values.len();
+    if len == 0 {
+        return None;
+    }
+    let start = values[0];
+    let last_offset = u32::try_from(len - 1).ok()?;
+    let expected_end = start.checked_add(last_offset)?;
+    if values[len - 1] != expected_end {
+        return None;
+    }
+    let mid = len >> 1;
+    if values[mid] != start + mid as u32 {
+        return None;
+    }
+    const CHUNK: usize = 8;
+    let mut base = start;
+    let (chunks, remainder) = values.as_chunks::<CHUNK>();
+    for chunk in chunks {
+        let diff = (chunk[0] ^ base)
+            | (chunk[1] ^ (base + 1))
+            | (chunk[2] ^ (base + 2))
+            | (chunk[3] ^ (base + 3))
+            | (chunk[4] ^ (base + 4))
+            | (chunk[5] ^ (base + 5))
+            | (chunk[6] ^ (base + 6))
+            | (chunk[7] ^ (base + 7));
+        if diff != 0 {
+            return None;
+        }
+        base += CHUNK as u32;
+    }
+    for &v in remainder {
+        if v != base {
+            return None;
+        }
+        base += 1;
+    }
+    Some((start as usize, len))
+}
+
 /// Returns a new [RecordBatch] by combining the `left` and `right` according to `indices`.
 /// The resulting batch has [Schema] `schema`.
 #[expect(clippy::too_many_arguments)]
@@ -1592,6 +1640,7 @@ pub(crate) fn build_batch_from_indices(
     // 1. pick whether the column is from the left or right
     // 2. based on the pick, `take` items from the different RecordBatches
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
+    let mut probe_contiguous: Option<Option<(usize, usize)>> = None;
 
     for column_index in column_indices {
         let array = if column_index.side == JoinSide::None {
@@ -1610,6 +1659,8 @@ pub(crate) fn build_batch_from_indices(
                 assert_eq!(build_indices.null_count(), build_indices.len());
                 new_null_array(array.data_type(), build_indices.len())
             } else {
+                // Always materialize build columns with `take` so output batches
+                // never retain build-side (or prepared-build) buffers.
                 take(array.as_ref(), build_indices, None)?
             }
         } else {
@@ -1617,6 +1668,16 @@ pub(crate) fn build_batch_from_indices(
             if array.is_empty() || probe_indices.null_count() == probe_indices.len() {
                 assert_eq!(probe_indices.null_count(), probe_indices.len());
                 new_null_array(array.data_type(), probe_indices.len())
+            } else if let Some((start, len)) = *probe_contiguous
+                .get_or_insert_with(|| contiguous_range_u32(probe_indices))
+                && start.checked_add(len).is_some_and(|end| end <= array.len())
+                && len.saturating_mul(2) >= array.len()
+            {
+                if start == 0 && len == array.len() {
+                    Arc::clone(array)
+                } else {
+                    array.slice(start, len)
+                }
             } else {
                 take(array.as_ref(), probe_indices, None)?
             }
@@ -6204,5 +6265,229 @@ mod tests {
             ),
             Inexact(10)
         );
+    }
+
+    #[test]
+    fn test_contiguous_range_and_identity_helpers() {
+        // Test across chunk boundaries (CHUNK = 8) and remainder.
+        let full: UInt32Array = (0..25u32).collect();
+        assert_eq!(contiguous_range_u32(&full), Some((0, 25)));
+
+        let shifted: UInt32Array = (7..32u32).collect();
+        assert_eq!(contiguous_range_u32(&shifted), Some((7, 25)));
+
+        assert_eq!(
+            contiguous_range_u32(&UInt32Array::from(vec![42])),
+            Some((42, 1))
+        );
+        assert_eq!(
+            contiguous_range_u32(&UInt32Array::from(Vec::<u32>::new())),
+            None
+        );
+        let with_null = UInt32Array::from(vec![Some(0), None, Some(2)]);
+        assert_eq!(contiguous_range_u32(&with_null), None);
+
+        for bad_idx in 1..24 {
+            let mut vals: Vec<u32> = (5..30).collect();
+            vals[bad_idx] += 1;
+            assert_eq!(
+                contiguous_range_u32(&UInt32Array::from(vals)),
+                None,
+                "failed to reject perturbation at {bad_idx}"
+            );
+        }
+
+        let overflow = UInt32Array::from(vec![u32::MAX, 0]);
+        assert_eq!(contiguous_range_u32(&overflow), None);
+    }
+
+    #[test]
+    fn test_build_batch_from_indices_zero_copy_fast_paths() {
+        use arrow::array::{Float64Array, StringArray, StringViewArray};
+        use arrow::datatypes::Field;
+
+        let n = 20usize;
+        let build_schema = Arc::new(Schema::new(vec![
+            Field::new("b_i32", DataType::Int32, true),
+            Field::new("b_str", DataType::Utf8, true),
+        ]));
+        let build_batch = RecordBatch::try_new(
+            Arc::clone(&build_schema),
+            vec![
+                Arc::new(Int32Array::from_iter(
+                    (0..n as i32).map(|v| (v % 5 != 0).then_some(v * 10)),
+                )),
+                Arc::new(StringArray::from_iter(
+                    (0..n).map(|v| (v % 4 != 0).then(|| format!("build_{v}"))),
+                )),
+            ],
+        )
+        .unwrap();
+
+        let probe_schema = Arc::new(Schema::new(vec![
+            Field::new("p_i32", DataType::Int32, true),
+            Field::new("p_f64", DataType::Float64, true),
+            Field::new("p_view", DataType::Utf8View, true),
+        ]));
+        let probe_batch = RecordBatch::try_new(
+            Arc::clone(&probe_schema),
+            vec![
+                Arc::new(Int32Array::from_iter(
+                    (0..n as i32).map(|v| (v % 7 != 0).then_some(v)),
+                )),
+                Arc::new(Float64Array::from_iter(
+                    (0..n).map(|v| (v % 6 != 0).then_some(v as f64 * 1.5)),
+                )),
+                Arc::new(StringViewArray::from_iter((0..n).map(|v| {
+                    (v % 3 != 0).then(|| format!("probe_long_payload_string_{v:04}"))
+                }))),
+            ],
+        )
+        .unwrap();
+
+        let out_schema = Arc::new(Schema::new(vec![
+            Field::new("b_i32", DataType::Int32, true),
+            Field::new("b_str", DataType::Utf8, true),
+            Field::new("p_i32", DataType::Int32, true),
+            Field::new("p_f64", DataType::Float64, true),
+            Field::new("p_view", DataType::Utf8View, true),
+        ]));
+        let col_indices = vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Right,
+            },
+        ];
+
+        // 1. Exact identity on probe side -> Arc::ptr_eq for probe columns;
+        //    build columns still materialize independently so build buffers are not retained.
+        let build_id: UInt64Array = (0..n as u64).collect();
+        let probe_id: UInt32Array = (0..n as u32).collect();
+        let out = build_batch_from_indices(
+            &out_schema,
+            &build_batch,
+            &probe_batch,
+            &build_id,
+            &probe_id,
+            &col_indices,
+            JoinSide::Left,
+            JoinType::Inner,
+            None,
+        )
+        .unwrap();
+        assert!(!Arc::ptr_eq(out.column(0), build_batch.column(0)));
+        assert!(!Arc::ptr_eq(out.column(1), build_batch.column(1)));
+        assert!(Arc::ptr_eq(out.column(2), probe_batch.column(0)));
+        assert!(Arc::ptr_eq(out.column(3), probe_batch.column(1)));
+        assert!(Arc::ptr_eq(out.column(4), probe_batch.column(2)));
+
+        // 2. Contiguous probe slice >= 50% (12/20 rows) -> zero-copy slice for probe;
+        //    build_input_buffer still uses take.
+        let build_partial: UInt64Array = (0..12u64).collect();
+        let probe_slice: UInt32Array = (4..16u32).collect();
+        let out_slice = build_batch_from_indices(
+            &out_schema,
+            &build_batch,
+            &probe_batch,
+            &build_partial,
+            &probe_slice,
+            &col_indices,
+            JoinSide::Left,
+            JoinType::Inner,
+            None,
+        )
+        .unwrap();
+        assert_eq!(out_slice.num_rows(), 12);
+        // Zero-copy slice shares the same underlying allocation (data pointer offset by 4 elements).
+        assert_eq!(
+            out_slice.column(2).to_data().buffers()[0].as_ptr() as usize,
+            probe_batch.column(0).to_data().buffers()[0].as_ptr() as usize
+                + 4 * size_of::<i32>()
+        );
+        assert_eq!(
+            out_slice.column(4).to_data().buffers()[0].as_ptr() as usize,
+            probe_batch.column(2).to_data().buffers()[0].as_ptr() as usize
+                + 4 * size_of::<u128>()
+        );
+        assert_ne!(
+            out_slice.column(0).to_data().buffers()[0].as_ptr(),
+            build_batch.column(0).to_data().buffers()[0].as_ptr()
+        );
+        for (i, col_idx) in col_indices.iter().enumerate() {
+            let expected = if col_idx.side == JoinSide::Left {
+                take(build_batch.column(col_idx.index), &build_partial, None).unwrap()
+            } else {
+                take(probe_batch.column(col_idx.index), &probe_slice, None).unwrap()
+            };
+            assert_eq!(out_slice.column(i).as_ref(), expected.as_ref());
+        }
+
+        // 3. Contiguous probe slice < 50% (9/20 rows) -> falls back to `take`.
+        let build_small: UInt64Array = (0..9u64).collect();
+        let probe_small: UInt32Array = (5..14u32).collect();
+        let out_small = build_batch_from_indices(
+            &out_schema,
+            &build_batch,
+            &probe_batch,
+            &build_small,
+            &probe_small,
+            &col_indices,
+            JoinSide::Left,
+            JoinType::Inner,
+            None,
+        )
+        .unwrap();
+        assert_ne!(
+            out_small.column(2).to_data().buffers()[0].as_ptr(),
+            probe_batch.column(0).to_data().buffers()[0].as_ptr()
+        );
+        assert_eq!(
+            out_small.column(2).as_ref(),
+            take(probe_batch.column(0), &probe_small, None)
+                .unwrap()
+                .as_ref()
+        );
+
+        // 4. Non-contiguous, duplicate, and nullable probe indices fall back to `take`
+        //    and match `arrow::compute::take` identically.
+        let build_mixed = UInt64Array::from(vec![0, 1, 2, 3, 4, 5]);
+        let probe_mixed =
+            UInt32Array::from(vec![Some(0), Some(2), None, Some(2), Some(1), Some(5)]);
+        let out_mixed = build_batch_from_indices(
+            &out_schema,
+            &build_batch,
+            &probe_batch,
+            &build_mixed,
+            &probe_mixed,
+            &col_indices,
+            JoinSide::Left,
+            JoinType::Left,
+            None,
+        )
+        .unwrap();
+        for (i, col_idx) in col_indices.iter().enumerate() {
+            let expected = if col_idx.side == JoinSide::Left {
+                take(build_batch.column(col_idx.index), &build_mixed, None).unwrap()
+            } else {
+                take(probe_batch.column(col_idx.index), &probe_mixed, None).unwrap()
+            };
+            assert_eq!(out_mixed.column(i).as_ref(), expected.as_ref());
+        }
     }
 }
