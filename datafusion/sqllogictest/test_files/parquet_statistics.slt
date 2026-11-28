@@ -264,6 +264,53 @@ physical_plan
 statement ok
 DROP TABLE months;
 
+# Positive IN lists longer than max_in_list_size (default 20) fall back to an
+# enclosing-range pruning predicate [vmin, vmax]; NOT IN skips min/max pruning.
+statement ok
+COPY (SELECT CAST(value AS INT) AS id FROM generate_series(1, 100))
+TO 'test_files/scratch/parquet_statistics/in_list_range.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE in_list_range STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/in_list_range.parquet';
+
+query TT
+EXPLAIN SELECT id FROM in_list_range WHERE id IN (10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30);
+----
+physical_plan
+01)FilterExec: id@0 IN (SET) ([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]), statistics=[Rows=Inexact(21), Bytes=Inexact(84), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(100)) Null=Exact(0) ScanBytes=Inexact(84))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/in_list_range.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 IN (SET) ([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]), pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 >= 10 AND id_null_count@1 != row_count@2 AND id_min@3 <= 30, required_guarantees=[id in (10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)], statistics=[Rows=Inexact(100), Bytes=Inexact(400), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(100)) Null=Inexact(0) ScanBytes=Inexact(400))]]
+
+query TT
+EXPLAIN SELECT id FROM in_list_range WHERE id NOT IN (10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30);
+----
+physical_plan
+01)FilterExec: id@0 NOT IN (SET) ([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]), statistics=[Rows=Inexact(79), Bytes=Inexact(316), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(100)) Null=Exact(0) ScanBytes=Inexact(316))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/in_list_range.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 NOT IN (SET) ([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]), pruning_predicate=true, required_guarantees=[id not in (10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)], statistics=[Rows=Inexact(100), Bytes=Inexact(400), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(100)) Null=Inexact(0) ScanBytes=Inexact(400))]]
+
+statement ok
+SET datafusion.execution.parquet.max_in_list_size = 0;
+
+statement ok
+CREATE EXTERNAL TABLE in_list_range_disabled STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/in_list_range.parquet';
+
+query TT
+EXPLAIN SELECT id FROM in_list_range_disabled WHERE id IN (10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30);
+----
+physical_plan
+01)FilterExec: id@0 IN (SET) ([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]), statistics=[Rows=Inexact(21), Bytes=Inexact(84), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(100)) Null=Exact(0) ScanBytes=Inexact(84))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/in_list_range.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 IN (SET) ([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]), pruning_predicate=true, required_guarantees=[id in (10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)], statistics=[Rows=Inexact(100), Bytes=Inexact(400), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(100)) Null=Inexact(0) ScanBytes=Inexact(400))]]
+
+statement ok
+RESET datafusion.execution.parquet.max_in_list_size;
+
+statement ok
+DROP TABLE in_list_range;
+
+statement ok
+DROP TABLE in_list_range_disabled;
+
 ######
 # Aggregate statistics through casts
 ######

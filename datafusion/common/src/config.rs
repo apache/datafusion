@@ -1382,8 +1382,8 @@ config_namespace! {
         pub max_predicate_cache_size: Option<usize>, default = None
 
         /// Maximum number of input values in an `IN (...)` list eligible for
-        /// min/max pruning. Lists above this cap, or a cap of 0, skip this
-        /// rewrite; other predicates and Bloom-filter pruning remain available.
+        /// exact min/max pruning. A cap of 0 skips this rewrite; other predicates
+        /// and Bloom-filter pruning remain available.
         ///
         /// Within the cap, nonempty lists of at most 20 values use the existing
         /// per-value rewrite. Larger literal lists use a compact representation
@@ -1394,6 +1394,11 @@ config_namespace! {
         /// do not use the fully-matched-row-group optimization. Floating-point and
         /// other lists retain the existing per-value rewrite, so raising the cap
         /// can make those predicates expensive to build and evaluate.
+        ///
+        /// Above the cap (when nonzero), positive `IN` lists of orderable literals
+        /// (excluding `NaN`) fall back to an enclosing-range check `[vmin, vmax]`
+        /// so containers outside the range can still be pruned. `NOT IN` and
+        /// unsupported lists above the cap skip min/max pruning.
         ///
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
