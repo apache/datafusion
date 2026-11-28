@@ -1,0 +1,331 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+#######
+# Tests for the map_agg aggregate function.
+#######
+
+# A map is built from all input rows.
+query ?
+SELECT map_agg(v, m ORDER BY v) FROM (VALUES (1, 10), (2, 20), (3, 30), (4, 40)) t(v, m)
+----
+{1: 10, 2: 20, 3: 30, 4: 40}
+
+# NULL values are kept in the map.
+query ?
+SELECT map_agg(v, m ORDER BY v) FROM (VALUES (1, 10), (2, NULL), (3, 30)) t(v, m)
+----
+{1: 10, 2: NULL, 3: 30}
+
+# Null keys cannot be represented in an Arrow map.
+statement error DataFusion error: Execution error: map key cannot be null
+SELECT map_agg(v, m) FROM (VALUES (1, 10), (NULL, 20)) t(v, m)
+
+# Empty input produces a NULL map, like array_agg.
+query ?
+SELECT map_agg(v, m) FROM (VALUES (1, 10)) t(v, m) WHERE false
+----
+NULL
+
+# Each group collects its own key/value pairs into one map.
+query T?
+SELECT k, map_agg(v, m ORDER BY v)
+FROM (VALUES
+    ('a', 1, 10),
+    ('a', 2, 20),
+    ('b', 3, 30)
+) t(k, v, m)
+GROUP BY k
+ORDER BY k
+----
+a {1: 10, 2: 20}
+b {3: 30}
+
+# duplicate group keys: each group keeps only its first pair per key
+query T?
+SELECT k, map_agg(k,v ORDER BY v)
+FROM (VALUES
+    ('a', 1),
+    ('a', 2),
+    ('b', 3)
+) t(k, v )
+GROUP BY k
+ORDER BY k
+----
+a {a: 1}
+b {b: 3}
+
+# ORDER BY inside the aggregate controls the map entry order
+query ?
+SELECT map_agg(k, v ORDER BY v)
+FROM (VALUES
+    ('a', 3),
+    ('b', 1),
+    ('c', 2)
+) t(k, v)
+----
+{b: 1, c: 2, a: 3}
+
+# ORDER BY DESC reverses the entry order.
+query ?
+SELECT map_agg(k, v ORDER BY v DESC)
+FROM (VALUES ('a', 3), ('b', 1), ('c', 2)) t(k, v)
+----
+{a: 3, c: 2, b: 1}
+
+# Ordering by the key puts the entries in key order.
+query ?
+SELECT map_agg(k, v ORDER BY k)
+FROM (VALUES ('c', 3), ('a', 1), ('b', 2)) t(k, v)
+----
+{a: 1, b: 2, c: 3}
+
+# Multiple ordering expressions are applied left to right.
+query ?
+SELECT map_agg(k, v ORDER BY g, v DESC)
+FROM (VALUES
+    ('a', 1, 'x'),
+    ('b', 5, 'x'),
+    ('c', 3, 'y')
+) t(k, v, g)
+----
+{b: 5, a: 1, c: 3}
+
+# The ordering may reference a column that is neither the key nor the value.
+query ?
+SELECT map_agg(k, v ORDER BY o)
+FROM (VALUES ('a', 10, 3), ('b', 20, 1), ('c', 30, 2)) t(k, v, o)
+----
+{b: 20, c: 30, a: 10}
+
+# With an ORDER BY the pairs are sorted before de-duplication, so the pair that
+# sorts first wins -- unlike the unordered accumulator, which keeps the first
+# input row.
+query ?
+SELECT map_agg(k, v ORDER BY v)
+FROM (VALUES ('a', 20), ('b', 5), ('a', 10)) t(k, v)
+----
+{b: 5, a: 10}
+
+# Reverse-preordered input must still use the first pair in the requested
+# ordering, not the first physical row.
+query ?
+SELECT map_agg(k, v ORDER BY v)
+FROM (
+    SELECT * FROM (VALUES ('a', 20), ('b', 5), ('a', 10)) t(k, v)
+    ORDER BY v DESC
+) t
+----
+{b: 5, a: 10}
+
+# The default null ordering is NULLS LAST for ascending order, so NULL ordering
+# values sort to the end.
+query ?
+SELECT map_agg(k, v ORDER BY v)
+FROM (VALUES ('a', 1), ('b', NULL), ('c', 2)) t(k, v)
+----
+{a: 1, c: 2, b: NULL}
+
+# NULLS FIRST moves them to the front.
+query ?
+SELECT map_agg(k, v ORDER BY v NULLS FIRST)
+FROM (VALUES ('a', 1), ('b', NULL), ('c', 2)) t(k, v)
+----
+{b: NULL, a: 1, c: 2}
+
+# Ordered and unordered aggregates both reject NULL keys.
+statement error map key cannot be null
+SELECT map_agg(k, v ORDER BY v) FROM (VALUES ('a', 1), (NULL, 2)) t(k, v)
+
+# Empty input produces a NULL map even when an ORDER BY is present.
+query ?
+SELECT map_agg(k, v ORDER BY v) FROM (VALUES ('a', 1)) t(k, v) WHERE false
+----
+NULL
+
+# The ORDER BY is applied independently within each group.
+query T?
+SELECT g, map_agg(k, v ORDER BY v DESC)
+FROM (VALUES
+    ('a', 'p', 1),
+    ('a', 'q', 3),
+    ('b', 'r', 2)
+) t(g, k, v)
+GROUP BY g
+ORDER BY g
+----
+a {q: 3, p: 1}
+b {r: 2}
+
+# Partial states from every partition are merged on the ordering, so the entry
+# order is deterministic under the default parallelism -- in contrast to the
+# unordered accumulator, whose entry order depends on which partial state
+# finishes first.
+query ?
+SELECT map_agg(k, v ORDER BY v)
+FROM (VALUES
+    ('a', 1), ('b', 2), ('c', 3), ('d', 4),
+    ('e', 5), ('f', 6), ('g', 7), ('h', 8)
+) t(k, v)
+----
+{a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8}
+
+# Multiple batches: with batch_size = 1 every row arrives in its own batch.
+# A single partition keeps the input order, so the entries stay in row order.
+statement ok
+set datafusion.execution.batch_size = 1
+
+statement ok
+set datafusion.execution.target_partitions = 1
+
+query ?
+SELECT map_agg(v, m) FROM (VALUES (1, 10), (2, NULL), (3, 30)) t(v, m)
+----
+{1: 10, 2: NULL, 3: 30}
+
+# The ordered accumulator keeps its ordering when every row arrives in its own
+# batch.
+query ?
+SELECT map_agg(k, v ORDER BY v)
+FROM (VALUES ('a', 3), ('b', 1), ('c', 2)) t(k, v)
+----
+{b: 1, c: 2, a: 3}
+
+# The SLT runner sets target_partitions to 4 instead of using the default, so
+# set it back explicitly rather than resetting.
+statement ok
+set datafusion.execution.target_partitions = 4
+
+# With the default parallelism the entry order depends on which partial state
+# finishes first, so assert the entry count and the sorted keys instead.
+query I
+SELECT cardinality(map_agg(v, m)) FROM (VALUES (1, 10), (2, 20), (3, 30), (4, 40)) t(v, m)
+----
+4
+
+query T
+SELECT array_to_string(array_sort(map_keys(map_agg(v, m))), ',') FROM (VALUES (1, 10), (2, 20), (3, 30), (4, 40)) t(v, m)
+----
+1,2,3,4
+
+statement ok
+reset datafusion.execution.batch_size
+
+# DISTINCT must not be silently ignored, with or without aggregate ordering.
+statement error map_agg does not support DISTINCT
+SELECT map_agg(DISTINCT k, v) FROM (VALUES ('a', 1), ('a', 2)) t(k, v)
+
+statement error map_agg does not support DISTINCT
+SELECT map_agg(DISTINCT k, v ORDER BY v) FROM (VALUES ('a', 1), ('a', 2)) t(k, v)
+
+# UNION ALL supplies multiple input partitions. Reverse-sorted input and
+# duplicates across partitions must still select the first requested value.
+statement ok
+CREATE VIEW map_partitions AS
+SELECT * FROM (VALUES (1, 'a', 20), (2, 'c', 30)) t(g, k, v)
+UNION ALL
+SELECT * FROM (VALUES (1, 'a', 10), (1, 'b', 5), (2, 'c', 3)) t(g, k, v)
+
+query TT
+EXPLAIN SELECT g, map_agg(k, v ORDER BY v)
+FROM (SELECT * FROM map_partitions ORDER BY v DESC) t
+GROUP BY g ORDER BY g
+----
+logical_plan
+01)Sort: t.g ASC NULLS LAST
+02)--Aggregate: groupBy=[[t.g]], aggr=[[map_agg(t.k, t.v) ORDER BY [t.v ASC NULLS LAST]]]
+03)----SubqueryAlias: t
+04)------SubqueryAlias: map_partitions
+05)--------Union
+06)----------SubqueryAlias: t
+07)------------Projection: column1 AS g, column2 AS k, column3 AS v
+08)--------------Values: (Int64(1), Utf8("a"), Int64(20)), (Int64(2), Utf8("c"), Int64(30))
+09)----------SubqueryAlias: t
+10)------------Projection: column1 AS g, column2 AS k, column3 AS v
+11)--------------Values: (Int64(1), Utf8("a"), Int64(10)), (Int64(1), Utf8("b"), Int64(5)), (Int64(2), Utf8("c"), Int64(3))
+physical_plan
+01)SortPreservingMergeExec: [g@0 ASC NULLS LAST]
+02)--SortExec: expr=[g@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[map_agg(t.k,t.v) ORDER BY [t.v ASC NULLS LAST]]
+04)------RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=2
+05)--------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[map_agg(t.k,t.v) ORDER BY [t.v ASC NULLS LAST]]
+06)----------UnionExec
+07)------------ProjectionExec: expr=[column1@0 as g, column2@1 as k, column3@2 as v]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)------------ProjectionExec: expr=[column1@0 as g, column2@1 as k, column3@2 as v]
+10)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I?
+SELECT g, map_agg(k, v ORDER BY v)
+FROM (SELECT * FROM map_partitions ORDER BY v DESC) t
+GROUP BY g ORDER BY g
+----
+1 {b: 5, a: 10}
+2 {c: 3}
+
+# Nested values, including NULL list elements, survive partial-state merging.
+query I?
+SELECT g, map_agg(k, [v, NULL] ORDER BY v)
+FROM map_partitions GROUP BY g ORDER BY g
+----
+1 {b: [5, NULL], a: [10, NULL]}
+2 {c: [3, NULL]}
+
+query ?
+SELECT map_agg(k, named_struct('x', v) ORDER BY v)
+FROM (VALUES ('a', 2), ('b', 1)) t(k, v)
+----
+{b: {x: 1}, a: {x: 2}}
+
+# Unordered aggregation also preserves nested values through merging.
+query ?
+SELECT map_agg(k, [v, NULL])
+FROM (SELECT 'a' AS k, 1 AS v UNION ALL SELECT 'a' AS k, 1 AS v) t
+----
+{a: [1, NULL]}
+
+# Full-partition windows over reverse-sorted input must not reverse the
+# duplicate winner when there is no ORDER BY inside the aggregate.
+query I?
+SELECT v, map_agg(k, v) OVER (
+    ORDER BY v ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+) FROM (SELECT * FROM (VALUES ('a', 20), ('b', 5), ('a', 10)) t(k, v)
+        ORDER BY v DESC) t
+ORDER BY v
+----
+5 {b: 5, a: 10}
+10 {b: 5, a: 10}
+20 {b: 5, a: 10}
+
+# A growing window must support repeated evaluation without consuming state.
+query I?
+SELECT v, map_agg(k, v) OVER (
+    ORDER BY v ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+) FROM (VALUES ('a', 20), ('b', 5), ('a', 10)) t(k, v)
+ORDER BY v
+----
+5 {b: 5}
+10 {b: 5, a: 10}
+20 {b: 5, a: 10}
+
+statement ok
+DROP VIEW map_partitions
+
+# Assumes sorted for sorted values in a opposite order
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+query ?
+SELECT map_agg(k, v ORDER BY v ASC NULLS LAST)
+FROM (
+  SELECT *
+  FROM (VALUES ('a', 20), ('b', 5), ('a', 10), ('z', 0)) t(k, v)
+  ORDER BY v DESC NULLS FIRST
+  LIMIT 3
+) s;
+----
+{b: 5, a: 10}
+
+statement ok
+set datafusion.execution.target_partitions = 4

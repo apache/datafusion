@@ -47,6 +47,7 @@ const NOT_EXERCISED: &[(&str, Reason)] = &[
     ("covar_pop", Reason::NoGroupsAccumulator),
     ("covar_samp", Reason::NoGroupsAccumulator),
     ("grouping", Reason::NoAccumulator),
+    ("map_agg", Reason::NoGroupsAccumulator),
     ("nth_value", Reason::NoGroupsAccumulator),
     ("regr_avgx", Reason::NoGroupsAccumulator),
     ("regr_avgy", Reason::NoGroupsAccumulator),
