@@ -299,6 +299,29 @@ SELECT * FROM test_delete_false;
 statement ok
 DROP TABLE test_delete_false;
 
+# Repeated expressions in the WHERE clause: common subexpression elimination
+# computes them once in a projection below the filter, and the table provider
+# must still receive a predicate over the table's own columns
+statement ok
+CREATE TABLE test_delete_cse(c0 INT, c1 VARCHAR);
+
+statement ok
+INSERT INTO test_delete_cse VALUES (1, 'a'), (NULL, 'b'), (7, 'c');
+
+query I
+DELETE FROM test_delete_cse WHERE COALESCE(c0, 0) > 0 AND COALESCE(c0, 0) < 5;
+----
+1
+
+query IT rowsort
+SELECT * FROM test_delete_cse;
+----
+7 c
+NULL b
+
+statement ok
+DROP TABLE test_delete_cse;
+
 # Test the same statements with the optimizer switched off
 # With `max_passes = 0` no rule rewrites the subquery into a semi join and no
 # rule folds an always-false predicate, so the whole WHERE clause reaches the
