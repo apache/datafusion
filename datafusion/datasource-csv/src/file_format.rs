@@ -97,7 +97,7 @@ impl FileFormatFactory for CsvFormatFactory {
             Some(csv_options) => {
                 let mut csv_options = csv_options.clone();
                 for (k, v) in format_options {
-                    csv_options.set(k, v)?;
+                    csv_options.set(k.strip_prefix("format.").unwrap_or(k), v)?;
                 }
                 csv_options
             }
@@ -973,6 +973,8 @@ impl CsvSink {
 #[cfg(feature = "proto")]
 impl From<&CsvFormatFactory> for datafusion_proto_models::protobuf::CsvOptions {
     fn from(factory: &CsvFormatFactory) -> Self {
+        use datafusion_proto_models::datafusion_common::CsvQuoteStyle;
+
         if let Some(options) = &factory.options {
             datafusion_proto_models::protobuf::CsvOptions {
                 has_header: options.has_header.map_or(vec![], |v| vec![v as u8]),
@@ -999,7 +1001,7 @@ impl From<&CsvFormatFactory> for datafusion_proto_models::protobuf::CsvOptions {
                     .map_or(vec![], |v| vec![v as u8]),
                 truncated_rows: options.truncated_rows.map_or(vec![], |v| vec![v as u8]),
                 compression_level: options.compression_level,
-                quote_style: options.quote_style as i32,
+                quote_style: CsvQuoteStyle::from(options.quote_style).into(),
                 ignore_leading_whitespace: options
                     .ignore_leading_whitespace
                     .map_or(vec![], |v| vec![v as u8]),

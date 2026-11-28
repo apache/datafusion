@@ -86,7 +86,7 @@ impl FileFormatFactory for JsonFormatFactory {
             Some(json_options) => {
                 let mut json_options = json_options.clone();
                 for (k, v) in format_options {
-                    json_options.set(k, v)?;
+                    json_options.set(k.strip_prefix("format.").unwrap_or(k), v)?;
                 }
                 json_options
             }

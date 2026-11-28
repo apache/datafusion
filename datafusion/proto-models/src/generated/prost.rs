@@ -497,6 +497,11 @@ pub struct CopyToNode {
     pub file_type: ::prost::alloc::vec::Vec<u8>,
     #[prost(string, repeated, tag = "7")]
     pub partition_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(map = "string, string", tag = "8")]
+    pub options: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 /// Wraps a serialized FileFormatFactory with its format kind tag,
 /// so the decoder can dispatch to the correct format-specific codec.

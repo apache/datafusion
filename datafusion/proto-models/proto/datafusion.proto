@@ -316,6 +316,7 @@ message CopyToNode {
   string output_url = 2;
   bytes file_type = 3;
   repeated string partition_by = 7;
+  map<string, string> options = 8;
 }
 
 // Identifies a built-in file format supported by DataFusion.

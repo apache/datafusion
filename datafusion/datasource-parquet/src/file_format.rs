@@ -101,7 +101,7 @@ impl FileFormatFactory for ParquetFormatFactory {
             Some(parquet_options) => {
                 let mut parquet_options = parquet_options.clone();
                 for (k, v) in format_options {
-                    parquet_options.set(k, v)?;
+                    parquet_options.set(k.strip_prefix("format.").unwrap_or(k), v)?;
                 }
                 parquet_options
             }
