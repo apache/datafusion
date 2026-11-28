@@ -4776,7 +4776,7 @@ SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY c3 DESC) FROM aggregate_test
 query R
 SELECT percentile_cont(0.05) WITHIN GROUP (ORDER BY c3 DESC) FROM aggregate_test_100
 ----
-118.099998
+118.1
 
 # Test with GROUP BY
 query TR
@@ -4794,7 +4794,7 @@ SELECT c1, percentile_cont(0.95) WITHIN GROUP (ORDER BY c3) FROM aggregate_test_
 a 65
 b 68
 c 118
-d 123.299998
+d 123.3
 e 112
 
 # Test with NULLs
