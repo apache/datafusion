@@ -23,6 +23,7 @@ use datafusion_physical_optimizer::ensure_requirements::enforce_sorting::sort_pu
 
 use std::sync::Arc;
 
+use arrow::array::{Int64Array, RecordBatch, StringViewArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::Result;
@@ -32,6 +33,7 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::memory::MemoryStream;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
@@ -1789,4 +1791,242 @@ fn test_keep_sort_above_local_limit() -> Result<()> {
           MockMultiPartitionExec
     ");
     Ok(())
+}
+
+// ========================================================================
+// Ordered limit + computed projection (#27550)
+// ========================================================================
+
+/// A single-partition, bounded scan that declares an output ordering but
+/// reports unknown statistics — the shape of a parquet listing-table scan
+/// registered with `with_file_sort_order`, where the optimizer cannot know
+/// the exact row count.
+#[derive(Debug)]
+struct OrderedUnknownStatsScan {
+    batches: Vec<RecordBatch>,
+    properties: Arc<PlanProperties>,
+}
+
+impl OrderedUnknownStatsScan {
+    fn new(batches: Vec<RecordBatch>, ordering: LexOrdering) -> Self {
+        let schema = batches[0].schema();
+        let mut eq = EquivalenceProperties::new(schema);
+        eq.add_ordering(ordering);
+        let properties = Arc::new(PlanProperties::new(
+            eq,
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ));
+        Self {
+            batches,
+            properties,
+        }
+    }
+}
+
+impl DisplayAs for OrderedUnknownStatsScan {
+    fn fmt_as(
+        &self,
+        _t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "OrderedUnknownStatsScan")
+    }
+}
+
+impl ExecutionPlan for OrderedUnknownStatsScan {
+    fn name(&self) -> &'static str {
+        "OrderedUnknownStatsScan"
+    }
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
+    }
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion_execution::TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let schema = Arc::clone(self.properties.equivalence_properties().schema());
+        Ok(Box::pin(MemoryStream::try_new(
+            self.batches.clone(),
+            schema,
+            None,
+        )?))
+    }
+}
+
+/// 10k sorted rows on `(seq, label)`, so the row-count statistics gate for
+/// round-robin repartitioning passes (statistics are unknown).
+fn ordered_unknown_stats_scan() -> (Arc<dyn ExecutionPlan>, Arc<Schema>) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("seq", DataType::Int64, false),
+        Field::new("label", DataType::Utf8View, false),
+    ]));
+    let n_rows = 10_000usize;
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from_iter_values(0..n_rows as i64)),
+            Arc::new(StringViewArray::from_iter_values(std::iter::repeat_n(
+                "x", n_rows,
+            ))),
+        ],
+    )
+    .unwrap();
+    let ordering = sort_expr_on("seq", 0, false, true);
+    let scan: Arc<dyn ExecutionPlan> =
+        Arc::new(OrderedUnknownStatsScan::new(vec![batch], ordering));
+    (scan, schema)
+}
+
+/// `ORDER BY seq LIMIT 3 OFFSET 2` with a computed projection above it, over
+/// an ordered single-partition scan with unknown statistics.
+///
+/// Regression for #27550: `EnsureRequirements` used to insert a
+/// `RoundRobinBatch` repartition between the computed projection and the
+/// ordered limit. The repartition keeps every output partition sorted, but
+/// the plan root then has several partitions, nothing re-merges them, and
+/// `collect` returns the rows out of order.
+#[tokio::test]
+async fn ordered_limit_with_computed_projection_keeps_global_order() {
+    use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
+
+    let (scan, _schema) = ordered_unknown_stats_scan();
+    let sort: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(sort_expr_on("seq", 0, false, true), scan));
+    let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 2, Some(3)));
+
+    // A projection that computes something (a CAST), the shape that makes
+    // ProjectionExec report it benefits from input partitioning.
+    let label = Column::new("label", 1);
+    let cast = Arc::new(datafusion_physical_expr::expressions::CastExpr::new(
+        Arc::new(label),
+        DataType::Utf8,
+        None,
+    )) as Arc<dyn PhysicalExpr>;
+    let proj_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![
+        (Arc::new(Column::new("seq", 0)), "seq".to_string()),
+        (cast, "label".to_string()),
+    ];
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(proj_exprs, limit).unwrap());
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 4;
+
+    let mut optimized = Arc::clone(&projection);
+    for rule in PhysicalOptimizer::new().rules {
+        optimized = rule
+            .optimize(optimized, &config)
+            .unwrap_or_else(|e| panic!("optimizer rule {} failed: {e}", rule.name()));
+    }
+
+    // The plan root must deliver the query's globally ordered rows from a
+    // single partition: with several partitions the row order is undefined.
+    // Parallelising the projection may still repartition the ordered limit
+    // output round robin, but the root must merge the sorted partitions back.
+    assert_eq!(
+        optimized.output_partitioning().partition_count(),
+        1,
+        "ordered limit plan must have a single output partition, got:\n{}",
+        plan_string(&optimized)
+    );
+    assert!(
+        plan_string(&optimized).contains("SortPreservingMergeExec"),
+        "expected the root to merge the ordered partitions:\n{}",
+        plan_string(&optimized)
+    );
+
+    let batches = datafusion_physical_plan::collect(
+        optimized,
+        datafusion::prelude::SessionContext::new().task_ctx(),
+    )
+    .await
+    .unwrap();
+    let seqs: Vec<i64> = batches
+        .iter()
+        .flat_map(|b| {
+            b.column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+                .iter()
+                .copied()
+        })
+        .collect();
+    assert_eq!(seqs, vec![2, 3, 4], "rows must come back in seq order");
+}
+
+/// The same query with a projection that only rearranges columns. Such a
+/// projection reports it does not benefit from input partitioning, so no
+/// repartition was ever inserted here; keep that behaviour.
+#[tokio::test]
+async fn ordered_limit_with_plain_projection_keeps_global_order() {
+    use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
+
+    let (scan, _schema) = ordered_unknown_stats_scan();
+    let sort: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(sort_expr_on("seq", 0, false, true), scan));
+    let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(sort, 2, Some(3)));
+
+    let proj_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = vec![
+        (Arc::new(Column::new("seq", 0)), "seq".to_string()),
+        (Arc::new(Column::new("label", 1)), "label".to_string()),
+    ];
+    let projection: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(proj_exprs, limit).unwrap());
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 4;
+
+    let mut optimized = Arc::clone(&projection);
+    for rule in PhysicalOptimizer::new().rules {
+        optimized = rule
+            .optimize(optimized, &config)
+            .unwrap_or_else(|e| panic!("optimizer rule {} failed: {e}", rule.name()));
+    }
+
+    assert_eq!(
+        optimized.output_partitioning().partition_count(),
+        1,
+        "plan:\n{}",
+        plan_string(&optimized)
+    );
+
+    let batches = datafusion_physical_plan::collect(
+        optimized,
+        datafusion::prelude::SessionContext::new().task_ctx(),
+    )
+    .await
+    .unwrap();
+    let seqs: Vec<i64> = batches
+        .iter()
+        .flat_map(|b| {
+            b.column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values()
+                .iter()
+                .copied()
+        })
+        .collect();
+    assert_eq!(seqs, vec![2, 3, 4], "rows must come back in seq order");
 }
