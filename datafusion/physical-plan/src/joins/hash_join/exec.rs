@@ -160,19 +160,14 @@ fn subtree_max_len(data: &ArrayData) -> usize {
         .fold(data.len(), usize::max)
 }
 
-/// Decides whether the build side should be joined with an [`ArrayMap`]
-/// (perfect hash join), returning the `(min, max)` key range to build it over.
-///
-/// On `Some`, the memory of the [`ArrayMap`] has already been added to
-/// `reservation`; the caller creates the map with [`ArrayMap::try_new`].
-fn array_map_key_range(
+fn try_build_array_map(
     bounds: Option<&PartitionBounds>,
     keys: &[ArrayRef],
     reservation: &mut MemoryReservation,
     perfect_hash_join_small_build_threshold: usize,
     perfect_hash_join_min_key_density: f64,
     null_equality: NullEquality,
-) -> Result<Option<(u64, u64)>> {
+) -> Result<Option<ArrayMap>> {
     let [key] = keys else {
         return Ok(None);
     };
@@ -231,13 +226,29 @@ fn array_map_key_range(
     if range >= perfect_hash_join_small_build_threshold as u64
         && dense_ratio <= perfect_hash_join_min_key_density
     {
-        return Ok(None);
+        if perfect_hash_join_small_build_threshold == 0
+            || !perfect_hash_join_min_key_density.is_finite()
+        {
+            return Ok(None);
+        }
+        let Some(bytes) = ArrayMap::sparse_memory_bound(range, num_rows) else {
+            return Ok(None);
+        };
+        let hash_bytes =
+            estimate_memory_size::<(u32, u64)>(num_rows, size_of::<JoinHashMapU32>())?;
+        if bytes > hash_bytes + num_rows * size_of::<u32>() {
+            return Ok(None);
+        }
+        reservation.try_grow(bytes)?;
+        let map = ArrayMap::try_sparse(key, min_val, range)?;
+        reservation.shrink(bytes - map.as_ref().map_or(0, ArrayMap::size));
+        return Ok(map);
     }
 
     let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_rows);
     reservation.try_grow(mem_size)?;
 
-    Ok(Some((min_val, max_val)))
+    ArrayMap::try_new(key, min_val, max_val).map(Some)
 }
 
 /// Immutable build buffers and their durable reservation.
@@ -726,7 +737,7 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 /// 4. build_side.num_rows() < u32::MAX
 /// 5. NullEqualsNothing || (NullEqualsNull && build side doesn't contain null)
 ///
-/// See [`array_map_key_range`] for more details.
+/// See [`try_build_array_map`] for more details.
 ///
 /// Note that when using [`PartitionMode::Partitioned`], the build side is split into multiple
 /// partitions. This can cause a dense build side to become sparse within each partition,
@@ -3070,7 +3081,7 @@ impl BuildSideState {
 /// (perfect hash join): a single join key of a supported integer type.
 ///
 /// Only a candidate: the final decision also depends on the observed key
-/// range and density, see [`array_map_key_range`].
+/// range and density, see [`try_build_array_map`].
 fn is_perfect_hash_join_candidate(
     on_left: &[PhysicalExprRef],
     schema: &SchemaRef,
@@ -3379,7 +3390,7 @@ fn build_in_memory(
     };
     let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
 
-    let join_hash_map = if let Some((min_val, max_val)) = array_map_key_range(
+    let join_hash_map = if let Some(array_map) = try_build_array_map(
         bounds.as_ref(),
         &left_values,
         &mut map_reservation,
@@ -3387,8 +3398,6 @@ fn build_in_memory(
         config.execution.perfect_hash_join_min_key_density,
         null_equality,
     )? {
-        let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
-
         array_map_created_count.add(1);
         metrics.build_mem_used.add(array_map.size());
 
@@ -3726,6 +3735,32 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn sparse_map_admission_and_duplicate_fallback() -> Result<()> {
+        let mut keys: Vec<i64> = (0..204).map(|i| i * 980).collect();
+        let bounds =
+            PartitionBounds::new(vec![ColumnBounds::new(0_i64.into(), keys[203].into())]);
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(8192));
+        for duplicate in [false, true] {
+            if duplicate {
+                keys[1] = keys[0];
+            }
+            let array: ArrayRef = Arc::new(Int64Array::from(keys.clone()));
+            let mut reservation = MemoryConsumer::new("sparse").register(&pool);
+            let map = try_build_array_map(
+                Some(&bounds),
+                &[array],
+                &mut reservation,
+                1024,
+                0.15,
+                NullEquality::NullEqualsNothing,
+            )?;
+            assert_eq!(map.is_some(), !duplicate);
+            assert_eq!(reservation.size(), map.as_ref().map_or(0, ArrayMap::size));
+        }
+        Ok(())
+    }
+
     /// 200 keys spread over 2M: sparse enough for a hash map rather than an
     /// array map, and sizing a pruning bitmap at the 128 KiB cap.
     fn sparse_keys() -> Vec<i64> {
@@ -3883,7 +3918,7 @@ mod tests {
     }
 
     /// Dense keys build an `ArrayMap`, which is charged to the map's own
-    /// reservation in `array_map_key_range` rather than the build's.
+    /// reservation in `try_build_array_map` rather than the build's.
     #[rstest]
     #[tokio::test]
     async fn array_map_stays_reserved_with_dynamic_filter(
