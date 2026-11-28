@@ -26,7 +26,7 @@ workspace = true
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
 # note: only use the main datafusion crate for examples
-datafusion = { workspace = true, default-features = true, features = ["parquet_encryption"] }
+datafusion = { workspace = true, default-features = true, features = ["parquet_encryption", "test_utils"] }
 nom = "8.0.0"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }

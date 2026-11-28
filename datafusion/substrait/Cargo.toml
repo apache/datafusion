@@ -36,7 +36,7 @@ url = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
-datafusion = { workspace = true, features = ["nested_expressions", "unicode_expressions"] }
+datafusion = { workspace = true, features = ["nested_expressions", "test_utils", "unicode_expressions"] }
 datafusion-functions-aggregate = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

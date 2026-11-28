@@ -69,6 +69,7 @@ parquet_encryption = [
 substrait = ["datafusion-substrait"]
 
 [dev-dependencies]
+datafusion = { workspace = true, features = ["test_utils"] }
 env_logger = { workspace = true }
 regex = { workspace = true }
 # Required to make sure tests for pg display behaves consistently

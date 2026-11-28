@@ -262,7 +262,8 @@ pub fn parquet_test_data() -> String {
 ///
 ///  Returns either:
 /// The path referred to in `udf_env` if that variable is set and refers to a directory
-/// The submodule_data directory relative to CARGO_MANIFEST_PATH
+/// The submodule_data directory relative to CARGO_MANIFEST_PATH, if the
+/// `test_utils` feature is enabled
 pub fn get_data_dir(
     udf_env: &str,
     submodule_data: &str,
@@ -287,21 +288,36 @@ pub fn get_data_dir(
 
     // The env is undefined or its value is trimmed to empty, let's try default dir.
 
-    // env "CARGO_MANIFEST_DIR" is "the directory containing the manifest of your package",
-    // set by `cargo run` or `cargo test`, see:
-    // https://doc.rust-lang.org/cargo/reference/environment-variables.html
-    let dir = env!("CARGO_MANIFEST_DIR");
+    // Feature-gated because `env!` embeds the absolute build path into the
+    // compiled library, which makes builds non-reproducible. The default dir
+    // only exists in a DataFusion source checkout anyway.
+    #[cfg(feature = "test_utils")]
+    {
+        // env "CARGO_MANIFEST_DIR" is "the directory containing the manifest of your package",
+        // set by `cargo run` or `cargo test`, see:
+        // https://doc.rust-lang.org/cargo/reference/environment-variables.html
+        let dir = env!("CARGO_MANIFEST_DIR");
 
-    let pb = PathBuf::from(dir).join(submodule_data);
-    if pb.is_dir() {
-        Ok(pb)
-    } else {
+        let pb = PathBuf::from(dir).join(submodule_data);
+        if pb.is_dir() {
+            Ok(pb)
+        } else {
+            Err(format!(
+                "env `{}` is undefined or has empty value, and the pre-defined data dir `{}` not found\n\
+                 HINT: try running `git submodule update --init`",
+                udf_env,
+                pb.display(),
+            ).into())
+        }
+    }
+
+    #[cfg(not(feature = "test_utils"))]
+    {
         Err(format!(
-            "env `{}` is undefined or has empty value, and the pre-defined data dir `{}` not found\n\
-             HINT: try running `git submodule update --init`",
-            udf_env,
-            pb.display(),
-        ).into())
+            "env `{udf_env}` is undefined or has empty value, and the pre-defined data dir \
+             `{submodule_data}` is only searched with the `test_utils` feature of `datafusion-common`"
+        )
+        .into())
     }
 }
 

@@ -74,6 +74,7 @@ datafusion = { workspace = true, default-features = false, features = [
     "datetime_expressions",
     "nested_expressions",
     "unicode_expressions",
+    "test_utils",
 ] }
 datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }
