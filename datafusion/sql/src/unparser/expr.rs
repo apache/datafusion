@@ -1903,7 +1903,7 @@ impl Unparser<'_> {
             DataType::Float16 => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
-            DataType::Float32 => Ok(ast::DataType::Float(ast::ExactNumberInfo::None)),
+            DataType::Float32 => Ok(self.dialect.float32_ast_dtype()),
             DataType::Float64 => Ok(self.dialect.float64_ast_dtype()),
             DataType::Timestamp(time_unit, tz) => {
                 Ok(self.dialect.timestamp_cast_dtype(time_unit, tz))
@@ -4253,6 +4253,15 @@ mod tests {
         let expr = cast(col("a"), DataType::Float64);
         let actual = format!("{}", unparser.expr_to_sql(&expr)?);
         assert_eq!(actual, "CAST(`a` AS FLOAT64)");
+
+        // float32_ast_dtype: FLOAT64 instead of FLOAT
+        let expr = cast(col("a"), DataType::Float32);
+        let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+        assert_eq!(actual, "CAST(`a` AS FLOAT64)");
+
+        // Non-finite Float32 literals use the same accepted BigQuery type.
+        let actual = format!("{}", unparser.expr_to_sql(&lit(f32::INFINITY))?);
+        assert_eq!(actual, "CAST('Infinity' AS FLOAT64)");
 
         // supports_column_alias_in_table_alias: false
         assert!(!bigquery_dialect.supports_column_alias_in_table_alias());

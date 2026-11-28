@@ -74,6 +74,12 @@ pub trait Dialect: Send + Sync {
         ast::DataType::Double(ast::ExactNumberInfo::None)
     }
 
+    /// Does the dialect use a type other than FLOAT to represent Float32?
+    /// E.g. BigQuery uses FLOAT64 because it has no FLOAT type
+    fn float32_ast_dtype(&self) -> ast::DataType {
+        ast::DataType::Float(ast::ExactNumberInfo::None)
+    }
+
     /// The SQL type to use for Arrow Utf8 unparsing
     /// Most dialects use VARCHAR, but some, like MySQL, require CHAR
     fn utf8_cast_dtype(&self) -> ast::DataType {
@@ -850,6 +856,10 @@ impl Dialect for BigQueryDialect {
     }
 
     fn float64_ast_dtype(&self) -> ast::DataType {
+        ast::DataType::Float64
+    }
+
+    fn float32_ast_dtype(&self) -> ast::DataType {
         ast::DataType::Float64
     }
 
