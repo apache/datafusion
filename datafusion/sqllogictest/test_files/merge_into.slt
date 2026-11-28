@@ -176,13 +176,19 @@ statement error DataFusion error: Error during planning: Duplicate column 'id' i
 merge into target using source on target.id = source.id
 when not matched then insert (id, ID) values (1, 2);
 
-statement error DataFusion error: Error during planning: MERGE INSERT has 2 column\(s\) but 1 value\(s\)
+statement error
 merge into target using source on target.id = source.id
 when not matched then insert (id, val) values (source.id);
+----
+DataFusion error: Error during planning: MERGE INSERT has 2 column(s) but 1 value(s)
 
-statement error DataFusion error: Error during planning: MERGE INSERT has 3 column\(s\) but 2 value\(s\)
+
+statement error
 merge into target using source on target.id = source.id
 when not matched then insert values (source.id, source.val);
+----
+DataFusion error: Error during planning: MERGE INSERT has 3 column(s) but 2 value(s)
+
 
 statement error DataFusion error: Error during planning: MERGE INSERT must have exactly one row of values
 merge into target using source on target.id = source.id
@@ -398,13 +404,18 @@ on exists (
 when matched then delete;
 
 # LIMIT expressions use an empty scope; this correlated scalar placement remains unsupported
-statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: Correlated scalar subquery can only be used in Projection, Filter, Aggregate and MERGE DML plan nodes
+statement error
 merge into target as t using source as s
 on exists (
   select t.id from source t
   limit (select t.id from source x limit 1)
 )
 when matched then delete;
+----
+DataFusion error: Invalid (non-executable) plan after Analyzer
+caused by
+Error during planning: Correlated scalar subquery can only be used in Projection, Filter, Aggregate and MERGE DML plan nodes
+
 
 ##########
 # Planning errors: unsupported syntax
@@ -430,13 +441,19 @@ statement error DataFusion error: This feature is not implemented: MERGE INSERT 
 merge into target using source on target.id = source.id
 when not matched then insert row;
 
-statement error DataFusion error: This feature is not implemented: MERGE UPDATE SET \* is not supported
+statement error
 merge into target using source on target.id = source.id
 when matched then update set *;
+----
+DataFusion error: This feature is not implemented: MERGE UPDATE SET * is not supported
 
-statement error DataFusion error: This feature is not implemented: MERGE INSERT \* is not supported
+
+statement error
 merge into target using source on target.id = source.id
 when not matched then insert *;
+----
+DataFusion error: This feature is not implemented: MERGE INSERT * is not supported
+
 
 statement error DataFusion error: This feature is not implemented: MERGE WHEN ... THEN DO NOTHING action is not supported
 merge into target using source on target.id = source.id

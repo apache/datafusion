@@ -7,68 +7,116 @@
 ###############
 
 # Missing `STORED AS` and `LOCATION` clauses
-statement error DataFusion error: SQL error: ParserError\("Missing STORED AS clause in CREATE EXTERNAL TABLE statement"\)
+statement error
 CREATE EXTERNAL TABLE t
+----
+DataFusion error: SQL error: ParserError("Missing STORED AS clause in CREATE EXTERNAL TABLE statement")
+
 
 # Missing `STORED AS` clause
-statement error DataFusion error: SQL error: ParserError\("Missing STORED AS clause in CREATE EXTERNAL TABLE statement"\)
+statement error
 CREATE EXTERNAL TABLE t LOCATION 'foo.csv'
+----
+DataFusion error: SQL error: ParserError("Missing STORED AS clause in CREATE EXTERNAL TABLE statement")
+
 
 # Missing `LOCATION` clause
-statement error DataFusion error: SQL error: ParserError\("Missing LOCATION clause in CREATE EXTERNAL TABLE statement"\)
+statement error
 CREATE EXTERNAL TABLE t STORED AS CSV
+----
+DataFusion error: SQL error: ParserError("Missing LOCATION clause in CREATE EXTERNAL TABLE statement")
+
 
 # Option value is missing
-statement error DataFusion error: SQL error: ParserError\("Expected: string or numeric value, found: \) at Line: 1, Column: 66"\)
+statement error
 CREATE EXTERNAL TABLE t STORED AS x OPTIONS ('k1' 'v1', k2 v2, k3) LOCATION 'blahblah'
+----
+DataFusion error: SQL error: ParserError("Expected: string or numeric value, found: ) at Line: 1, Column: 66")
+
 
 # Missing `(` in WITH ORDER clause
-statement error DataFusion error: SQL error: ParserError\("Expected: \(, found: c1 at Line: 1, Column: 58"\)
+statement error
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER c1 LOCATION 'foo.csv'
+----
+DataFusion error: SQL error: ParserError("Expected: (, found: c1 at Line: 1, Column: 58")
+
 
 # Missing `)` in WITH ORDER clause
-statement error DataFusion error: SQL error: ParserError\("Expected: \), found: LOCATION at Line: 1, Column: 62"\)
+statement error
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH ORDER (c1 LOCATION 'foo.csv'
+----
+DataFusion error: SQL error: ParserError("Expected: ), found: LOCATION at Line: 1, Column: 62")
+
 
 # Missing `ROW` in WITH HEADER clause
-statement error DataFusion error: SQL error: ParserError\("Expected: ROW, found: LOCATION at Line: 1, Column: 51"\)
+statement error
 CREATE EXTERNAL TABLE t STORED AS CSV WITH HEADER LOCATION 'abc'
+----
+DataFusion error: SQL error: ParserError("Expected: ROW, found: LOCATION at Line: 1, Column: 51")
+
 
 # Missing `BY` in PARTITIONED clause
-statement error DataFusion error: SQL error: ParserError\("Expected: BY, found: LOCATION at Line: 1, Column: 51"\)
+statement error
 CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED LOCATION 'abc'
+----
+DataFusion error: SQL error: ParserError("Expected: BY, found: LOCATION at Line: 1, Column: 51")
+
 
 # Duplicate `STORED AS` clause
-statement error DataFusion error: SQL error: ParserError\("STORED AS specified more than once"\)
+statement error
 CREATE EXTERNAL TABLE t STORED AS CSV STORED AS PARQUET LOCATION 'foo.parquet'
+----
+DataFusion error: SQL error: ParserError("STORED AS specified more than once")
+
 
 # Duplicate `LOCATION` clause
-statement error DataFusion error: SQL error: ParserError\("LOCATION specified more than once"\)
+statement error
 CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv' LOCATION 'bar.csv'
+----
+DataFusion error: SQL error: ParserError("LOCATION specified more than once")
+
 
 # Duplicate `PARTITIONED BY` clause
-statement error DataFusion error: SQL error: ParserError\("PARTITIONED BY specified more than once"\)
+statement error
 create EXTERNAL TABLE t(c1 int, c2 int) STORED AS CSV PARTITIONED BY (c1) partitioned by (c2) LOCATION 'foo.csv'
+----
+DataFusion error: SQL error: ParserError("PARTITIONED BY specified more than once")
+
 
 # Duplicate `OPTIONS` clause
-statement error DataFusion error: SQL error: ParserError\("OPTIONS specified more than once"\)
+statement error
 CREATE EXTERNAL TABLE t STORED AS CSV OPTIONS ('k1' 'v1', 'k2' 'v2') OPTIONS ('k3' 'v3') LOCATION 'foo.csv'
+----
+DataFusion error: SQL error: ParserError("OPTIONS specified more than once")
+
 
 # With typo error
-statement error DataFusion error: SQL error: ParserError\("Expected: HEADER, found: HEAD at Line: 1, Column: 52"\)
+statement error
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH HEAD ROW LOCATION 'foo.csv';
+----
+DataFusion error: SQL error: ParserError("Expected: HEADER, found: HEAD at Line: 1, Column: 52")
+
 
 # Missing `anything` in WITH clause
-statement error DataFusion error: SQL error: ParserError\("Expected: HEADER, found: LOCATION at Line: 1, Column: 52"\)
+statement error
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV WITH LOCATION 'foo.csv';
+----
+DataFusion error: SQL error: ParserError("Expected: HEADER, found: LOCATION at Line: 1, Column: 52")
+
 
 # Unrecognized random clause
-statement error DataFusion error: SQL error: ParserError\("Expected: end of statement or ;, found: FOOBAR at Line: 1, Column: 47"\)
+statement error
 CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV FOOBAR BARBAR BARFOO LOCATION 'foo.csv';
+----
+DataFusion error: SQL error: ParserError("Expected: end of statement or ;, found: FOOBAR at Line: 1, Column: 47")
+
 
 # Missing partition column
-statement error DataFusion error: Arrow error: Schema error: Unable to get field named "c2". Valid fields: \["c1"\]
+statement error
 create EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (c2) LOCATION 'foo.csv'
+----
+DataFusion error: Arrow error: Schema error: Unable to get field named "c2". Valid fields: ["c1"]
+
 
 # Duplicate Column in `PARTITIONED BY` clause
 statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name c1
@@ -89,11 +137,14 @@ CREATE TEMPORARY TABLE my_temp_table (
 );
 
 # Partitioned table on a single file
-query error DataFusion error: Error during planning: Can't create a partitioned table backed by a single file, perhaps the URL is missing a trailing slash\?
+query error
 CREATE EXTERNAL TABLE single_file_partition(c1 int)
 PARTITIONED BY (p2 string, p1 string)
 STORED AS CSV
 LOCATION 'foo.csv';
+----
+DataFusion error: Error during planning: Can't create a partitioned table backed by a single file, perhaps the URL is missing a trailing slash?
+
 
 # Wrong partition order error
 
@@ -108,17 +159,23 @@ INSERT INTO partitioned VALUES (1, 'x', 'y');
 ----
 1
 
-query error DataFusion error: Error during planning: Inferred partitions to be \["p1", "p2"\], but got \["p2", "p1"\]
+query error
 CREATE EXTERNAL TABLE wrong_order_partitioned (c1 int)
 PARTITIONED BY (p2 string, p1 string)
 STORED AS parquet
 LOCATION 'test_files/scratch/create_external_table/bad_partitioning/';
+----
+DataFusion error: Error during planning: Inferred partitions to be ["p1", "p2"], but got ["p2", "p1"]
 
-statement error DataFusion error: Error during planning: Inferred partitions to be \["p1", "p2"\], but got \["p2"\]
+
+statement error
 CREATE EXTERNAL TABLE wrong_order_partitioned (c1 int)
 PARTITIONED BY (p2 string)
 STORED AS parquet
 LOCATION 'test_files/scratch/create_external_table/bad_partitioning/';
+----
+DataFusion error: Error during planning: Inferred partitions to be ["p1", "p2"], but got ["p2"]
+
 
 # But allows partial partition selection
 
@@ -172,12 +229,15 @@ INSERT INTO test2 VALUES('name', '2024', '03');
 ----
 1
 
-statement error DataFusion error: Error during planning: Found mixed partition values on disk \[\["month", "year"\], \["year", "month"\]\]
+statement error
 -- fails to infer as partitions are not consistent
 CREATE EXTERNAL TABLE test3(name string)
 PARTITIONED BY (month string, year string)
 STORED AS parquet
 LOCATION 'test_files/scratch/create_external_table/manual_partitioning/';
+----
+DataFusion error: Error during planning: Found mixed partition values on disk [["month", "year"], ["year", "month"]]
+
 
 # Duplicate key assignment in OPTIONS clause
 statement error DataFusion error: Error during planning: Option format.delimiter is specified multiple times
@@ -285,10 +345,13 @@ statement error DataFusion error: Error during planning: failed to resolve schem
 CREATE EXTERNAL TABLE release.bar STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
 
 # Cannot create external table alongside `if_not_exists` and `or_replace`
-statement error DataFusion error: SQL error: ParserError\("'IF NOT EXISTS' cannot coexist with 'REPLACE'"\)
+statement error
 CREATE OR REPLACE EXTERNAL TABLE IF NOT EXISTS t_conflict(c1 int)
 STORED AS CSV
 LOCATION 'foo.csv';
+----
+DataFusion error: SQL error: ParserError("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
+
 
 # Multiple listed locations are read together as a single table.
 # Each partition-N.csv has 11 rows, so listing exactly two of them (rather than

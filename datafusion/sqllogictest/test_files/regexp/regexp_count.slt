@@ -78,14 +78,23 @@ SELECT regexp_count('abc', 'x*', 4);
 ----
 1
 
-statement error DataFusion error: Execution error: regexp_count\(\) requires start to be 1 based
+statement error
 SELECT regexp_count('123123123123', '123', 0);
+----
+DataFusion error: Execution error: regexp_count() requires start to be 1 based
 
-statement error DataFusion error: Execution error: regexp_count\(\) requires start to be 1 based
+
+statement error
 SELECT regexp_count('123123123123', '123', -3);
+----
+DataFusion error: Execution error: regexp_count() requires start to be 1 based
 
-statement error DataFusion error: Error during planning: regexp_count\(\) does not support the "global" option
+
+statement error
 SELECT regexp_count('123123123123', '123', 1, 'g');
+----
+DataFusion error: Error during planning: regexp_count() does not support the "global" option
+
 
 query I
 SELECT regexp_count(str, '\w') from regexp_test_data;
@@ -391,8 +400,11 @@ SELECT regexp_count('abc', 'a(b');
 query error DataFusion error: Execution error: Regular expression did not compile: regex parse error:
 SELECT regexp_count('abc', 'a', 1, 'z');
 
-query error DataFusion error: Error during planning: regexp_count\(\) does not support the "global" option
+query error
 SELECT regexp_count('abc', 'a', 1, 'g');
+----
+DataFusion error: Error during planning: regexp_count() does not support the "global" option
+
 
 # A pattern that varies per row is reported in the same way.
 statement ok
