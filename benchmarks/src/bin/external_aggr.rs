@@ -211,7 +211,8 @@ impl ExternalAggrConfig {
         let mut millis = vec![];
         // run benchmark
         let mut query_results = vec![];
-        for i in 0..self.iterations() {
+        let mut sampler = self.common.sampler();
+        while let Some(i) = sampler.next_iteration() {
             let start = Instant::now();
 
             let query_idx = query_id - 1; // 1-indexed -> 0-indexed
@@ -220,6 +221,7 @@ impl ExternalAggrConfig {
             let result = self.execute_query(&ctx, sql).await?;
 
             let elapsed = start.elapsed(); //.as_secs_f64() * 1000.0;
+            sampler.record(elapsed);
             let ms = elapsed.as_secs_f64() * 1000.0;
             millis.push(ms);
 
@@ -324,10 +326,6 @@ impl ExternalAggrConfig {
         Ok(Arc::new(ListingTable::try_new(config)?.with_cache(
             ctx.runtime_env().cache_manager.get_file_statistic_cache(),
         )))
-    }
-
-    fn iterations(&self) -> usize {
-        self.common.iterations
     }
 
     fn partitions(&self) -> usize {
