@@ -113,75 +113,49 @@ fn test_timestamp_without_session_timezone_coercion() -> Result<()> {
 fn test_decimal_mathematics_op_type() {
     // Decimal32
     assert_eq!(
-        coerce_numeric_type_to_decimal32(&DataType::Int8).unwrap(),
-        DataType::Decimal32(3, 0)
-    );
-    assert_eq!(
-        coerce_numeric_type_to_decimal32(&DataType::Int16).unwrap(),
-        DataType::Decimal32(5, 0)
-    );
-    assert!(coerce_numeric_type_to_decimal32(&DataType::Int32).is_none());
-    assert!(coerce_numeric_type_to_decimal32(&DataType::Int64).is_none(),);
-    assert_eq!(
-        coerce_numeric_type_to_decimal32(&DataType::Float16).unwrap(),
+        coerce_float_type_to_decimal32(&DataType::Float16).unwrap(),
         DataType::Decimal32(6, 3)
     );
-    assert!(coerce_numeric_type_to_decimal32(&DataType::Float32).is_none(),);
-    assert!(coerce_numeric_type_to_decimal32(&DataType::Float64).is_none());
+    assert!(coerce_float_type_to_decimal32(&DataType::Float32).is_none());
+    assert!(coerce_float_type_to_decimal32(&DataType::Float64).is_none());
 
     // Decimal64
     assert_eq!(
-        coerce_numeric_type_to_decimal64(&DataType::Int8).unwrap(),
-        DataType::Decimal64(3, 0)
-    );
-    assert_eq!(
-        coerce_numeric_type_to_decimal64(&DataType::Int16).unwrap(),
-        DataType::Decimal64(5, 0)
-    );
-    assert_eq!(
-        coerce_numeric_type_to_decimal64(&DataType::Int32).unwrap(),
-        DataType::Decimal64(10, 0)
-    );
-    assert!(coerce_numeric_type_to_decimal64(&DataType::Int64).is_none(),);
-    assert_eq!(
-        coerce_numeric_type_to_decimal64(&DataType::Float16).unwrap(),
+        coerce_float_type_to_decimal64(&DataType::Float16).unwrap(),
         DataType::Decimal64(6, 3)
     );
     assert_eq!(
-        coerce_numeric_type_to_decimal64(&DataType::Float32).unwrap(),
+        coerce_float_type_to_decimal64(&DataType::Float32).unwrap(),
         DataType::Decimal64(14, 7)
     );
-    assert!(coerce_numeric_type_to_decimal64(&DataType::Float64).is_none());
+    assert!(coerce_float_type_to_decimal64(&DataType::Float64).is_none());
 
     // Decimal128
     assert_eq!(
-        coerce_numeric_type_to_decimal128(&DataType::Int8).unwrap(),
-        DataType::Decimal128(3, 0)
-    );
-    assert_eq!(
-        coerce_numeric_type_to_decimal128(&DataType::Int16).unwrap(),
-        DataType::Decimal128(5, 0)
-    );
-    assert_eq!(
-        coerce_numeric_type_to_decimal128(&DataType::Int32).unwrap(),
-        DataType::Decimal128(10, 0)
-    );
-    assert_eq!(
-        coerce_numeric_type_to_decimal128(&DataType::Int64).unwrap(),
-        DataType::Decimal128(20, 0)
-    );
-    assert_eq!(
-        coerce_numeric_type_to_decimal128(&DataType::Float16).unwrap(),
+        coerce_float_type_to_decimal128(&DataType::Float16).unwrap(),
         DataType::Decimal128(6, 3)
     );
     assert_eq!(
-        coerce_numeric_type_to_decimal128(&DataType::Float32).unwrap(),
+        coerce_float_type_to_decimal128(&DataType::Float32).unwrap(),
         DataType::Decimal128(14, 7)
     );
     assert_eq!(
-        coerce_numeric_type_to_decimal128(&DataType::Float64).unwrap(),
+        coerce_float_type_to_decimal128(&DataType::Float64).unwrap(),
         DataType::Decimal128(30, 15)
     );
+}
+
+#[test]
+fn test_integer_decimal_precision() {
+    assert_eq!(integer_decimal_precision(&DataType::Int8), Some((3, 0)));
+    assert_eq!(integer_decimal_precision(&DataType::UInt8), Some((3, 0)));
+    assert_eq!(integer_decimal_precision(&DataType::Int16), Some((5, 0)));
+    assert_eq!(integer_decimal_precision(&DataType::UInt16), Some((5, 0)));
+    assert_eq!(integer_decimal_precision(&DataType::Int32), Some((10, 0)));
+    assert_eq!(integer_decimal_precision(&DataType::UInt32), Some((10, 0)));
+    assert_eq!(integer_decimal_precision(&DataType::Int64), Some((20, 0)));
+    assert_eq!(integer_decimal_precision(&DataType::UInt64), Some((20, 0)));
+    assert_eq!(integer_decimal_precision(&DataType::Float64), None);
 }
 
 #[test]
@@ -553,6 +527,67 @@ fn test_timestamp_minus_mixed_timezone_awareness() -> Result<()> {
 
     // For contrast, comparisons already coerced the mixed pair this way.
     test_coercion_binary_rule!(aware_ms, naive_ns, Operator::Eq, aware_ns);
+
+    Ok(())
+}
+
+/// An integer too wide for the decimal's variant used to turn decimal
+/// arithmetic into integer arithmetic.
+#[test]
+fn test_coercion_arithmetic_decimal_wide_integer() -> Result<()> {
+    // Int32 needs 10 digits, past Decimal32's 9
+    test_math_decimal_coercion_rule(
+        DataType::Decimal32(9, 2),
+        DataType::Int32,
+        DataType::Decimal64(9, 2),
+        DataType::Decimal64(10, 0),
+    );
+    test_math_decimal_coercion_rule(
+        DataType::Int32,
+        DataType::Decimal32(9, 2),
+        DataType::Decimal64(10, 0),
+        DataType::Decimal64(9, 2),
+    );
+
+    // Int64 and UInt64 need 20, past Decimal64's 18
+    test_math_decimal_coercion_rule(
+        DataType::Decimal32(9, 2),
+        DataType::Int64,
+        DataType::Decimal128(9, 2),
+        DataType::Decimal128(20, 0),
+    );
+    test_math_decimal_coercion_rule(
+        DataType::Decimal32(9, 2),
+        DataType::UInt64,
+        DataType::Decimal128(9, 2),
+        DataType::Decimal128(20, 0),
+    );
+    test_math_decimal_coercion_rule(
+        DataType::Decimal64(18, 2),
+        DataType::Int64,
+        DataType::Decimal128(18, 2),
+        DataType::Decimal128(20, 0),
+    );
+    test_math_decimal_coercion_rule(
+        DataType::Int64,
+        DataType::Decimal64(18, 2),
+        DataType::Decimal128(20, 0),
+        DataType::Decimal128(18, 2),
+    );
+
+    // A pair whose precisions the variant still holds leaves it alone
+    test_math_decimal_coercion_rule(
+        DataType::Decimal32(9, 2),
+        DataType::Int8,
+        DataType::Decimal32(9, 2),
+        DataType::Decimal32(3, 0),
+    );
+    test_math_decimal_coercion_rule(
+        DataType::Decimal64(18, 2),
+        DataType::Int32,
+        DataType::Decimal64(18, 2),
+        DataType::Decimal64(10, 0),
+    );
 
     Ok(())
 }

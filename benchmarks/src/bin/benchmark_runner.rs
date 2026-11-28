@@ -749,10 +749,12 @@ async fn run_simple_benchmark(
     run.set_memory_pool(&ctx.runtime_env().memory_pool);
     run.start_new_case(&case_name);
 
-    for iteration in 0..config.common.iterations {
+    let mut sampler = config.common.sampler();
+    while let Some(iteration) = sampler.next_iteration() {
         let start = Instant::now();
         let row_count = benchmark.run(ctx, false).await?;
         let elapsed = start.elapsed();
+        sampler.record(elapsed);
         let ms = elapsed.as_secs_f64() * 1000.0;
 
         println!("{case_name} iteration {iteration}: {ms:.1} ms, {row_count} rows");
@@ -903,6 +905,9 @@ mod tests {
     fn common(iterations: usize) -> CommonOpt {
         CommonOpt {
             iterations,
+            max_time: None,
+            target_precision: 0.02,
+            max_iterations: 1000,
             partitions: None,
             batch_size: None,
             mem_pool_type: "fair".to_string(),

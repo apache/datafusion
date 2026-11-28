@@ -878,3 +878,39 @@ DROP TABLE asof_corr_l;
 
 statement ok
 DROP TABLE asof_corr_r;
+
+# An ASOF key or match condition of two numeric types takes the same common
+# type as a comparison: a `Decimal32` key against an `Int64` one used to be
+# compared as integers, which made 1.50 and 1 the same key.
+
+statement ok
+CREATE TABLE asof_dec_left AS SELECT * FROM (VALUES
+  (arrow_cast(CAST(1.5 AS DECIMAL(9, 2)), 'Decimal32(9, 2)'), 1),
+  (arrow_cast(CAST(2.0 AS DECIMAL(9, 2)), 'Decimal32(9, 2)'), 2)
+) t(k, g);
+
+statement ok
+CREATE TABLE asof_dec_right AS SELECT * FROM (VALUES (1, 1), (2, 2)) t(k, g);
+
+query TT
+SELECT arrow_typeof(l.k), arrow_typeof(r.k) FROM asof_dec_left l, asof_dec_right r LIMIT 1;
+----
+Decimal32(9, 2) Int64
+
+query RI
+SELECT l.k, r.k FROM asof_dec_left l ASOF JOIN asof_dec_right r MATCH_CONDITION (l.g >= r.g) ON l.k = r.k ORDER BY l.k;
+----
+1.50 NULL
+2.00 2
+
+query RI
+SELECT l.k, r.k FROM asof_dec_left l ASOF JOIN asof_dec_right r MATCH_CONDITION (l.k > r.k) ON l.g = r.g ORDER BY l.k;
+----
+1.50 1
+2.00 NULL
+
+statement ok
+DROP TABLE asof_dec_left;
+
+statement ok
+DROP TABLE asof_dec_right;

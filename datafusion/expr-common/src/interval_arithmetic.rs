@@ -3927,6 +3927,31 @@ mod tests {
                 ScalarValue::Float64(Some(next_up(100.))),
                 false,
             ),
+            // These bounds used to lose their fraction, putting 1 inside them
+            (
+                Interval::try_new(
+                    ScalarValue::Decimal32(Some(150), 9, 2),
+                    ScalarValue::Decimal32(Some(250), 9, 2),
+                )?,
+                ScalarValue::Int64(Some(1)),
+                false,
+            ),
+            (
+                Interval::try_new(
+                    ScalarValue::Decimal32(Some(150), 9, 2),
+                    ScalarValue::Decimal32(Some(250), 9, 2),
+                )?,
+                ScalarValue::Int64(Some(2)),
+                true,
+            ),
+            (
+                Interval::try_new(
+                    ScalarValue::Decimal32(Some(150), 9, 2),
+                    ScalarValue::Decimal32(Some(250), 9, 2),
+                )?,
+                ScalarValue::Int64(Some(3)),
+                false,
+            ),
         ];
 
         for (interval, value, expected) in possible_cases {
