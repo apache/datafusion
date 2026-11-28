@@ -597,6 +597,61 @@ mod tests {
     }
 
     #[test]
+    fn test_singleton_maybe_null_not_folded() {
+        let guarantees = [(
+            col("x"),
+            NullableInterval::MaybeNull {
+                values: Interval::try_new(
+                    ScalarValue::Int32(Some(5)),
+                    ScalarValue::Int32(Some(5)),
+                )
+                .unwrap(),
+            },
+        )];
+
+        // {5, NULL} must NOT fold `x` to `5`, `x IS NULL` to `false`, `x = 5` to `true`,
+        // or `x IS (NOT) DISTINCT FROM 5` to a boolean literal.
+        let unchanged = &[
+            col("x"),
+            col("x").is_null(),
+            col("x").is_not_null(),
+            col("x").eq(lit(5_i32)),
+            Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(col("x")),
+                op: Operator::IsDistinctFrom,
+                right: Box::new(lit(5_i32)),
+            }),
+            Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(col("x")),
+                op: Operator::IsNotDistinctFrom,
+                right: Box::new(lit(5_i32)),
+            }),
+        ];
+        validate_unchanged_cases(&guarantees, unchanged);
+
+        // Disjoint literal `6` IS still certainly distinct from {5, NULL}.
+        let simplified = &[
+            (
+                Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(col("x")),
+                    op: Operator::IsDistinctFrom,
+                    right: Box::new(lit(6_i32)),
+                }),
+                true,
+            ),
+            (
+                Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(col("x")),
+                    op: Operator::IsNotDistinctFrom,
+                    right: Box::new(lit(6_i32)),
+                }),
+                false,
+            ),
+        ];
+        validate_simplified_cases(&guarantees, simplified);
+    }
+
+    #[test]
     fn test_in_list() {
         let guarantees = [
             // x ∈ [1, 10] (not null)

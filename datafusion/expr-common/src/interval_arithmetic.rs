@@ -2310,17 +2310,24 @@ impl NullableInterval {
                 let values = match (self, rhs) {
                     // NULL is distinct from NULL -> False
                     (Self::Null { .. }, Self::Null { .. }) => Interval::FALSE,
-                    // x is distinct from y -> x != y,
-                    // if at least one of them is never null.
-                    (Self::NotNull { .. }, _) | (_, Self::NotNull { .. }) => {
-                        let lhs_values = self.values();
-                        let rhs_values = rhs.values();
-                        match (lhs_values, rhs_values) {
-                            (Some(lhs_values), Some(rhs_values)) => {
-                                lhs_values.equal(rhs_values)?.not()?
-                            }
-                            (Some(_), None) | (None, Some(_)) => Interval::TRUE,
-                            (None, None) => unreachable!("Null case handled above"),
+                    // Non-null is always distinct from NULL -> True
+                    (Self::NotNull { .. }, Self::Null { .. })
+                    | (Self::Null { .. }, Self::NotNull { .. }) => Interval::TRUE,
+                    // Neither side can be NULL -> exact value inequality
+                    (Self::NotNull { values: lhs }, Self::NotNull { values: rhs }) => {
+                        lhs.equal(rhs)?.not()?
+                    }
+                    // One side is non-null, the other may be NULL:
+                    // - If the non-null ranges are disjoint, both the NULL case and all
+                    //   non-null pairs are distinct -> True
+                    // - Otherwise, the non-null case may be equal (False) while the NULL
+                    //   case is distinct (True) -> [False, True]
+                    (Self::NotNull { values: lhs }, Self::MaybeNull { values: rhs })
+                    | (Self::MaybeNull { values: lhs }, Self::NotNull { values: rhs }) => {
+                        if lhs.equal(rhs)? == Interval::FALSE {
+                            Interval::TRUE
+                        } else {
+                            Interval::TRUE_OR_FALSE
                         }
                     }
                     _ => Interval::TRUE_OR_FALSE,
@@ -2430,13 +2437,24 @@ impl NullableInterval {
     ///     .unwrap(),
     /// };
     /// assert_eq!(interval.single_value(), None);
+    ///
+    /// // Even when lower == upper, a MaybeNull interval represents `{4, NULL}`,
+    /// // not a single value.
+    /// let interval = NullableInterval::MaybeNull {
+    ///     values: Interval::try_new(
+    ///         ScalarValue::Int32(Some(4)),
+    ///         ScalarValue::Int32(Some(4)),
+    ///     )
+    ///     .unwrap(),
+    /// };
+    /// assert_eq!(interval.single_value(), None);
     /// ```
     pub fn single_value(&self) -> Option<ScalarValue> {
         match self {
             Self::Null { datatype } => {
                 Some(ScalarValue::try_from(datatype).unwrap_or(ScalarValue::Null))
             }
-            Self::MaybeNull { values } | Self::NotNull { values }
+            Self::NotNull { values }
                 if values.lower == values.upper && !values.lower.is_null() =>
             {
                 Some(values.lower.clone())
@@ -5806,5 +5824,80 @@ mod tests {
                 "Failed for interval: {interval} and value {value:?}",
             );
         }
+    }
+
+    #[test]
+    fn nullable_interval_singleton_maybe_null() -> Result<()> {
+        let maybe_5 = NullableInterval::MaybeNull {
+            values: Interval::make(Some(5_i32), Some(5_i32))?,
+        };
+        let exact_5 = NullableInterval::from(ScalarValue::Int32(Some(5)));
+        let exact_6 = NullableInterval::from(ScalarValue::Int32(Some(6)));
+        let null_i32 = NullableInterval::from(ScalarValue::Int32(None));
+
+        // {5, NULL} has two possible values, not a single value
+        assert_eq!(maybe_5.single_value(), None);
+        assert_eq!(exact_5.single_value(), Some(ScalarValue::Int32(Some(5))));
+        assert_eq!(null_i32.single_value(), Some(ScalarValue::Int32(None)));
+
+        // NULL IS DISTINCT FROM 5 is TRUE, while 5 IS DISTINCT FROM 5 is FALSE
+        assert_eq!(
+            maybe_5.apply_operator(&Operator::IsDistinctFrom, &exact_5)?,
+            NullableInterval::TRUE_OR_FALSE
+        );
+        assert_eq!(
+            exact_5.apply_operator(&Operator::IsDistinctFrom, &maybe_5)?,
+            NullableInterval::TRUE_OR_FALSE
+        );
+        assert_eq!(
+            maybe_5.apply_operator(&Operator::IsNotDistinctFrom, &exact_5)?,
+            NullableInterval::TRUE_OR_FALSE
+        );
+        assert_eq!(
+            exact_5.apply_operator(&Operator::IsNotDistinctFrom, &maybe_5)?,
+            NullableInterval::TRUE_OR_FALSE
+        );
+
+        // Disjoint non-null value is still certainly distinct even when maybe-null
+        assert_eq!(
+            maybe_5.apply_operator(&Operator::IsDistinctFrom, &exact_6)?,
+            NullableInterval::TRUE
+        );
+        assert_eq!(
+            exact_6.apply_operator(&Operator::IsDistinctFrom, &maybe_5)?,
+            NullableInterval::TRUE
+        );
+        assert_eq!(
+            maybe_5.apply_operator(&Operator::IsNotDistinctFrom, &exact_6)?,
+            NullableInterval::FALSE
+        );
+        assert_eq!(
+            exact_6.apply_operator(&Operator::IsNotDistinctFrom, &maybe_5)?,
+            NullableInterval::FALSE
+        );
+
+        // Comparing two MaybeNull intervals (even disjoint) can be FALSE when both are NULL
+        let maybe_6 = NullableInterval::MaybeNull {
+            values: Interval::make(Some(6_i32), Some(6_i32))?,
+        };
+        assert_eq!(
+            maybe_5.apply_operator(&Operator::IsDistinctFrom, &maybe_6)?,
+            NullableInterval::TRUE_OR_FALSE
+        );
+        assert_eq!(
+            maybe_5.apply_operator(&Operator::IsNotDistinctFrom, &maybe_6)?,
+            NullableInterval::TRUE_OR_FALSE
+        );
+
+        // MaybeNull vs Null can be FALSE (when NULL) or TRUE (when 5)
+        assert_eq!(
+            maybe_5.apply_operator(&Operator::IsDistinctFrom, &null_i32)?,
+            NullableInterval::TRUE_OR_FALSE
+        );
+        assert_eq!(
+            null_i32.apply_operator(&Operator::IsDistinctFrom, &maybe_5)?,
+            NullableInterval::TRUE_OR_FALSE
+        );
+        Ok(())
     }
 }
