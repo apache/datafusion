@@ -1060,18 +1060,19 @@ where
         upper: T::Native,
         fraction: f64,
     ) -> Result<T::Native> {
-        // Linear interpolation.
-        // We compute a quantized interpolation weight using `FLOAT_INTERPOLATION_PRECISION` because:
-        // 1. Both values come from the input data, so (upper - lower) is bounded by the value range
-        // 2. fraction is between 0 and 1; quantizing it provides stable, predictable results
-        // 3. The result is guaranteed to be between lower_value and upper_value (modulo cast rounding)
-        // 4. Arithmetic is performed in f64 and cast back to avoid overflowing Float16 intermediates
-        let scaled = (fraction * (INTERPOLATION_PRECISION as f64)) as usize;
-        let weight = scaled as f64 / (INTERPOLATION_PRECISION as f64);
-
+        // Linear interpolation with the exact fraction. The arithmetic is done in f64
+        // and cast back to avoid overflowing Float16 intermediates.
         let lower_f: f64 = lower.as_();
         let upper_f: f64 = upper.as_();
-        let interpolated_f = lower_f + (upper_f - lower_f) * weight;
+        let delta = upper_f - lower_f;
+        let interpolated_f =
+            if lower_f.is_finite() && upper_f.is_finite() && !delta.is_finite() {
+                // Finite values of opposite sign near the f64 limits can have an
+                // infinite difference, so weight each endpoint separately instead.
+                lower_f * (1.0 - fraction) + upper_f * fraction
+            } else {
+                lower_f + delta * fraction
+            };
         Ok(interpolated_f.as_())
     }
 }
@@ -1242,6 +1243,30 @@ mod tests {
             },
             DataType::Float64,
         )
+    }
+
+    fn interpolate_f64(lower: f64, upper: f64, fraction: f64) -> f64 {
+        <FloatInterpolator as PercentileInterpolator<Float64Type>>::interpolate(
+            lower, upper, fraction,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn float_interpolation_keeps_small_fractions() {
+        // https://github.com/apache/datafusion/issues/25266
+        assert_eq!(interpolate_f64(0.0, 1.0, 5e-7), 5e-7);
+        assert_eq!(interpolate_f64(0.0, 1.0, 0.0), 0.0);
+        assert_eq!(interpolate_f64(0.0, 1.0, 1.0), 1.0);
+    }
+
+    #[test]
+    fn float_interpolation_does_not_overflow_for_finite_inputs() {
+        // https://github.com/apache/datafusion/issues/25267
+        assert_eq!(interpolate_f64(-f64::MAX, f64::MAX, 0.5), 0.0);
+        let p = 2.0_f64.powi(1023);
+        assert_eq!(interpolate_f64(-p, p, 0.25), -p / 2.0);
+        assert_eq!(interpolate_f64(-p, p, 0.75), p / 2.0);
     }
 
     #[test]
