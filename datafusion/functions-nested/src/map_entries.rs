@@ -5,7 +5,7 @@
 //! [`ScalarUDFImpl`] definitions for map_entries function.
 
 use crate::utils::{get_map_entry_field, make_scalar_function};
-use arrow::array::{Array, ArrayRef, ListArray};
+use arrow::array::{Array, ArrayRef, ListArray, StructArray};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, cast::as_map_array, exec_err};
@@ -110,16 +110,20 @@ fn map_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         _ => return exec_err!("Argument for map_entries should be a map"),
     };
 
+    // The input's entry fields can differ from the `key` and `value` fields of
+    // the result in name, nullability or metadata (for example, a Parquet map
+    // with non-nullable values), so rebuild the entries with the result fields.
+    let fields = Fields::from(vec![
+        Field::new("key", map_array.key_type().clone(), false),
+        Field::new("value", map_array.value_type().clone(), true),
+    ]);
+    let (_, columns, nulls) = map_array.entries().clone().into_parts();
+    let entries = StructArray::try_new(fields.clone(), columns, nulls)?;
+
     Ok(Arc::new(ListArray::new(
-        Arc::new(Field::new_list_field(
-            DataType::Struct(Fields::from(vec![
-                Field::new("key", map_array.key_type().clone(), false),
-                Field::new("value", map_array.value_type().clone(), true),
-            ])),
-            false,
-        )),
+        Arc::new(Field::new_list_field(DataType::Struct(fields), false)),
         map_array.offsets().clone(),
-        Arc::new(map_array.entries().clone()),
+        Arc::new(entries),
         map_array.nulls().cloned(),
     )))
 }
