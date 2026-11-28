@@ -124,7 +124,7 @@ impl StepContext {
         }
     }
 
-    /// Appends a `/`-separated path to the workspace root. Unlike `Path::join`,
+    /// Appends a `/`-separated path to the workspace root. Unlike [`Path::join`],
     /// this never inserts `\`, so `--explain` output is the same on Windows.
     fn root_path(&self, relative: &str) -> PathBuf {
         let mut path = self.root.clone().into_os_string();
