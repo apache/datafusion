@@ -26,7 +26,10 @@
 //!
 //! - **Sort elimination**: when a data source's natural ordering satisfies the
 //!   request, return `Exact` and remove the `SortExec` entirely. Preserves
-//!   `fetch` (LIMIT) from the eliminated `SortExec` for early termination.
+//!   `fetch` (LIMIT) from the eliminated `SortExec` for early termination,
+//!   pushed down as far as [`LimitPushdown`] would push it.
+//!
+//! [`LimitPushdown`]: crate::limit_pushdown::LimitPushdown
 //! - **Statistics-based file sorting**: sort files within each partition by
 //!   min/max statistics. When files are non-overlapping but listed in wrong
 //!   order (e.g., alphabetical order ≠ sort key order), this fixes the ordering
@@ -42,6 +45,10 @@
 //! Related issue: <https://github.com/apache/datafusion/issues/17348>
 
 use crate::PhysicalOptimizerRule;
+use crate::limit_pushdown::push_down_limits;
+use crate::optimizer::{
+    ConfigOnlyContext, PhysicalOptimizerContext, with_statistics_context,
+};
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
@@ -52,6 +59,7 @@ use datafusion_physical_plan::buffer::BufferExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::statistics::StatisticsContext;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use std::sync::Arc;
 
@@ -73,149 +81,24 @@ impl PhysicalOptimizerRule for PushdownSort {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
+    }
+
+    fn optimize_with_context(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let config = context.config_options();
         // Check if sort pushdown optimization is enabled
         if !config.optimizer.enable_sort_pushdown {
             return Ok(plan);
         }
 
         let buffer_capacity = config.execution.sort_pushdown_buffer_capacity;
-
-        // Use transform_down to find and optimize all SortExec nodes (including nested ones)
-        // Also handles SPM → SortExec pattern to insert BufferExec when sort is eliminated
-        plan.transform_down(|plan: Arc<dyn ExecutionPlan>| {
-            // Pattern 1: SPM → SortExec(preserve_partitioning)
-            // When we eliminate the SortExec, SPM loses its memory buffer and reads
-            // directly from I/O-bound sources. Insert a BufferExec to compensate.
-            if let Some(spm) = plan.downcast_ref::<SortPreservingMergeExec>()
-                && let Some(sort_child) = spm.input().downcast_ref::<SortExec>()
-                && sort_child.preserve_partitioning()
-            {
-                let sort_input = Arc::clone(sort_child.input());
-                if input_has_fetch(&sort_input)? {
-                    return Ok(Transformed::no(plan));
-                }
-                let required_ordering = sort_child.expr();
-                match sort_input.try_pushdown_sort(required_ordering)? {
-                    SortOrderPushdownResult::Exact { inner } => {
-                        // Preserve fetch (LIMIT) from the eliminated SortExec.
-                        // Use LocalLimitExec (not Global) since input is multi-partition.
-                        let inner = if let Some(fetch) = sort_child.fetch() {
-                            inner.with_fetch(Some(fetch)).unwrap_or_else(|| {
-                                Arc::new(LocalLimitExec::new(inner, fetch))
-                            })
-                        } else {
-                            inner
-                        };
-                        // Insert BufferExec to replace SortExec's buffering role.
-                        // SortExec buffered all data in memory; BufferExec provides
-                        // bounded buffering so SPM doesn't stall on I/O.
-                        let buffered: Arc<dyn ExecutionPlan> =
-                            Arc::new(BufferExec::new(inner, buffer_capacity));
-                        let new_spm =
-                            SortPreservingMergeExec::new(spm.expr().clone(), buffered)
-                                .with_fetch(spm.fetch());
-                        return Ok(Transformed::yes(Arc::new(new_spm)));
-                    }
-                    SortOrderPushdownResult::Inexact { inner } => {
-                        let new_sort = SortExec::new(required_ordering.clone(), inner)
-                            .with_fetch(sort_child.fetch())
-                            .with_preserve_partitioning(true);
-                        let new_spm = SortPreservingMergeExec::new(
-                            spm.expr().clone(),
-                            Arc::new(new_sort),
-                        )
-                        .with_fetch(spm.fetch());
-                        // The replacement already has the required
-                        // `SortPreservingMergeExec` parent. Do not descend
-                        // into its `SortExec` child and treat it as a
-                        // standalone TopK.
-                        return Ok(Transformed::new(
-                            Arc::new(new_spm),
-                            true,
-                            TreeNodeRecursion::Jump,
-                        ));
-                    }
-                    SortOrderPushdownResult::Unsupported => {
-                        return Ok(Transformed::no(plan));
-                    }
-                }
-            }
-
-            // Pattern 2: Standalone SortExec (no SPM parent)
-            let Some(sort_exec) = plan.downcast_ref::<SortExec>() else {
-                return Ok(Transformed::no(plan));
-            };
-
-            let sort_input = Arc::clone(sort_exec.input());
-            if input_has_fetch(&sort_input)? {
-                return Ok(Transformed::no(plan));
-            }
-            let required_ordering = sort_exec.expr();
-
-            // Try to push the sort requirement down through the plan tree
-            // Each node type defines its own pushdown behavior via try_pushdown_sort()
-            match sort_input.try_pushdown_sort(required_ordering)? {
-                SortOrderPushdownResult::Exact { inner } => {
-                    // Data source guarantees perfect ordering - remove the Sort operator.
-                    //
-                    // If the SortExec carried a fetch (LIMIT), we must preserve it.
-                    // First try pushing the limit into the source via `with_fetch()`.
-                    // If the source doesn't support `with_fetch`, preserve whether
-                    // the limit applies to each partition or to the entire input.
-                    if let Some(fetch) = sort_exec.fetch() {
-                        let inner = inner.with_fetch(Some(fetch)).unwrap_or_else(|| {
-                            if sort_exec.preserve_partitioning() {
-                                Arc::new(LocalLimitExec::new(inner, fetch))
-                            } else {
-                                Arc::new(GlobalLimitExec::new(inner, 0, Some(fetch)))
-                            }
-                        });
-                        Ok(Transformed::yes(inner))
-                    } else {
-                        Ok(Transformed::yes(inner))
-                    }
-                }
-                SortOrderPushdownResult::Inexact { inner } => {
-                    // Data source is optimized for the ordering but not perfectly sorted
-                    // Keep the Sort operator but use the optimized input
-                    // Benefits: TopK queries can terminate early, better cache locality
-                    // A standalone multi-partition TopK still needs a global
-                    // merge; otherwise a later coalesce can concatenate
-                    // locally sorted partitions.
-                    let preserve_partitioning = sort_exec.preserve_partitioning();
-                    let needs_global_topk =
-                        preserve_partitioning && sort_exec.fetch().is_some();
-                    let input_partitions = inner.output_partitioning().partition_count();
-                    let new_sort: Arc<dyn ExecutionPlan> = Arc::new(
-                        SortExec::new(required_ordering.clone(), inner)
-                            .with_fetch(sort_exec.fetch())
-                            .with_preserve_partitioning(preserve_partitioning),
-                    );
-                    if needs_global_topk && input_partitions > 1 {
-                        let new_spm = SortPreservingMergeExec::new(
-                            required_ordering.clone(),
-                            new_sort,
-                        )
-                        .with_fetch(sort_exec.fetch());
-                        // Do not descend into the newly inserted
-                        // `SortExec`, or this standalone branch will wrap it
-                        // in another `SortPreservingMergeExec`.
-                        Ok(Transformed::new(
-                            Arc::new(new_spm),
-                            true,
-                            TreeNodeRecursion::Jump,
-                        ))
-                    } else {
-                        Ok(Transformed::yes(new_sort))
-                    }
-                }
-                SortOrderPushdownResult::Unsupported => {
-                    // Cannot optimize for this ordering - no change
-                    Ok(Transformed::no(plan))
-                }
-            }
+        with_statistics_context(context, |stats_ctx| {
+            pushdown_sorts(plan, buffer_capacity, stats_ctx)
         })
-        .data()
     }
 
     fn name(&self) -> &str {
@@ -225,6 +108,147 @@ impl PhysicalOptimizerRule for PushdownSort {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+fn pushdown_sorts(
+    plan: Arc<dyn ExecutionPlan>,
+    buffer_capacity: usize,
+    stats_ctx: &StatisticsContext,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    // Use transform_down to find and optimize all SortExec nodes (including nested ones)
+    // Also handles SPM → SortExec pattern to insert BufferExec when sort is eliminated
+    plan.transform_down(|plan: Arc<dyn ExecutionPlan>| {
+        // Pattern 1: SPM → SortExec(preserve_partitioning)
+        // When we eliminate the SortExec, SPM loses its memory buffer and reads
+        // directly from I/O-bound sources. Insert a BufferExec to compensate.
+        if let Some(spm) = plan.downcast_ref::<SortPreservingMergeExec>()
+            && let Some(sort_child) = spm.input().downcast_ref::<SortExec>()
+            && sort_child.preserve_partitioning()
+        {
+            let sort_input = Arc::clone(sort_child.input());
+            if input_has_fetch(&sort_input)? {
+                return Ok(Transformed::no(plan));
+            }
+            let required_ordering = sort_child.expr();
+            match sort_input.try_pushdown_sort(required_ordering)? {
+                SortOrderPushdownResult::Exact { inner } => {
+                    // Preserve fetch (LIMIT) from the eliminated SortExec.
+                    // Use LocalLimitExec (not Global) since input is multi-partition.
+                    let inner = if let Some(fetch) = sort_child.fetch() {
+                        push_down_limits(
+                            Arc::new(LocalLimitExec::new(inner, fetch)),
+                            stats_ctx,
+                        )?
+                    } else {
+                        inner
+                    };
+                    // Insert BufferExec to replace SortExec's buffering role.
+                    // SortExec buffered all data in memory; BufferExec provides
+                    // bounded buffering so SPM doesn't stall on I/O.
+                    let buffered: Arc<dyn ExecutionPlan> =
+                        Arc::new(BufferExec::new(inner, buffer_capacity));
+                    let new_spm =
+                        SortPreservingMergeExec::new(spm.expr().clone(), buffered)
+                            .with_fetch(spm.fetch());
+                    return Ok(Transformed::yes(Arc::new(new_spm)));
+                }
+                SortOrderPushdownResult::Inexact { inner } => {
+                    let new_sort = SortExec::new(required_ordering.clone(), inner)
+                        .with_fetch(sort_child.fetch())
+                        .with_preserve_partitioning(true);
+                    let new_spm = SortPreservingMergeExec::new(
+                        spm.expr().clone(),
+                        Arc::new(new_sort),
+                    )
+                    .with_fetch(spm.fetch());
+                    // The replacement already has the required
+                    // `SortPreservingMergeExec` parent. Do not descend
+                    // into its `SortExec` child and treat it as a
+                    // standalone TopK.
+                    return Ok(Transformed::new(
+                        Arc::new(new_spm),
+                        true,
+                        TreeNodeRecursion::Jump,
+                    ));
+                }
+                SortOrderPushdownResult::Unsupported => {
+                    return Ok(Transformed::no(plan));
+                }
+            }
+        }
+
+        // Pattern 2: Standalone SortExec (no SPM parent)
+        let Some(sort_exec) = plan.downcast_ref::<SortExec>() else {
+            return Ok(Transformed::no(plan));
+        };
+
+        let sort_input = Arc::clone(sort_exec.input());
+        if input_has_fetch(&sort_input)? {
+            return Ok(Transformed::no(plan));
+        }
+        let required_ordering = sort_exec.expr();
+
+        // Try to push the sort requirement down through the plan tree
+        // Each node type defines its own pushdown behavior via try_pushdown_sort()
+        match sort_input.try_pushdown_sort(required_ordering)? {
+            SortOrderPushdownResult::Exact { inner } => {
+                // Data source guarantees perfect ordering - remove the Sort operator.
+                //
+                // If the SortExec carried a fetch (LIMIT), we must preserve it.
+                // Keep whether the limit applies to each partition or to the
+                // entire input, then push it down as far as it goes, e.g.
+                // through a projection into the source.
+                if let Some(fetch) = sort_exec.fetch() {
+                    let limit: Arc<dyn ExecutionPlan> =
+                        if sort_exec.preserve_partitioning() {
+                            Arc::new(LocalLimitExec::new(inner, fetch))
+                        } else {
+                            Arc::new(GlobalLimitExec::new(inner, 0, Some(fetch)))
+                        };
+                    Ok(Transformed::yes(push_down_limits(limit, stats_ctx)?))
+                } else {
+                    Ok(Transformed::yes(inner))
+                }
+            }
+            SortOrderPushdownResult::Inexact { inner } => {
+                // Data source is optimized for the ordering but not perfectly sorted
+                // Keep the Sort operator but use the optimized input
+                // Benefits: TopK queries can terminate early, better cache locality
+                // A standalone multi-partition TopK still needs a global
+                // merge; otherwise a later coalesce can concatenate
+                // locally sorted partitions.
+                let preserve_partitioning = sort_exec.preserve_partitioning();
+                let needs_global_topk =
+                    preserve_partitioning && sort_exec.fetch().is_some();
+                let input_partitions = inner.output_partitioning().partition_count();
+                let new_sort: Arc<dyn ExecutionPlan> = Arc::new(
+                    SortExec::new(required_ordering.clone(), inner)
+                        .with_fetch(sort_exec.fetch())
+                        .with_preserve_partitioning(preserve_partitioning),
+                );
+                if needs_global_topk && input_partitions > 1 {
+                    let new_spm =
+                        SortPreservingMergeExec::new(required_ordering.clone(), new_sort)
+                            .with_fetch(sort_exec.fetch());
+                    // Do not descend into the newly inserted
+                    // `SortExec`, or this standalone branch will wrap it
+                    // in another `SortPreservingMergeExec`.
+                    Ok(Transformed::new(
+                        Arc::new(new_spm),
+                        true,
+                        TreeNodeRecursion::Jump,
+                    ))
+                } else {
+                    Ok(Transformed::yes(new_sort))
+                }
+            }
+            SortOrderPushdownResult::Unsupported => {
+                // Cannot optimize for this ordering - no change
+                Ok(Transformed::no(plan))
+            }
+        }
+    })
+    .data()
 }
 
 /// Whether a node below this sort has a fetch. A fetch keeps the first rows in the

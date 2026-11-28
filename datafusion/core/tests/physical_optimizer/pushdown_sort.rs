@@ -23,6 +23,8 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::pushdown_sort::PushdownSort;
+use datafusion_physical_plan::coop::CooperativeExec;
+use datafusion_physical_plan::limit::GlobalLimitExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::{ExecutionPlan, collect};
 use std::sync::Arc;
@@ -32,7 +34,7 @@ use crate::physical_optimizer::test_utils::{
     parquet_exec, parquet_exec_with_sort, projection_exec, projection_exec_with_alias,
     repartition_exec, schema, simple_projection_exec, sort_exec, sort_exec_with_fetch,
     sort_exec_with_fetch_and_preserve_partitioning, sort_expr, sort_expr_named,
-    test_scan_with_ordering,
+    sort_preserving_merge_exec_with_fetch, test_scan_with_ordering,
 };
 
 #[test]
@@ -1202,6 +1204,229 @@ fn test_sort_pushdown_exact_preserves_fetch_with_source_support() {
       output:
         Ok:
           - TestScan: requested_ordering=[a@0 ASC], fetch=10
+    "
+    );
+}
+
+/// A scan that answers `Exact` for any ordering, with `partitions` output
+/// partitions, that takes a fetch when `supports_fetch`.
+fn exact_scan(partitions: usize, supports_fetch: bool) -> Arc<dyn ExecutionPlan> {
+    Arc::new(
+        TestScan::new(schema(), vec![])
+            .with_exact_pushdown(true)
+            .with_supports_fetch(supports_fetch)
+            .with_partition_count(partitions),
+    )
+}
+
+#[test]
+fn test_sort_pushdown_exact_pushes_fetch_through_projection() {
+    // The limit of the eliminated SortExec passes the projection and goes
+    // into the source, instead of staying above the projection.
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let projection = simple_projection_exec(exact_scan(1, true), vec![0, 1]);
+
+    let ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let plan = sort_exec_with_fetch(ordering, Some(10), projection);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+        -     TestScan
+      output:
+        Ok:
+          - ProjectionExec: expr=[a@0 as a, b@1 as b]
+          -   TestScan: requested_ordering=[a@0 DESC NULLS LAST], fetch=10
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_exact_pushes_fetch_through_cooperative_and_projection() {
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let cooperative = Arc::new(CooperativeExec::new(exact_scan(1, true)));
+    let projection = simple_projection_exec(cooperative, vec![0, 1]);
+
+    let ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let plan = sort_exec_with_fetch(ordering, Some(10), projection);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+        -     CooperativeExec
+        -       TestScan
+      output:
+        Ok:
+          - ProjectionExec: expr=[a@0 as a, b@1 as b]
+          -   CooperativeExec
+          -     TestScan: requested_ordering=[a@0 DESC NULLS LAST], fetch=10
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_exact_places_limit_below_projection() {
+    // The source can't take a fetch: the limit goes right above it, so the
+    // projection only sees the rows that are kept.
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let projection = simple_projection_exec(exact_scan(1, false), vec![0, 1]);
+
+    let ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let plan = sort_exec_with_fetch(ordering, Some(10), projection);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+        -     TestScan
+      output:
+        Ok:
+          - ProjectionExec: expr=[a@0 as a, b@1 as b]
+          -   GlobalLimitExec: skip=0, fetch=10
+          -     TestScan: requested_ordering=[a@0 DESC NULLS LAST]
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_exact_keeps_offset_above_pushed_fetch() {
+    // `OFFSET 5 LIMIT 10`: the outer limit stays, the sort's fetch of 15 goes
+    // into the source.
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let projection = simple_projection_exec(exact_scan(1, true), vec![0, 1]);
+
+    let ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let sort = sort_exec_with_fetch(ordering, Some(15), projection);
+    let plan = Arc::new(GlobalLimitExec::new(sort, 5, Some(10)));
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - GlobalLimitExec: skip=5, fetch=10
+        -   SortExec: TopK(fetch=15), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -     ProjectionExec: expr=[a@0 as a, b@1 as b]
+        -       TestScan
+      output:
+        Ok:
+          - GlobalLimitExec: skip=5, fetch=10
+          -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+          -     TestScan: requested_ordering=[a@0 DESC NULLS LAST], fetch=15
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_exact_partitioned_pushes_fetch_through_projection() {
+    // SPM -> SortExec(preserve_partitioning): each partition keeps its own
+    // fetch, now in the source below the projection.
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let projection = simple_projection_exec(exact_scan(4, true), vec![0, 1]);
+
+    let ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let sort = sort_exec_with_fetch_and_preserve_partitioning(
+        ordering.clone(),
+        Some(10),
+        projection,
+    );
+    let plan = sort_preserving_merge_exec_with_fetch(ordering, sort, 10);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortPreservingMergeExec: [a@0 DESC NULLS LAST], fetch=10
+        -   SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[true]
+        -     ProjectionExec: expr=[a@0 as a, b@1 as b]
+        -       TestScan
+      output:
+        Ok:
+          - SortPreservingMergeExec: [a@0 DESC NULLS LAST], fetch=10
+          -   BufferExec: capacity=1073741824
+          -     ProjectionExec: expr=[a@0 as a, b@1 as b]
+          -       TestScan: requested_ordering=[a@0 DESC NULLS LAST], fetch=10
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_exact_partitioned_places_local_limit_below_projection() {
+    // The source can't take a fetch: a per-partition limit, not a global one,
+    // goes right above it.
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let projection = simple_projection_exec(exact_scan(4, false), vec![0, 1]);
+
+    let ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let sort = sort_exec_with_fetch_and_preserve_partitioning(
+        ordering.clone(),
+        Some(10),
+        projection,
+    );
+    let plan = sort_preserving_merge_exec_with_fetch(ordering, sort, 10);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortPreservingMergeExec: [a@0 DESC NULLS LAST], fetch=10
+        -   SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[true]
+        -     ProjectionExec: expr=[a@0 as a, b@1 as b]
+        -       TestScan
+      output:
+        Ok:
+          - SortPreservingMergeExec: [a@0 DESC NULLS LAST], fetch=10
+          -   BufferExec: capacity=1073741824
+          -     ProjectionExec: expr=[a@0 as a, b@1 as b]
+          -       LocalLimitExec: fetch=10
+          -         TestScan: requested_ordering=[a@0 DESC NULLS LAST]
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_standalone_partitioned_exact_pushes_fetch_through_projection() {
+    // A standalone SortExec(preserve_partitioning) keeps a per-partition fetch.
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let projection = simple_projection_exec(exact_scan(4, false), vec![0, 1]);
+
+    let ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let plan =
+        sort_exec_with_fetch_and_preserve_partitioning(ordering, Some(10), projection);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[true]
+        -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+        -     TestScan
+      output:
+        Ok:
+          - ProjectionExec: expr=[a@0 as a, b@1 as b]
+          -   LocalLimitExec: fetch=10
+          -     TestScan: requested_ordering=[a@0 DESC NULLS LAST]
     "
     );
 }

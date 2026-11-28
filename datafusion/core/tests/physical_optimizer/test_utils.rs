@@ -58,8 +58,9 @@ use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_window_expr};
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
-    InputDistributionRequirements, InputOrderMode, Partitioning, PlanProperties,
-    ReplaceChildrenOptions, SortOrderPushdownResult, StatisticsArgs, displayable,
+    InputDistributionRequirements, InputOrderMode, LimitBehavior, Partitioning,
+    PlanProperties, ReplaceChildrenOptions, SortOrderPushdownResult, StatisticsArgs,
+    displayable,
 };
 
 /// Create a non sorted parquet exec
@@ -1093,6 +1094,11 @@ impl ExecutionPlan for TestScan {
         self.supports_fetch
     }
 
+    // A leaf: it takes a limit as its own fetch, like `DataSourceExec`.
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Stops
+    }
+
     fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         if self.supports_fetch {
             let mut new_scan = self.clone();
@@ -1128,7 +1134,7 @@ impl ExecutionPlan for TestScan {
             );
             new_scan.plan_properties = Arc::new(PlanProperties::new(
                 eq_properties,
-                Partitioning::UnknownPartitioning(1),
+                self.plan_properties.output_partitioning().clone(),
                 EmissionType::Incremental,
                 Boundedness::Bounded,
             ));
