@@ -995,3 +995,181 @@ DROP TABLE t;
 
 statement ok
 RESET datafusion.execution.batch_size;
+
+# https://github.com/apache/datafusion/issues/5492#issuecomment-6395684651
+statement ok
+CREATE TABLE t1(a INT, b INT, c INT) AS VALUES
+(1, 1, 1),
+(1, 2, NULL),
+(2, 2, 3),
+(2, NULL, 1),
+(3, 1, 2),
+(NULL, 2, 2),
+(4, 4, 4),
+(1, 1, 1);
+
+statement ok
+CREATE TABLE t2(a INT, b INT, c INT) AS VALUES
+(1, 1, 5),
+(1, 3, NULL),
+(2, 2, 1),
+(2, 2, 2),
+(NULL, 1, 3),
+(3, NULL, 1),
+(5, 5, 5),
+(1, NULL, 2);
+
+statement ok
+CREATE TABLE t3(a INT, b INT, c INT) AS VALUES
+(1, 2, 1),
+(2, 1, NULL),
+(2, 2, 2),
+(NULL, NULL, 1),
+(3, 3, 3),
+(1, 1, 2);
+
+# scalar_subquery_derived_table_redefines_correlated_column
+# Fails today. Expected (DuckDB):
+# 1 0
+# 1 2
+# 1 2
+# 2 1
+# 2 2
+# 3 2
+# 4 0
+# NULL 2
+query error Schema contains qualified field name t2\.c and unqualified field name c which would be ambiguous
+SELECT t1.a, (SELECT count(*) FROM (SELECT a, b + 1 AS c FROM t2 WHERE t2.c = t1.c) x) AS v FROM t1;
+
+# exists_derived_table_redefines_correlated_column
+# Fails today. Expected (DuckDB):
+# 1
+# 1
+# 2
+# 2
+# 3
+# NULL
+query error Schema contains qualified field name t2\.c and unqualified field name c which would be ambiguous
+SELECT t1.a FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT a, b + 1 AS c FROM t2 WHERE t2.c = t1.c) x);
+
+# lateral_derived_table_redefines_correlated_column
+# Fails today. Expected (DuckDB):
+# 1 2
+# 1 2
+# 1 3
+# 1 3
+# 2 2
+# 2 3
+# 2 NULL
+# 3 1
+# 3 2
+# NULL 1
+# NULL 2
+query error Schema contains qualified field name t2\.c and unqualified field name c which would be ambiguous
+SELECT t1.a, s.x FROM t1 CROSS JOIN LATERAL (SELECT x.a AS x FROM (SELECT a, b + 1 AS c FROM t2 WHERE t2.c = t1.c) x) s;
+
+# exists_with_rollup
+# Fails today. Expected (DuckDB):
+# 1 1
+# 1 1
+# 1 2
+# 2 2
+# 2 NULL
+# 3 1
+# 4 4
+# NULL 2
+query error Physical plan does not support logical expression Exists
+SELECT t1.a, t1.b FROM t1 WHERE EXISTS (SELECT t2.b FROM t2 WHERE t2.a = t1.a GROUP BY ROLLUP(t2.b));
+
+# in_with_grouping_sets
+# Fails today. Expected (DuckDB):
+# 1 1
+# 1 1
+# 2 2
+query error Physical plan does not support logical expression InSubquery
+SELECT t1.a, t1.b FROM t1 WHERE t1.b IN (SELECT t2.b FROM t2 WHERE t2.a = t1.a GROUP BY GROUPING SETS ((t2.b), ()));
+
+# lateral_with_cube
+# Fails today. Expected (DuckDB):
+# 1 1 1
+# 1 1 1
+# 1 1 3
+# 1 1 3
+# 1 1 NULL
+# 1 1 NULL
+# 1 1 NULL
+# 1 1 NULL
+# 1 2 1
+# 1 2 3
+# 1 2 NULL
+# 1 2 NULL
+# 2 2 2
+# 2 2 NULL
+# 2 NULL 2
+# 2 NULL NULL
+# 3 1 NULL
+# 3 1 NULL
+# 4 4 NULL
+# NULL 2 NULL
+query error Physical plan does not support logical expression OuterReferenceColumn
+SELECT t1.a, t1.b, s.x FROM t1 CROSS JOIN LATERAL (SELECT t2.b AS x FROM t2 WHERE t2.a = t1.a GROUP BY CUBE(t2.b)) s;
+
+# exists_with_order_by
+# Fails today. Expected (DuckDB):
+# 1 1
+# 1 1
+# 1 2
+# 2 2
+# 2 NULL
+# 3 1
+query error Physical plan does not support logical expression Exists
+SELECT t1.a, t1.b FROM t1 WHERE EXISTS (SELECT t2.a FROM t2 WHERE t2.a = t1.a ORDER BY 1);
+
+# in_with_order_by
+# Fails today. Expected (DuckDB):
+# 1 1
+# 1 1
+# 2 2
+query error Physical plan does not support logical expression InSubquery
+SELECT t1.a, t1.b FROM t1 WHERE t1.b IN (SELECT t2.b FROM t2 WHERE t2.a = t1.a ORDER BY 1);
+
+# in_with_order_by_limit
+# Fails today. Expected (DuckDB):
+# 1 1
+# 1 1
+# 2 2
+query error Physical plan does not support logical expression InSubquery
+SELECT t1.a, t1.b FROM t1 WHERE t1.b IN (SELECT t2.b FROM t2 WHERE t2.a = t1.a ORDER BY t2.b NULLS LAST LIMIT 1);
+
+# lateral_with_order_by_limit
+# Fails today. Expected (DuckDB):
+# 1 1 1
+# 1 1 1
+# 1 2 1
+# 2 2 2
+# 2 NULL 2
+# 3 1 NULL
+query error Physical plan does not support logical expression OuterReferenceColumn
+SELECT t1.a, t1.b, s.x FROM t1 CROSS JOIN LATERAL (SELECT t2.b AS x FROM t2 WHERE t2.a = t1.a ORDER BY t2.b NULLS LAST LIMIT 1) s;
+
+# left_lateral_count_with_correlated_inequality
+# Fails today. Expected (DuckDB):
+# 1 1 0
+# 1 1 0
+# 1 2 0
+# 2 2 3
+# 2 NULL 3
+# 3 1 5
+# 4 4 6
+# NULL 2 0
+query error Physical plan does not support logical expression OuterReferenceColumn
+SELECT t1.a, t1.b, s.x FROM t1 LEFT JOIN LATERAL (SELECT count(*) AS x FROM t2 WHERE t2.a < t1.a) s ON TRUE;
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+DROP TABLE t3;
