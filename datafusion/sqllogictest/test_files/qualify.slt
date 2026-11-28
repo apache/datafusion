@@ -394,17 +394,23 @@ SELECT count(*) > 0 FROM (
 false
 
 # a volatile alias and a window function in the same conjunct cannot be split
-query error DataFusion error: Error during planning: QUALIFY clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions\. Add the function to the SELECT list and reference it by alias, or use a subquery
+query error
 SELECT id, random() AS r
 FROM users
 QUALIFY r > ROW_NUMBER() OVER (ORDER BY id);
+----
+DataFusion error: Error during planning: QUALIFY clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions. Add the function to the SELECT list and reference it by alias, or use a subquery
+
 
 # an OR predicate is planned as one filter. The volatile alias forces that
 # filter above the projection, but the window function is not available there
-query error DataFusion error: Error during planning: QUALIFY clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions\. Add the function to the SELECT list and reference it by alias, or use a subquery
+query error
 SELECT id, random() AS r
 FROM users
 QUALIFY ROW_NUMBER() OVER (ORDER BY id) >= 1 OR r > 0.5;
+----
+DataFusion error: Error during planning: QUALIFY clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions. Add the function to the SELECT list and reference it by alias, or use a subquery
+
 
 # volatile alias in QUALIFY still requires a window function
 query error DataFusion error: Error during planning: QUALIFY clause requires window functions in the SELECT list or QUALIFY clause

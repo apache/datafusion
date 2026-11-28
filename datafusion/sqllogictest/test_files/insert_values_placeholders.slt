@@ -9,5 +9,9 @@
 statement ok
 CREATE TABLE placeholder_zero_insert(x BIGINT NULL);
 
-query error DataFusion error: Error during planning: Invalid placeholder, zero is not a valid index: \$0
+query error
 EXPLAIN INSERT INTO placeholder_zero_insert VALUES ($0);
+----
+DataFusion error: Error during planning: Invalid placeholder, zero is not a valid index: $0
+
+

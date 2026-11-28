@@ -301,8 +301,11 @@ single_file_test(a bigint, b bigint)
 STORED AS csv
 LOCATION 'test_files/scratch/insert_to_external/single_csv_table.csv';
 
-query error DataFusion error: Error during planning: Inserting into a ListingTable backed by a single file is not supported, URL is possibly missing a trailing `/`\. To append to an existing file use StreamTable, e\.g\. by using CREATE UNBOUNDED EXTERNAL TABLE
+query error
 INSERT INTO single_file_test values (1, 2), (3, 4);
+----
+DataFusion error: Error during planning: Inserting into a ListingTable backed by a single file is not supported, URL is possibly missing a trailing `/`. To append to an existing file use StreamTable, e.g. by using CREATE UNBOUNDED EXTERNAL TABLE
+
 
 statement ok
 drop table single_file_test;
@@ -674,12 +677,15 @@ statement ok
 drop table test_column_defaults
 
 # test invalid default value
-statement error DataFusion error: Schema error: No field named a\.
+statement error
 CREATE EXTERNAL TABLE test_column_defaults(
   a int,
   b int default a+1
 ) STORED AS parquet
 LOCATION 'test_files/scratch/insert_to_external/external_parquet_table_q7/';
+----
+DataFusion error: Schema error: No field named a.
+
 
 # Config reset
 

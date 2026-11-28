@@ -585,8 +585,13 @@ SHOW datafusion.format.date_format
 datafusion.format.date_format %Y-%m-%d
 
 # Invalid format option name
-statement error DataFusion error: Error setting config datafusion\.format\.unknown_option\ncaused by\nInvalid or Unsupported Configuration: Config value "unknown_option" not found on FormatOptions
+statement error
 SET datafusion.format.unknown_option = true
+----
+DataFusion error: Error setting config datafusion.format.unknown_option
+caused by
+Invalid or Unsupported Configuration: Config value "unknown_option" not found on FormatOptions
+
 
 ############
 ## Test runtime configuration variables
@@ -713,17 +718,26 @@ SET datafusion.runtime.list_files_cache_ttl = '307445734561825860m'
 statement ok
 SET datafusion.runtime.list_files_cache_ttl = '307445734561825860m10s'
 
-statement error DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins \* 60' when setting 'datafusion\.runtime\.list_files_cache_ttl'
+statement error
 SET datafusion.runtime.list_files_cache_ttl = '307445734561825861m'
+----
+DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins * 60' when setting 'datafusion.runtime.list_files_cache_ttl'
 
-statement error DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins \* 60 \+ secs' when setting 'datafusion\.runtime\.list_files_cache_ttl'
+
+statement error
 SET datafusion.runtime.list_files_cache_ttl = '307445734561825860m60s'
+----
+DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins * 60 + secs' when setting 'datafusion.runtime.list_files_cache_ttl'
+
 
 statement ok
 SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551555s'
 
-statement error DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins \* 60 \+ secs' when setting 'datafusion\.runtime\.list_files_cache_ttl'
+statement error
 SET datafusion.runtime.list_files_cache_ttl = '1m18446744073709551556s'
+----
+DataFusion error: Error during planning: Duration has overflowed allowed maximum limit due to 'mins * 60 + secs' when setting 'datafusion.runtime.list_files_cache_ttl'
+
 
 # Set invalid value and ensures error
 statement ok
@@ -909,11 +923,21 @@ OPTIONS ('format.coerce_int96' 'us', 'format.coerce_int96_tz' 'Not/A_Timezone');
 DataFusion error: Invalid or Unsupported Configuration: Invalid time zone: Not/A_Timezone. Valid values are UTC offsets such as +08:00 or IANA time zone names such as Asia/Taipei
 
 
-statement error DataFusion error: Error setting config datafusion\.execution\.batch_size\ncaused by\nInvalid or Unsupported Configuration: value must be greater than 0
+statement error
 SET datafusion.execution.batch_size = 0
+----
+DataFusion error: Error setting config datafusion.execution.batch_size
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
 
-statement error DataFusion error: Error setting config datafusion\.execution\.meta_fetch_concurrency\ncaused by\nInvalid or Unsupported Configuration: value must be greater than 0
+
+statement error
 SET datafusion.execution.meta_fetch_concurrency = 0
+----
+DataFusion error: Error setting config datafusion.execution.meta_fetch_concurrency
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
+
 
 statement error
 SET datafusion.execution.minimum_parallel_output_files = 0
