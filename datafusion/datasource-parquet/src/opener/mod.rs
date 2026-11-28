@@ -175,7 +175,7 @@ pub(crate) fn build_virtual_columns_state(
 }
 
 /// Return `base` unchanged when `extra` is empty; otherwise build a new schema
-/// with `extra` appended to `base`'s fields.
+/// with `extra` appended to `base`'s fields, keeping `base`'s metadata.
 pub(crate) fn append_fields(base: &SchemaRef, extra: &[FieldRef]) -> SchemaRef {
     if extra.is_empty() {
         return Arc::clone(base);
@@ -186,7 +186,7 @@ pub(crate) fn append_fields(base: &SchemaRef, extra: &[FieldRef]) -> SchemaRef {
         .cloned()
         .chain(extra.iter().cloned())
         .collect::<Vec<_>>();
-    Arc::new(Schema::new(fields))
+    Arc::new(Schema::new_with_metadata(fields, base.metadata().clone()))
 }
 
 /// Reject predicates that reference a virtual column.
@@ -5924,7 +5924,9 @@ mod test {
         use datafusion_expr::ScalarUDF;
         use datafusion_functions::core::input_file_name::InputFileNameFunc;
         use datafusion_physical_expr::{ScalarFunctionExpr, projection::ProjectionExpr};
+        use datafusion_physical_expr_adapter::PhysicalExprAdapter;
         use parquet::arrow::RowNumber;
+        use std::sync::Mutex;
 
         /// Build a parquet `row_number` virtual column field. Spark's
         /// `_tmp_metadata_row_index` is declared nullable, so the default
@@ -6392,6 +6394,90 @@ mod test {
             let stream = open_file(&morselizer, file).await.unwrap();
             let (_batches, rows) = count_batches_and_rows(stream).await;
             assert_eq!(rows, 5);
+        }
+
+        /// Records the `writer` metadata value of each physical file schema it
+        /// adapts to.
+        #[derive(Debug, Default)]
+        struct MetadataRecordingAdapterFactory {
+            writers: Mutex<Vec<Option<String>>>,
+        }
+
+        impl PhysicalExprAdapterFactory for MetadataRecordingAdapterFactory {
+            fn create(
+                &self,
+                logical_file_schema: SchemaRef,
+                physical_file_schema: SchemaRef,
+            ) -> Result<Arc<dyn PhysicalExprAdapter>> {
+                self.writers
+                    .lock()
+                    .unwrap()
+                    .push(physical_file_schema.metadata().get("writer").cloned());
+                DefaultPhysicalExprAdapterFactory
+                    .create(logical_file_schema, physical_file_schema)
+            }
+        }
+
+        #[tokio::test]
+        async fn test_row_index_keeps_file_schema_metadata_for_expr_adapter() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let file_schema = Arc::new(Schema::new(vec![Field::new(
+                "value",
+                DataType::Int64,
+                false,
+            )]));
+            let batch = RecordBatch::try_new(
+                Arc::clone(&file_schema),
+                vec![Arc::new(Int64Array::from(vec![10, 20, 30]))],
+            )
+            .unwrap();
+            let props = WriterProperties::builder()
+                .set_key_value_metadata(Some(vec![KeyValue::new(
+                    "writer".to_string(),
+                    "test".to_string(),
+                )]))
+                .build();
+            let data_size = write_parquet_batches(
+                Arc::clone(&store),
+                "metadata.parquet",
+                vec![batch],
+                Some(props),
+            )
+            .await;
+
+            // The adapter gets the file's key-value metadata whether or not
+            // the scan also reads a virtual column.
+            for virtual_columns in [vec![], vec![row_number_field("row_number", false)]] {
+                let num_virtual_columns = virtual_columns.len();
+                let table_schema = TableSchemaBuilder::new(Arc::clone(&file_schema))
+                    .with_virtual_columns(virtual_columns)
+                    .build();
+                let projection = ProjectionExprs::from_indices(
+                    &(0..=num_virtual_columns).collect::<Vec<_>>(),
+                    table_schema.table_schema(),
+                );
+                let factory = Arc::new(MetadataRecordingAdapterFactory::default());
+                let mut morselizer = ParquetMorselizerBuilder::new()
+                    .with_store(Arc::clone(&store))
+                    .with_table_schema(table_schema)
+                    .with_projection(projection)
+                    .build();
+                morselizer.expr_adapter_factory = Arc::clone(&factory) as _;
+
+                let file = PartitionedFile::new(
+                    "metadata.parquet".to_string(),
+                    u64::try_from(data_size).unwrap(),
+                );
+                let stream = open_file(&morselizer, file).await.unwrap();
+                let (_batches, rows) = count_batches_and_rows(stream).await;
+                assert_eq!(rows, 3);
+
+                assert_eq!(
+                    *factory.writers.lock().unwrap(),
+                    vec![Some("test".to_string())],
+                    "{num_virtual_columns} virtual columns"
+                );
+            }
         }
     }
 
