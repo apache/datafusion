@@ -389,11 +389,39 @@ query ?
 select array_concat(column4, column1) from arrays_values_v2;
 ----
 [[30, 40, 50], [NULL, 2, 3]]
-[[NULL, NULL, 60], NULL]
+[[NULL, NULL, 60]]
 [[70, NULL, NULL], [9, NULL, 10]]
 [[NULL, 1]]
 [[11, 12]]
-[NULL]
+NULL
+
+# A NULL argument wrapped to a higher dimension is skipped, the same as for 1D
+# inputs, so a row's result does not depend on the other rows in its batch
+# (https://github.com/apache/datafusion/issues/27223)
+statement ok
+CREATE TABLE concat_null_dims AS VALUES
+  (make_array(1, 2), make_array(make_array(30, 40))),
+  (CAST(NULL AS INT[]), CAST(NULL AS INT[][]));
+
+query ?
+select array_concat(column2, column1) from concat_null_dims;
+----
+[[30, 40], [1, 2]]
+NULL
+
+query ?
+select array_concat(column2, column1) from concat_null_dims where column1 is null;
+----
+NULL
+
+query ?
+select array_concat(column1, column1) from concat_null_dims;
+----
+[1, 2, 1, 2]
+NULL
+
+statement ok
+DROP TABLE concat_null_dims;
 
 # array_concat column-wise #12 (1D + 1D + 1D)
 query ?
