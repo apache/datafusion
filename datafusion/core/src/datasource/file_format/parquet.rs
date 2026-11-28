@@ -140,6 +140,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
     use async_trait::async_trait;
     use datafusion_datasource::file_groups::FileGroup;
+    use datafusion_datasource::sink::DataSinkExec;
     use datafusion_datasource_parquet::metadata::DFParquetMetadata;
     use futures::StreamExt;
     use futures::stream::BoxStream;
@@ -1691,6 +1692,111 @@ mod tests {
                 "output file metadata should contain col b"
             );
         }
+
+        Ok(())
+    }
+
+    /// The `ParquetSink` that `COPY` plans through
+    /// `ParquetFormat::create_writer_physical_plan` must not retain the metadata
+    /// of the files it writes, or memory grows with the number of files (#27026).
+    #[tokio::test]
+    async fn parquet_sink_planned_by_copy_does_not_retain_metadata() -> Result<()> {
+        let tmp_dir = tempfile::TempDir::new()?;
+        let out_dir = tmp_dir.path().join("out");
+        let ctx = SessionContext::new();
+
+        // Partitioning by `column2` writes one file per distinct value.
+        let plan = ctx
+            .sql(&format!(
+                "COPY (VALUES (1, 'a'), (2, 'b'), (3, 'a'), (4, 'c')) \
+                 TO '{}' STORED AS PARQUET PARTITIONED BY (column2)",
+                out_dir.display()
+            ))
+            .await?
+            .create_physical_plan()
+            .await?;
+        let parquet_sink = plan
+            .downcast_ref::<DataSinkExec>()
+            .expect("COPY plans a DataSinkExec")
+            .sink()
+            .downcast_ref::<ParquetSink>()
+            .expect("COPY ... STORED AS PARQUET plans a ParquetSink");
+
+        let count = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+        assert_snapshot!(batches_to_string(&count), @r"
+        +-------+
+        | count |
+        +-------+
+        | 4     |
+        +-------+
+        ");
+
+        let mut files = vec![];
+        for partition in std::fs::read_dir(&out_dir)? {
+            for file in std::fs::read_dir(partition?.path())? {
+                files.push(file?.path());
+            }
+        }
+        assert_eq!(files.len(), 3, "one file per partition: {files:?}");
+        let rows_read = ctx
+            .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
+            .await?
+            .count()
+            .await?;
+        assert_eq!(rows_read, 4);
+
+        assert!(
+            parquet_sink.written().is_empty(),
+            "the planned sink retained metadata for {} files",
+            parquet_sink.written().len()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_sink_write_without_retained_metadata() -> Result<()> {
+        let field_a = Field::new("a", DataType::Utf8, false);
+        let field_b = Field::new("b", DataType::Utf8, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+        let object_store_url = ObjectStoreUrl::local_filesystem();
+
+        let file_sink_config = FileSinkConfig {
+            original_url: String::default(),
+            object_store_url: object_store_url.clone(),
+            file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
+            table_paths: vec![ListingTableUrl::parse("file:///")?],
+            output_schema: schema.clone(),
+            table_partition_cols: vec![],
+            insert_op: InsertOp::Overwrite,
+            keep_partition_by_columns: false,
+            file_extension: "parquet".into(),
+            file_output_mode: FileOutputMode::Automatic,
+        };
+        let parquet_sink = Arc::new(
+            ParquetSink::new(file_sink_config, TableParquetOptions::default())
+                .with_retain_written_metadata(false),
+        );
+
+        let col_a: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar"]));
+        let col_b: ArrayRef = Arc::new(StringArray::from(vec!["baz", "baz"]));
+        let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)])?;
+
+        let rows_written = FileSink::write_all(
+            parquet_sink.as_ref(),
+            Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                futures::stream::iter(vec![Ok(batch)]),
+            )),
+            &build_ctx(object_store_url.as_ref()),
+        )
+        .await?;
+
+        assert_eq!(rows_written, 2, "the file is still written and counted");
+        assert!(
+            parquet_sink.written().is_empty(),
+            "no file metadata is retained"
+        );
 
         Ok(())
     }
