@@ -692,6 +692,128 @@ has the names and types of the columns that it reads from the body. The
 optimizer runs this check after each rule in debug builds, so a custom rule
 that does not remap the scans now fails with an error that names the rule.</p>
 </section>
+<section id="null-aware-sort-merge-joins-add-a-protobuf-field">
+<h3>Null-aware sort-merge joins add a protobuf field<a class="headerlink" href="#null-aware-sort-merge-joins-add-a-protobuf-field" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">SortMergeJoinExec</span></code> now supports null-aware (<code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code>) semantics for
+uncorrelated, single-key <code class="docutils literal notranslate"><span class="pre">LeftAnti</span></code> joins without a join filter.
+The existing seven-argument <code class="docutils literal notranslate"><span class="pre">SortMergeJoinExec::try_new</span></code> continues
+to create a non-null-aware join. Enable null-aware semantics with
+<code class="docutils literal notranslate"><span class="pre">.with_null_aware(true)?</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">exec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SortMergeJoinExec</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span>
+<span class="w">    </span><span class="n">left</span><span class="p">,</span>
+<span class="w">    </span><span class="n">right</span><span class="p">,</span>
+<span class="w">    </span><span class="n">on</span><span class="p">,</span>
+<span class="w">    </span><span class="nb">None</span><span class="p">,</span>
+<span class="w">    </span><span class="n">JoinType</span><span class="p">::</span><span class="n">LeftAnti</span><span class="p">,</span>
+<span class="w">    </span><span class="fm">vec!</span><span class="p">[</span><span class="n">SortOptions</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">)],</span><span class="w"> </span><span class="c1">// ASC NULLS FIRST</span>
+<span class="w">    </span><span class="n">NullEquality</span><span class="p">::</span><span class="n">NullEqualsNothing</span><span class="p">,</span>
+<span class="p">)</span><span class="o">?</span>
+<span class="p">.</span><span class="n">with_null_aware</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Both inputs must have a single partition when executed.</p>
+<p>The generated protobuf <code class="docutils literal notranslate"><span class="pre">SortMergeJoinExecNode</span></code> type has a new
+<code class="docutils literal notranslate"><span class="pre">null_aware</span></code> field. Exhaustive struct literals must initialize it;
+<code class="docutils literal notranslate"><span class="pre">false</span></code> preserves the previous behavior:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">node</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SortMergeJoinExecNode</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">left</span><span class="p">,</span>
+<span class="w">    </span><span class="n">right</span><span class="p">,</span>
+<span class="w">    </span><span class="n">on</span><span class="p">,</span>
+<span class="w">    </span><span class="n">join_type</span><span class="p">,</span>
+<span class="w">    </span><span class="n">filter</span><span class="p">,</span>
+<span class="w">    </span><span class="n">sort_options</span><span class="p">,</span>
+<span class="w">    </span><span class="n">null_equality</span><span class="p">,</span>
+<span class="w">    </span><span class="n">projection</span><span class="p">,</span>
+<span class="w">    </span><span class="n">null_aware</span><span class="p">:</span><span class="w"> </span><span class="nc">false</span><span class="p">,</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>A binary protobuf payload without this field decodes with
+<code class="docutils literal notranslate"><span class="pre">null_aware</span> <span class="pre">=</span> <span class="pre">false</span></code>. A 56.x reader ignores the field and executes a plain
+anti join, which can return incorrect results for a null-aware plan. Upgrade
+all plan readers before sending plans with <code class="docutils literal notranslate"><span class="pre">null_aware</span> <span class="pre">=</span> <span class="pre">true</span></code>.</p>
+</section>
+<section id="aggregate-functional-dependencies-is-deprecated">
+<span id="aggregate_functional_dependencies-is-deprecated"></span><h3><code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies</span></code> is deprecated<a class="headerlink" href="#aggregate-functional-dependencies-is-deprecated" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies</span></code> is deprecated; use
+<code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies_with_computed_inputs</span></code> instead. Its new
+<code class="docutils literal notranslate"><span class="pre">computed_input_indices:</span> <span class="pre">&amp;[Option&lt;Vec&lt;usize&gt;&gt;]</span></code> parameter lists, for each GROUP
+BY expression, the input fields that a deterministic computed expression reads,
+or is <code class="docutils literal notranslate"><span class="pre">None</span></code> for a column reference or a volatile expression. A computed
+expression is determined by a key when every field it reads is, so the key
+stays a key of the aggregate output. The deprecated function treats every
+computed expression as not determined.</p>
+<p><strong>Migration guide:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">aggregate_functional_dependencies</span><span class="p">(</span><span class="n">input_schema</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">group_by_input_indices</span><span class="p">,</span><span class="w"> </span><span class="n">aggr_schema</span><span class="p">);</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">aggregate_functional_dependencies_with_computed_inputs</span><span class="p">(</span>
+<span class="w">    </span><span class="n">input_schema</span><span class="p">,</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">group_by_input_indices</span><span class="p">,</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">computed_input_indices</span><span class="p">,</span>
+<span class="w">    </span><span class="n">aggr_schema</span><span class="p">,</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/27112">issue #27112</a> for details.</p>
+</section>
+<section id="createfunction-argument-and-return-types-are-fieldrefs">
+<h3><code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> argument and return types are <code class="docutils literal notranslate"><span class="pre">FieldRef</span></code>s<a class="headerlink" href="#createfunction-argument-and-return-types-are-fieldrefs" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">OperateFunctionArg::data_type</span></code> is replaced by <code class="docutils literal notranslate"><span class="pre">OperateFunctionArg::field</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">CreateFunction::return_type</span></code> by <code class="docutils literal notranslate"><span class="pre">CreateFunction::return_field</span></code>. Both are now
+<code class="docutils literal notranslate"><span class="pre">FieldRef</span></code>s instead of <code class="docutils literal notranslate"><span class="pre">DataType</span></code>s, so <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">FUNCTION</span></code> can declare argument
+and return types that need field metadata, such as extension types
+(<code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">FUNCTION</span> <span class="pre">f(id</span> <span class="pre">UUID)</span> <span class="pre">RETURNS</span> <span class="pre">UUID</span> <span class="pre">...</span></code>). The argument field is named
+after the argument, or <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> if the argument has no name. The return field has
+the name <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code>.</p>
+<p><strong>Migration guide:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">arg_types</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">args</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">a</span><span class="o">|</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="n">data_type</span><span class="p">.</span><span class="n">clone</span><span class="p">()).</span><span class="n">collect</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">return_type</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">definition</span><span class="p">.</span><span class="n">return_type</span><span class="p">;</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">arg_types</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">args</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">a</span><span class="o">|</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="n">field</span><span class="p">.</span><span class="n">data_type</span><span class="p">().</span><span class="n">clone</span><span class="p">()).</span><span class="n">collect</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">return_type</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">definition</span>
+<span class="w">    </span><span class="p">.</span><span class="n">return_field</span>
+<span class="w">    </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">field</span><span class="o">|</span><span class="w"> </span><span class="n">field</span><span class="p">.</span><span class="n">data_type</span><span class="p">().</span><span class="n">clone</span><span class="p">());</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">CreateFunction::try_new</span></code> takes <code class="docutils literal notranslate"><span class="pre">Option&lt;FieldRef&gt;</span></code> for the return type.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/18235">issue #18235</a> for details.</p>
+</section>
+<section id="new-match-columns-by-header-field-on-csv-options">
+<span id="new-match_columns_by_header-field-on-csv-options"></span><h3>New <code class="docutils literal notranslate"><span class="pre">match_columns_by_header</span></code> field on CSV options<a class="headerlink" href="#new-match-columns-by-header-field-on-csv-options" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_common::config::CsvOptions</span></code> and <code class="docutils literal notranslate"><span class="pre">datafusion::prelude::CsvReadOptions</span></code>
+have a new public field, <code class="docutils literal notranslate"><span class="pre">match_columns_by_header</span></code>, which maps CSV file columns
+to the table schema by header name instead of by position. The protobuf
+messages <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code> and <code class="docutils literal notranslate"><span class="pre">CsvScanExecNode</span></code> gained the same field.</p>
+<p>Code that constructs these structs with an exhaustive struct literal must add
+the field or use <code class="docutils literal notranslate"><span class="pre">..Default::default()</span></code>. Builder methods are unaffected:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// 56.0.0</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">has_header</span><span class="p">:</span><span class="w"> </span><span class="nc">true</span><span class="p">,</span>
+<span class="w">    </span><span class="o">..</span><span class="nb">Default</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="p">};</span>
+
+<span class="c1">// 57.0.0</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">has_header</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">match_columns_by_header</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="dataframes-built-from-arrays-derive-field-nullability-from-the-data">
+<h3><code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>s built from arrays derive field nullability from the data<a class="headerlink" href="#dataframes-built-from-arrays-derive-field-nullability-from-the-data" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> and the <code class="docutils literal notranslate"><span class="pre">dataframe!</span></code> macro used to mark every field
+as nullable. They now mark a field as nullable only when its array may contain
+nulls (<code class="docutils literal notranslate"><span class="pre">Array::is_nullable</span></code>); the new <code class="docutils literal notranslate"><span class="pre">DataFrame::from_arrays</span></code> follows the same
+rule. Columns without nulls get a non-nullable schema, which lets the optimizer
+simplify expressions such as <code class="docutils literal notranslate"><span class="pre">col</span> <span class="pre">IS</span> <span class="pre">NULL</span></code> on them.</p>
+<p>Row values are unchanged, but schema inspection can differ: code that compares
+the resulting schema against a hand-written one with <code class="docutils literal notranslate"><span class="pre">nullable:</span> <span class="pre">true</span></code> for
+every field needs to be updated.</p>
+</section>
 </section>
 </section>
 
@@ -757,6 +879,11 @@ that does not remap the scans now fails with an error that names the rule.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#deprecated-expr-wildcard-has-been-removed">Deprecated <code class="docutils literal notranslate"><span class="pre">Expr::Wildcard</span></code> has been removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-must-have-one-columnstatistics-per-schema-field">Statistics must have one <code class="docutils literal notranslate"><span class="pre">ColumnStatistics</span></code> per schema field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#materialized-cte-scans-have-a-projection">Materialized CTE scans have a projection</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-aware-sort-merge-joins-add-a-protobuf-field">Null-aware sort-merge joins add a protobuf field</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregate-functional-dependencies-is-deprecated"><code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies</span></code> is deprecated</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#createfunction-argument-and-return-types-are-fieldrefs"><code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> argument and return types are <code class="docutils literal notranslate"><span class="pre">FieldRef</span></code>s</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#new-match-columns-by-header-field-on-csv-options">New <code class="docutils literal notranslate"><span class="pre">match_columns_by_header</span></code> field on CSV options</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframes-built-from-arrays-derive-field-nullability-from-the-data"><code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>s built from arrays derive field nullability from the data</a></li>
 </ul>
 </li>
 </ul>

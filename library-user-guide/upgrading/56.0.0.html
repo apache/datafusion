@@ -493,9 +493,6 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-56-0-0">
 <span id="datafusion-5600"></span><h2>DataFusion 56.0.0<a class="headerlink" href="#datafusion-56-0-0" title="Link to this heading">#</a></h2>
-<p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">56.0.0</span></code> has not been released yet. The information provided
-in this section pertains to features and changes that have already been merged
-to the main branch and are awaiting release in this version.</p>
 <section id="session-time-zone-now-applies-to-mixed-timestamp-operations">
 <h3>Session time zone now applies to mixed timestamp operations<a class="headerlink" href="#session-time-zone-now-applies-to-mixed-timestamp-operations" title="Link to this heading">#</a></h3>
 <p>When <code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code> is set, DataFusion now uses it to
@@ -1204,17 +1201,6 @@ instead of specifically accepting a <code class="docutils literal notranslate"><
 the exact non-generic function signature of <code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> may need
 to be updated to account for the new generic API.</p>
 </section>
-<section id="dataframes-built-from-arrays-derive-field-nullability-from-the-data">
-<h3><code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>s built from arrays derive field nullability from the data<a class="headerlink" href="#dataframes-built-from-arrays-derive-field-nullability-from-the-data" title="Link to this heading">#</a></h3>
-<p><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> and the <code class="docutils literal notranslate"><span class="pre">dataframe!</span></code> macro used to mark every field
-as nullable. They now mark a field as nullable only when its array may contain
-nulls (<code class="docutils literal notranslate"><span class="pre">Array::is_nullable</span></code>); the new <code class="docutils literal notranslate"><span class="pre">DataFrame::from_arrays</span></code> follows the same
-rule. Columns without nulls get a non-nullable schema, which lets the optimizer
-simplify expressions such as <code class="docutils literal notranslate"><span class="pre">col</span> <span class="pre">IS</span> <span class="pre">NULL</span></code> on them.</p>
-<p>Row values are unchanged, but schema inspection can differ: code that compares
-the resulting schema against a hand-written one with <code class="docutils literal notranslate"><span class="pre">nullable:</span> <span class="pre">true</span></code> for
-every field needs to be updated.</p>
-</section>
 <section id="aggregate-ordering-state-field-names-are-now-namespaced">
 <h3>Aggregate ordering state field names are now namespaced<a class="headerlink" href="#aggregate-ordering-state-field-names-are-now-namespaced" title="Link to this heading">#</a></h3>
 <p>Ordering expressions exposed as top-level aggregate state fields now use names
@@ -1474,49 +1460,6 @@ null-aware join itself must set the count, or the join fails to plan:</p>
 <p>A 55.x reader ignores the field and rejects a multi-key null-aware join from a
 56.0 plan.</p>
 </section>
-<section id="null-aware-sort-merge-joins-add-a-protobuf-field">
-<h3>Null-aware sort-merge joins add a protobuf field<a class="headerlink" href="#null-aware-sort-merge-joins-add-a-protobuf-field" title="Link to this heading">#</a></h3>
-<p><code class="docutils literal notranslate"><span class="pre">SortMergeJoinExec</span></code> now supports null-aware (<code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code>) semantics for
-uncorrelated, single-key <code class="docutils literal notranslate"><span class="pre">LeftAnti</span></code> joins without a join filter.
-The existing seven-argument <code class="docutils literal notranslate"><span class="pre">SortMergeJoinExec::try_new</span></code> continues
-to create a non-null-aware join. Enable null-aware semantics with
-<code class="docutils literal notranslate"><span class="pre">.with_null_aware(true)?</span></code>:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">exec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SortMergeJoinExec</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span>
-<span class="w">    </span><span class="n">left</span><span class="p">,</span>
-<span class="w">    </span><span class="n">right</span><span class="p">,</span>
-<span class="w">    </span><span class="n">on</span><span class="p">,</span>
-<span class="w">    </span><span class="nb">None</span><span class="p">,</span>
-<span class="w">    </span><span class="n">JoinType</span><span class="p">::</span><span class="n">LeftAnti</span><span class="p">,</span>
-<span class="w">    </span><span class="fm">vec!</span><span class="p">[</span><span class="n">SortOptions</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">)],</span><span class="w"> </span><span class="c1">// ASC NULLS FIRST</span>
-<span class="w">    </span><span class="n">NullEquality</span><span class="p">::</span><span class="n">NullEqualsNothing</span><span class="p">,</span>
-<span class="p">)</span><span class="o">?</span>
-<span class="p">.</span><span class="n">with_null_aware</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
-</pre></div>
-</div>
-<p>Both inputs must have a single partition when executed.</p>
-<p>The generated protobuf <code class="docutils literal notranslate"><span class="pre">SortMergeJoinExecNode</span></code> type has a new
-<code class="docutils literal notranslate"><span class="pre">null_aware</span></code> field. Exhaustive struct literals must initialize it;
-<code class="docutils literal notranslate"><span class="pre">false</span></code> preserves the previous behavior:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">node</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SortMergeJoinExecNode</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">left</span><span class="p">,</span>
-<span class="w">    </span><span class="n">right</span><span class="p">,</span>
-<span class="w">    </span><span class="n">on</span><span class="p">,</span>
-<span class="w">    </span><span class="n">join_type</span><span class="p">,</span>
-<span class="w">    </span><span class="n">filter</span><span class="p">,</span>
-<span class="w">    </span><span class="n">sort_options</span><span class="p">,</span>
-<span class="w">    </span><span class="n">null_equality</span><span class="p">,</span>
-<span class="w">    </span><span class="n">projection</span><span class="p">,</span>
-<span class="w">    </span><span class="n">null_aware</span><span class="p">:</span><span class="w"> </span><span class="nc">false</span><span class="p">,</span>
-<span class="p">};</span>
-</pre></div>
-</div>
-<p>For binary protobuf plans, an older sort-merge join payload without this
-field decodes with <code class="docutils literal notranslate"><span class="pre">null_aware</span> <span class="pre">=</span> <span class="pre">false</span></code>. A 55.x reader must not consume
-a new sort-merge join plan with <code class="docutils literal notranslate"><span class="pre">null_aware</span> <span class="pre">=</span> <span class="pre">true</span></code>: it ignores the
-unknown field and executes a plain anti join, which can return incorrect
-results. Upgrade all plan readers before sending them null-aware
-sort-merge join plans.</p>
-</section>
 <section id="functionaldependence-has-a-new-null-equality-field">
 <span id="functionaldependence-has-a-new-null_equality-field"></span><h3><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field<a class="headerlink" href="#functionaldependence-has-a-new-null-equality-field" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> now records the NULL semantics its dependency holds under.
@@ -1592,31 +1535,6 @@ reference, <code class="docutils literal notranslate"><span class="pre">datafusi
 </pre></div>
 </div>
 </section>
-<section id="aggregate-functional-dependencies-is-deprecated">
-<span id="aggregate_functional_dependencies-is-deprecated"></span><h3><code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies</span></code> is deprecated<a class="headerlink" href="#aggregate-functional-dependencies-is-deprecated" title="Link to this heading">#</a></h3>
-<p><code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies</span></code> is deprecated; use
-<code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies_with_computed_inputs</span></code> instead. Its new
-<code class="docutils literal notranslate"><span class="pre">computed_input_indices:</span> <span class="pre">&amp;[Option&lt;Vec&lt;usize&gt;&gt;]</span></code> parameter lists, for each GROUP
-BY expression, the input fields that a deterministic computed expression reads,
-or is <code class="docutils literal notranslate"><span class="pre">None</span></code> for a column reference or a volatile expression. A computed
-expression is determined by a key when every field it reads is, so the key
-stays a key of the aggregate output. The deprecated function treats every
-computed expression as not determined.</p>
-<p><strong>Migration guide:</strong></p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">aggregate_functional_dependencies</span><span class="p">(</span><span class="n">input_schema</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">group_by_input_indices</span><span class="p">,</span><span class="w"> </span><span class="n">aggr_schema</span><span class="p">);</span>
-
-<span class="c1">// After</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">deps</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">aggregate_functional_dependencies_with_computed_inputs</span><span class="p">(</span>
-<span class="w">    </span><span class="n">input_schema</span><span class="p">,</span>
-<span class="w">    </span><span class="o">&amp;</span><span class="n">group_by_input_indices</span><span class="p">,</span>
-<span class="w">    </span><span class="o">&amp;</span><span class="n">computed_input_indices</span><span class="p">,</span>
-<span class="w">    </span><span class="n">aggr_schema</span><span class="p">,</span>
-<span class="p">);</span>
-</pre></div>
-</div>
-<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/27112">issue #27112</a> for details.</p>
-</section>
 <section id="filesource-exact-filter-controls-scan-equivalence-properties">
 <span id="filesourceexact_filter-controls-scan-equivalence-properties"></span><h3><code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> controls scan equivalence properties<a class="headerlink" href="#filesource-exact-filter-controls-scan-equivalence-properties" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> no longer derives equivalence properties (constant columns
@@ -1641,13 +1559,46 @@ conjuncts when <code class="docutils literal notranslate"><span class="pre">push
 </pre></div>
 </div>
 </section>
+<section id="tableprovider-scan-takes-option-usize-for-the-projection">
+<span id="tableproviderscan-takes-optionusize-for-the-projection"></span><h3><code class="docutils literal notranslate"><span class="pre">TableProvider::scan</span></code> takes <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;[usize]&gt;</span></code> for the projection<a class="headerlink" href="#tableprovider-scan-takes-option-usize-for-the-projection" title="Link to this heading">#</a></h3>
+<p>Update the <code class="docutils literal notranslate"><span class="pre">scan</span></code> signature in your <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> implementation.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">scan</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">state</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">Session</span><span class="p">,</span>
+<span class="w">    </span><span class="n">projection</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;&amp;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">filters</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">Expr</span><span class="p">],</span>
+<span class="w">    </span><span class="n">limit</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ExecutionPlan</span><span class="o">&gt;&gt;</span><span class="p">;</span>
+
+<span class="c1">// After</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">scan</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">state</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">Session</span><span class="p">,</span>
+<span class="w">    </span><span class="n">projection</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;&amp;</span><span class="p">[</span><span class="kt">usize</span><span class="p">]</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">filters</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">Expr</span><span class="p">],</span>
+<span class="w">    </span><span class="n">limit</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">ExecutionPlan</span><span class="o">&gt;&gt;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Use <code class="docutils literal notranslate"><span class="pre">projection.map(|p|</span> <span class="pre">p.to_vec())</span></code> if your implementation needs an owned
+<code class="docutils literal notranslate"><span class="pre">Vec</span></code>. Callers holding an <code class="docutils literal notranslate"><span class="pre">Option&lt;Vec&lt;usize&gt;&gt;</span></code> can pass <code class="docutils literal notranslate"><span class="pre">.as_deref()</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">StreamingTableExec::try_new</span></code> also takes <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;[usize]&gt;</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_common::project_schema</span></code> now accepts unsized projections
+(<code class="docutils literal notranslate"><span class="pre">projection:</span> <span class="pre">Option&lt;&amp;T&gt;</span> <span class="pre">where</span> <span class="pre">T:</span> <span class="pre">AsRef&lt;[usize]&gt;</span> <span class="pre">+</span> <span class="pre">?Sized</span></code>), so it takes both
+<code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;Vec&lt;usize&gt;&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;[usize]&gt;</span></code>; no caller changes are required.</p>
+<p>Besides being the more idiomatic signature, this lets
+<code class="docutils literal notranslate"><span class="pre">TableProvider::scan_with_args</span></code>’s default body hand the projection straight to
+<code class="docutils literal notranslate"><span class="pre">scan</span></code> instead of allocating a <code class="docutils literal notranslate"><span class="pre">Vec</span></code> that then has to be captured by the
+returned future – which is what made that method expensive to compile
+(<code class="docutils literal notranslate"><span class="pre">datafusion-session</span></code> compiles ~3.3x faster as a result).</p>
+</section>
 <section id="tableprovider-scan-with-args-supports-skip-pushdown">
 <span id="tableproviderscan_with_args-supports-skip-pushdown"></span><h3><code class="docutils literal notranslate"><span class="pre">TableProvider::scan_with_args</span></code> supports skip pushdown<a class="headerlink" href="#tableprovider-scan-with-args-supports-skip-pushdown" title="Link to this heading">#</a></h3>
-<p>The <code class="docutils literal notranslate"><span class="pre">ScanArgs</span></code> struct now carries a new <code class="docutils literal notranslate"><span class="pre">skip</span></code> (number of rows to skip) field
-alongside <code class="docutils literal notranslate"><span class="pre">limit</span></code>. <code class="docutils literal notranslate"><span class="pre">TableProvider::scan_with_args()</span></code> by default forwards to <code class="docutils literal notranslate"><span class="pre">scan()</span></code>, so
-existing <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> implementations keep compiling and working
-unchanged; implementations that want to take advantage of <code class="docutils literal notranslate"><span class="pre">skip</span></code> (or future
-<code class="docutils literal notranslate"><span class="pre">ScanArgs</span></code> fields) can override <code class="docutils literal notranslate"><span class="pre">scan_with_args</span></code> in addition to <code class="docutils literal notranslate"><span class="pre">scan</span></code>.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">ScanArgs</span></code> struct now carries a <code class="docutils literal notranslate"><span class="pre">skip</span></code> field (the number of rows to skip)
+alongside <code class="docutils literal notranslate"><span class="pre">limit</span></code>. After updating the <code class="docutils literal notranslate"><span class="pre">scan</span></code> signature above, providers can use
+the default <code class="docutils literal notranslate"><span class="pre">scan_with_args</span></code>, which forwards to <code class="docutils literal notranslate"><span class="pre">scan</span></code>. Override
+<code class="docutils literal notranslate"><span class="pre">scan_with_args</span></code> to handle <code class="docutils literal notranslate"><span class="pre">skip</span></code>.</p>
 <p>A new <code class="docutils literal notranslate"><span class="pre">TableProvider::supports_skip_pushdown()</span> <span class="pre">-&gt;</span> <span class="pre">bool</span></code> (default <code class="docutils literal notranslate"><span class="pre">false</span></code>)
 lets a provider guarantee it honors <code class="docutils literal notranslate"><span class="pre">ScanArgs::skip</span></code> exactly — that a scan
 built with <code class="docutils literal notranslate"><span class="pre">skip</span></code> omits <em>exactly</em> the first <code class="docutils literal notranslate"><span class="pre">skip</span></code> rows it would
@@ -1959,50 +1910,107 @@ until the method is removed, as callers of the deprecated method still use them.
 </div>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/18882">issue #18882</a> for details.</p>
 </section>
-<section id="createfunction-argument-and-return-types-are-fieldrefs">
-<h3><code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> argument and return types are <code class="docutils literal notranslate"><span class="pre">FieldRef</span></code>s<a class="headerlink" href="#createfunction-argument-and-return-types-are-fieldrefs" title="Link to this heading">#</a></h3>
-<p><code class="docutils literal notranslate"><span class="pre">OperateFunctionArg::data_type</span></code> is replaced by <code class="docutils literal notranslate"><span class="pre">OperateFunctionArg::field</span></code>, and
-<code class="docutils literal notranslate"><span class="pre">CreateFunction::return_type</span></code> by <code class="docutils literal notranslate"><span class="pre">CreateFunction::return_field</span></code>. Both are now
-<code class="docutils literal notranslate"><span class="pre">FieldRef</span></code>s instead of <code class="docutils literal notranslate"><span class="pre">DataType</span></code>s, so <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">FUNCTION</span></code> can declare argument
-and return types that need field metadata, such as extension types
-(<code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">FUNCTION</span> <span class="pre">f(id</span> <span class="pre">UUID)</span> <span class="pre">RETURNS</span> <span class="pre">UUID</span> <span class="pre">...</span></code>). The argument field is named
-after the argument, or <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> if the argument has no name. The return field has
-the name <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code>.</p>
-<p><strong>Migration guide:</strong></p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">arg_types</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">args</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">a</span><span class="o">|</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="n">data_type</span><span class="p">.</span><span class="n">clone</span><span class="p">()).</span><span class="n">collect</span><span class="p">();</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">return_type</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">definition</span><span class="p">.</span><span class="n">return_type</span><span class="p">;</span>
-
-<span class="c1">// After</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">arg_types</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">args</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">a</span><span class="o">|</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="n">field</span><span class="p">.</span><span class="n">data_type</span><span class="p">().</span><span class="n">clone</span><span class="p">()).</span><span class="n">collect</span><span class="p">();</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">return_type</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">definition</span>
-<span class="w">    </span><span class="p">.</span><span class="n">return_field</span>
-<span class="w">    </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">field</span><span class="o">|</span><span class="w"> </span><span class="n">field</span><span class="p">.</span><span class="n">data_type</span><span class="p">().</span><span class="n">clone</span><span class="p">());</span>
-</pre></div>
-</div>
-<p><code class="docutils literal notranslate"><span class="pre">CreateFunction::try_new</span></code> takes <code class="docutils literal notranslate"><span class="pre">Option&lt;FieldRef&gt;</span></code> for the return type.</p>
-<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/18235">issue #18235</a> for details.</p>
+<section id="map-casts-with-nested-structs-use-schema-evolution-rules">
+<h3>Map casts with nested Structs use schema-evolution rules<a class="headerlink" href="#map-casts-with-nested-structs-use-schema-evolution-rules" title="Link to this heading">#</a></h3>
+<p>Casts of a <code class="docutils literal notranslate"><span class="pre">Map</span></code> whose key or value recursively contains a <code class="docutils literal notranslate"><span class="pre">Struct</span></code> now adapt
+nested Struct fields by case-sensitive name. Nullable fields added to the target
+Struct are filled with <code class="docutils literal notranslate"><span class="pre">NULL</span></code>, and source-only fields are omitted. Missing
+non-nullable target fields, nullable-to-non-nullable changes, and incompatible
+nested types are rejected.</p>
+<p>Map keys define map identity. During this nested-Struct adaptation, key Struct
+fields cannot be removed and primitive key type changes must preserve every
+source value (for example, <code class="docutils literal notranslate"><span class="pre">Int32</span></code> to <code class="docutils literal notranslate"><span class="pre">Int64</span></code> is allowed, while <code class="docutils literal notranslate"><span class="pre">Int64</span></code> to
+<code class="docutils literal notranslate"><span class="pre">Int32</span></code> is rejected). Sorted Maps also require an unchanged key type and the
+same sorted flag.</p>
+<p><strong>Migration guide:</strong> Schemas that relied on positional Struct-field matching,
+key-field removal, or narrowing Map-key casts must be updated to retain
+case-sensitive field names and key identity. Ordinary Maps without semantic
+Struct children continue to use Arrow’s normal Map cast behavior.</p>
 </section>
-<section id="new-match-columns-by-header-field-on-csv-options">
-<span id="new-match_columns_by_header-field-on-csv-options"></span><h3>New <code class="docutils literal notranslate"><span class="pre">match_columns_by_header</span></code> field on CSV options<a class="headerlink" href="#new-match-columns-by-header-field-on-csv-options" title="Link to this heading">#</a></h3>
-<p><code class="docutils literal notranslate"><span class="pre">datafusion_common::config::CsvOptions</span></code> and <code class="docutils literal notranslate"><span class="pre">datafusion::prelude::CsvReadOptions</span></code>
-have a new public field, <code class="docutils literal notranslate"><span class="pre">match_columns_by_header</span></code>, which maps CSV file columns
-to the table schema by header name instead of by position. The protobuf
-messages <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code> and <code class="docutils literal notranslate"><span class="pre">CsvScanExecNode</span></code> gained the same field.</p>
-<p>Code that constructs these structs with an exhaustive struct literal must add
-the field or use <code class="docutils literal notranslate"><span class="pre">..Default::default()</span></code>. Builder methods are unaffected:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// 55.0.0</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">has_header</span><span class="p">:</span><span class="w"> </span><span class="nc">true</span><span class="p">,</span>
-<span class="w">    </span><span class="o">..</span><span class="nb">Default</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
-<span class="p">};</span>
-
-<span class="c1">// 56.0.0</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">options</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CsvReadOptions</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
-<span class="w">    </span><span class="p">.</span><span class="n">has_header</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span>
-<span class="w">    </span><span class="p">.</span><span class="n">match_columns_by_header</span><span class="p">(</span><span class="kc">true</span><span class="p">);</span>
+<section id="exprtype-gained-a-sqlsimilartopattern-variant">
+<h3><code class="docutils literal notranslate"><span class="pre">ExprType</span></code> gained a <code class="docutils literal notranslate"><span class="pre">SqlSimilarToPattern</span></code> variant<a class="headerlink" href="#exprtype-gained-a-sqlsimilartopattern-variant" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">SIMILAR</span> <span class="pre">TO</span></code> with a non-literal (column- or expression-based) pattern is now
+represented by a new <code class="docutils literal notranslate"><span class="pre">SqlSimilarToPattern</span></code> physical expression, so it can be
+serialized. The generated <code class="docutils literal notranslate"><span class="pre">ExprType</span></code> enum on <code class="docutils literal notranslate"><span class="pre">PhysicalExprNode</span></code> gained a
+matching <code class="docutils literal notranslate"><span class="pre">SqlSimilarToPattern</span></code> variant (tag 28).</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users matching exhaustively on <code class="docutils literal notranslate"><span class="pre">ExprType</span></code> (for example in a custom
+physical-plan encoder/decoder).</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Add a <code class="docutils literal notranslate"><span class="pre">SqlSimilarToPattern</span></code> arm, or fall back to a wildcard arm:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">match</span><span class="w"> </span><span class="n">expr_type</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="n">ExprType</span><span class="p">::</span><span class="n">SqlSimilarToPattern</span><span class="p">(</span><span class="n">node</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* ... */</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
 </pre></div>
 </div>
+<p>Plans encoded before this variant existed are unaffected: they never produced
+this variant, so decoding is unchanged. Plans containing a dynamic
+<code class="docutils literal notranslate"><span class="pre">SIMILAR</span> <span class="pre">TO</span></code> pattern encoded after this change fail to decode on older
+readers that don’t recognize the new tag.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/23188">PR #23188</a> for details.</p>
+</section>
+<section id="sortproperties-and-or-replaced-by-and-and-or">
+<span id="sortpropertiesand_or-replaced-by-and-and-or"></span><h3><code class="docutils literal notranslate"><span class="pre">SortProperties::and_or</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">and</span></code> and <code class="docutils literal notranslate"><span class="pre">or</span></code><a class="headerlink" href="#sortproperties-and-or-replaced-by-and-and-or" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_expr_common::sort_properties::SortProperties::and_or</span></code> has been
+removed. Call <code class="docutils literal notranslate"><span class="pre">and</span></code> for <code class="docutils literal notranslate"><span class="pre">AND</span></code> and <code class="docutils literal notranslate"><span class="pre">or</span></code> for <code class="docutils literal notranslate"><span class="pre">OR</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before (55.0.0)</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">lhs</span><span class="p">.</span><span class="n">and_or</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rhs</span><span class="p">);</span>
+
+<span class="c1">// After (56.0.0)</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">lhs</span><span class="p">.</span><span class="n">and</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rhs</span><span class="p">);</span><span class="w"> </span><span class="c1">// for AND</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">lhs</span><span class="p">.</span><span class="n">or</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rhs</span><span class="p">);</span><span class="w">  </span><span class="c1">// for OR</span>
+</pre></div>
+</div>
+<p>The two operators do not preserve the same sort orders. <code class="docutils literal notranslate"><span class="pre">AND</span></code> keeps an ordering
+only when nulls sort after <code class="docutils literal notranslate"><span class="pre">true</span></code> (<code class="docutils literal notranslate"><span class="pre">ASC</span> <span class="pre">NULLS</span> <span class="pre">LAST</span></code> or <code class="docutils literal notranslate"><span class="pre">DESC</span> <span class="pre">NULLS</span> <span class="pre">FIRST</span></code>), and
+<code class="docutils literal notranslate"><span class="pre">OR</span></code> only when nulls sort before <code class="docutils literal notranslate"><span class="pre">false</span></code> (<code class="docutils literal notranslate"><span class="pre">ASC</span> <span class="pre">NULLS</span> <span class="pre">FIRST</span></code> or
+<code class="docutils literal notranslate"><span class="pre">DESC</span> <span class="pre">NULLS</span> <span class="pre">LAST</span></code>). <code class="docutils literal notranslate"><span class="pre">and_or</span></code> did not say which operator the caller meant, so it
+could not be right for both.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/pull/24276">PR #24276</a> for details.</p>
+</section>
+<section id="range-window-frames-with-offsets-now-reject-order-by-types-without-arithmetic">
+<h3>RANGE window frames with offsets now reject ORDER BY types without arithmetic<a class="headerlink" href="#range-window-frames-with-offsets-now-reject-order-by-types-without-arithmetic" title="Link to this heading">#</a></h3>
+<p>A <code class="docutils literal notranslate"><span class="pre">RANGE</span></code> frame offset such as <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">PRECEDING</span></code> is measured in <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> values
+rather than in rows, so the frame bound is computed as <code class="docutils literal notranslate"><span class="pre">current_value</span> <span class="pre">-</span> <span class="pre">1</span></code>. That
+requires arithmetic on the <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> type. For types that have no such
+arithmetic – <code class="docutils literal notranslate"><span class="pre">Utf8</span></code>, <code class="docutils literal notranslate"><span class="pre">Binary</span></code>, <code class="docutils literal notranslate"><span class="pre">Boolean</span></code>, <code class="docutils literal notranslate"><span class="pre">List</span></code> and <code class="docutils literal notranslate"><span class="pre">Null</span></code> – such frames are
+now rejected when the query is planned:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="n">RANGE</span><span class="w"> </span><span class="k">BETWEEN</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="n">PRECEDING</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="k">CURRENT</span><span class="w"> </span><span class="k">ROW</span><span class="p">)</span>
+<span class="k">FROM</span><span class="w"> </span><span class="p">(</span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;a&#39;</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;b&#39;</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;c&#39;</span><span class="p">))</span><span class="w"> </span><span class="n">t</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">x</span><span class="p">;</span>
+<span class="c1">-- Error during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Utf8</span>
+</pre></div>
+</div>
+<p>What this replaces depends on the <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> type. Over <code class="docutils literal notranslate"><span class="pre">Utf8</span></code>, <code class="docutils literal notranslate"><span class="pre">Boolean</span></code> and
+<code class="docutils literal notranslate"><span class="pre">List</span></code> keys such queries planned successfully, and in DataFusion 54 and 55 the failing
+frame-bound arithmetic was silently treated as an overflow
+(<a class="reference external" href="https://github.com/apache/datafusion/pull/22140">#22140</a>): the bound collapsed
+to the partition edge, and the query returned results computed over that wrongly
+widened frame instead of an offset window. DataFusion 53 and earlier failed
+during execution with an arithmetic error. Rows whose order key value was <code class="docutils literal notranslate"><span class="pre">NULL</span></code>
+never reached the arithmetic, so queries where every order key value was <code class="docutils literal notranslate"><span class="pre">NULL</span></code>
+returned correct results throughout; those also now fail at planning. Over a
+<code class="docutils literal notranslate"><span class="pre">Null</span></code>-typed key the offset itself failed to coerce, erroring at planning time
+with <code class="docutils literal notranslate"><span class="pre">Cast</span> <span class="pre">error:</span> <span class="pre">Casting</span> <span class="pre">from</span> <span class="pre">Utf8</span> <span class="pre">to</span> <span class="pre">Null</span> <span class="pre">not</span> <span class="pre">supported</span></code>, and binary keys were
+rejected for every <code class="docutils literal notranslate"><span class="pre">RANGE</span></code> frame with the internal error quoted below – for
+those two, only the error message changes.</p>
+<p>Such an <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> type is still usable with the <code class="docutils literal notranslate"><span class="pre">UNBOUNDED</span> <span class="pre">PRECEDING</span></code>,
+<code class="docutils literal notranslate"><span class="pre">CURRENT</span> <span class="pre">ROW</span></code> and <code class="docutils literal notranslate"><span class="pre">UNBOUNDED</span> <span class="pre">FOLLOWING</span></code> bounds, which are located by comparing
+<code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> values rather than by computing them. Binary order keys additionally
+gained support for those bounds in this release, having previously failed with
+<code class="docutils literal notranslate"><span class="pre">Internal</span> <span class="pre">error:</span> <span class="pre">Cannot</span> <span class="pre">run</span> <span class="pre">range</span> <span class="pre">queries</span> <span class="pre">on</span> <span class="pre">datatype:</span> <span class="pre">Binary</span></code>.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Queries using <code class="docutils literal notranslate"><span class="pre">offset</span> <span class="pre">PRECEDING</span></code> or <code class="docutils literal notranslate"><span class="pre">offset</span> <span class="pre">FOLLOWING</span></code> in a <code class="docutils literal notranslate"><span class="pre">RANGE</span></code> frame over
+a non-numeric, non-temporal <code class="docutils literal notranslate"><span class="pre">ORDER</span> <span class="pre">BY</span></code> key. To count rows rather than compare
+values, use a <code class="docutils literal notranslate"><span class="pre">ROWS</span></code> frame; to include everything up to the partition edge,
+use <code class="docutils literal notranslate"><span class="pre">UNBOUNDED</span> <span class="pre">PRECEDING</span></code> or <code class="docutils literal notranslate"><span class="pre">UNBOUNDED</span> <span class="pre">FOLLOWING</span></code>.</p></li>
+</ul>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/24327">issue #24327</a> for details.</p>
 </section>
 </section>
 </section>
@@ -2092,7 +2100,6 @@ the field or use <code class="docutils literal notranslate"><span class="pre">..
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#date-bin-rejects-strides-that-are-not-positive"><code class="docutils literal notranslate"><span class="pre">date_bin</span></code> rejects strides that are not positive</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#log-base-value-widens-float-arguments-to-the-wider-type"><code class="docutils literal notranslate"><span class="pre">log(base,</span> <span class="pre">value)</span></code> widens float arguments to the wider type</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframe-from-columns-accepts-intoiterator"><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframes-built-from-arrays-derive-field-nullability-from-the-data"><code class="docutils literal notranslate"><span class="pre">DataFrame</span></code>s built from arrays derive field nullability from the data</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregate-ordering-state-field-names-are-now-namespaced">Aggregate ordering state field names are now namespaced</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-filter-pushdown-resolves-columns-by-position">Physical filter pushdown resolves columns by position</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#default-datafusion-sql-parser-recursion-limit-raised-from-50-to-51">Default <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.recursion_limit</span></code> raised from 50 to 51</a></li>
@@ -2101,12 +2108,11 @@ the field or use <code class="docutils literal notranslate"><span class="pre">..
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-supports-limit-pushdown-is-deprecated-in-favour-of-limit-behavior"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::supports_limit_pushdown</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">limit_behavior</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoopnode-protobuf-literals-require-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-aware-joins-record-their-not-in-value-key-count">Null-aware joins record their <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> value key count</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-aware-sort-merge-joins-add-a-protobuf-field">Null-aware sort-merge joins add a protobuf field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#functionaldependence-has-a-new-null-equality-field"><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#nullable-unique-constraints-no-longer-add-or-remove-group-by-expressions">Nullable <code class="docutils literal notranslate"><span class="pre">UNIQUE</span></code> constraints no longer add or remove <code class="docutils literal notranslate"><span class="pre">GROUP</span> <span class="pre">BY</span></code> expressions</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#functional-dependency-helpers-take-field-indices-instead-of-names">Functional dependency helpers take field indices instead of names</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregate-functional-dependencies-is-deprecated"><code class="docutils literal notranslate"><span class="pre">aggregate_functional_dependencies</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesource-exact-filter-controls-scan-equivalence-properties"><code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> controls scan equivalence properties</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tableprovider-scan-takes-option-usize-for-the-projection"><code class="docutils literal notranslate"><span class="pre">TableProvider::scan</span></code> takes <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;[usize]&gt;</span></code> for the projection</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tableprovider-scan-with-args-supports-skip-pushdown"><code class="docutils literal notranslate"><span class="pre">TableProvider::scan_with_args</span></code> supports skip pushdown</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#who-is-affected">Who is affected</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#api-breaks">API breaks</a></li>
@@ -2124,8 +2130,10 @@ the field or use <code class="docutils literal notranslate"><span class="pre">..
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logicalplan-map-expressions-re-derives-a-projection-s-schema"><code class="docutils literal notranslate"><span class="pre">LogicalPlan::map_expressions</span></code> re-derives a <code class="docutils literal notranslate"><span class="pre">Projection</span></code>’s schema</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sanitycheckplan-is-deprecated-and-no-longer-in-the-default-physical-optimizer-rules"><code class="docutils literal notranslate"><span class="pre">SanityCheckPlan</span></code> is deprecated and no longer in the default physical optimizer rules</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-is-nullable-is-deprecated"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_nullable</span></code> is deprecated</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#createfunction-argument-and-return-types-are-fieldrefs"><code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> argument and return types are <code class="docutils literal notranslate"><span class="pre">FieldRef</span></code>s</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#new-match-columns-by-header-field-on-csv-options">New <code class="docutils literal notranslate"><span class="pre">match_columns_by_header</span></code> field on CSV options</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#map-casts-with-nested-structs-use-schema-evolution-rules">Map casts with nested Structs use schema-evolution rules</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exprtype-gained-a-sqlsimilartopattern-variant"><code class="docutils literal notranslate"><span class="pre">ExprType</span></code> gained a <code class="docutils literal notranslate"><span class="pre">SqlSimilarToPattern</span></code> variant</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sortproperties-and-or-replaced-by-and-and-or"><code class="docutils literal notranslate"><span class="pre">SortProperties::and_or</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">and</span></code> and <code class="docutils literal notranslate"><span class="pre">or</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#range-window-frames-with-offsets-now-reject-order-by-types-without-arithmetic">RANGE window frames with offsets now reject ORDER BY types without arithmetic</a></li>
 </ul>
 </li>
 </ul>
