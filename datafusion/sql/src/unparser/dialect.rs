@@ -457,6 +457,23 @@ impl Dialect for PostgreSqlDialect {
         ast::DataType::SmallInt(None)
     }
 
+    fn uint8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::SmallInt(None)
+    }
+
+    fn uint16_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Integer(None)
+    }
+
+    fn uint32_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::BigInt(None)
+    }
+
+    fn uint64_cast_dtype(&self) -> ast::DataType {
+        // can overflow
+        ast::DataType::BigInt(None)
+    }
+
     fn distinct_from_style(&self) -> DistinctFromStyle {
         DistinctFromStyle::FullText
     }
