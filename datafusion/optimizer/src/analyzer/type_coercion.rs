@@ -1649,6 +1649,14 @@ fn coerce_case_expression(
     Ok(Case::new(case_expr, when_then, else_expr))
 }
 
+/// Returns `true` if two fields have the same extension type (name, metadata,
+/// and underlying storage type).
+fn extension_types_equal(left: &Field, right: &Field) -> bool {
+    left.extension_type_name() == right.extension_type_name()
+        && left.extension_type_metadata() == right.extension_type_metadata()
+        && left.data_type() == right.data_type()
+}
+
 /// Get a common schema that is compatible with all inputs of UNION.
 ///
 /// This method presumes that the wildcard expansion is unneeded, or has already
@@ -1721,11 +1729,48 @@ fn coerce_union_schema_with_schema(
         .iter()
         .enumerate()
         .map(|(i, field)| {
+            let input_fields: Vec<&Field> = inputs
+                .iter()
+                .map(|plan| plan.schema().field(i).as_ref())
+                .collect();
+
+            // Validate extension type compatibility across non-Null inputs.
+            // Merging extension metadata onto a widened storage type (e.g.
+            // FixedSizeBinary(16)<arrow.uuid> + Binary -> Binary) produces an
+            // invalid logical schema that causes internal errors on UNION and
+            // silently drops the extension type on UNION ALL.
+            if let Some(ext_field) = input_fields
+                .iter()
+                .find(|f| f.extension_type_name().is_some())
+            {
+                for other in &input_fields {
+                    if matches!(other.data_type(), DataType::Null) {
+                        continue;
+                    }
+                    if !extension_types_equal(ext_field, other) {
+                        return plan_err!(
+                            "UNION types cannot be unified for column '{}': \
+                            extension type '{}' ({}) is incompatible with {}",
+                            field.name(),
+                            ext_field.extension_type_name().unwrap_or_default(),
+                            ext_field.data_type(),
+                            match other.extension_type_name() {
+                                Some(other_ext) => {
+                                    format!(
+                                        "extension type '{other_ext}' ({})",
+                                        other.data_type()
+                                    )
+                                }
+                                None => other.data_type().to_string(),
+                            }
+                        );
+                    }
+                }
+            }
+
             // The stored schema may already contain an inferred common type. Feeding
             // it back into coercion can change the result, notably for dictionaries.
-            let datatype = coerce_union_type(
-                inputs.iter().map(|plan| plan.schema().field(i).as_ref()),
-            )?;
+            let datatype = coerce_union_type(input_fields)?;
             let nullable = field.is_nullable()
                 || inputs
                     .iter()
@@ -2009,6 +2054,38 @@ mod test {
               EmptyRelation: rows=0
             EmptyRelation: rows=0
         "
+        )
+    }
+
+    #[test]
+    fn test_coerce_union_incompatible_extension_type() -> Result<()> {
+        let uuid_field = Field::new("id", DataType::FixedSizeBinary(16), false)
+            .with_metadata(std::collections::HashMap::from([(
+                "ARROW:extension:name".to_string(),
+                "arrow.uuid".to_string(),
+            )]));
+        let left_plan = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::from_unqualified_fields(
+                vec![uuid_field].into(),
+                std::collections::HashMap::new(),
+            )?),
+        }));
+        let right_plan = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::from_unqualified_fields(
+                vec![Field::new("id", DataType::FixedSizeBinary(16), false)].into(),
+                std::collections::HashMap::new(),
+            )?),
+        }));
+
+        let union = LogicalPlan::Union(Union::try_new_with_loose_types(vec![
+            left_plan, right_plan,
+        ])?);
+
+        assert_type_coercion_error(
+            union,
+            "UNION types cannot be unified for column 'id': extension type 'arrow.uuid'",
         )
     }
 
