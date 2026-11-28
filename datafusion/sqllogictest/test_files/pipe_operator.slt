@@ -72,6 +72,66 @@ FROM test
 ----
 1 1.1 2.1
 
+# Window functions in SELECT and EXTEND pipes
+query III rowsort
+SELECT * FROM (VALUES (1, 10), (1, 20), (2, 30)) AS t(k, v)
+|> EXTEND ROW_NUMBER() OVER (PARTITION BY k ORDER BY v DESC) AS rn
+|> WHERE rn = 1
+----
+1 20 1
+2 30 1
+
+query II rowsort
+SELECT * FROM (VALUES (1, 10), (1, 20), (2, 30)) AS t(k, v)
+|> SELECT k, ROW_NUMBER() OVER (PARTITION BY k ORDER BY v) AS rn
+----
+1 1
+1 2
+2 1
+
+query IIII rowsort
+SELECT * FROM (VALUES (1, 10), (1, 20), (2, 30)) AS t(k, v)
+|> EXTEND LAG(v) OVER (PARTITION BY k ORDER BY v) AS prev_v,
+          LEAD(v) OVER (PARTITION BY k ORDER BY v) AS next_v
+----
+1 10 NULL 20
+1 20 10 NULL
+2 30 NULL NULL
+
+query III rowsort
+SELECT * FROM (VALUES (1, 10), (1, 20), (2, 30)) AS t(k, v)
+|> SELECT k, v - LAG(v) OVER (PARTITION BY k ORDER BY v) AS dv, LEAD(v, 1, 0) OVER (ORDER BY v) AS next_v
+----
+1 10 30
+1 NULL 20
+2 NULL 0
+
+# unnest in SELECT and EXTEND pipes
+query I
+SELECT [1, 2, 3] AS xs
+|> SELECT unnest(xs) AS x
+----
+1
+2
+3
+
+query ?I
+SELECT [1, 2, 3] AS xs
+|> EXTEND unnest(xs) AS x
+----
+[1, 2, 3] 1
+[1, 2, 3] 2
+[1, 2, 3] 3
+
+# Window functions in ORDER BY pipe
+query II
+SELECT * FROM (VALUES (1, 10), (1, 20), (2, 30)) AS t(k, v)
+|> ORDER BY row_number() OVER (ORDER BY v DESC)
+----
+2 30
+1 20
+1 10
+
 # AS pipe
 query I
 SELECT *
@@ -159,6 +219,43 @@ query TII rowsort
 |> WHERE num_items > 1;
 ----
 apples 2 9
+
+# Ordering suffixes in AGGREGATE pipe
+query II
+SELECT * FROM (VALUES (3, 1), (1, 2), (2, 3), (NULL, 4)) AS t(k, v)
+|> AGGREGATE sum(v) AS s GROUP BY k DESC
+----
+NULL 4
+3 1
+2 3
+1 2
+
+query II
+SELECT * FROM (VALUES (3, 1), (1, 2), (2, 3), (NULL, 4)) AS t(k, v)
+|> AGGREGATE sum(v) AS s DESC GROUP BY k
+----
+NULL 4
+2 3
+1 2
+3 1
+
+query III
+SELECT * FROM (VALUES (1, 1, 10), (1, 2, 30), (2, 1, 5), (2, 2, 7)) AS t(a, b, v)
+|> AGGREGATE sum(v) AS s DESC GROUP BY a ASC, b
+----
+1 2 30
+1 1 10
+2 2 7
+2 1 5
+
+# unnest in AGGREGATE pipe GROUP BY
+query II
+SELECT * FROM (VALUES (1, [1, 2]), (2, [3]), (3, [1])) AS t(k, xs)
+|> AGGREGATE count(*) AS c GROUP BY unnest(xs) AS x ASC
+----
+1 2
+2 1
+3 1
 
 # JOIN pipe
 query TII
