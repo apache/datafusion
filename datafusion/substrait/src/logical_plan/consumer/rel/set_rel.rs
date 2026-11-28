@@ -96,6 +96,7 @@ fn name_projected_struct_literals(
 ) -> datafusion::common::Result<LogicalPlan> {
     match input {
         LogicalPlan::Projection(projection) => {
+            let input_schema = Arc::clone(projection.input.schema());
             let exprs = projection
                 .expr
                 .into_iter()
@@ -107,7 +108,7 @@ fn name_projected_struct_literals(
                     // keep the column's name, which the plans above may refer to: an
                     // unaliased literal is named after its value, field names included
                     let name = expr.schema_name().to_string();
-                    rename_literal_fields(&mut expr, named_type);
+                    rename_literal_fields(&mut expr, named_type, &input_schema);
                     expr.alias_if_changed(name)
                 })
                 .collect::<datafusion::common::Result<_>>()?;
@@ -176,7 +177,11 @@ fn removes_duplicates(aggregate: &Aggregate) -> bool {
 fn projects_literal(input: &LogicalPlan, column: usize) -> bool {
     match input {
         LogicalPlan::Projection(projection) => {
-            projection.expr.get(column).is_some_and(has_literal_value)
+            let input_schema = projection.input.schema();
+            projection
+                .expr
+                .get(column)
+                .is_some_and(|expr| has_literal_value(expr, input_schema))
         }
         LogicalPlan::Union(union) => union
             .inputs
