@@ -10,7 +10,7 @@ use arrow::buffer::NullBuffer;
 use arrow::compute;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
+use datafusion_common::Result;
 use datafusion_expr_common::groups_accumulator::{
     EmitTo, GroupSelection, GroupsAccumulator,
 };
@@ -163,10 +163,6 @@ where
     ) -> Result<Vec<ArrayRef>> {
         let values = values[0].as_primitive::<T>().clone();
 
-        // Initializing state with starting values
-        let initial_state =
-            PrimitiveArray::<T>::from_value(self.starting_value, values.len());
-
         // Recalculating values in case there is filter
         let values = match opt_filter {
             None => values,
@@ -188,18 +184,12 @@ where
             }
         };
 
-        let state_values = compute::binary_mut(initial_state, &values, |mut x, y| {
-            (self.prim_fn)(&mut x, y);
-            x
-        });
-        let state_values = state_values
-            .map_err(|_| {
-                internal_datafusion_err!(
-                    "initial_values underlying buffer must not be shared"
-                )
-            })?
-            .map_err(DataFusionError::from)?
-            .with_data_type(self.data_type.clone());
+        let state_values = compute::unary::<T, _, T>(&values, |value| {
+            let mut state = self.starting_value;
+            (self.prim_fn)(&mut state, value);
+            state
+        })
+        .with_data_type(self.data_type.clone());
 
         Ok(vec![Arc::new(state_values)])
     }
