@@ -452,10 +452,13 @@ where
 mod test {
     use std::sync::Arc;
 
-    use crate::math::trunc::{compute_truncate_decimal, trunc};
+    use crate::math::trunc::{
+        compute_truncate_decimal, compute_truncate32, compute_truncate64, trunc,
+        truncate_float_array,
+    };
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array, Int64Array};
-    use arrow::datatypes::Decimal128Type;
+    use arrow::datatypes::{Decimal128Type, Float32Type, Float64Type};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
 
     #[test]
@@ -603,5 +606,60 @@ mod test {
             compute_truncate_decimal::<Decimal128Type>(-123_456, 4, 3),
             -123_450
         );
+    }
+
+    #[test]
+    fn test_truncate_extreme_precision_scalar() {
+        assert_eq!(compute_truncate32(42.5, 40), 42.5);
+        assert_eq!(compute_truncate32(42.5, -50), 0.0);
+        assert!(compute_truncate32(42.5, -50).is_sign_positive());
+        assert!(compute_truncate32(-42.5, -50).is_sign_negative());
+
+        assert_eq!(compute_truncate64(42.5, 400), 42.5);
+        assert_eq!(compute_truncate64(42.5, -400), 0.0);
+        assert!(compute_truncate64(-42.5, -400).is_sign_negative());
+    }
+
+    #[test]
+    fn test_truncate_i64_precision_beyond_i32_range() {
+        assert_eq!(compute_truncate64(42.5, 2_147_483_648), 42.5);
+        assert_eq!(compute_truncate32(42.5, i64::MAX), 42.5);
+        assert_eq!(compute_truncate64(42.5, i64::MIN), 0.0);
+        assert!(compute_truncate64(-42.5, i64::MIN).is_sign_negative());
+    }
+
+    #[test]
+    fn test_truncate_float_array_extreme_scalar_precision() {
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![42.5, -42.5]));
+        let result = truncate_float_array::<Float64Type>(&values, 400);
+        let floats = as_float64_array(&result).expect("failed to read f64 result");
+        assert_eq!(floats.value(0), 42.5);
+        assert_eq!(floats.value(1), -42.5);
+
+        let result = truncate_float_array::<Float64Type>(&values, -400);
+        let floats = as_float64_array(&result).expect("failed to read f64 result");
+        assert_eq!(floats.value(0), 0.0);
+        assert!(floats.value(0).is_sign_positive());
+        assert_eq!(floats.value(1), 0.0);
+        assert!(floats.value(1).is_sign_negative());
+
+        let values: ArrayRef = Arc::new(Float32Array::from(vec![42.5, -42.5]));
+        let result = truncate_float_array::<Float32Type>(&values, 40);
+        let floats = as_float32_array(&result).expect("failed to read f32 result");
+        assert_eq!(floats.value(0), 42.5);
+        assert_eq!(floats.value(1), -42.5);
+    }
+
+    #[test]
+    fn test_truncate_extreme_precision_array() {
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Float64Array::from(vec![42.5, -42.5])),
+            Arc::new(Int64Array::from(vec![400, -400])),
+        ];
+        let result = trunc(&args).expect("failed to truncate f64 array");
+        let floats = as_float64_array(&result).expect("failed to read f64 result");
+        assert_eq!(floats.value(0), 42.5);
+        assert_eq!(floats.value(1), 0.0);
+        assert!(floats.value(1).is_sign_negative());
     }
 }

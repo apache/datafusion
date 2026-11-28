@@ -181,6 +181,38 @@ SELECT round('x');
 query error round decimal_places 2147483648 is out of supported i32 range
 SELECT round(1.25, 2147483648);
 
+# Extreme precision must not turn finite inputs into NaN
+query RRRR
+SELECT
+  round(CAST(1.5 AS REAL), 40),
+  round(CAST(1.5 AS REAL), -50),
+  round(CAST(1.5 AS DOUBLE), 400),
+  round(CAST(1.5 AS DOUBLE), -400);
+----
+1.5 0 1.5 0
+
+# The sign of a rounded extreme-negative result is preserved
+query RR
+SELECT 1.0 / round(CAST(-1.5 AS REAL), -50), 1.0 / round(CAST(-1.5 AS DOUBLE), -400);
+----
+-Infinity -Infinity
+
+query RRRRR
+SELECT
+  trunc(CAST(42.5 AS REAL), 40),
+  trunc(CAST(42.5 AS REAL), -50),
+  trunc(CAST(42.5 AS DOUBLE), 400),
+  trunc(CAST(42.5 AS DOUBLE), -400),
+  trunc(CAST(42.5 AS DOUBLE), 2147483648);
+----
+42.5 0 42.5 0 42.5
+
+# The sign of a truncated extreme-negative result is preserved
+query RR
+SELECT 1.0 / trunc(CAST(-42.5 AS REAL), -50), 1.0 / trunc(CAST(-42.5 AS DOUBLE), -400);
+----
+-Infinity -Infinity
+
 # atan2
 query RRRRRRR
 SELECT atan2(2.0, 1.0), atan2(-2.0, 1.0), atan2(2.0, -1.0), atan2(-2.0, -1.0), atan2(NULL, 1.0), atan2(2.0, NULL), atan2(NULL, NULL);

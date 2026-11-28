@@ -1117,4 +1117,80 @@ mod test {
             Err(DataFusionError::ArrowError(_, _)) | Err(DataFusionError::Execution(_))
         ));
     }
+
+    #[test]
+    fn test_round_f32_extreme_positive_decimal_places() {
+        let result = super::round_columnar(
+            &ColumnarValue::Scalar(ScalarValue::Float32(Some(1.5))),
+            &ColumnarValue::Scalar(ScalarValue::Int32(Some(40))),
+            1,
+            &DataType::Float32,
+        )
+        .expect("failed to round f32");
+        let ColumnarValue::Scalar(ScalarValue::Float32(value)) = result else {
+            panic!("expected an f32 scalar result");
+        };
+        assert_eq!(value, Some(1.5));
+    }
+
+    #[test]
+    fn test_round_f32_extreme_negative_decimal_places() {
+        let value: ArrayRef = Arc::new(Float32Array::from(vec![1.5, -1.5]));
+        let result = super::round_columnar(
+            &ColumnarValue::Array(value),
+            &ColumnarValue::Scalar(ScalarValue::Int32(Some(-50))),
+            2,
+            &DataType::Float32,
+        )
+        .expect("failed to round f32");
+        let ColumnarValue::Array(result) = result else {
+            panic!("expected an array result");
+        };
+        let floats = as_float32_array(&result).expect("failed to read f32 result");
+        assert_eq!(floats.value(0), 0.0);
+        assert!(floats.value(0).is_sign_positive());
+        assert_eq!(floats.value(1), 0.0);
+        assert!(floats.value(1).is_sign_negative());
+    }
+
+    #[test]
+    fn test_round_f64_extreme_scalar_decimal_places() {
+        let result = super::round_columnar(
+            &ColumnarValue::Scalar(ScalarValue::Float64(Some(1.5))),
+            &ColumnarValue::Scalar(ScalarValue::Int32(Some(400))),
+            1,
+            &DataType::Float64,
+        )
+        .expect("failed to round f64");
+        let ColumnarValue::Scalar(ScalarValue::Float64(value)) = result else {
+            panic!("expected an f64 scalar result");
+        };
+        assert_eq!(value, Some(1.5));
+
+        let result = super::round_columnar(
+            &ColumnarValue::Scalar(ScalarValue::Float64(Some(-1.5))),
+            &ColumnarValue::Scalar(ScalarValue::Int32(Some(-400))),
+            1,
+            &DataType::Float64,
+        )
+        .expect("failed to round f64");
+        let ColumnarValue::Scalar(ScalarValue::Float64(value)) = result else {
+            panic!("expected an f64 scalar result");
+        };
+        assert_eq!(value, Some(-0.0));
+        assert!(value.unwrap().is_sign_negative());
+    }
+
+    #[test]
+    fn test_round_extreme_decimal_places_array() {
+        let result = round_arrays(
+            Arc::new(Float64Array::from(vec![1.5, -1.5])),
+            Some(Arc::new(Int64Array::from(vec![400, -400]))),
+        )
+        .expect("failed to round f64 array");
+        let floats = as_float64_array(&result).expect("failed to read f64 result");
+        assert_eq!(floats.value(0), 1.5);
+        assert_eq!(floats.value(1), 0.0);
+        assert!(floats.value(1).is_sign_negative());
+    }
 }
