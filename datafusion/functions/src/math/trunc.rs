@@ -379,10 +379,32 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+/// Clamps an i64 precision to the range accepted by `powi`.
+///
+/// A plain `as i32` cast wraps out-of-range values, turning a large positive
+/// precision into a negative one and selecting the opposite scaling path.
+fn clamp_precision_to_i32(precision: i64) -> i32 {
+    precision.clamp(i32::MIN.into(), i32::MAX.into()) as i32
+}
+
 /// Truncates `x` using a pre-computed `factor` of `10^precision`. Taking the
 /// factor as an argument lets callers hoist `10^precision` out of a per-element
 /// loop when the precision is constant.
+///
+/// An infinite factor means the requested precision is beyond what the float type can
+/// represent, so the value is already truncated. A zero factor means every finite
+/// value truncates to zero; the sign is kept so negative inputs produce negative zero.
 fn truncate_with_factor<F: Float>(x: F, factor: F) -> F {
+    if !x.is_finite() || factor.is_infinite() {
+        return x;
+    }
+    if factor.is_zero() {
+        return if x.is_sign_negative() {
+            -F::zero()
+        } else {
+            F::zero()
+        };
+    }
     (x * factor).trunc() / factor
 }
 
@@ -395,7 +417,7 @@ where
 {
     let factor = <T::Native as NumCast>::from(10.0_f64)
         .unwrap()
-        .powi(precision as i32);
+        .powi(clamp_precision_to_i32(precision));
     Arc::new(
         arr.as_primitive::<T>()
             .unary::<_, T>(|x| truncate_with_factor(x, factor)),
@@ -403,11 +425,11 @@ where
 }
 
 fn compute_truncate32(x: f32, y: i64) -> f32 {
-    truncate_with_factor(x, 10.0_f32.powi(y as i32))
+    truncate_with_factor(x, 10.0_f32.powi(clamp_precision_to_i32(y)))
 }
 
 fn compute_truncate64(x: f64, y: i64) -> f64 {
-    truncate_with_factor(x, 10.0_f64.powi(y as i32))
+    truncate_with_factor(x, 10.0_f64.powi(clamp_precision_to_i32(y)))
 }
 
 /// Truncates a decimal value to `truncate_precision` fractional digits.
