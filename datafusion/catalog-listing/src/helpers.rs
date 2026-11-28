@@ -493,15 +493,18 @@ where
             );
             return None;
         }
-        match part.split_once('=') {
-            Some((name, val)) if name == expected_partition => {
+        match part
+            .strip_prefix(expected_partition)
+            .and_then(|rest| rest.strip_prefix('='))
+        {
+            Some(val) => {
                 // Preserve the original value if percent-decoding produces invalid UTF-8.
                 let decoded = percent_decode_str(val)
                     .decode_utf8()
                     .unwrap_or(Cow::Borrowed(val));
                 part_values.push(decoded);
             }
-            _ => {
+            None => {
                 debug!(
                     "Ignoring file: file_path='{file_path}', table_path='{table_path}', part='{part}', partition_col='{expected_partition}'",
                 );

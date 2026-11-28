@@ -183,6 +183,21 @@ a x aa
 b y bb
 c z cc
 
+statement ok
+CREATE EXTERNAL TABLE partitioned_equals (payload VARCHAR, "a=b" VARCHAR)
+STORED AS PARQUET LOCATION 'test_files/scratch/copy/partitioned_equals/'
+PARTITIONED BY ("a=b");
+
+query I
+INSERT INTO partitioned_equals VALUES ('row1', 'x=y');
+----
+1
+
+query TT
+SELECT payload, "a=b" FROM partitioned_equals;
+----
+row1 x=y
+
 # Unquoted partition column names are normalized like other identifiers
 query I
 COPY source_table TO 'test_files/scratch/copy/partitioned_upper_ident/' STORED AS PARQUET PARTITIONED BY (COL2);
