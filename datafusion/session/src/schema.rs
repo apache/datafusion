@@ -29,7 +29,11 @@ pub trait SchemaProvider: Any + Debug + Sync + Send {
     }
 
     /// Retrieves the list of available table names in this schema.
-    fn table_names(&self) -> Vec<String>;
+    ///
+    /// `Ok(vec![])` means the schema has no tables. Return `Err` if the
+    /// provider could not list its tables (for example, a remote catalog that
+    /// timed out), so callers do not mistake a failure for an empty schema.
+    fn table_names(&self) -> Result<Vec<String>>;
 
     /// Retrieves a specific table from the schema by name, if it exists,
     /// otherwise returns `None`.
@@ -69,8 +73,13 @@ pub trait SchemaProvider: Any + Debug + Sync + Send {
         exec_err!("schema provider does not support deregistering tables")
     }
 
-    /// Returns true if table exist in the schema provider, false otherwise.
-    fn table_exist(&self, name: &str) -> bool;
+    /// Returns `Ok(true)` if the table exists in the schema provider.
+    ///
+    /// `Ok(false)` means the provider confirmed that the table does not exist.
+    /// Return `Err` if the provider could not answer (for example, a remote
+    /// catalog that timed out), so callers do not mistake a failure for a
+    /// missing table.
+    fn table_exist(&self, name: &str) -> Result<bool>;
 }
 
 impl dyn SchemaProvider {

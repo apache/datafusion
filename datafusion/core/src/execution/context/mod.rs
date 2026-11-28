@@ -306,9 +306,9 @@ impl SessionContext {
             let cat = self
                 .catalog(cat_name.as_str())
                 .ok_or_else(|| internal_datafusion_err!("Catalog not found!"))?;
-            for schema_name in cat.schema_names() {
+            for schema_name in cat.schema_names()? {
                 let schema = cat
-                    .schema(schema_name.as_str())
+                    .schema(schema_name.as_str())?
                     .ok_or_else(|| internal_datafusion_err!("Schema not found!"))?;
                 let lister = schema.downcast_ref::<ListingSchemaProvider>();
                 if let Some(lister) = lister {
@@ -1015,7 +1015,7 @@ impl SessionContext {
             }
             _ => return exec_err!("Unable to parse catalog from {schema_name}"),
         };
-        let schema = catalog.schema(schema_name);
+        let schema = catalog.schema(schema_name)?;
 
         match (if_not_exists, schema) {
             (true, Some(_)) => self.return_empty_dataframe(),
@@ -1097,13 +1097,13 @@ impl SessionContext {
         let DropTable {
             name, if_exists, ..
         } = cmd;
-        let result = self
+        let dropped = self
             .find_and_deregister(name.clone(), TableType::Base)
-            .await;
-        match (result, if_exists) {
-            (Ok(true), _) => self.return_empty_dataframe(),
-            (_, true) => self.return_empty_dataframe(),
-            (_, _) => exec_err!("Table '{name}' doesn't exist."),
+            .await?;
+        if dropped || if_exists {
+            self.return_empty_dataframe()
+        } else {
+            exec_err!("Table '{name}' doesn't exist.")
         }
     }
 
@@ -1111,13 +1111,13 @@ impl SessionContext {
         let DropView {
             name, if_exists, ..
         } = cmd;
-        let result = self
+        let dropped = self
             .find_and_deregister(name.clone(), TableType::View)
-            .await;
-        match (result, if_exists) {
-            (Ok(true), _) => self.return_empty_dataframe(),
-            (_, true) => self.return_empty_dataframe(),
-            (_, _) => exec_err!("View '{name}' doesn't exist."),
+            .await?;
+        if dropped || if_exists {
+            self.return_empty_dataframe()
+        } else {
+            exec_err!("View '{name}' doesn't exist.")
         }
     }
 
@@ -1523,10 +1523,10 @@ impl SessionContext {
         let maybe_schema = {
             let state = self.state.read();
             let resolved = state.resolve_table_ref(table_ref.clone());
-            state
-                .catalog_list()
-                .catalog(&resolved.catalog)
-                .and_then(|c| c.schema(&resolved.schema))
+            match state.catalog_list().catalog(&resolved.catalog) {
+                Some(catalog) => catalog.schema(&resolved.schema)?,
+                None => None,
+            }
         };
 
         if let Some(schema) = maybe_schema
@@ -2043,11 +2043,10 @@ impl SessionContext {
         let table_ref: TableReference = table_ref.into();
         let table = table_ref.table();
         let table_ref = table_ref.clone();
-        Ok(self
-            .state
+        self.state
             .read()
             .schema_for_ref(table_ref)?
-            .table_exist(table))
+            .table_exist(table)
     }
 
     /// Retrieves a [`DataFrame`] representing a table previously

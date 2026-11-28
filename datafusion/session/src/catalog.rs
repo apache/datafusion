@@ -130,10 +130,19 @@ impl CatalogProviderList for EmptyCatalogProviderList {
 /// [`TableProvider`]: crate::TableProvider
 pub trait CatalogProvider: Any + Debug + Sync + Send {
     /// Retrieves the list of available schema names in this catalog.
-    fn schema_names(&self) -> Vec<String>;
+    ///
+    /// `Ok(vec![])` means the catalog has no schemas. Return `Err` if the
+    /// provider could not list its schemas (for example, a remote catalog that
+    /// timed out), so callers do not mistake a failure for an empty catalog.
+    fn schema_names(&self) -> Result<Vec<String>>;
 
     /// Retrieves a specific schema from the catalog by name, provided it exists.
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>>;
+    ///
+    /// `Ok(None)` means the provider confirmed that the schema does not exist.
+    /// Return `Err` if the provider could not answer (for example, a remote
+    /// catalog that timed out), so callers do not mistake a failure for a
+    /// missing schema.
+    fn schema(&self, name: &str) -> Result<Option<Arc<dyn SchemaProvider>>>;
 
     /// Adds a new schema to this catalog.
     ///

@@ -28,7 +28,7 @@ use crate::{df_result, sresult_return};
 pub struct FFI_SchemaProvider {
     pub owner_name: FFI_Option<SString>,
 
-    pub table_names: unsafe extern "C" fn(provider: &Self) -> SVec<SString>,
+    pub table_names: unsafe extern "C" fn(provider: &Self) -> FFI_Result<SVec<SString>>,
 
     pub table: unsafe extern "C" fn(
         provider: &Self,
@@ -50,7 +50,8 @@ pub struct FFI_SchemaProvider {
             name: SString,
         ) -> FFI_Result<FFI_Option<FFI_TableProvider>>,
 
-    pub table_exist: unsafe extern "C" fn(provider: &Self, name: SString) -> bool,
+    pub table_exist:
+        unsafe extern "C" fn(provider: &Self, name: SString) -> FFI_Result<bool>,
 
     pub logical_codec: FFI_LogicalExtensionCodec,
 
@@ -100,12 +101,12 @@ impl FFI_SchemaProvider {
 
 unsafe extern "C" fn table_names_fn_wrapper(
     provider: &FFI_SchemaProvider,
-) -> SVec<SString> {
+) -> FFI_Result<SVec<SString>> {
     unsafe {
         let provider = provider.inner();
 
-        let table_names = provider.table_names();
-        table_names.into_iter().map(|s| s.into()).collect()
+        let table_names = sresult_return!(provider.table_names());
+        FFI_Result::Ok(table_names.into_iter().map(|s| s.into()).collect())
     }
 }
 
@@ -173,8 +174,10 @@ unsafe extern "C" fn deregister_table_fn_wrapper(
 unsafe extern "C" fn table_exist_fn_wrapper(
     provider: &FFI_SchemaProvider,
     name: SString,
-) -> bool {
-    unsafe { provider.inner().table_exist(name.as_str()) }
+) -> FFI_Result<bool> {
+    unsafe {
+        FFI_Result::Ok(sresult_return!(provider.inner().table_exist(name.as_str())))
+    }
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SchemaProvider) {
@@ -304,12 +307,12 @@ impl SchemaProvider for ForeignSchemaProvider {
         name.map(|s| s.as_str())
     }
 
-    fn table_names(&self) -> Vec<String> {
+    fn table_names(&self) -> Result<Vec<String>> {
         unsafe {
-            (self.0.table_names)(&self.0)
+            Ok(df_result!((self.0.table_names)(&self.0))?
                 .into_iter()
                 .map(|s| s.into())
-                .collect()
+                .collect())
         }
     }
 
@@ -362,8 +365,8 @@ impl SchemaProvider for ForeignSchemaProvider {
     }
 
     /// Returns true if table exist in the schema provider, false otherwise.
-    fn table_exist(&self, name: &str) -> bool {
-        unsafe { (self.0.table_exist)(&self.0, name.into()) }
+    fn table_exist(&self, name: &str) -> Result<bool> {
+        unsafe { df_result!((self.0.table_exist)(&self.0, name.into())) }
     }
 }
 
@@ -377,6 +380,64 @@ mod tests {
 
     fn empty_table() -> Arc<dyn TableProvider> {
         Arc::new(EmptyTable::new(Arc::new(Schema::empty())))
+    }
+
+    #[derive(Debug)]
+    struct FailingSchemaProvider;
+
+    #[async_trait]
+    impl SchemaProvider for FailingSchemaProvider {
+        fn table_names(&self) -> Result<Vec<String>> {
+            Err(DataFusionError::Internal(
+                "table_names failure from provider".to_string(),
+            ))
+        }
+
+        async fn table(&self, _name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+            Ok(None)
+        }
+
+        fn table_exist(&self, _name: &str) -> Result<bool> {
+            Err(DataFusionError::Internal(
+                "table_exist failure from provider".to_string(),
+            ))
+        }
+    }
+
+    fn assert_ffi_error_contains(err: DataFusionError, expected: &str) {
+        let DataFusionError::Ffi(message) = err else {
+            panic!("expected FFI error, got {err:?}");
+        };
+        assert!(
+            message.contains(expected),
+            "expected error message to contain '{expected}', got '{message}'"
+        );
+    }
+
+    #[test]
+    fn test_ffi_schema_provider_propagates_failures() {
+        let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+
+        let mut ffi_schema_provider = FFI_SchemaProvider::new(
+            Arc::new(FailingSchemaProvider),
+            None,
+            task_ctx_provider,
+            None,
+        );
+        ffi_schema_provider.library_marker_id = crate::mock_foreign_marker_id;
+
+        let foreign_schema_provider: Arc<dyn SchemaProvider> =
+            (&ffi_schema_provider).into();
+
+        let table_names_err = foreign_schema_provider
+            .table_names()
+            .expect_err("table_names failure should cross FFI boundary");
+        assert_ffi_error_contains(table_names_err, "table_names failure from provider");
+
+        let table_exist_err = foreign_schema_provider
+            .table_exist("failing_table")
+            .expect_err("table_exist failure should cross FFI boundary");
+        assert_ffi_error_contains(table_exist_err, "table_exist failure from provider");
     }
 
     #[tokio::test]
@@ -399,7 +460,9 @@ mod tests {
         let foreign_schema_provider: Arc<dyn SchemaProvider> =
             (&ffi_schema_provider).into();
 
-        let prior_table_names = foreign_schema_provider.table_names();
+        let prior_table_names = foreign_schema_provider
+            .table_names()
+            .expect("table names lookup should succeed");
         assert_eq!(prior_table_names.len(), 1);
         assert_eq!(prior_table_names[0], "prior_table");
 
@@ -407,21 +470,39 @@ mod tests {
         let returned_schema = foreign_schema_provider
             .register_table("prior_table".to_string(), empty_table());
         assert!(returned_schema.is_err());
-        assert_eq!(foreign_schema_provider.table_names().len(), 1);
+        assert_eq!(
+            foreign_schema_provider
+                .table_names()
+                .expect("table names lookup should succeed")
+                .len(),
+            1
+        );
 
         // Add a new table
         let returned_schema = foreign_schema_provider
             .register_table("second_table".to_string(), empty_table())
             .expect("Unable to register table");
         assert!(returned_schema.is_none());
-        assert_eq!(foreign_schema_provider.table_names().len(), 2);
+        assert_eq!(
+            foreign_schema_provider
+                .table_names()
+                .expect("table names lookup should succeed")
+                .len(),
+            2
+        );
 
         // Remove a table
         let returned_schema = foreign_schema_provider
             .deregister_table("prior_table")
             .expect("Unable to deregister table");
         assert!(returned_schema.is_some());
-        assert_eq!(foreign_schema_provider.table_names().len(), 1);
+        assert_eq!(
+            foreign_schema_provider
+                .table_names()
+                .expect("table names lookup should succeed")
+                .len(),
+            1
+        );
 
         // Retrieve non-existent table
         let returned_schema = foreign_schema_provider
@@ -429,7 +510,11 @@ mod tests {
             .await
             .expect("Unable to query table");
         assert!(returned_schema.is_none());
-        assert!(!foreign_schema_provider.table_exist("prior_table"));
+        assert!(
+            !foreign_schema_provider
+                .table_exist("prior_table")
+                .expect("table existence lookup should succeed")
+        );
 
         // Retrieve valid table
         let returned_schema = foreign_schema_provider
@@ -437,7 +522,11 @@ mod tests {
             .await
             .expect("Unable to query table");
         assert!(returned_schema.is_some());
-        assert!(foreign_schema_provider.table_exist("second_table"));
+        assert!(
+            foreign_schema_provider
+                .table_exist("second_table")
+                .expect("table existence lookup should succeed")
+        );
     }
 
     #[test]

@@ -77,17 +77,20 @@ impl DynamicFileCatalogProvider {
 }
 
 impl CatalogProvider for DynamicFileCatalogProvider {
-    fn schema_names(&self) -> Vec<String> {
+    fn schema_names(&self) -> datafusion_common::Result<Vec<String>> {
         self.inner.schema_names()
     }
 
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        self.inner.schema(name).map(|schema| {
+    fn schema(
+        &self,
+        name: &str,
+    ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
+        Ok(self.inner.schema(name)?.map(|schema| {
             Arc::new(DynamicFileSchemaProvider::new(
                 schema,
                 Arc::clone(&self.factory),
             )) as _
-        })
+        }))
     }
 
     fn register_schema(
@@ -123,7 +126,7 @@ impl DynamicFileSchemaProvider {
 
 #[async_trait]
 impl SchemaProvider for DynamicFileSchemaProvider {
-    fn table_names(&self) -> Vec<String> {
+    fn table_names(&self) -> datafusion_common::Result<Vec<String>> {
         self.inner.table_names()
     }
 
@@ -153,7 +156,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         self.inner.deregister_table(name)
     }
 
-    fn table_exist(&self, name: &str) -> bool {
+    fn table_exist(&self, name: &str) -> datafusion_common::Result<bool> {
         self.inner.table_exist(name)
     }
 }
