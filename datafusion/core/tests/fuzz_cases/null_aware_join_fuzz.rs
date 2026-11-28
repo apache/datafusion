@@ -23,7 +23,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::common::JoinType;
 use datafusion::datasource::MemTable;
-use datafusion::physical_plan::joins::HashJoinExec;
+use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use rand::rngs::StdRng;
@@ -100,6 +100,8 @@ async fn null_aware_join_matches_reference(#[case] seeds: Range<u64>) {
     assert!(plans.left_anti > 0, "{plans:?}");
     assert!(plans.right_anti > 0, "{plans:?}");
     assert!(plans.correlated_right_anti > 0, "{plans:?}");
+    assert!(plans.right_mark > 0, "{plans:?}");
+    assert!(plans.partitioned > 0, "{plans:?}");
 }
 
 /// Counts the null-aware anti join plans the fuzz queries ran.
@@ -110,6 +112,8 @@ struct NullAwarePlans {
     /// `RightAnti` joins with more than one key or a join filter, which
     /// decide `NOT IN` per probe row.
     correlated_right_anti: usize,
+    right_mark: usize,
+    partitioned: usize,
 }
 
 impl NullAwarePlans {
@@ -118,6 +122,9 @@ impl NullAwarePlans {
         if let Some(join) = plan.downcast_ref::<HashJoinExec>()
             && join.null_aware
         {
+            if *join.partition_mode() == PartitionMode::Partitioned {
+                self.partitioned += 1;
+            }
             match join.join_type() {
                 JoinType::LeftAnti => self.left_anti += 1,
                 JoinType::RightAnti => {
@@ -126,6 +133,7 @@ impl NullAwarePlans {
                         self.correlated_right_anti += 1;
                     }
                 }
+                JoinType::RightMark => self.right_mark += 1,
                 _ => {}
             }
         }
