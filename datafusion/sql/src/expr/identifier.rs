@@ -4,12 +4,14 @@
 
 use arrow::datatypes::FieldRef;
 use datafusion_common::datatype::DataTypeExt;
+use datafusion_common::ScalarValue;
 use datafusion_common::{
     Column, DFSchema, Result, Span, TableReference, assert_or_internal_err,
     exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::LambdaVariable;
-use datafusion_expr::planner::PlannerResult;
+use datafusion_expr::planner::{PlannerResult, RawFieldAccessExpr};
+use datafusion_expr::GetFieldAccess;
 use datafusion_expr::{Case, Expr};
 use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
 use std::sync::Arc;
@@ -135,6 +137,33 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .into_iter()
                 .map(|id| self.ident_normalizer.normalize(id))
                 .collect::<Vec<_>>();
+
+            // lambdas parameters have higher precedence, matching sql_identifier_to_expr
+            if let Some(field) = planner_context.lambda_parameters().get(&ids[0]) {
+                let mut lambda_var =
+                    LambdaVariable::new(ids[0].clone(), Some(Arc::clone(field)));
+                if self.options.collect_spans
+                    && let Some(span) = ids_span
+                {
+                    lambda_var.spans_mut().add_span(span);
+                }
+                let mut expr = Expr::LambdaVariable(lambda_var);
+                for nested_name in &ids[1..] {
+                    let field_access = GetFieldAccess::NamedStructField {
+                        name: ScalarValue::from(nested_name.clone()),
+                    };
+                    let field_access_expr = RawFieldAccessExpr { expr, field_access };
+                    match self.try_plan_field_access(field_access_expr, schema)? {
+                        PlannerResult::Planned(planned) => expr = planned,
+                        PlannerResult::Original(field_access_expr) => {
+                            return not_impl_err!(
+                                "GetFieldAccess not supported by ExprPlanner: {field_access_expr:?}"
+                            );
+                        }
+                    }
+                }
+                return Ok(expr);
+            }
 
             let search_result = search_dfschema(&ids, schema);
             match search_result {
