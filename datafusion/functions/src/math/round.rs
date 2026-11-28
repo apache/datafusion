@@ -850,17 +850,13 @@ where
     PT: ArrowPrimitiveType,
     PT::Native: num_traits::Float,
 {
-    // Bring `Float` into scope so `.round()` resolves on the `PT::Native`
-    // projection below.
-    use num_traits::Float;
-
     if let ColumnarValue::Scalar(ScalarValue::Int32(Some(decimal_places))) =
         decimal_places
     {
         let factor = round_factor::<PT::Native>(*decimal_places)?;
         let result = value_array
             .as_primitive::<PT>()
-            .unary::<_, PT>(|value| (value * factor).round() / factor);
+            .unary::<_, PT>(|value| round_with_factor(value, factor));
         return Ok(Arc::new(result) as ArrayRef);
     }
 
@@ -881,12 +877,31 @@ fn round_factor<T: num_traits::Float>(decimal_places: i32) -> Result<T, ArrowErr
     })
 }
 
+/// Rounds with a power-of-ten factor that may be non-finite after `powi`.
+///
+/// An infinite factor means the requested precision is beyond what the float type can
+/// represent, so the value is already rounded. A zero factor means every finite value
+/// rounds to zero; the sign is kept so negative inputs produce negative zero.
+fn round_with_factor<T: num_traits::Float>(value: T, factor: T) -> T {
+    if !value.is_finite() || factor.is_infinite() {
+        return value;
+    }
+    if factor.is_zero() {
+        return if value.is_sign_negative() {
+            -T::zero()
+        } else {
+            T::zero()
+        };
+    }
+    (value * factor).round() / factor
+}
+
 fn round_float<T>(value: T, decimal_places: i32) -> Result<T, ArrowError>
 where
     T: num_traits::Float,
 {
     let factor = round_factor::<T>(decimal_places)?;
-    Ok((value * factor).round() / factor)
+    Ok(round_with_factor(value, factor))
 }
 
 fn round_decimal<V: ArrowNativeTypeOp>(
