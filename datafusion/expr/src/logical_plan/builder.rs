@@ -2427,7 +2427,18 @@ pub fn wrap_projection_for_join_if_necessary(
         .collect::<Vec<_>>();
 
     let need_project = join_keys.iter().any(|key| !matches!(key, Expr::Column(_)));
-    let plan = if need_project {
+    let (plan, alias_join_keys) = if need_project {
+        // Normalize and columnize keys before extending the projection so join_on
+        // matches the field names produced by LogicalPlanBuilder::project.
+        let alias_join_keys = {
+            let mut normalizer = ColumnNormalizer::new(&input);
+            let columnizer = Columnizer::new(&input);
+            alias_join_keys
+                .into_iter()
+                .map(|key| columnizer.columnize(normalizer.normalize(key)?))
+                .collect::<Result<Vec<_>>>()?
+        };
+
         // Include all columns from the input and extend them with the join keys
         let mut projection = input_schema
             .columns()
@@ -2443,11 +2454,12 @@ pub fn wrap_projection_for_join_if_necessary(
             .collect::<HashSet<Expr>>();
         projection.extend(join_key_items);
 
-        LogicalPlanBuilder::from(input)
+        let plan = LogicalPlanBuilder::from(input)
             .project(projection.into_iter().map(SelectExpr::from))?
-            .build()?
+            .build()?;
+        (plan, alias_join_keys)
     } else {
-        input
+        (input, alias_join_keys)
     };
 
     let join_on = alias_join_keys
@@ -3541,5 +3553,87 @@ mod tests {
             "Execution error: Types don't match and no valid cast exists, \
          received data of type Boolean for field of type Date32"
         );
+    }
+
+    #[test]
+    fn wrap_projection_for_join_if_necessary_normalizes_aliased_keys() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("__datafusion_extracted_1", DataType::Int64, false),
+            Field::new("s", DataType::Int64, false),
+        ]);
+        let aliased = table_scan(Some("a"), &schema, None)?.alias("x")?.build()?;
+
+        let (single_wrapped, single_join_on, single_projected) =
+            wrap_projection_for_join_if_necessary(
+                &[col("__datafusion_extracted_1") + lit(1i64)],
+                aliased.clone(),
+            )?;
+        assert!(single_projected);
+        assert_eq!(
+            single_join_on,
+            vec![Column::from_name("x.__datafusion_extracted_1 + Int64(1)")]
+        );
+        assert_eq!(
+            single_wrapped
+                .schema()
+                .qualified_field_from_column(&single_join_on[0])?
+                .1
+                .name(),
+            "x.__datafusion_extracted_1 + Int64(1)"
+        );
+
+        let (wrapped, join_on, projected) = wrap_projection_for_join_if_necessary(
+            &[
+                col("__datafusion_extracted_1") + lit(1i64),
+                col("x.__datafusion_extracted_1") + lit(1i64),
+            ],
+            aliased.clone(),
+        )?;
+
+        assert!(projected);
+        assert_eq!(
+            join_on,
+            vec![
+                Column::from_name("x.__datafusion_extracted_1 + Int64(1)"),
+                Column::from_name("x.__datafusion_extracted_1 + Int64(1)"),
+            ]
+        );
+        for key in &join_on {
+            assert_eq!(
+                wrapped.schema().qualified_field_from_column(key)?.1.name(),
+                "x.__datafusion_extracted_1 + Int64(1)"
+            );
+        }
+        assert_snapshot!(wrapped, @r"
+        Projection: x.__datafusion_extracted_1, x.s, x.__datafusion_extracted_1 + Int64(1)
+          SubqueryAlias: x
+            TableScan: a
+        ");
+
+        let (wrapped_cast, cast_join_on, cast_projected) =
+            wrap_projection_for_join_if_necessary(
+                &[
+                    col("__datafusion_extracted_1"),
+                    Expr::Cast(crate::Cast::new(
+                        Box::new(col("__datafusion_extracted_1")),
+                        DataType::Int32,
+                    )),
+                ],
+                aliased,
+            )?;
+
+        assert!(cast_projected);
+        assert_eq!(
+            cast_join_on,
+            vec![
+                Column::from("x.__datafusion_extracted_1"),
+                Column::from_name("CAST(__datafusion_extracted_1 AS Int32)"),
+            ]
+        );
+        for key in &cast_join_on {
+            wrapped_cast.schema().qualified_field_from_column(key)?;
+        }
+
+        Ok(())
     }
 }
