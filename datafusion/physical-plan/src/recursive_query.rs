@@ -20,7 +20,7 @@ use crate::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
 };
-use arrow::array::{BooleanArray, BooleanBuilder};
+use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -464,9 +464,8 @@ impl DistinctDeduplicator {
     /// Remove duplicated rows from the given batch, keeping a state between batches.
     ///
     /// We use a hash table to allocate new group ids for the new rows.
-    /// [`GroupValues`] allocate increasing group ids.
-    /// Hence, if groups (i.e., rows) are new, then they have ids >= length before interning, we keep them.
-    /// We also detect duplicates by enforcing that group ids are increasing.
+    /// [`GroupValues`] allocate group ids without gaps, so the groups created for this batch have
+    /// ids >= length before interning. We keep the first row of each of these groups.
     fn deduplicate(&mut self, batch: &RecordBatch) -> Result<RecordBatch> {
         let size_before = self.group_values.len();
         let additional = batch.num_rows();
@@ -479,7 +478,11 @@ impl DistinctDeduplicator {
             })?;
         self.group_values
             .intern(batch.columns(), &mut self.intern_output_buffer)?;
-        let mask = new_groups_mask(&self.intern_output_buffer, size_before);
+        let mask = new_groups_mask(
+            &self.intern_output_buffer,
+            size_before,
+            self.group_values.len(),
+        );
         self.intern_output_buffer.clear();
         // We update the reservation to reflect the new size of the hash table.
         self.reservation.try_resize(self.group_values.size())?;
@@ -487,21 +490,30 @@ impl DistinctDeduplicator {
     }
 }
 
-/// Return a mask, each element being true if, and only if, the element is greater than all previous elements and greater or equal than the provided max_already_seen_group_id
+/// Returns a mask that is true for the first row of each group created by the batch, i.e., for
+/// the first occurrence of each group id in `size_before..size_after`.
+///
+/// The ids of new groups are not necessarily increasing in row order. For example,
+/// `GroupValuesColumn` assigns ids to rows whose hash collides with another row of the batch
+/// only after it has assigned ids to the other new rows.
 fn new_groups_mask(
-    values: &[usize],
-    mut max_already_seen_group_id: usize,
+    group_ids: &[usize],
+    size_before: usize,
+    size_after: usize,
 ) -> BooleanArray {
-    let mut output = BooleanBuilder::with_capacity(values.len());
-    for value in values {
-        if *value >= max_already_seen_group_id {
-            output.append_value(true);
-            max_already_seen_group_id = *value + 1; // We want to be increasing
-        } else {
-            output.append_value(false);
-        }
-    }
-    output.finish()
+    let mut seen = vec![false; size_after - size_before];
+    group_ids
+        .iter()
+        .map(|&group_id| {
+            if group_id < size_before {
+                return Some(false);
+            }
+            let new_group_offset = group_id - size_before;
+            let is_first_occurrence = !seen[new_group_offset];
+            seen[new_group_offset] = true;
+            Some(is_first_occurrence)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -563,6 +575,37 @@ mod tests {
         assert!(exec.schema().field(0).is_nullable());
         assert!(exec.static_term().schema().field(0).is_nullable());
         assert!(exec.recursive_term().schema().field(0).is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn new_groups_mask_keeps_first_occurrence_of_each_new_group() {
+        // Group ids of new groups need not be increasing in row order.
+        let mask = new_groups_mask(&[3, 5, 1, 4, 5, 3, 0], 3, 6);
+        assert_eq!(
+            mask,
+            BooleanArray::from(vec![true, true, false, true, false, false, false])
+        );
+    }
+
+    /// The test "deduplicating recursive CTE keeps rows whose hashes collide within a batch" in
+    /// `cte.slt` relies on `('x', 'a', 'b')` and `('x', 'b', 'a')` having the same hash in the
+    /// deduplication. If this test fails, the hashing changed and the SLT test needs new rows
+    /// whose hashes collide.
+    #[test]
+    fn cte_slt_rows_have_colliding_hashes() -> Result<()> {
+        use crate::aggregates::AGGREGATION_HASH_SEED;
+        use arrow::array::{ArrayRef, StringArray};
+        use datafusion_common::hash_utils::create_hashes;
+
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec!["x", "x"])),
+            Arc::new(StringArray::from(vec!["a", "b"])),
+            Arc::new(StringArray::from(vec!["b", "a"])),
+        ];
+        let mut hashes = vec![0; 2];
+        create_hashes(&columns, &AGGREGATION_HASH_SEED, &mut hashes)?;
+        assert_eq!(hashes[0], hashes[1]);
         Ok(())
     }
 }

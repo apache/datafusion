@@ -306,6 +306,23 @@ SELECT * FROM ranges
 2 4
 1 4
 
+# deduplicating recursive CTE keeps rows whose hashes collide within a batch.
+# With an equal first column, the hash of (g, s, o) is symmetric in s and o, so
+# ('x', 'a', 'b') and ('x', 'b', 'a') collide (checked by
+# `cte_slt_rows_have_colliding_hashes` in `datafusion/physical-plan/src/recursive_query.rs`).
+query TTT rowsort
+WITH RECURSIVE t AS (
+    SELECT arrow_cast(g, 'Utf8') AS g, arrow_cast(s, 'Utf8') AS s, arrow_cast(o, 'Utf8') AS o
+    FROM (VALUES ('x', 'a', 'b'), ('x', 'b', 'a'), ('x', 'c', 'd')) edges(g, s, o)
+    UNION
+    SELECT * FROM t WHERE false
+)
+SELECT * FROM t
+----
+x a b
+x b a
+x c d
+
 # setup
 statement ok
 CREATE EXTERNAL TABLE balance STORED as CSV LOCATION '../core/tests/data/recursive_cte/balance.csv' OPTIONS ('format.has_header' 'true');
