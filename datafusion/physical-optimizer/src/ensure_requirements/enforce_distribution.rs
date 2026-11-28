@@ -19,6 +19,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::join_selection::below_collect_thresholds;
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
@@ -327,6 +328,10 @@ pub fn reorder_aggregate_keys(
         && *agg_exec.mode() == AggregateMode::Partial
     {
         let group_exprs = agg_exec.group_expr().expr();
+        let mut orig_to_new = vec![0; positions.len()];
+        for (new_idx, &orig_idx) in positions.iter().enumerate() {
+            orig_to_new[orig_idx] = new_idx;
+        }
         let new_group_exprs = positions
             .into_iter()
             .map(|idx| group_exprs[idx].clone())
@@ -373,13 +378,13 @@ pub fn reorder_aggregate_keys(
             .iter()
             .map(|col| {
                 let name = col.name();
-                let index = agg_schema.index_of(name)?;
-                Ok(ProjectionExpr {
+                let index = orig_to_new[col.index()];
+                ProjectionExpr {
                     expr: Arc::new(Column::new(name, index)) as _,
                     alias: name.to_owned(),
-                })
+                }
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         let agg_fields = agg_schema.fields();
         for (idx, field) in agg_fields.iter().enumerate().skip(output_columns.len()) {
             let name = field.name();
@@ -1439,9 +1444,10 @@ fn enforce_distribution_relationships(
     plan_name: &str,
     input_distributions: &InputDistributionRequirements,
     children: &mut [DistributionChildState],
-    target_partitions: usize,
+    config: &ConfigOptions,
     stats_ctx: &StatisticsContext,
 ) -> Result<()> {
+    let target_partitions = config.execution.target_partitions;
     let mut repartitioned_for_relationship = vec![false; children.len()];
 
     loop {
@@ -1525,6 +1531,29 @@ fn enforce_distribution_relationships(
                     }
                 }
             };
+
+        // A small input's range split points can put most rows of a larger input
+        // in one partition, so do not adapt a child above the `CollectLeft`
+        // thresholds to a range reference below them; fall back to hash
+        // partitioning instead. Keep any other reference, so that it is not
+        // shuffled as well: hash partitioning does not depend on the data.
+        let best_satisfied_child = best_satisfied_child.filter(|(ref_idx, part)| {
+            let is_small = |idx: usize| {
+                let stats = stats_ctx
+                    .compute_arc(&children[idx].context.plan, &StatisticsArgs::new())
+                    .ok()?;
+                below_collect_thresholds(
+                    &stats,
+                    config.optimizer.hash_join_single_partition_threshold,
+                    config.optimizer.hash_join_single_partition_threshold_rows,
+                )
+            };
+            !matches!(part, Partitioning::Range(_))
+                || is_small(*ref_idx) != Some(true)
+                || !unsatisfied_children
+                    .iter()
+                    .any(|&child_idx| is_small(child_idx) == Some(false))
+        });
 
         // Validate that best_satisfied_child can be adapted across all unsatisfied children in the group
         let best_satisfied_child =
@@ -1953,7 +1982,7 @@ pub fn ensure_distribution_with_stats(
         plan.name(),
         &input_distributions,
         &mut children,
-        target_partitions,
+        config,
         stats_ctx,
     )?;
 

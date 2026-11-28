@@ -737,7 +737,12 @@ mod tests {
             panic!("expected CREATE EXTERNAL TABLE");
         };
         assert_eq!(table.columns.len(), 1);
-        assert_eq!(table.table_partition_cols, ["p1", "p2"]);
+        let partition_cols: Vec<_> = table
+            .table_partition_cols
+            .iter()
+            .map(|col| col.value.as_str())
+            .collect();
+        assert_eq!(partition_cols, ["p1", "p2"]);
         assert_eq!(table.options.len(), 1);
     }
 

@@ -137,7 +137,7 @@ EXPLAIN ANALYZE SELECT * FROM rg_count_size_and_bytes WHERE id >= 0;
 ----
 Plan with Metrics
 01)FilterExec: id@0 >= 0<slt:ignore>
-02)--DataSourceExec: <slt:ignore>row_groups_pruned_statistics=8 total<slt:ignore>
+02)--DataSourceExec: <slt:ignore>row_groups_pruned_statistics=4.10 K total<slt:ignore>
 
 # Byte limit drives alone: the row-count limit is far larger than the data, so
 # only the byte limit splits. Each 1024-row batch fills a fresh (empty) row
@@ -158,7 +158,7 @@ EXPLAIN ANALYZE SELECT * FROM rg_count_bytes_only WHERE id >= 0;
 ----
 Plan with Metrics
 01)FilterExec: id@0 >= 0<slt:ignore>
-02)--DataSourceExec: <slt:ignore>row_groups_pruned_statistics=4 total<slt:ignore>
+02)--DataSourceExec: <slt:ignore>row_groups_pruned_statistics=4.10 K total<slt:ignore>
 
 statement ok
 reset datafusion.execution.parquet.allow_single_file_parallelism;

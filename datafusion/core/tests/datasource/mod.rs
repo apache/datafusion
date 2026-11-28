@@ -6,6 +6,8 @@
 //!
 //! Note tests for the Parquet format are in `parquet_integration` binary
 
+#[cfg(feature = "compression")]
+mod compression;
 // Include tests in csv module
 mod csv;
 mod object_store_access;

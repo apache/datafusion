@@ -887,14 +887,16 @@ mod test {
             total_byte_size: Precision::Inexact(16),
             column_statistics: vec![
                 ColumnStatistics {
-                    null_count: Precision::Absent,
+                    null_count: Precision::Exact(0),
                     max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
                     min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
                 },
-                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Inexact(ScalarValue::Int32(Some(4))))
+                    .with_max_value(Precision::Inexact(ScalarValue::Int32(Some(5)))),
                 ColumnStatistics::new_unknown(),
             ],
         };
@@ -906,14 +908,16 @@ mod test {
             total_byte_size: Precision::Inexact(16),
             column_statistics: vec![
                 ColumnStatistics {
-                    null_count: Precision::Absent,
+                    null_count: Precision::Exact(0),
                     max_value: Precision::Exact(ScalarValue::Int32(Some(2))),
                     min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
                 },
-                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Inexact(ScalarValue::Int32(Some(2))))
+                    .with_max_value(Precision::Inexact(ScalarValue::Int32(Some(3)))),
                 ColumnStatistics::new_unknown(),
             ],
         };
@@ -990,6 +994,7 @@ mod test {
             column_statistics: vec![
                 ColumnStatistics {
                     distinct_count: Precision::Exact(0),
+                    null_count: Precision::Exact(0),
                     ..ColumnStatistics::new_unknown()
                 },
                 ColumnStatistics::new_unknown(),

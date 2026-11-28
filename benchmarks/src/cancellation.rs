@@ -89,8 +89,10 @@ impl RunOpt {
         let mut rundata = BenchmarkRun::new();
         rundata.start_new_case("Cancellation");
 
-        for i in 0..self.common.iterations {
+        let mut sampler = self.common.sampler();
+        while let Some(i) = sampler.next_iteration() {
             let elapsed = run_test(self.wait_time, Arc::clone(&store))?;
+            sampler.record(elapsed);
             let ms = elapsed.as_secs_f64() * 1000.0;
             println!("Iteration {i} cancelled in {ms} ms");
             rundata.write_iter(elapsed, 0);

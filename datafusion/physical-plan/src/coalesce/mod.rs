@@ -7,7 +7,13 @@ use arrow::compute::{BatchCoalescer, filter_record_batch, prep_null_mask_filter}
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{Result, assert_or_internal_err};
 
-/// Concatenate multiple [`RecordBatch`]es and apply a limit
+/// Concatenate multiple [`RecordBatch`]es and apply a limit.
+///
+/// The limit is a hard cap on the total number of output rows across all batches.
+///
+/// For example, with a limit of 5, pushing batches of 3 and 4 rows coalesces all 3 rows
+/// from the first batch and only the first 2 from the second. The second push
+/// returns [`PushBatchStatus::LimitReached`] to indicate that the limit has been reached.
 ///
 /// See [`BatchCoalescer`] for more details on how this works.
 #[derive(Debug)]
@@ -104,6 +110,43 @@ impl LimitedBatchCoalescer {
         self.total_rows += batch.num_rows();
         self.inner.push_batch(batch)?;
 
+        Ok(PushBatchStatus::Continue)
+    }
+
+    /// Pushes a batch after applying `indices` and returns the coalescer status.
+    ///
+    /// This is semantically equivalent to calling [`Self::push_batch`] with the
+    /// result of taking `indices` from `batch`. See
+    /// [`BatchCoalescer::push_batch_with_indices`] for the supported index types
+    /// and error behavior.
+    pub fn push_batch_with_indices(
+        &mut self,
+        batch: RecordBatch,
+        indices: &dyn Array,
+    ) -> Result<PushBatchStatus> {
+        assert_or_internal_err!(
+            !self.finished,
+            "LimitedBatchCoalescer: cannot push batch after finish"
+        );
+
+        if let Some(fetch) = self.fetch {
+            if self.total_rows >= fetch {
+                return Ok(PushBatchStatus::LimitReached);
+            }
+
+            if self.total_rows + indices.len() >= fetch {
+                let remaining = fetch - self.total_rows;
+                debug_assert!(remaining > 0);
+                let indices = indices.slice(0, remaining);
+                self.inner
+                    .push_batch_with_indices(batch, indices.as_ref())?;
+                self.total_rows += remaining;
+                return Ok(PushBatchStatus::LimitReached);
+            }
+        }
+
+        self.inner.push_batch_with_indices(batch, indices)?;
+        self.total_rows += indices.len();
         Ok(PushBatchStatus::Continue)
     }
 
@@ -299,6 +342,98 @@ mod tests {
         );
         coalescer.finish().unwrap();
         assert_next_batch_values(&mut coalescer, vec![1, 4, 5]);
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_and_fetch() {
+        let batch = uint32_batch(0..8);
+        let indices = UInt32Array::from(vec![7, 1, 5, 3]);
+        let mut coalescer = LimitedBatchCoalescer::new(batch.schema(), 100, Some(3));
+
+        assert_eq!(
+            coalescer.push_batch_with_indices(batch, &indices).unwrap(),
+            PushBatchStatus::LimitReached,
+        );
+        coalescer.finish().unwrap();
+        assert_next_batch_values(&mut coalescer, vec![7, 1, 5]);
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_fetch_boundaries() {
+        let batch1 = uint32_batch(0..4);
+        let batch2 = uint32_batch(4..8);
+        let mut coalescer = LimitedBatchCoalescer::new(batch1.schema(), 2, Some(5));
+
+        assert_eq!(
+            coalescer
+                .push_batch_with_indices(batch1, &UInt32Array::from(vec![3, 1]))
+                .unwrap(),
+            PushBatchStatus::Continue,
+        );
+        assert_eq!(
+            coalescer
+                .push_batch_with_indices(batch2, &UInt32Array::from(vec![2, 0, 3, 1]))
+                .unwrap(),
+            PushBatchStatus::LimitReached,
+        );
+        coalescer.finish().unwrap();
+        assert_next_batch_values(&mut coalescer, vec![3, 1]);
+        assert_next_batch_values(&mut coalescer, vec![6, 4, 7]);
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_empty_and_invalid() {
+        let batch = uint32_batch(0..4);
+        let mut coalescer = LimitedBatchCoalescer::new(batch.schema(), 2, None);
+        assert_eq!(
+            coalescer
+                .push_batch_with_indices(batch, &UInt32Array::from(Vec::<u32>::new()))
+                .unwrap(),
+            PushBatchStatus::Continue,
+        );
+        assert!(coalescer.is_empty());
+
+        for invalid_indices in [
+            Arc::new(BooleanArray::from(vec![true])) as Arc<dyn Array>,
+            Arc::new(UInt32Array::from(vec![4])) as Arc<dyn Array>,
+        ] {
+            let batch = uint32_batch(0..4);
+            let mut coalescer = LimitedBatchCoalescer::new(batch.schema(), 2, Some(1));
+            assert!(
+                coalescer
+                    .push_batch_with_indices(batch.clone(), invalid_indices.as_ref())
+                    .is_err()
+            );
+            assert_eq!(
+                coalescer
+                    .push_batch_with_indices(batch, &UInt32Array::from(vec![0]))
+                    .unwrap(),
+                PushBatchStatus::LimitReached,
+            );
+            coalescer.finish().unwrap();
+            assert_next_batch_values(&mut coalescer, vec![0]);
+        }
+    }
+
+    #[test]
+    fn test_push_batch_with_indices_after_limit_reached() {
+        let batch = uint32_batch(0..8);
+        let mut coalescer = LimitedBatchCoalescer::new(batch.schema(), 100, Some(2));
+        assert_eq!(
+            coalescer
+                .push_batch_with_indices(batch.clone(), &UInt32Array::from(vec![0, 1]))
+                .unwrap(),
+            PushBatchStatus::LimitReached,
+        );
+        assert_eq!(
+            coalescer
+                .push_batch_with_indices(batch, &UInt32Array::from(vec![4, 5]))
+                .unwrap(),
+            PushBatchStatus::LimitReached,
+        );
+        coalescer.finish().unwrap();
+        assert_next_batch_values(&mut coalescer, vec![0, 1]);
+        assert!(coalescer.next_completed_batch().is_none());
     }
 
     #[test]

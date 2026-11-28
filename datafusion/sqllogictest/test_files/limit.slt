@@ -1402,3 +1402,12 @@ SELECT * FROM (
 
 statement ok
 DROP TABLE t_26162;
+
+# Limited UNION branches must preserve same-named join columns through Substrait.
+query II rowsort
+(SELECT * FROM (VALUES (1)) AS x(a) CROSS JOIN (VALUES (2)) AS y(a) LIMIT 1)
+UNION ALL
+SELECT * FROM (VALUES (3)) AS x(a) CROSS JOIN (VALUES (4)) AS y(a);
+----
+1 2
+3 4

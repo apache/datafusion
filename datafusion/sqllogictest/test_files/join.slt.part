@@ -1354,16 +1354,17 @@ logical_plan
 06)----TableScan: f projection=[a]
 07)--TableScan: s projection=[b]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(s.b AS Int64)@1, col1@1)], projection=[col0@2, col1@3, a@4, b@0]
-02)--ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(f.a AS Int64)@1, col0@0)], projection=[col0@2, col1@3, a@0]
-05)----ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as CAST(f.a AS Int64)]
-06)------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
-08)------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
-09)--------FilterExec: y@1 = x@0
-10)----------DataSourceExec: partitions=1, partition_sizes=[1]
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(col1@1, CAST(s.b AS Int64)@1)], projection=[col0@0, col1@1, a@2, b@3]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(col0@0, CAST(f.a AS Int64)@1)], projection=[col0@0, col1@1, a@2]
+03)----CoalescePartitionsExec
+04)------ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
+06)----------FilterExec: y@1 = x@0
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)----ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as CAST(f.a AS Int64)]
+09)------DataSourceExec: partitions=1, partition_sizes=[1]
+10)--ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
+11)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table pairs;

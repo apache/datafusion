@@ -154,36 +154,66 @@ select column1, column2, column3, column4, column5, column6, column7, column8, c
 statement ok
 create table test ("'test'" varchar, "'test2'" varchar, "'test3'" varchar);
 
-# https://github.com/apache/datafusion/issues/9714
-## Until the partition by parsing uses ColumnDef, this test is meaningless since it becomes an overfit. Even in
-## CREATE EXTERNAL TABLE, there is a schema mismatch, this should be an issue.
-#
-#query TTT
-#insert into test VALUES ('a', 'x', 'aa'), ('b','y', 'bb'), ('c', 'z', 'cc')
-#----
-#3
-#
-#query T
-#select "'test'" from test
-#----
-#a
-#b
-#c
-#
-# # Note to place a single ' inside of a literal string escape by putting two ''
-#query TTT
-#copy test to 'test_files/scratch/copy/escape_quote' STORED AS CSV;
-#----
-#3
-#
-#statement ok
-#CREATE EXTERNAL TABLE validate_partitioned_escape_quote STORED AS CSV
-#LOCATION 'test_files/scratch/copy/escape_quote/' PARTITIONED BY ("'test2'", "'test3'");
-#
-# This triggers a panic (index out of bounds)
-# https://github.com/apache/datafusion/issues/9269
-#query
-#select * from validate_partitioned_escape_quote;
+query I
+insert into test VALUES ('a', 'x', 'aa'), ('b','y', 'bb'), ('c', 'z', 'cc')
+----
+3
+
+query T
+select "'test'" from test order by 1
+----
+a
+b
+c
+
+# Quoted partition column names keep their exact spelling
+query I
+copy test to 'test_files/scratch/copy/escape_quote/' STORED AS PARQUET PARTITIONED BY ("'test2'", "'test3'");
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_escape_quote STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/escape_quote/' PARTITIONED BY ("'test2'", "'test3'");
+
+query TTT
+select "'test'", "'test2'", "'test3'" from validate_partitioned_escape_quote order by 1
+----
+a x aa
+b y bb
+c z cc
+
+# Unquoted partition column names are normalized like other identifiers
+query I
+COPY source_table TO 'test_files/scratch/copy/partitioned_upper_ident/' STORED AS PARQUET PARTITIONED BY (COL2);
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_upper_ident STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_upper_ident/' PARTITIONED BY (COL2);
+
+query IT
+select col1, col2 from validate_partitioned_upper_ident order by col1
+----
+1 Foo
+2 Bar
+
+# Quoted mixed-case partition column names match the directory keys exactly
+query I
+COPY (SELECT col1 AS "Id", col2 AS "Part" FROM source_table) TO 'test_files/scratch/copy/partitioned_mixed_case/' STORED AS PARQUET PARTITIONED BY ("Part");
+----
+2
+
+statement ok
+CREATE EXTERNAL TABLE validate_partitioned_mixed_case STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/partitioned_mixed_case/' PARTITIONED BY ("Part");
+
+query IT
+select "Id", "Part" from validate_partitioned_mixed_case order by "Id"
+----
+1 Foo
+2 Bar
 
 query TT
 EXPLAIN COPY source_table TO 'test_files/scratch/copy/table/' STORED AS PARQUET OPTIONS ('format.compression' 'zstd(10)');
@@ -932,3 +962,109 @@ DROP TABLE copy_with_order;
 
 statement ok
 DROP TABLE union_const_src;
+
+# A struct column before the sort key must not shift the recorded sort column
+query I
+COPY (
+  SELECT named_struct('x', i, 'y', i) AS st, i % 3 AS a, i AS b
+  FROM generate_series(1, 6) AS t(i)
+  ORDER BY b
+) TO 'test_files/scratch/copy/struct_before_sort_key/sorted.parquet';
+----
+6
+
+statement ok
+CREATE EXTERNAL TABLE struct_before_sort_key STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/struct_before_sort_key/sorted.parquet';
+
+query I
+SELECT a FROM struct_before_sort_key ORDER BY a;
+----
+0
+0
+1
+1
+2
+2
+
+# The file is not sorted by a, so the physical plan keeps the SortExec
+query TT
+EXPLAIN SELECT a FROM struct_before_sort_key ORDER BY a;
+----
+logical_plan
+01)Sort: struct_before_sort_key.a ASC NULLS LAST
+02)--TableScan: struct_before_sort_key projection=[a]
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/struct_before_sort_key/sorted.parquet]]}, projection=[a], file_type=parquet, sort_order_for_reorder=[a@0 ASC NULLS LAST]
+
+# The logical plan keeps the Sort, but the file is sorted by b,
+# so the physical plan has no SortExec
+query TT
+EXPLAIN SELECT b FROM struct_before_sort_key ORDER BY b;
+----
+logical_plan
+01)Sort: struct_before_sort_key.b ASC NULLS LAST
+02)--TableScan: struct_before_sort_key projection=[b]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/struct_before_sort_key/sorted.parquet]]}, projection=[b], output_ordering=[b@0 ASC NULLS LAST], file_type=parquet
+
+# A struct sort key can't be recorded, so no sort order is written
+query I
+COPY (
+  SELECT named_struct('x', -i, 'y', i) AS st, i % 3 AS a, i AS b
+  FROM generate_series(1, 6) AS t(i)
+  ORDER BY st, b
+) TO 'test_files/scratch/copy/struct_sort_key/sorted.parquet';
+----
+6
+
+statement ok
+CREATE EXTERNAL TABLE struct_sort_key STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/struct_sort_key/sorted.parquet';
+
+query I
+SELECT a FROM struct_sort_key ORDER BY a;
+----
+0
+0
+1
+1
+2
+2
+
+query I
+SELECT b FROM struct_sort_key ORDER BY b;
+----
+1
+2
+3
+4
+5
+6
+
+# No sort order is recorded, so both physical plans keep the SortExec
+query TT
+EXPLAIN SELECT a FROM struct_sort_key ORDER BY a;
+----
+logical_plan
+01)Sort: struct_sort_key.a ASC NULLS LAST
+02)--TableScan: struct_sort_key projection=[a]
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/struct_sort_key/sorted.parquet]]}, projection=[a], file_type=parquet, sort_order_for_reorder=[a@0 ASC NULLS LAST]
+
+query TT
+EXPLAIN SELECT b FROM struct_sort_key ORDER BY b;
+----
+logical_plan
+01)Sort: struct_sort_key.b ASC NULLS LAST
+02)--TableScan: struct_sort_key projection=[b]
+physical_plan
+01)SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/struct_sort_key/sorted.parquet]]}, projection=[b], file_type=parquet, sort_order_for_reorder=[b@0 ASC NULLS LAST]
+
+statement ok
+DROP TABLE struct_before_sort_key;
+
+statement ok
+DROP TABLE struct_sort_key;

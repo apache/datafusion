@@ -961,6 +961,9 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             max_row_group_bytes_opt: value.max_row_group_bytes.map(|v| protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v.get() as u64)),
             content_defined_chunking: Some((&value.content_defined_chunking).into()),
             enable_rle_to_dictionary: value.enable_rle_to_dictionary,
+            dictionary_read_max_distinct_values: value
+                .dictionary_read_max_distinct_values
+                .map(|max_distinct_values| max_distinct_values as u64),
         })
     }
 }

@@ -3220,6 +3220,7 @@ impl DefaultPhysicalPlanner {
                     FinalPhysicalPlan,
                     displayable(optimized_plan.as_ref())
                         .set_tree_maximum_render_width(config.tree_maximum_render_width)
+                        .set_show_equivalences(config.show_equivalences)
                         .tree_render()
                         .to_string(),
                 ));
@@ -3262,6 +3263,7 @@ impl DefaultPhysicalPlanner {
                         .set_show_statistics(show_statistics)
                         .set_statistics_registry(statistics_registry.clone())
                         .set_show_schema(show_schema)
+                        .set_show_equivalences(config.show_equivalences)
                         .indent(e.verbose)
                         .to_string()
                 };
