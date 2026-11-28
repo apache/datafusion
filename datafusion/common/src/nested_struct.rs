@@ -331,12 +331,13 @@ fn cast_list_column<O: arrow::array::OffsetSizeTrait>(
         cast_options,
     )?;
 
-    let result = GenericListArray::<O>::new(
+    let result = GenericListArray::<O>::try_new(
         Arc::clone(target_inner_field),
         source_list.offsets().clone(),
         cast_values,
         source_list.nulls().cloned(),
-    );
+    )?;
+
     Ok(Arc::new(result))
 }
 
@@ -3349,6 +3350,43 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert_contains!(error, "Found unmasked nulls for non-nullable");
+    }
+
+    #[test]
+    fn test_cast_list_struct_null_item_to_non_nullable_returns_error() {
+        let fields = Fields::from(vec![field("a", DataType::Int64)]);
+        let source_field = arc_field("item", Struct(fields.clone()));
+        let target_field = Arc::new(non_null_field("item", Struct(fields.clone())));
+        // [{a: 1}, NULL]
+        let items: ArrayRef = Arc::new(StructArray::new(
+            fields,
+            vec![Arc::new(Int64Array::from(vec![1, 0])) as ArrayRef],
+            Some(NullBuffer::from(vec![true, false])),
+        ));
+
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Arc::clone(&source_field),
+            OffsetBuffer::from_lengths([2]),
+            Arc::clone(&items),
+            None,
+        ));
+        let target_type = DataType::List(Arc::clone(&target_field));
+        let error = cast_column(&list, &target_type, &DEFAULT_CAST_OPTIONS)
+            .unwrap_err()
+            .to_string();
+        assert_contains!(error, "Non-nullable field of ListArray");
+
+        let large_list: ArrayRef = Arc::new(GenericListArray::<i64>::new(
+            source_field,
+            OffsetBuffer::from_lengths([2]),
+            items,
+            None,
+        ));
+        let target_type = DataType::LargeList(target_field);
+        let error = cast_column(&large_list, &target_type, &DEFAULT_CAST_OPTIONS)
+            .unwrap_err()
+            .to_string();
+        assert_contains!(error, "Non-nullable field of LargeListArray");
     }
 
     #[test]
