@@ -151,6 +151,8 @@ impl PhysicalOptimizerRule for JoinSelection {
             Box::new(hash_join_swap_subrule),
         ];
         let new_plan = plan
+            .transform_down(|p| crate::join_key_bounds::restrict(p, context))
+            .data()?
             .transform_up(|p| apply_subrules(p, &subrules, context.config_options()))
             .data()?;
         new_plan
