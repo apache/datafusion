@@ -72,8 +72,9 @@ impl CastPredicatePreimage {
 ///   `Timestamps`, rejecting literal conversions outside the target's range or
 ///   that would lose decimal digits
 /// * string → string between `Utf8`, `LargeUtf8` and `Utf8View`
-/// * wrapping a value into, or unwrapping it out of, a `Dictionary` whose value
-///   type matches the literal's type
+/// * unwrapping a value out of a `Dictionary` whose value type matches the
+///   target type, and wrapping a literal into a `Dictionary`, converting it to
+///   the value type first when both are numeric
 /// * `Binary` → `FixedSizeBinary` of the matching length
 /// * `Timestamp` → `Timestamp` cast between different time units is allowed even
 ///   though it can truncate (for example nanoseconds → seconds), and a unit
@@ -1053,6 +1054,13 @@ fn try_cast_dictionary(
         {
             ScalarValue::Dictionary(index_type.clone(), Box::new(lit_value.clone()))
         }
+        // Convert the literal to the value type before wrapping it. Only a
+        // numeric conversion is attempted, so a `Dictionary` whose value type
+        // is a different string type still returns `None`.
+        (_, DataType::Dictionary(index_type, inner_type)) => ScalarValue::Dictionary(
+            index_type.clone(),
+            Box::new(try_cast_numeric_literal(lit_value, inner_type)?),
+        ),
         _ => {
             return None;
         }
@@ -2239,6 +2247,56 @@ mod tests {
                 ExpectedCast::Value(s.clone()),
             )
         }
+    }
+
+    #[test]
+    fn test_try_cast_to_dictionary_type_converts_the_value_type() {
+        use arrow::datatypes::i256;
+
+        fn dictionary_type(t: DataType) -> DataType {
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(t))
+        }
+        fn dictionary_value(value: ScalarValue) -> ScalarValue {
+            ScalarValue::Dictionary(Box::new(DataType::Int32), Box::new(value))
+        }
+
+        // A scale of 19 or more takes a `Decimal256` common type against an
+        // integer, so the literal no longer has the dictionary's value type.
+        let five = 5 * 10_i128.pow(24);
+        expect_cast(
+            ScalarValue::Decimal256(Some(i256::from_i128(five)), 44, 24),
+            dictionary_type(DataType::Decimal128(38, 24)),
+            ExpectedCast::Value(dictionary_value(ScalarValue::Decimal128(
+                Some(five),
+                38,
+                24,
+            ))),
+        );
+        expect_cast(
+            ScalarValue::Int64(Some(5)),
+            dictionary_type(DataType::Int32),
+            ExpectedCast::Value(dictionary_value(ScalarValue::Int32(Some(5)))),
+        );
+
+        // A literal the value type has no room for is still rejected.
+        expect_cast(
+            ScalarValue::Int64(Some(i64::MAX)),
+            dictionary_type(DataType::Int32),
+            ExpectedCast::NoValue,
+        );
+        expect_cast(
+            ScalarValue::Decimal128(Some(1201), 38, 2),
+            dictionary_type(DataType::Decimal128(38, 1)),
+            ExpectedCast::NoValue,
+        );
+
+        // Only a numeric value type is converted, so a string one that differs
+        // keeps returning `None`.
+        expect_cast(
+            ScalarValue::Utf8(Some("string".to_owned())),
+            dictionary_type(DataType::Utf8View),
+            ExpectedCast::NoValue,
+        );
     }
 
     #[test]
@@ -3445,6 +3503,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_cast_predicate_preimage_dictionary_decimal256_literal() {
+        use arrow::datatypes::i256;
+
+        let dict = |inner: DataType| {
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(inner))
+        };
+        let five = 5 * 10_i128.pow(24);
+
+        // The common type of a dictionary-encoded column is taken from its
+        // value type, so a scale of 19 or more reaches the column through the
+        // dictionary wrapper as well.
+        assert_preimage_exact(
+            &dict(DataType::Decimal128(38, 24)),
+            &DataType::Decimal256(44, 24),
+            Operator::Eq,
+            &ScalarValue::Decimal256(Some(i256::from_i128(five)), 44, 24),
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Decimal128(Some(five), 38, 24)),
+            ),
+        );
+        assert_preimage_exact(
+            &dict(DataType::Int32),
+            &DataType::Int64,
+            Operator::Lt,
+            &ScalarValue::Int64(Some(5)),
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Int32(Some(5))),
+            ),
+        );
+
+        // A literal the value type has no room for keeps its cast.
+        assert_preimage_none(
+            &dict(DataType::Int32),
+            &DataType::Int64,
+            Operator::Lt,
+            &ScalarValue::Int64(Some(i64::MAX)),
+        );
+    }
     // ── Integer → string distinctness tests ─────────────────────────────
 
     #[test]
