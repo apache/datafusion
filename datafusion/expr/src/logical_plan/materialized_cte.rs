@@ -190,14 +190,7 @@ impl MaterializedCte {
         continuation: Arc<LogicalPlan>,
     ) -> Result<Self> {
         let name = name.into();
-        for scan in MaterializedCteScan::find_in(&continuation, id)? {
-            scan.check_body_schema(cte.schema())
-                .map_err(|e| {
-                    e.context(format!(
-                        "A scan of the materialized CTE {name} does not have the schema of the CTE"
-                    ))
-                })?;
-        }
+        check_scans(id, &name, cte.schema(), &continuation)?;
         Ok(Self {
             id,
             name,
@@ -234,12 +227,24 @@ impl MaterializedCte {
     /// Whether a scan in the continuation reads this CTE, also in a subquery
     /// expression. A CTE that nothing reads does not need to be computed.
     pub fn is_read(&self) -> Result<bool> {
-        self.scans().map(|scans| !scans.is_empty())
+        let mut is_read = false;
+        visit_scans(&self.continuation, self.id, |_| {
+            is_read = true;
+            Ok(TreeNodeRecursion::Stop)
+        })?;
+        Ok(is_read)
+    }
+
+    /// Returns an error if a scan of this CTE in the continuation does not
+    /// have the names and types of the columns of the body that it reads.
+    pub(crate) fn check_scans(&self) -> Result<()> {
+        check_scans(self.id, &self.name, self.cte.schema(), &self.continuation)
     }
 
     /// The scans in the continuation that read this CTE, also in subquery
     /// expressions. See [`MaterializedCteScan::find_in`].
-    pub(crate) fn scans(&self) -> Result<Vec<MaterializedCteScan>> {
+    #[cfg(test)]
+    fn scans(&self) -> Result<Vec<MaterializedCteScan>> {
         MaterializedCteScan::find_in(&self.continuation, self.id)
     }
 
@@ -323,7 +328,13 @@ impl MaterializedCte {
                 Transformed::yes(new_scan)
             })
         })?;
-        Self::try_new(self.id, self.name, Arc::new(body), continuation)
+        // `with_body_schema` checked the names, and the scans have the types
+        // of `body`.
+        Ok(Self {
+            cte: Arc::new(body),
+            continuation,
+            ..self
+        })
     }
 
     /// Remove from the body the columns that no scan of this CTE reads. The
@@ -336,9 +347,10 @@ impl MaterializedCte {
     /// does not change if nothing reads the CTE or if every column is read.
     pub fn prune_body_columns(self) -> Result<Transformed<Self>> {
         let body_len = self.cte.schema().fields().len();
-        let scans = self.scans()?;
+        let mut has_scans = false;
         let mut is_read = vec![false; body_len];
-        for scan in &scans {
+        visit_scans(&self.continuation, self.id, |scan| {
+            has_scans = true;
             match scan.projection() {
                 None => is_read.fill(true),
                 Some(projection) => {
@@ -353,7 +365,8 @@ impl MaterializedCte {
                     }
                 }
             }
-        }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
         if !is_read.contains(&true)
             && let Some(first) = is_read.first_mut()
         {
@@ -361,7 +374,7 @@ impl MaterializedCte {
         }
         let kept: Vec<usize> = (0..body_len).filter(|index| is_read[*index]).collect();
         // A CTE that nothing reads is not planned, so its body is left as it is.
-        if scans.is_empty() || kept.len() == body_len {
+        if !has_scans || kept.len() == body_len {
             return Ok(Transformed::no(self));
         }
 
@@ -375,8 +388,12 @@ impl MaterializedCte {
         let continuation = Self::map_scans(self.id, self.continuation, |scan| {
             scan.with_body_columns(&kept).map(Transformed::yes)
         })?;
-        Self::try_new(self.id, self.name, Arc::new(body), continuation)
-            .map(Transformed::yes)
+        // `with_body_columns` checked that each scan reads a kept column.
+        Ok(Transformed::yes(Self {
+            cte: Arc::new(body),
+            continuation,
+            ..self
+        }))
     }
 
     /// Apply `f` to each scan of the CTE `id` in `continuation`, also in
@@ -681,30 +698,61 @@ impl MaterializedCteScan {
     /// The search does not go below a [`MaterializedCte`] with the same `id`
     /// in `plan`. Such a node is a separate occurrence of the CTE (the id is
     /// copied when a plan is cloned) and owns the scans below it.
-    pub(crate) fn find_in(
-        plan: &LogicalPlan,
-        id: MaterializedCteId,
-    ) -> Result<Vec<Self>> {
+    #[cfg(test)]
+    fn find_in(plan: &LogicalPlan, id: MaterializedCteId) -> Result<Vec<Self>> {
         let mut scans = vec![];
-        plan.apply_with_subqueries(|node| match node {
-            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte))
-                if cte.id == id =>
-            {
-                Ok(TreeNodeRecursion::Jump)
-            }
-            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
-                if scan.id == id =>
-            {
-                scans.push(scan.clone());
-                Ok(TreeNodeRecursion::Continue)
-            }
-            _ => Ok(TreeNodeRecursion::Continue),
+        visit_scans(plan, id, |scan| {
+            scans.push(scan.clone());
+            Ok(TreeNodeRecursion::Continue)
         })?;
         Ok(scans)
     }
 }
 
 /// The columns `indices` of `schema`, with their qualifiers.
+/// Call `f` with each scan of the CTE `id` in `plan`, also in subquery
+/// expressions, until `f` returns [`TreeNodeRecursion::Stop`].
+///
+/// The traversal does not go below a [`MaterializedCte`] with the same `id`.
+/// Such a node is a separate occurrence of the CTE (the id is copied when a
+/// plan is cloned) and owns the scans below it.
+fn visit_scans(
+    plan: &LogicalPlan,
+    id: MaterializedCteId,
+    mut f: impl FnMut(&MaterializedCteScan) -> Result<TreeNodeRecursion>,
+) -> Result<()> {
+    plan.apply_with_subqueries(|node| match node {
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) if cte.id == id => {
+            Ok(TreeNodeRecursion::Jump)
+        }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan))
+            if scan.id == id =>
+        {
+            f(scan)
+        }
+        _ => Ok(TreeNodeRecursion::Continue),
+    })
+    .map(|_| ())
+}
+
+/// Returns an error if a scan of the CTE `id` in `continuation` does not have
+/// the names and types of the columns of `body` that it reads.
+fn check_scans(
+    id: MaterializedCteId,
+    name: &str,
+    body: &DFSchema,
+    continuation: &LogicalPlan,
+) -> Result<()> {
+    visit_scans(continuation, id, |scan| {
+        scan.check_body_schema(body).map_err(|e| {
+            e.context(format!(
+                "A scan of the materialized CTE {name} does not have the schema of the CTE"
+            ))
+        })?;
+        Ok(TreeNodeRecursion::Continue)
+    })
+}
+
 fn project_schema(schema: &DFSchema, indices: &[usize]) -> Result<DFSchema> {
     let fields = indices
         .iter()
@@ -738,6 +786,7 @@ impl PartialOrd for MaterializedCteScan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logical_plan::InvariantLevel;
     use crate::logical_plan::builder::LogicalPlanBuilder;
     use crate::{EmptyRelation, exists};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1070,7 +1119,6 @@ mod tests {
 
     #[test]
     fn check_invariants_rejects_a_scan_that_does_not_match_the_body() -> Result<()> {
-        use crate::logical_plan::InvariantLevel;
         let id = MaterializedCteId::next();
         let cte = MaterializedCte::try_new(
             id,
@@ -1091,8 +1139,9 @@ mod tests {
             .check_invariants(InvariantLevel::Executable)
             .unwrap_err();
         assert!(
-            err.to_string()
-                .contains("A scan of the materialized CTE c does not match the CTE"),
+            err.to_string().contains(
+                "A scan of the materialized CTE c does not have the schema of the CTE"
+            ),
             "{err}"
         );
 

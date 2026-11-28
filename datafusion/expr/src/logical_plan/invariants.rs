@@ -106,14 +106,7 @@ fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
 fn assert_materialized_cte_scans_are_valid(plan: &LogicalPlan) -> Result<()> {
     plan.apply_with_subqueries(|node| {
         if let LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) = node {
-            for scan in cte.scans()? {
-                scan.check_body_schema(cte.body().schema()).map_err(|e| {
-                    e.context(format!(
-                        "A scan of the materialized CTE {} does not match the CTE",
-                        cte.name()
-                    ))
-                })?;
-            }
+            cte.check_scans()?;
         }
         Ok(TreeNodeRecursion::Continue)
     })
