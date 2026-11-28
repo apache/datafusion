@@ -95,6 +95,8 @@ use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+#[cfg(doc)]
+use datafusion_physical_optimizer::ensure_requirements::enforce_distribution::adjust_input_keys_ordering;
 use datafusion_physical_optimizer::sanity_checker::{
     check_plan_tree_sanity, input_requirements_hold,
 };
@@ -1907,8 +1909,8 @@ impl DefaultPhysicalPlanner {
                         )?
                         .with_null_aware(true)?,
                     )
-                } else if session.config().target_partitions() > 1
-                    && session.config().repartition_joins()
+                } else if (session.config().target_partitions() == 1
+                    || session.config().repartition_joins())
                     && !prefer_hash_join
                     && !*null_aware
                 // Null-aware joins (e.g. `NOT IN` with a nullable subquery) that do not
@@ -1922,14 +1924,15 @@ impl DefaultPhysicalPlanner {
                     // Use ordinary sort-merge join when hash join is not preferred.
                     // Null-aware joins not handled above fall back to CollectLeft
                     // HashJoin because their semantics are not supported by sort-merge join.
-                    let join_on_len = join_on.len();
+                    let (join_on, sort_options) =
+                        sort_merge_join_keys(&physical_left, &physical_right, &join_on)?;
                     Arc::new(SortMergeJoinExec::try_new(
                         physical_left,
                         physical_right,
                         join_on,
                         join_filter,
                         *join_type,
-                        vec![SortOptions::default(); join_on_len],
+                        sort_options,
                         *null_equality,
                     )?)
                 } else {
@@ -3748,6 +3751,62 @@ enum PlannedExprResult {
 enum PlanAsyncExpr {
     Sync(PlannedExprResult),
     Async(AsyncMapper, PlannedExprResult),
+}
+
+/// Chooses the join key order and per-key [`SortOptions`] of a [`SortMergeJoinExec`].
+///
+/// The keys are an unordered set of equalities, so each input proposes the longest
+/// permutation of its keys that it is already sorted on. A proposal replaces the default
+/// (original order, `ASC NULLS FIRST`) only if strictly more inputs are sorted on it.
+///
+/// The chosen order is not final: [`adjust_input_keys_ordering`] (run by [`EnsureRequirements`] optimizer)
+/// may reshuffle the keys again, e.g. to match the partitioning of the inputs, which can bring
+/// a `SortExec` back that this choice avoided.
+fn sort_merge_join_keys(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    on: &join_utils::JoinOn,
+) -> Result<(join_utils::JoinOn, Vec<SortOptions>)> {
+    let (left_keys, right_keys): (Vec<_>, Vec<_>) = on.iter().cloned().unzip();
+    let inputs = [
+        (left.equivalence_properties(), left_keys),
+        (right.equivalence_properties(), right_keys),
+    ];
+    // Number of inputs already sorted on the keys at `order` with `options`.
+    let sorted_inputs = |order: &[usize], options: &[SortOptions]| {
+        inputs.iter().try_fold(0, |sorted, (eq, keys)| {
+            let sort_exprs = order.iter().zip(options).map(|(&i, &options)| {
+                PhysicalSortExpr::new(Arc::clone(&keys[i]), options)
+            });
+            Ok::<_, DataFusionError>(
+                sorted + usize::from(eq.ordering_satisfy(sort_exprs)?),
+            )
+        })
+    };
+
+    let mut best_order: Vec<usize> = (0..on.len()).collect();
+    let mut best_options = vec![SortOptions::default(); on.len()];
+    let mut best_sorted = sorted_inputs(&best_order, &best_options)?;
+    for (eq, keys) in &inputs {
+        if best_sorted == inputs.len() || eq.oeq_class().is_empty() {
+            continue;
+        }
+        let (sort_exprs, mut order) = eq.find_longest_permutation(keys)?;
+        if order.is_empty() {
+            continue;
+        }
+        let mut options: Vec<_> = sort_exprs.iter().map(|e| e.options).collect();
+        // Keys this input is not sorted on follow in their original order.
+        let unsorted: Vec<_> = (0..on.len()).filter(|i| !order.contains(i)).collect();
+        options.resize(on.len(), SortOptions::default());
+        order.extend(unsorted);
+        let sorted = sorted_inputs(&order, &options)?;
+        if sorted > best_sorted {
+            (best_order, best_options, best_sorted) = (order, options, sorted);
+        }
+    }
+    let on = best_order.into_iter().map(|i| on[i].clone()).collect();
+    Ok((on, best_options))
 }
 
 fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
