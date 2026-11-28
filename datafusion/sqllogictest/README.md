@@ -491,9 +491,14 @@ cargo test --test sqllogictests --features substrait -- --substrait-round-trip -
 ## Running tests: Unparser round-trip mode
 
 This mode runs each query through the SQL unparser. The runner plans the SQL, unparses the
-logical plan with `plan_to_sql` and the default dialect, plans the unparsed SQL again in the
-same `SessionContext`, and executes the result (SQL statement → DF logical → SQL statement →
-DF logical → DF physical → execute).
+logical plan, plans the unparsed SQL again in the same `SessionContext`, and executes the
+result (SQL statement → DF logical → SQL statement → DF logical → DF physical → execute).
+
+The runner unparses with the unparser dialect that matches `datafusion.sql_parser.dialect`.
+PostgreSQL, MySQL, SQLite, DuckDB, BigQuery and Snowflake have their own unparser dialect.
+Every other parser dialect uses the default unparser dialect. So a file that sets
+`datafusion.sql_parser.dialect = 'postgres'` checks that the PostgreSQL unparser emits SQL
+that the PostgreSQL parser accepts.
 
 The runner passes `Ddl`, `Dml`, `Copy`, `Explain`, `Analyze`, `Show` and `Statement` plans through unchanged,
 because SQL cannot express them as a query.

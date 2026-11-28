@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# `named_struct` under each SQL parser dialect. In the unparser round-trip
+# mode, the unparsed SQL must parse again with the same dialect.
+
+statement ok
+CREATE TABLE named_struct_values (x INT, y VARCHAR) AS VALUES (1, 'one'), (2, 'two');
+
+query ?
+SELECT named_struct('a', x, 'b', y) FROM named_struct_values ORDER BY x;
+----
+{a: 1, b: one}
+{a: 2, b: two}
+
+statement ok
+set datafusion.sql_parser.dialect = 'postgres';
+
+query ?
+SELECT named_struct('a', x, 'b', y) FROM named_struct_values ORDER BY x;
+----
+{a: 1, b: one}
+{a: 2, b: two}
+
+statement ok
+set datafusion.sql_parser.dialect = 'mysql';
+
+query ?
+SELECT named_struct('a', x, 'b', y) FROM named_struct_values ORDER BY x;
+----
+{a: 1, b: one}
+{a: 2, b: two}
+
+statement ok
+set datafusion.sql_parser.dialect = 'duckdb';
+
+query ?
+SELECT named_struct('a', x, 'b', y) FROM named_struct_values ORDER BY x;
+----
+{a: 1, b: one}
+{a: 2, b: two}
+
+statement ok
+reset datafusion.sql_parser.dialect;
+
+statement ok
+DROP TABLE named_struct_values;

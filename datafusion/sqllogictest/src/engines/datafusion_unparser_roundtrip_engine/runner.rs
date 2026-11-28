@@ -13,10 +13,15 @@ use crate::memory_drift::rewrap_replaced_pool;
 use crate::{DFSqlLogicTestError, convert_batches, convert_schema_to_types};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion::common::config::Dialect;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execute_stream;
 use datafusion::prelude::SessionContext;
-use datafusion::sql::unparser::plan_to_sql;
+use datafusion::sql::unparser::Unparser;
+use datafusion::sql::unparser::dialect::{
+    BigQueryDialect, DefaultDialect, Dialect as UnparserDialect, DuckDBDialect,
+    MySqlDialect, PostgreSqlDialect, SnowflakeDialect, SqliteDialect,
+};
 use indicatif::ProgressBar;
 use log::Level::{Debug, Info};
 use log::{debug, log_enabled, warn};
@@ -24,7 +29,11 @@ use sqllogictest::DBOutput;
 use tokio::time::Instant;
 
 /// A sqllogictest engine that unparses each query's logical plan to SQL with
-/// [`plan_to_sql`] and plans that SQL again before it runs the query.
+/// an [`Unparser`] and plans that SQL again before it runs the query.
+///
+/// The engine unparses with the unparser dialect that matches
+/// `datafusion.sql_parser.dialect`, so the SQL must parse in the dialect that
+/// plans it again.
 pub struct DataFusionUnparserRoundTrip {
     ctx: SessionContext,
     relative_path: PathBuf,
@@ -158,7 +167,10 @@ async fn run_query_unparser_round_trip(
         } else {
             logical_plan
         };
-        let unparsed_sql = plan_to_sql(&to_unparse)?.to_string();
+        let dialect = unparser_dialect(state.config().options().sql_parser.dialect);
+        let unparsed_sql = Unparser::new(dialect.as_ref())
+            .plan_to_sql(&to_unparse)?
+            .to_string();
         debug!("Unparsed SQL: \"{unparsed_sql}\"");
         state.create_logical_plan(&unparsed_sql).await?
     };
@@ -176,5 +188,19 @@ async fn run_query_unparser_round_trip(
         Ok(DBOutput::StatementComplete(0))
     } else {
         Ok(DBOutput::Rows { types, rows })
+    }
+}
+
+/// The unparser dialect for a SQL parser dialect. A parser dialect without its
+/// own unparser dialect uses [`DefaultDialect`].
+fn unparser_dialect(dialect: Dialect) -> Box<dyn UnparserDialect> {
+    match dialect {
+        Dialect::PostgreSQL => Box::new(PostgreSqlDialect {}),
+        Dialect::MySQL => Box::new(MySqlDialect {}),
+        Dialect::SQLite => Box::new(SqliteDialect {}),
+        Dialect::DuckDB => Box::new(DuckDBDialect::new()),
+        Dialect::BigQuery => Box::new(BigQueryDialect {}),
+        Dialect::Snowflake => Box::new(SnowflakeDialect::new()),
+        _ => Box::new(DefaultDialect {}),
     }
 }
