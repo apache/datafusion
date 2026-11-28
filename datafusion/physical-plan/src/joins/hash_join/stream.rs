@@ -12,10 +12,11 @@
 //! Hash join execution is being incrementally split into dedicated regular and
 //! existence join streams; see [#26361](https://github.com/apache/datafusion/issues/26361).
 //!
-//! Inner, left, right, and full joins use this stream only when
+//! For ordinary builds, inner, left, right, and full joins use this stream only when
 //! `datafusion.execution.enable_migration_hash_join = false`. Implement changes
 //! for these join types in [`BatchedJoinProcessor`], the default path, and keep
 //! this legacy fallback consistent.
+//! Prepared builds retain the executor chosen during preparation.
 //!
 //! Semi, anti, mark, and null-aware joins still use this stream by default.
 //!

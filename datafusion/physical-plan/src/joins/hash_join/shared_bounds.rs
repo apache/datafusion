@@ -18,7 +18,7 @@ use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::not_in::NotIn;
 use crate::joins::hash_join::partitioned_hash_eval::{
-    HashTableLookupExpr, PartitionRouter, SeededRandomState,
+    HashTableLookupExpr, JoinMembership, PartitionRouter, SeededRandomState,
 };
 use crate::joins::join_hash_map::{JoinHashMapType, JoinHashMapU32};
 use crate::joins::key_range_bitmap::{KeyRangeBitmap, KeyRangePart};
@@ -313,7 +313,7 @@ pub(crate) enum PushdownStrategy {
     InList(ArrayRef),
     /// Use map lookup for large build sides. If `Some` the second field
     /// represents the build side's keys using a bucket bitmap.
-    Map(Arc<ReservedMap>, Option<Arc<KeyRangeBitmap>>),
+    Map(Arc<dyn JoinMembership>, Option<Arc<KeyRangeBitmap>>),
     /// There was no data in this partition, do not build a dynamic filter for it
     Empty,
 }
@@ -861,7 +861,7 @@ impl SharedBuildAccumulator {
     ///
     /// The table is not reserved, same as the IN list it is built from. Its
     /// size follows that list, which `hash_join_inlist_pushdown_max_size` caps.
-    fn in_list_hash_map(&self, values: &ArrayRef) -> Result<Arc<ReservedMap>> {
+    fn in_list_hash_map(&self, values: &ArrayRef) -> Result<Arc<dyn JoinMembership>> {
         let columns = match values.as_struct_opt() {
             Some(columns) if self.on_right.len() > 1 => columns.columns(),
             _ => std::slice::from_ref(values),
