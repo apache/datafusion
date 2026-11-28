@@ -160,9 +160,10 @@ fn simplify_conjunction(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
         return Ok(predicates);
     }
 
-    // Group predicates by their column reference
-    let mut column_predicates: BTreeMap<Column, Vec<Expr>> = BTreeMap::new();
-    let mut other_predicates = Vec::with_capacity(predicates.len());
+    // Group predicates by their column reference. A column's simplified predicates
+    // take the place of its first one, so no predicate moves ahead of one before it.
+    let mut groups: Vec<Vec<Expr>> = Vec::with_capacity(predicates.len());
+    let mut column_groups: BTreeMap<Column, usize> = BTreeMap::new();
 
     for pred in predicates {
         match pred {
@@ -187,10 +188,12 @@ fn simplify_conjunction(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
                 {
                     let mut right = right;
                     normalize_literal(right.as_mut());
-                    column_predicates
-                        .entry(col)
-                        .or_default()
-                        .push(Expr::BinaryExpr(BinaryExpr { left, op, right }));
+                    push_column_predicate(
+                        &mut column_groups,
+                        &mut groups,
+                        col,
+                        Expr::BinaryExpr(BinaryExpr { left, op, right }),
+                    );
                 } else if let (Some(_), Some(col), Some(swapped_op)) = (
                     left.as_literal(),
                     extract_column_from_expr(&right),
@@ -200,29 +203,27 @@ fn simplify_conjunction(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
                     // operand order compare equal below
                     let mut left = left;
                     normalize_literal(left.as_mut());
-                    column_predicates
-                        .entry(col)
-                        .or_default()
-                        .push(Expr::BinaryExpr(BinaryExpr {
+                    push_column_predicate(
+                        &mut column_groups,
+                        &mut groups,
+                        col,
+                        Expr::BinaryExpr(BinaryExpr {
                             left: right,
                             op: swapped_op,
                             right: left,
-                        }));
+                        }),
+                    );
                 } else {
-                    other_predicates.push(Expr::BinaryExpr(BinaryExpr {
-                        left,
-                        op,
-                        right,
-                    }));
+                    groups.push(vec![Expr::BinaryExpr(BinaryExpr { left, op, right })]);
                 }
             }
-            _ => other_predicates.push(pred),
+            _ => groups.push(vec![pred]),
         }
     }
 
     // Process each column's predicates to remove redundancies
-    let mut result = other_predicates;
-    for (_, preds) in column_predicates {
+    for i in column_groups.into_values() {
+        let preds = std::mem::take(&mut groups[i]);
         // Literals of one column that cannot be ordered against each other carry no
         // information we can use, so keep the predicates as they were written
         let simplified = match simplify_column_predicates(preds.clone()) {
@@ -232,10 +233,23 @@ fn simplify_conjunction(predicates: Vec<Expr>) -> Result<Vec<Expr>> {
         if simplified.iter().any(is_false) {
             return Ok(always_false());
         }
-        result.extend(simplified);
+        groups[i] = simplified;
     }
 
-    Ok(result)
+    Ok(groups.into_iter().flatten().collect())
+}
+
+fn push_column_predicate(
+    column_groups: &mut BTreeMap<Column, usize>,
+    groups: &mut Vec<Vec<Expr>>,
+    col: Column,
+    predicate: Expr,
+) {
+    let i = *column_groups.entry(col).or_insert_with(|| {
+        groups.push(vec![]);
+        groups.len() - 1
+    });
+    groups[i].push(predicate);
 }
 
 /// Simplifies predicates related to a single column.

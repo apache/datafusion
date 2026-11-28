@@ -172,5 +172,38 @@ SELECT evaluations();
 ----
 20
 
+# https://github.com/apache/datafusion/issues/27683
+# A redundant comparison must not change how often the volatile call runs.
+
+query I
+SELECT a FROM t WHERE a > 9 AND counted_volatile(a) > 0;
+----
+10
+
+query I
+SELECT evaluations();
+----
+1
+
+query I
+SELECT a FROM t WHERE a > 1 AND a > 9 AND counted_volatile(a) > 0;
+----
+10
+
+query I
+SELECT evaluations();
+----
+1
+
+query I
+SELECT a FROM t WHERE a > 9 AND counted_volatile(a) > 0 AND a > 1;
+----
+10
+
+query I
+SELECT evaluations();
+----
+1
+
 statement ok
 DROP TABLE t;

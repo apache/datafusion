@@ -54,7 +54,7 @@ query TT
 EXPLAIN SELECT * FROM test_data WHERE int_col > 5 AND float_col < 10 AND int_col > 6 AND float_col < 8;
 ----
 logical_plan
-01)Filter: test_data.float_col < Float32(8) AND test_data.int_col > Int32(6)
+01)Filter: test_data.int_col > Int32(6) AND test_data.float_col < Float32(8)
 02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
 
 # x = 7 AND x = 7 should simplify to x = 7
@@ -186,7 +186,7 @@ WHERE int_col > 5
   AND float_col BETWEEN 1 AND 100;
 ----
 logical_plan
-01)Filter: test_data.float_col >= Float32(1) AND test_data.float_col <= Float32(100) AND test_data.int_col > Int32(10) AND test_data.str_col LIKE Utf8View("A%")
+01)Filter: test_data.int_col > Int32(10) AND test_data.float_col >= Float32(1) AND test_data.float_col <= Float32(100) AND test_data.str_col LIKE Utf8View("A%")
 02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
 
 statement ok
@@ -360,3 +360,46 @@ query T
 SELECT label FROM signed_zero WHERE f > -0.0 AND f >= 0.0;
 ----
 NaN
+
+# https://github.com/apache/datafusion/issues/27683
+# A volatile conjunct never moves ahead of a conjunct before it.
+
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > 1 AND int_col > 9 AND counted_volatile(int_col) > 0;
+----
+logical_plan
+01)Filter: test_data.int_col > Int32(9) AND counted_volatile(test_data.int_col) > Int32(0)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+physical_plan
+01)FilterExec: int_col@0 > 9 AND counted_volatile(int_col@0) > 0
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > 9 AND counted_volatile(int_col) > 0 AND int_col > 1;
+----
+logical_plan
+01)Filter: test_data.int_col > Int32(9) AND counted_volatile(test_data.int_col) > Int32(0)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+physical_plan
+01)FilterExec: int_col@0 > 9 AND counted_volatile(int_col@0) > 0
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col >= 9 AND (int_col < 3 OR int_col < 10) AND counted_volatile(int_col) > 0;
+----
+logical_plan
+01)Filter: test_data.int_col >= Int32(9) AND test_data.int_col < Int32(10) AND counted_volatile(test_data.int_col) > Int32(0)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+physical_plan
+01)FilterExec: int_col@0 >= 9 AND int_col@0 < 10 AND counted_volatile(int_col@0) > 0
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+EXPLAIN SELECT * FROM test_data WHERE int_col > 9 AND counted_volatile(int_col) > 0 AND counted_volatile(int_col) < 100 AND int_col > 1;
+----
+logical_plan
+01)Filter: test_data.int_col > Int32(9) AND counted_volatile(test_data.int_col) > Int32(0) AND counted_volatile(test_data.int_col) < Int32(100)
+02)--TableScan: test_data projection=[int_col, float_col, str_col, date_col, bool_col]
+physical_plan
+01)FilterExec: int_col@0 > 9 AND counted_volatile(int_col@0) > 0 AND counted_volatile(int_col@0) < 100
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
