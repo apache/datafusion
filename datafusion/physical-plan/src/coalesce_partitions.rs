@@ -81,9 +81,15 @@ impl CoalescePartitionsExec {
             )
         };
 
-        // Coalescing partitions loses existing orderings:
+        // Coalescing partitions loses existing orderings, except when there is
+        // a single partition: `execute` then forwards the child stream as-is
+        // or returns its prefix when `fetch` is set, which cannot rearrange
+        // rows or split a group into separate runs. Grouping assertions ride
+        // along with the orderings (#27676).
         let mut eq_properties = input.equivalence_properties().clone();
-        eq_properties.clear_orderings();
+        if input_partitions > 1 {
+            eq_properties.clear_orderings();
+        }
         eq_properties.clear_per_partition_constants();
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
@@ -469,13 +475,17 @@ mod tests {
     use arrow::array::RecordBatch;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     use futures::FutureExt;
 
     #[rstest::rstest]
-    #[case::single_partition(1)]
-    #[case::multiple_partitions(2)]
-    fn coalesce_clears_explicit_grouping(#[case] partitions: usize) -> Result<()> {
+    #[case::single_partition_preserves_grouping(1, true)]
+    #[case::multiple_partitions_clear_grouping(2, false)]
+    fn coalesce_grouping(
+        #[case] partitions: usize,
+        #[case] preserved: bool,
+    ) -> Result<()> {
         let input = test::mem_exec(partitions);
         let grouping = col("i", &input.schema())?;
         let input = Arc::new(
@@ -489,8 +499,38 @@ mod tests {
         );
         let merge = CoalescePartitionsExec::new(input);
         let properties = merge.properties().equivalence_properties();
-        assert!(properties.geq_class().is_empty());
-        assert!(!properties.grouping_satisfy([grouping])?);
+        assert_eq!(properties.grouping_satisfy([grouping])?, preserved);
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::single_partition_preserves_ordering(1, true)]
+    #[case::multiple_partitions_lose_ordering(2, false)]
+    fn coalesce_ordering(
+        #[case] partitions: usize,
+        #[case] preserved: bool,
+    ) -> Result<()> {
+        let input = test::mem_exec(partitions);
+        let ordering = [PhysicalSortExpr::new_default(col("i", &input.schema())?)];
+        let input = Arc::new(input.try_with_sort_information(vec![
+            LexOrdering::new(ordering.clone()).expect("expected non-empty ordering"),
+        ])?);
+        assert!(
+            input
+                .properties()
+                .equivalence_properties()
+                .ordering_satisfy(ordering.clone())?
+        );
+        // `fetch` truncates the stream but cannot rearrange rows, so the
+        // preserved ordering claim holds with a fetch as well (#27676).
+        let merge = CoalescePartitionsExec::new(input).with_fetch(Some(3));
+        assert_eq!(
+            merge
+                .properties()
+                .equivalence_properties()
+                .ordering_satisfy(ordering)?,
+            preserved
+        );
         Ok(())
     }
 
