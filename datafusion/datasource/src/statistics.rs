@@ -27,7 +27,14 @@ use datafusion_physical_plan::Statistics;
 /// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
 /// The min/max values are ordered by [`Self::sort_order`].
 /// Furthermore, any columns that are reversed in the sort order have their min/max values swapped.
-pub(crate) struct MinMaxStatistics {
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub struct MinMaxStatistics {
     min_by_sort_order: Rows,
     max_by_sort_order: Rows,
     sort_order: LexOrdering,
@@ -35,13 +42,11 @@ pub(crate) struct MinMaxStatistics {
 
 impl MinMaxStatistics {
     /// Sort order used to sort the statistics
-    #[expect(unused)]
     pub fn sort_order(&self) -> &LexOrdering {
         &self.sort_order
     }
 
     /// Min value at index
-    #[expect(unused)]
     pub fn min(&'_ self, idx: usize) -> Row<'_> {
         self.min_by_sort_order.row(idx)
     }

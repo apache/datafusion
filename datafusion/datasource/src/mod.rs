@@ -54,6 +54,8 @@ use datafusion_common::{ScalarValue, Statistics};
 use datafusion_physical_expr::LexOrdering;
 use futures::Stream;
 use object_store::{ObjectMeta, path::Path};
+#[doc(hidden)]
+pub use statistics::MinMaxStatistics;
 pub use statistics::compute_all_files_statistics;
 use std::any::Any;
 use std::pin::Pin;
