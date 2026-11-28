@@ -3885,6 +3885,76 @@ NULL Decimal128(14, 4)
 statement ok
 drop table t;
 
+# avg_decimal_rounds_half_away_from_zero
+# https://github.com/apache/datafusion/issues/27688
+statement ok
+create table t (g int, c1 decimal(10, 2), c2 decimal(50, 2)) as values
+  (1, 1, 1), (1, 2, 2), (1, 2, 2),
+  (2, -1, -1), (2, -2, -2), (2, -2, -2),
+  (3, 1, 1), (3, 1, 1), (3, 2, 2);
+
+query RT
+select avg(c1), arrow_typeof(avg(c1)) from t where g = 1;
+----
+1.666667 Decimal128(14, 6)
+
+query RT
+select avg(c2), arrow_typeof(avg(c2)) from t where g = 1;
+----
+1.666667 Decimal256(54, 6)
+
+query IRR
+select g, avg(c1), avg(c2) from t group by g order by g;
+----
+1 1.666667 1.666667
+2 -1.666667 -1.666667
+3 1.333333 1.333333
+
+# 0.08 / 3 with the duplicate removed, 0.10 / 4 without
+statement ok
+create table d (g int, c1 decimal(10, 2), c2 decimal(50, 2)) as values
+  (1, 0.01, 0.01), (1, 0.02, 0.02), (1, 0.02, 0.02), (1, 0.05, 0.05),
+  (2, -0.01, -0.01), (2, -0.02, -0.02), (2, -0.02, -0.02), (2, -0.05, -0.05);
+
+query RR
+select avg(distinct c1), avg(distinct c2) from d where g = 1;
+----
+0.026667 0.026667
+
+query IRR
+select g, avg(distinct c1), avg(distinct c2) from d group by g order by g;
+----
+1 0.026667 0.026667
+2 -0.026667 -0.026667
+
+statement ok
+drop table d;
+
+# a remainder of exactly one half: 1 / 32 = 0.03125
+query RR
+select avg(cast(case when value = 1 then 1 else 0 end as decimal(10, 0))),
+       avg(cast(case when value = 1 then -1 else 0 end as decimal(10, 0)))
+from generate_series(1, 32);
+----
+0.0313 -0.0313
+
+# sliding window frame, which retracts rows
+query IRR
+select g, c1, avg(c1) over (order by g, c1 rows between 2 preceding and current row) from t order by g, c1;
+----
+1 1.00 1.000000
+1 2.00 1.500000
+1 2.00 1.666667
+2 -2.00 0.666667
+2 -2.00 -0.666667
+2 -1.00 -1.666667
+3 1.00 -0.666667
+3 1.00 0.333333
+3 2.00 1.333333
+
+statement ok
+drop table t;
+
 # avg_i32
 statement ok
 create table t (c1 int) as values (1), (2), (3), (4), (5);

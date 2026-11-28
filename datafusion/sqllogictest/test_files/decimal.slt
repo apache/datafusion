@@ -108,7 +108,7 @@ Decimal128(20, 6) 0.000550
 query TR
 select arrow_typeof(avg(c1)), avg(c1) from decimal_simple;
 ----
-Decimal128(14, 10) 0.0000366666
+Decimal128(14, 10) 0.0000366667
 
 
 query TR
@@ -665,7 +665,7 @@ select * from decimal256_simple where c1 > c5;
 query TR
 select arrow_typeof(avg(c1)), avg(c1) from decimal256_simple;
 ----
-Decimal256(54, 10) 0.0000366666
+Decimal256(54, 10) 0.0000366667
 
 query TR
 select arrow_typeof(min(c1)), min(c1) from decimal256_simple where c4=false;

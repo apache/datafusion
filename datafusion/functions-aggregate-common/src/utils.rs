@@ -135,7 +135,8 @@ impl<T: DecimalType> DecimalAverager<T> {
     }
 
     /// Returns the `sum`/`count` as a i128/i256 Decimal128/Decimal256 with
-    /// target_scale and target_precision and reporting overflow.
+    /// target_scale and target_precision and reporting overflow. The result
+    /// is rounded to target_scale, half away from zero.
     ///
     /// * sum: The total sum value stored as Decimal128 with sum_scale
     ///   (passed to `Self::try_new`)
@@ -143,7 +144,23 @@ impl<T: DecimalType> DecimalAverager<T> {
     #[inline(always)]
     pub fn avg(&self, sum: T::Native, count: T::Native) -> Result<T::Native> {
         if let Ok(value) = sum.mul_checked(self.target_mul.div_wrapping(self.sum_mul)) {
-            let new_value = value.div_wrapping(count);
+            // Round half away from zero, as MySQL and PostgreSQL do, rather
+            // than truncate. `count` is positive and the remainder is smaller
+            // in magnitude, so none of this can overflow.
+            let quotient = value.div_wrapping(count);
+            let remainder = value.mod_wrapping(count);
+            let remainder = if remainder.is_lt(T::Native::ZERO) {
+                remainder.neg_wrapping()
+            } else {
+                remainder
+            };
+            let new_value = if remainder.is_lt(count.sub_wrapping(remainder)) {
+                quotient
+            } else if value.is_lt(T::Native::ZERO) {
+                quotient.sub_wrapping(T::Native::ONE)
+            } else {
+                quotient.add_wrapping(T::Native::ONE)
+            };
 
             let validate = T::validate_decimal_precision(
                 new_value,
@@ -249,5 +266,57 @@ impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
         let num_elements = self.values.len();
         let fixed_size = size_of_val(self) + size_of_val(&self.values);
         estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{Decimal128Type, Decimal256Type, i256};
+
+    #[test]
+    fn decimal_averager_rounds_half_away_from_zero() -> Result<()> {
+        // sum scale 2, output scale 6, as `avg` plans for a `Decimal(_, 2)` input
+        let averager = DecimalAverager::<Decimal128Type>::try_new(2, 14, 6)?;
+
+        // 5.00 / 3 = 1.6666666..., 4.00 / 3 = 1.3333333...
+        assert_eq!(averager.avg(500, 3)?, 1_666_667);
+        assert_eq!(averager.avg(400, 3)?, 1_333_333);
+        assert_eq!(averager.avg(-500, 3)?, -1_666_667);
+        assert_eq!(averager.avg(-400, 3)?, -1_333_333);
+
+        // exact results are left alone
+        assert_eq!(averager.avg(600, 3)?, 2_000_000);
+        assert_eq!(averager.avg(-600, 3)?, -2_000_000);
+        assert_eq!(averager.avg(0, 3)?, 0);
+        assert_eq!(averager.avg(123, 1)?, 1_230_000);
+
+        // same scale in and out: a remainder of one half, just under and just over
+        let averager = DecimalAverager::<Decimal128Type>::try_new(0, 10, 0)?;
+        assert_eq!(averager.avg(5, 2)?, 3);
+        assert_eq!(averager.avg(-5, 2)?, -3);
+        assert_eq!(averager.avg(7, 15)?, 0);
+        assert_eq!(averager.avg(-7, 15)?, 0);
+        assert_eq!(averager.avg(8, 15)?, 1);
+        assert_eq!(averager.avg(-8, 15)?, -1);
+
+        let averager = DecimalAverager::<Decimal256Type>::try_new(2, 54, 6)?;
+        let avg = |sum| averager.avg(i256::from_i128(sum), i256::from_i128(3));
+        assert_eq!(avg(500)?, i256::from_i128(1_666_667));
+        assert_eq!(avg(-500)?, i256::from_i128(-1_666_667));
+
+        Ok(())
+    }
+
+    #[test]
+    fn decimal_averager_rounding_past_the_precision_is_an_overflow() -> Result<()> {
+        // 199 / 2 = 99.5 rounds to 100, which needs three digits
+        let averager = DecimalAverager::<Decimal128Type>::try_new(0, 2, 0)?;
+
+        assert_eq!(averager.avg(197, 2)?, 99);
+        let err = averager.avg(199, 2).unwrap_err();
+        assert!(err.to_string().contains("Arithmetic Overflow"), "{err}");
+
+        Ok(())
     }
 }
