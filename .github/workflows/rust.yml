@@ -708,25 +708,6 @@ jobs:
           cargo xtask ci step test substrait-optimized
           cargo xtask ci step test unparser
 
-  #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
-  #  Waiting for new Windows 2025 github runner
-  #  Details: https://github.com/apache/datafusion/issues/13726
-  #
-  #  windows:
-  #    name: cargo test (win64)
-  #    runs-on: windows-latest
-  #    steps:
-  #      - uses: actions/checkout@v4
-  #        with:
-  #          submodules: true
-  #      - name: Setup Rust toolchain
-  #        uses: ./.github/actions/setup-windows-builder
-  #      - name: Run tests (excluding doctests)
-  #        shell: bash
-  #        run: |
-  #          export PATH=$PATH:$HOME/d/protoc/bin
-  #          cargo test --lib --tests --bins --features avro,json,backtrace
-
   # macOS scope is narrowed to `datafusion-ffi`: the only bug class amd64
   # cannot reproduce is FFI cdylib loading (`.dylib` vs `.so` resolution in
   # datafusion/ffi/src/tests/utils.rs). All other macos-only failures

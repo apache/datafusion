@@ -1390,3 +1390,78 @@ SELECT a < b FROM decimal256_wide;
 
 statement ok
 DROP TABLE decimal256_wide;
+
+# Regression for https://github.com/apache/datafusion/issues/27424: an integer
+# too wide for Decimal32 or Decimal64 used to coerce the decimal to an integer
+# and drop its fraction. `arrow_cast` because a SQL `DECIMAL` is `Decimal128`.
+
+statement ok
+CREATE TABLE narrow_decimals AS SELECT
+  arrow_cast(CAST(5.5 AS DECIMAL(9, 2)), 'Decimal32(9, 2)') AS d32,
+  arrow_cast(CAST(5.5 AS DECIMAL(18, 2)), 'Decimal64(18, 2)') AS d64;
+
+query BBB
+SELECT d32 > 5, d32 = 5, d64 > 5 FROM narrow_decimals;
+----
+true false true
+
+query RTRT
+SELECT d32 + 1, arrow_typeof(d32 + 1), d64 * 2, arrow_typeof(d64 * 2) FROM narrow_decimals;
+----
+6.50 Decimal128(23, 2) 11.00 Decimal128(38, 2)
+
+# A pair whose precisions the variant still holds leaves it alone
+query RT
+SELECT d32 + arrow_cast(1, 'Int8'), arrow_typeof(d32 + arrow_cast(1, 'Int8')) FROM narrow_decimals;
+----
+6.50 Decimal32(9, 2)
+
+# Everything that asks for a common type sees it, not just `WHERE`
+query B
+SELECT d32 IN (5, 6) FROM narrow_decimals;
+----
+false
+
+query RRT
+SELECT greatest(d32, 5), least(d32, 5), arrow_typeof(greatest(d32, 5)) FROM narrow_decimals;
+----
+5.50 5.00 Decimal128(22, 2)
+
+query RT
+SELECT x, arrow_typeof(x) FROM (SELECT d32 AS x FROM narrow_decimals UNION ALL SELECT 5) ORDER BY x;
+----
+5.00 Decimal128(22, 2)
+5.50 Decimal128(22, 2)
+
+statement ok
+DROP TABLE narrow_decimals;
+
+# Regression for https://github.com/apache/datafusion/issues/27095: these need
+# 48 digits, and capping at Decimal128's 38 kept the scale, so the integer's
+# cast failed at execution.
+
+statement ok
+CREATE TABLE int_vs_wide_decimal(a INT) AS VALUES (-1), (0), (5);
+
+query I
+SELECT a FROM int_vs_wide_decimal WHERE a <> CAST(0.9 AS DECIMAL(38, 38)) ORDER BY a;
+----
+-1
+0
+5
+
+query I
+SELECT a FROM int_vs_wide_decimal WHERE a > CAST(0.9 AS DECIMAL(38, 38)) ORDER BY a;
+----
+5
+
+statement ok
+DROP TABLE int_vs_wide_decimal;
+
+# No variant holds the 90 digits this needs, so the precision is capped
+query BBB
+SELECT arrow_cast(0.5, 'Decimal256(76, 70)') > 0,
+       arrow_cast(0.5, 'Decimal256(76, 70)') = 0,
+       arrow_cast(0.5, 'Decimal256(76, 70)') > 5;
+----
+true false false

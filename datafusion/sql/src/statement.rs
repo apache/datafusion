@@ -1730,8 +1730,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let partition_by = statement
             .partitioned_by
-            .iter()
-            .map(|col| input_schema.field_with_name(table_ref.as_ref(), col))
+            .into_iter()
+            .map(|col| {
+                let col = self.ident_normalizer.normalize(col);
+                input_schema.field_with_name(table_ref.as_ref(), &col)
+            })
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .map(|f| f.name().to_owned())
@@ -1851,6 +1854,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 "File compression type cannot be set for PARQUET, AVRO, or ARROW files."
             )?;
         }
+
+        let table_partition_cols = table_partition_cols
+            .into_iter()
+            .map(|col| self.ident_normalizer.normalize(col))
+            .collect();
 
         let mut planner_context = PlannerContext::new();
 
