@@ -4876,3 +4876,74 @@ fn test_table_scan_with_skip() -> Result<()> {
     assert_snapshot!(scan(None, Some(10))?, @"SELECT * FROM t1 LIMIT 10");
     Ok(())
 }
+#[test]
+fn test_empty_projection_filtered_count_dialects() -> Result<()> {
+    use datafusion_sql::unparser::dialect::DuckDBDialect;
+
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("value", DataType::Float64, false),
+    ]);
+    let scan = TableScanBuilder::new("t", table_source(&schema)).build()?;
+    let inner_plan = LogicalPlanBuilder::table_scan(scan)?
+        .filter(col("t.value").eq(lit(0.0)))?
+        .project(Vec::<Expr>::new())?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(inner_plan)
+        .aggregate(
+            Vec::<Expr>::new(),
+            vec![count_udaf().call(vec![lit(1)]).alias("n")],
+        )?
+        .project(vec![col("n")])?
+        .build()?;
+
+    let pg_sql = Unparser::new(&UnparserPostgreSqlDialect {})
+        .plan_to_sql(&plan)?
+        .to_string();
+    assert_snapshot!(
+        pg_sql,
+        @r#"SELECT COUNT(1) AS "n" FROM (SELECT FROM "t" WHERE ("t"."value" = 0.0)) AS "derived_projection""#
+    );
+
+    let duckdb_sql = Unparser::new(&DuckDBDialect::new())
+        .plan_to_sql(&plan)?
+        .to_string();
+    assert_snapshot!(
+        duckdb_sql,
+        @r#"SELECT COUNT(1) AS "n" FROM (SELECT 1 FROM "t" WHERE ("t"."value" = 0.0))"#
+    );
+
+    let bq_sql = Unparser::new(&BigQueryDialect {})
+        .plan_to_sql(&plan)?
+        .to_string();
+    assert_snapshot!(
+        bq_sql,
+        @"SELECT COUNT(1) AS `n` FROM (SELECT 1 FROM `t` WHERE (`t`.`value` = 0.0))"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_projected_filtered_limit_keeps_table_in_scope() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("value", DataType::Float64, false),
+    ]);
+    let scan = TableScanBuilder::new("t", table_source(&schema)).build()?;
+    let plan = LogicalPlanBuilder::table_scan(scan)?
+        .filter(col("t.id").eq(lit(1002)))?
+        .limit(0, Some(2))?
+        .project(vec![cast(col("t.id"), DataType::Int64).alias("key")])?
+        .build()?;
+
+    let pg_sql = Unparser::new(&UnparserPostgreSqlDialect {})
+        .plan_to_sql(&plan)?
+        .to_string();
+    assert_snapshot!(
+        pg_sql,
+        @r#"SELECT CAST("t"."id" AS BIGINT) AS "key" FROM "t" WHERE ("t"."id" = 1002) LIMIT 2"#
+    );
+
+    Ok(())
+}
