@@ -93,6 +93,10 @@ impl GroupClustering {
     /// while respecting the configured group-clustering mode.
     ///
     /// Returns `None` if no data can be emitted.
+    #[deprecated(
+        since = "57.0.0",
+        note = "No longer used by DataFusion. Use `emit_to` and limit the returned `EmitTo::First` instead"
+    )]
     pub fn oom_emit_to(&self, n: usize) -> Option<EmitTo> {
         if n == 0 {
             return None;
@@ -230,6 +234,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_oom_emit_to_none_clustering() {
         let group_clustering = GroupClustering::None;
 
@@ -258,6 +263,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_oom_emit_to_partial_clamps_to_boundary() -> Result<()> {
         let group_clustering = partial_clustering(vec![1, 2, 3])?;
 
@@ -270,6 +276,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_oom_emit_to_partial_without_boundary() -> Result<()> {
         let group_clustering = partial_clustering(vec![1, 1, 1])?;
 

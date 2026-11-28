@@ -3234,6 +3234,10 @@ fn merge_expressions(
 
 pub type AccumulatorItem = Box<dyn Accumulator>;
 
+#[deprecated(
+    since = "57.0.0",
+    note = "No longer used by DataFusion. Call `AggregateFunctionExpr::create_accumulator` for each expression instead"
+)]
 pub fn create_accumulators(
     aggr_expr: &[Arc<AggregateFunctionExpr>],
 ) -> Result<Vec<AccumulatorItem>> {
@@ -3257,6 +3261,10 @@ pub(crate) fn create_accumulators_with_metrics(
 
 /// returns a vector of ArrayRefs, where each entry corresponds to either the
 /// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
+#[deprecated(
+    since = "57.0.0",
+    note = "No longer used by DataFusion. Call `Accumulator::evaluate` or `Accumulator::state` for each accumulator instead"
+)]
 pub fn finalize_aggregation(
     accumulators: &mut [AccumulatorItem],
     mode: &AggregateMode,
@@ -3287,6 +3295,10 @@ pub fn finalize_aggregation(
 }
 
 /// Evaluates groups of expressions against a record batch.
+#[deprecated(
+    since = "57.0.0",
+    note = "No longer used by DataFusion. Call `evaluate_expressions_to_arrays` for each group of expressions instead"
+)]
 pub fn evaluate_many(
     expr: &[Vec<Arc<dyn PhysicalExpr>>],
     batch: &RecordBatch,
