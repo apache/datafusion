@@ -103,3 +103,26 @@ update t1 as T set b = t2.b, c = t.a, d = 1 from t2 where t.a = t2.a and t.b > '
 # Config reset
 statement ok
 RESET datafusion.optimizer.max_passes;
+
+# Reject multiple assignments to the same column
+# https://github.com/apache/datafusion/issues/27096
+statement ok
+create table dup_assign(a int, b int) as values (0, 0);
+
+statement error DataFusion error: Error during planning: multiple assignments to same column "a"
+update dup_assign set a = 1, a = 2;
+
+statement error DataFusion error: Error during planning: multiple assignments to same column "a"
+update dup_assign set a = 3, b = 4, a = 5;
+
+statement error DataFusion error: Error during planning: multiple assignments to same column "a"
+update dup_assign set dup_assign.a = 1, a = 2;
+
+# Distinct columns still update
+statement ok
+update dup_assign set a = 1, b = 2;
+
+query II
+select * from dup_assign;
+----
+1 2
