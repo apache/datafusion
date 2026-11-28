@@ -172,12 +172,7 @@ impl AggregateUDFImpl for StringAgg {
             Ok(Box::new(SimpleStringAggAccumulator::new(&delimiter)))
         } else {
             let array_agg_acc = self.array_agg.accumulator(AccumulatorArgs {
-                return_field: Field::new(
-                    "f",
-                    DataType::new_list(acc_args.return_field.data_type().clone(), true),
-                    true,
-                )
-                .into(),
+                return_field: self.array_agg.return_field(&acc_args.expr_fields[..1])?,
                 exprs: &filter_index(acc_args.exprs, 1),
                 expr_fields: &filter_index(acc_args.expr_fields, 1),
                 // Unchanged below; we list each field explicitly in case we ever add more
