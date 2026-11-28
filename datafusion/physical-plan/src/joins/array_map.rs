@@ -375,6 +375,10 @@ impl ArrayMap {
         Ok(None)
     }
 
+    pub(crate) fn has_dense_unique_keys(&self) -> bool {
+        self.next.is_empty() && self.num_of_distinct_key == self.data.len()
+    }
+
     pub fn contain_keys(&self, probe_side_keys: &[ArrayRef]) -> Result<BooleanArray> {
         if probe_side_keys.len() != 1 {
             return internal_err!(
@@ -401,6 +405,13 @@ impl ArrayMap {
         T::Native: AsPrimitive<u64>,
     {
         let arr = array.as_primitive::<T>();
+        if self.has_dense_unique_keys() {
+            let len = self.data.len() as u64;
+            let buffer = BooleanBuffer::collect_bool(arr.len(), |i| {
+                arr.is_valid(i) && arr.value(i).as_().wrapping_sub(self.offset) < len
+            });
+            return Ok(BooleanArray::new(buffer, None));
+        }
         let buffer = BooleanBuffer::collect_bool(arr.len(), |i| {
             if arr.is_null(i) {
                 return false;
@@ -420,6 +431,33 @@ mod tests {
     use arrow::array::Int64Array;
     use arrow::array::UInt64Array;
     use std::sync::Arc;
+
+    #[test]
+    fn dense_range_membership() -> Result<()> {
+        let keys: ArrayRef =
+            Arc::new(Int64Array::from(vec![Some(-1), None, Some(0), Some(1)]));
+        let map = ArrayMap::try_new(&keys, (-1_i64) as u64, 1)?;
+        assert!(map.has_dense_unique_keys());
+        let probes: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(-2),
+            Some(-1),
+            None,
+            Some(0),
+            Some(1),
+            Some(2),
+        ]));
+        assert_eq!(
+            map.contain_keys(&[probes])?,
+            BooleanArray::from(vec![false, true, false, true, true, false])
+        );
+        for sparse_or_duplicate in [vec![-1, 1], vec![-1, 0, 1, 1]] {
+            let keys: ArrayRef = Arc::new(Int64Array::from(sparse_or_duplicate));
+            assert!(
+                !ArrayMap::try_new(&keys, (-1_i64) as u64, 1)?.has_dense_unique_keys()
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_array_map_limit_offset_duplicate_elements() -> Result<()> {

@@ -23,7 +23,7 @@ use crate::joins::hash_join::partitioned_hash_eval::{
 use crate::joins::join_hash_map::{JoinHashMapType, JoinHashMapU32};
 use crate::joins::key_range_bitmap::{KeyRangeBitmap, KeyRangePart};
 use crate::repartition::RangeExpr;
-use arrow::array::{ArrayRef, AsArray};
+use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::{ConfigOptions, OptimizerOptions};
@@ -682,6 +682,25 @@ impl SharedBuildAccumulator {
                 pushdown,
                 keys_have_null,
             }) => {
+                if let PushdownStrategy::InList(values) = &pushdown
+                    && let Some(keys) =
+                        values.as_any().downcast_ref::<arrow::array::Int64Array>()
+                    && self.on_right.len() == 1
+                    && keys.len() > 1
+                    && keys.null_count() == 0
+                    && let Some(bound) = bounds.get_column_bounds(0)
+                    && bound.min == ScalarValue::Int64(Some(keys.value(0)))
+                    && bound.max == ScalarValue::Int64(Some(keys.value(keys.len() - 1)))
+                    && keys
+                        .values()
+                        .windows(2)
+                        .all(|w| w[0].checked_add(1) == Some(w[1]))
+                    && let Some(expr) = create_bounds_predicate(&self.on_right, &bounds)
+                {
+                    self.dynamic_filter
+                        .update(self.preserve_probe_nulls(expr, keys_have_null)?)?;
+                    return Ok(());
+                }
                 let membership_expr = create_membership_predicate(
                     &self.on_right,
                     pushdown,
