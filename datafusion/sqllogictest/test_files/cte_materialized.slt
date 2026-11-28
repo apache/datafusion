@@ -1488,6 +1488,27 @@ SELECT count(*) FROM pruned
 statement ok
 DROP TABLE pruned;
 
+# A materialized CTE inside a correlated scalar subquery. The subquery
+# aggregates in the continuation of the `MaterializedCte` node.
+query II rowsort
+SELECT k, (WITH c AS MATERIALIZED (SELECT k AS x, v AS y FROM t)
+           SELECT max(y) FROM c WHERE c.x = t.k) FROM t
+----
+1 10
+2 20
+3 30
+4 40
+
+# Outer rows without a match get NULL.
+query II rowsort
+SELECT k, (WITH c AS MATERIALIZED (SELECT k AS x, v AS y FROM t)
+           SELECT max(y) FROM c WHERE c.x = t.k + 2) FROM t
+----
+1 30
+2 40
+3 NULL
+4 NULL
+
 statement ok
 DROP TABLE wide;
 
