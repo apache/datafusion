@@ -530,11 +530,9 @@ impl LogicalPlan {
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
-            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
-                cte,
-                continuation,
-                ..
-            })) => vec![cte, continuation],
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+                vec![cte.body(), cte.continuation()]
+            }
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => vec![],
             LogicalPlan::Union(Union { inputs, .. }) => {
                 inputs.iter().map(|arc| arc.as_ref()).collect()
@@ -673,7 +671,7 @@ impl LogicalPlan {
             }
             // A materialized CTE outputs the output of its continuation.
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
-                cte.continuation.head_output_expr()
+                cte.continuation().head_output_expr()
             }
             LogicalPlan::Extension(_)
             | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => Ok(None),
@@ -1233,9 +1231,11 @@ impl LogicalPlan {
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
                 self.assert_no_expressions(expr)?;
                 let (body, continuation) = self.only_two_inputs(inputs)?;
-                Ok(LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
-                    cte.with_new_inputs(Arc::new(body), Arc::new(continuation)),
-                )))
+                // The scans are not checked. See the documentation of
+                // `materialized_cte`.
+                Ok(cte
+                    .with_new_inputs_unchecked(Arc::new(body), Arc::new(continuation))
+                    .into())
             }
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => {
                 self.assert_no_expressions(expr)?;

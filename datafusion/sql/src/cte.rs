@@ -12,38 +12,16 @@ use datafusion_common::{
     tree_node::{TreeNode, TreeNodeRecursion},
 };
 use datafusion_expr::{
-    LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCteId,
-    MaterializedCtePlan, MaterializedCteScan, TableSource,
+    LogicalPlan, LogicalPlanBuilder, MaterializedCteBuilder, TableSource,
 };
 use sqlparser::ast::{CteAsMaterialized, Ident, Query, SetExpr, SetOperator, With};
-
-/// A `WITH x AS MATERIALIZED (...)` CTE whose body must wrap the query that
-/// declared it. See [`MaterializedCte`].
-pub(crate) struct PendingMaterializedCte {
-    id: MaterializedCteId,
-    name: String,
-    cte: LogicalPlan,
-}
-
-impl PendingMaterializedCte {
-    /// Wrap `continuation` so that its scans of this CTE read one shared result.
-    pub(crate) fn wrap(self, continuation: LogicalPlan) -> Result<LogicalPlan> {
-        MaterializedCte::try_new(
-            self.id,
-            self.name,
-            Arc::new(self.cte),
-            Arc::new(continuation),
-        )
-        .map(|cte| LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)))
-    }
-}
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn plan_with_clause(
         &self,
         with: With,
         planner_context: &mut PlannerContext,
-    ) -> Result<Vec<PendingMaterializedCte>> {
+    ) -> Result<Vec<MaterializedCteBuilder>> {
         let is_recursive = with.recursive;
         let mut materialized = vec![];
         // Process CTEs from top to bottom
@@ -86,20 +64,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // Every reference reads the shared result instead of a copy
                 // of the body. The body is already planned, so a reference
                 // of a recursive CTE to itself stays a work table scan.
-                let id = MaterializedCteId::next();
-                let scan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
-                    MaterializedCteScan::new(
-                        id,
-                        cte_name.clone(),
-                        Arc::clone(final_plan.schema()),
-                    ),
-                ));
-                materialized.push(PendingMaterializedCte {
-                    id,
-                    name: cte_name.clone(),
-                    cte: final_plan,
-                });
-                planner_context.insert_cte(cte_name, scan);
+                let builder = MaterializedCteBuilder::new(cte_name.clone(), final_plan);
+                planner_context.insert_cte(cte_name, builder.scan().into());
+                materialized.push(builder);
                 continue;
             }
             // Export the CTE to the outer query
