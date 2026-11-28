@@ -719,6 +719,18 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
+        let sql = "select distinct object_store_url from metadata_cache()";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+
+        assert_snapshot!(batches_to_string(&rbs),@r"
+        +------------------+
+        | object_store_url |
+        +------------------+
+        | file:///         |
+        +------------------+
+        ");
+
         // increase the number of hits
         ctx.sql("select * from alltypes_plain")
             .await?

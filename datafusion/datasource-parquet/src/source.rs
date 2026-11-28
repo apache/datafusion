@@ -1308,14 +1308,17 @@ impl ParquetSource {
         let store = ctx
             .task_ctx()
             .runtime_env()
-            .object_store(object_store_url)?;
+            .object_store(&object_store_url)?;
         let metadata_cache = ctx
             .task_ctx()
             .runtime_env()
             .cache_manager
             .get_file_metadata_cache();
-        let reader_factory =
-            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+            store,
+            object_store_url,
+            metadata_cache,
+        ));
 
         let mut source = ParquetSource::new(table_schema)
             .with_parquet_file_reader_factory(reader_factory)
@@ -1527,6 +1530,7 @@ mod tests {
         use datafusion_datasource::PartitionedFile;
         use datafusion_execution::cache::cache_manager::FileMetadataCache;
         use datafusion_execution::cache::default_cache::DefaultCache;
+        use datafusion_execution::object_store::ObjectStoreUrl;
         use object_store::memory::InMemory;
         use parquet::arrow::async_reader::AsyncFileReader;
 
@@ -1551,7 +1555,11 @@ mod tests {
         let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024));
         let source = ParquetSource::new(Arc::new(Schema::empty()))
             .with_parquet_file_reader_factory(Arc::new(
-                CachedParquetFileReaderFactory::new(Arc::clone(&store), cache),
+                CachedParquetFileReaderFactory::new(
+                    Arc::clone(&store),
+                    ObjectStoreUrl::parse("memory://").unwrap(),
+                    cache,
+                ),
             ));
         let factory = source.parquet_file_reader_factory().unwrap();
         assert!(factory.is::<CachedParquetFileReaderFactory>());

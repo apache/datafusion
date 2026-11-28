@@ -20,8 +20,9 @@ use datafusion_common::{
     internal_datafusion_err,
 };
 use datafusion_execution::cache::cache_manager::{
-    CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
+    CachedFileMetadataEntry, FileMetadata, FileMetadataCache, FileMetadataCacheKey,
 };
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -189,8 +190,11 @@ pub struct DFParquetMetadata<'a> {
     /// [`ParquetMetaDataReader::with_decryption_properties`].
     decryption_properties: Option<Arc<FileDecryptionProperties>>,
     /// Optional cache of previously fetched [`ParquetMetaData`], keyed by
-    /// file location.
+    /// object store and file location.
     file_metadata_cache: Option<Arc<FileMetadataCache>>,
+    /// URL of the object store `store`, which is part of the cache key. The
+    /// cache is only used when this is known.
+    object_store_url: Option<ObjectStoreUrl>,
     /// Policy controlling whether the Parquet page index (column and offset
     /// indexes) is fetched, mirroring
     /// [`ParquetMetaDataReader::with_page_index_policy`].
@@ -220,6 +224,7 @@ impl<'a> DFParquetMetadata<'a> {
             metadata_size_hint: None,
             decryption_properties: None,
             file_metadata_cache: None,
+            object_store_url: None,
             page_index_policy: None,
             coerce_int96: None,
             coerce_int96_tz: None,
@@ -270,12 +275,40 @@ impl<'a> DFParquetMetadata<'a> {
 
     /// Set an optional [`FileMetadataCache`] used to avoid re-fetching
     /// [`ParquetMetaData`] for files that have already been read.
+    ///
+    /// The cache is shared by all object stores, so it is only used when the
+    /// URL of the store is also set with [`Self::with_object_store_url`].
     pub fn with_file_metadata_cache(
         mut self,
         file_metadata_cache: Option<Arc<FileMetadataCache>>,
     ) -> Self {
         self.file_metadata_cache = file_metadata_cache;
         self
+    }
+
+    /// Set the [`ObjectStoreUrl`] of the store this file is read from.
+    ///
+    /// Together with the file's location it forms the
+    /// [`FileMetadataCacheKey`], so that files with the same path in
+    /// different object stores do not share a cache entry. Without it the
+    /// [`FileMetadataCache`] is not used.
+    pub fn with_object_store_url(
+        mut self,
+        object_store_url: Option<ObjectStoreUrl>,
+    ) -> Self {
+        self.object_store_url = object_store_url;
+        self
+    }
+
+    /// The configured [`FileMetadataCache`] and this file's key in it, if
+    /// both a cache and the object store URL are known.
+    fn metadata_cache(&self) -> Option<(&FileMetadataCache, FileMetadataCacheKey)> {
+        let cache = self.file_metadata_cache.as_deref()?;
+        let url = self.object_store_url.as_ref()?;
+        Some((
+            cache,
+            FileMetadataCacheKey::new(url, self.object_meta.location.clone()),
+        ))
     }
 
     /// Sets the policy for loading parquet page index structures (column and
@@ -341,8 +374,8 @@ impl<'a> DFParquetMetadata<'a> {
         let page_index_policy = self.effective_page_index_policy(cache_metadata);
 
         if cache_metadata
-            && let Some(file_metadata_cache) = self.file_metadata_cache.as_ref()
-            && let Some(cached) = file_metadata_cache.get(&self.object_meta.location)
+            && let Some((file_metadata_cache, key)) = self.metadata_cache()
+            && let Some(cached) = file_metadata_cache.get(&key)
             && cached.is_valid_for(self.object_meta)
             && let Some(cached_parquet) = cached
                 .file_metadata
@@ -378,7 +411,10 @@ impl<'a> DFParquetMetadata<'a> {
         self.page_index_policy.unwrap_or_else(|| {
             // fetching the page index often requires a second IO (after the
             // main metadata), so it is not free.
-            if cache_metadata && self.file_metadata_cache.is_some() {
+            if cache_metadata
+                && self.file_metadata_cache.is_some()
+                && self.object_store_url.is_some()
+            {
                 // When there is a cache available, retrieve the page index
                 // heuristically on the assumption it will be used multiple
                 // times
@@ -400,14 +436,15 @@ impl<'a> DFParquetMetadata<'a> {
     }
 
     /// Store `metadata` in the configured [`FileMetadataCache`], keyed by
-    /// the file's location.
+    /// the object store URL and the file's location.
     ///
-    /// This is a no-op unless a cache has been configured via
-    /// [`Self::with_file_metadata_cache`].
+    /// This is a no-op unless a cache and the object store URL have been
+    /// configured via [`Self::with_file_metadata_cache`] and
+    /// [`Self::with_object_store_url`].
     fn cache_metadata(&self, metadata: Arc<ParquetMetaData>) -> Result<()> {
-        if let Some(file_metadata_cache) = &self.file_metadata_cache {
+        if let Some((file_metadata_cache, key)) = self.metadata_cache() {
             file_metadata_cache.put(
-                &self.object_meta.location,
+                &key,
                 CachedFileMetadataEntry::new(
                     self.object_meta.clone(),
                     Arc::new(CachedParquetMetaData::new(metadata)),
@@ -1279,9 +1316,14 @@ fn sorting_columns_to_physical_exprs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int32Array;
+    use arrow::array::{Int32Array, RecordBatch};
     use arrow::compute::SortOptions;
     use arrow::datatypes::Field;
+    use chrono::DateTime;
+    use datafusion_execution::cache::default_cache::DefaultCache;
+    use object_store::ObjectStoreExt;
+    use object_store::memory::InMemory;
+    use parquet::arrow::ArrowWriter;
 
     #[test]
     fn test_lex_ordering_to_sorting_columns_uses_writer_schema() -> Result<()> {
@@ -2075,5 +2117,119 @@ mod tests {
                 "name column should have Inexact(5) distinct_count"
             );
         }
+    }
+
+    /// Writes a one row Parquet file with column `a` = `value` to `store`.
+    async fn put_single_value_file(
+        store: &dyn ObjectStore,
+        path: &Path,
+        value: i32,
+    ) -> u64 {
+        let batch = RecordBatch::try_from_iter([(
+            "a",
+            Arc::new(Int32Array::from(vec![value])) as _,
+        )])
+        .unwrap();
+        let mut data = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut data, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let size = data.len() as u64;
+        store.put(path, data.into()).await.unwrap();
+        size
+    }
+
+    fn max_value_of_a(metadata: &ParquetMetaData) -> i32 {
+        match metadata.row_group(0).column(0).statistics() {
+            Some(ParquetStatistics::Int32(stats)) => *stats.max_opt().unwrap(),
+            other => panic!("unexpected statistics {other:?}"),
+        }
+    }
+
+    /// Files with the same path, size and last modified time in two object
+    /// stores must not share an entry in the (shared) file metadata cache.
+    #[tokio::test]
+    async fn test_file_metadata_cache_is_keyed_by_object_store() -> Result<()> {
+        let store_a: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let store_b: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let url_a = ObjectStoreUrl::parse("memory://bucket-a")?;
+        let url_b = ObjectStoreUrl::parse("memory://bucket-b")?;
+        let path = Path::from("t/x.parquet");
+        let size_a = put_single_value_file(store_a.as_ref(), &path, 1).await;
+        let size_b = put_single_value_file(store_b.as_ref(), &path, 2).await;
+        assert_eq!(size_a, size_b);
+
+        // The same `ObjectMeta` is valid for both files
+        let object_meta = ObjectMeta {
+            location: path.clone(),
+            last_modified: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            size: size_a,
+            e_tag: None,
+            version: None,
+        };
+
+        let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024 * 1024));
+        let fetch = |store: &Arc<dyn ObjectStore>, url: &ObjectStoreUrl| {
+            let store = Arc::clone(store);
+            let url = url.clone();
+            let cache = Arc::clone(&cache);
+            let object_meta = object_meta.clone();
+            async move {
+                DFParquetMetadata::new(store.as_ref(), &object_meta)
+                    .with_file_metadata_cache(Some(cache))
+                    .with_object_store_url(Some(url))
+                    .fetch_metadata()
+                    .await
+            }
+        };
+
+        let metadata_a = fetch(&store_a, &url_a).await?;
+        assert_eq!(max_value_of_a(&metadata_a), 1);
+        assert_eq!(cache.len(), 1);
+
+        // Store B's file is read from store B, not served from store A's entry
+        let metadata_b = fetch(&store_b, &url_b).await?;
+        assert_eq!(max_value_of_a(&metadata_b), 2);
+        assert_eq!(cache.len(), 2);
+
+        // Both stores now hit their own entries
+        let metadata_a_again = fetch(&store_a, &url_a).await?;
+        assert!(Arc::ptr_eq(&metadata_a, &metadata_a_again));
+        let metadata_b_again = fetch(&store_b, &url_b).await?;
+        assert!(Arc::ptr_eq(&metadata_b, &metadata_b_again));
+
+        // The cache keys identify the object store
+        let mut keys: Vec<String> = cache
+            .list_entries()
+            .keys()
+            .map(|key| key.to_string())
+            .collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "memory://bucket-a/t/x.parquet",
+                "memory://bucket-b/t/x.parquet"
+            ]
+        );
+        Ok(())
+    }
+
+    /// Without the object store URL the shared cache cannot be keyed, so it
+    /// is not used.
+    #[tokio::test]
+    async fn test_file_metadata_cache_requires_object_store_url() -> Result<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("x.parquet");
+        put_single_value_file(store.as_ref(), &path, 1).await;
+        let object_meta = store.head(&path).await?;
+
+        let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024 * 1024));
+        DFParquetMetadata::new(store.as_ref(), &object_meta)
+            .with_file_metadata_cache(Some(Arc::clone(&cache)))
+            .fetch_metadata()
+            .await?;
+        assert!(cache.is_empty());
+        Ok(())
     }
 }

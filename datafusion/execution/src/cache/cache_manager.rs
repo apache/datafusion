@@ -3,7 +3,9 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::cache::default_cache::DefaultCache;
-pub use crate::cache::{Cache, CacheValue, SchemaFingerprint, TableScopedPath};
+pub use crate::cache::{
+    Cache, CacheValue, FileMetadataCacheKey, SchemaFingerprint, TableScopedPath,
+};
 use datafusion_common::HashMap;
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::{Result, Statistics};
@@ -66,15 +68,19 @@ pub type ListFilesCache = dyn Cache<TableScopedPath, CachedFileList>;
 /// For example, the built in [`ListingTable`] uses this cache to avoid parsing
 /// Parquet footers multiple times for the same file.
 ///
+/// One cache is shared by all object stores, so entries are keyed by
+/// [`FileMetadataCacheKey`], which identifies both the object store and the
+/// path of the file within it.
+///
 /// The typical usage pattern is:
-/// 1. Call `get(path)` to check for cached value
+/// 1. Call `get(key)` to check for cached value
 /// 2. If `Some(cached)`, validate with `cached.is_valid_for(&current_meta)`
-/// 3. If invalid or missing, compute new value and call `put(path, new_value)`
+/// 3. If invalid or missing, compute new value and call `put(key, new_value)`
 ///
 /// See [`crate::runtime_env::RuntimeEnv`] for more details.
 ///
 /// [`ListingTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
-pub type FileMetadataCache = dyn Cache<Path, CachedFileMetadataEntry>;
+pub type FileMetadataCache = dyn Cache<FileMetadataCacheKey, CachedFileMetadataEntry>;
 
 /// Cached metadata for a file, including statistics and ordering.
 ///
