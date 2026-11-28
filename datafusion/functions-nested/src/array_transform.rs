@@ -5,9 +5,9 @@
 //! [`datafusion_expr::HigherOrderUDF`] definitions for array_transform function.
 
 use arrow::{
-    array::{Array, ArrayRef, AsArray, LargeListArray, ListArray},
+    array::{Array, ArrayRef, AsArray, Int64Array, LargeListArray, ListArray},
     compute::take_arrays,
-    datatypes::{DataType, Field, FieldRef},
+    datatypes::{ArrowNativeType, DataType, Field, FieldRef},
 };
 use datafusion_common::{
     Result, exec_err, plan_err,
@@ -22,8 +22,7 @@ use datafusion_macros::user_doc;
 use std::sync::Arc;
 
 use crate::lambda_utils::{
-    ListValuesResult, coerce_single_list_arg, extract_list_values,
-    single_list_lambda_parameters,
+    ListValuesResult, coerce_single_list_arg, extract_list_values, value_lambda_pair,
 };
 
 make_higher_order_function_expr_and_func!(
@@ -45,6 +44,12 @@ make_higher_order_function_expr_and_func!(
 +--------------------------------------------+
 | [2, 4, 6, 8, 10]                           |
 +--------------------------------------------+
+> select array_transform([10, 20, 30], (x, i) -> x*i);
++----------------------------------------------+
+| array_transform([10, 20, 30], (x, i) -> x*i) |
++----------------------------------------------+
+| [10, 40, 90]                                 |
++----------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -52,7 +57,7 @@ make_higher_order_function_expr_and_func!(
     ),
     argument(
         name = "lambda",
-        description = "The lambda function used to transform each value of the array."
+        description = "The lambda function used to transform each value of the array. It receives the value and, optionally, its 1-based index in the array: `(value, index) -> ...`."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -101,7 +106,17 @@ impl HigherOrderUDFImpl for ArrayTransform {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        single_list_lambda_parameters(self.name(), fields)
+        let (list, _lambda) = value_lambda_pair(self.name(), fields)?;
+
+        let (DataType::List(field) | DataType::LargeList(field)) = list.data_type()
+        else {
+            return plan_err!("expected list, got {list}");
+        };
+
+        Ok(LambdaParametersProgress::Complete(vec![vec![
+            Arc::clone(field),
+            Arc::new(Field::new("index", DataType::Int64, false)),
+        ]]))
     }
 
     fn return_field_from_args(
@@ -146,10 +161,11 @@ impl HigherOrderUDFImpl for ArrayTransform {
 
         // by passing closures, lambda.evaluate can evaluate only those actually needed
         let values_param = || Ok(Arc::clone(&list_values));
+        let index_param = || list_values_index(&list_array);
 
         // call the transforming lambda
         let transformed_values = lambda
-            .evaluate(&[&values_param], |arrays| {
+            .evaluate(&[&values_param, &index_param], |arrays| {
                 // if any column got captured, we need to adjust it to the values arrays,
                 // duplicating values of list with multitple values and removing values of empty lists
                 let indices = list_values_row_number(&list_array)?;
@@ -208,16 +224,40 @@ impl HigherOrderUDFImpl for ArrayTransform {
     }
 }
 
+/// Returns the 1-based position of each value within its list,
+/// e.g. `[[a, b], [], [c]]` -> `[1, 2, 1]`.
+fn list_values_index(list_array: &ArrayRef) -> Result<ArrayRef> {
+    fn index<O: ArrowNativeType>(offsets: &[O]) -> ArrayRef {
+        Arc::new(Int64Array::from_iter_values(
+            offsets
+                .windows(2)
+                .flat_map(|w| 1..=(w[1].as_usize() - w[0].as_usize()) as i64),
+        ))
+    }
+
+    match list_array.data_type() {
+        DataType::List(_) => Ok(index(list_array.as_list::<i32>().offsets())),
+        DataType::LargeList(_) => Ok(index(list_array.as_list::<i64>().offsets())),
+        other => exec_err!("expected list, got {other}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use arrow::{
-        array::{Array, AsArray},
+        array::{Array, AsArray, Int64Array},
         buffer::{NullBuffer, OffsetBuffer},
+        datatypes::{DataType, Field, Int64Type},
     };
 
     use crate::array_transform::array_transform_higher_order_function;
-    use crate::lambda_utils::test_utils::{create_i32_list, eval_hof_on_i32_list, v};
-    use datafusion_expr::lit;
+    use crate::lambda_utils::test_utils::{
+        create_i32_list, eval_hof_on_i32_list, eval_hof_on_i32_list_with_params, v,
+    };
+    use datafusion_expr::expr::LambdaVariable;
+    use datafusion_expr::{Expr, lit};
 
     fn divide_100_by(
         list: impl Array + Clone + 'static,
@@ -276,5 +316,36 @@ mod tests {
 
         assert_eq!(actual_list.data_type(), expected_list.data_type());
         assert_eq!(actual_list, &expected_list);
+    }
+
+    #[test]
+    fn index_on_sliced_list_restarts_at_one_per_row() {
+        let list = create_i32_list(
+            vec![0, 1, 2, 3, 4, 5],
+            OffsetBuffer::<i32>::from_lengths(vec![1, 3, 2]),
+            None,
+        )
+        .slice(1, 2);
+
+        let i = Expr::LambdaVariable(LambdaVariable::new(
+            "i".to_string(),
+            Some(Arc::new(Field::new("i", DataType::Int64, false))),
+        ));
+
+        let res = eval_hof_on_i32_list_with_params(
+            array_transform_higher_order_function(),
+            list,
+            &["v", "i"],
+            i,
+        )
+        .unwrap();
+
+        let actual_list = res.as_list::<i32>();
+
+        assert_eq!(actual_list.value_offsets(), &[0, 3, 5]);
+        assert_eq!(
+            actual_list.values().as_primitive::<Int64Type>(),
+            &Int64Array::from(vec![1, 2, 3, 1, 2])
+        );
     }
 }

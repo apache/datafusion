@@ -428,6 +428,50 @@ SELECT array_transform(NULL, x -> x * 2);
 ----
 NULL
 
+# index parameter is 1-based
+query ?
+SELECT array_transform([10, 20, 30], (v, i) -> v * i);
+----
+[10, 40, 90]
+
+query ?
+SELECT array_transform(['a', 'b', 'c'], (v, i) -> i);
+----
+[1, 2, 3]
+
+query ?
+SELECT array_transform([10, 20], (v, i) -> arrow_typeof(i));
+----
+[Int64, Int64]
+
+# index restarts per row, and null elements still get an index
+query ?
+SELECT array_transform(column1, (v, i) -> i) FROM (VALUES ([1, 2, 3]), (NULL), ([]), ([4, NULL]));
+----
+[1, 2, 3]
+NULL
+[]
+[1, 2]
+
+query ?
+SELECT array_transform(arrow_cast([10, 20], 'LargeList(Int64)'), (v, i) -> v + i);
+----
+[11, 22]
+
+# index with a captured column
+query ?
+SELECT array_transform(list, (v, i) -> v + i * number) FROM t;
+----
+[11, 70]
+[44, 130]
+[67, 170]
+
+# nested lambdas, the inner body uses the outer index
+query ?
+SELECT array_transform([[1, 2], [3]], (a, i) -> array_transform(a, (v, j) -> i * 10 + j));
+----
+[[11, 12], [21]]
+
 query error
 select array_transform();
 ----
@@ -440,7 +484,7 @@ select array_transform(1, v -> v*2);
 query error DataFusion error: Error during planning: The function 'array_transform' expected a value at position 0 but received a lambda
 select array_transform(v -> v*2, [1, 2]);
 
-query error DataFusion error: Error during planning: lambda defined 3 params but UDF support only 1
+query error DataFusion error: Error during planning: lambda defined 3 params but UDF support only 2
 SELECT array_transform([1, 2], (e, i, j) -> i);
 
 query error DataFusion error: Error during planning: lambda parameters names must be unique, got \(v, v\)
