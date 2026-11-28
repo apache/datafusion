@@ -725,46 +725,65 @@ impl IPCStreamEncoder {
         })
     }
 
-    fn encode(&mut self, batch: &RecordBatch) -> Result<(usize, usize, Vec<Buffer>)> {
+    fn encode(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<(usize, usize, CoalescedBuffers)> {
         let encoder = self.encoder.as_mut().unwrap();
         let buffers = match &self.lengths_schema {
             Some(schema) => encoder.encode(&lengths::encode(batch, schema)?)?,
             None => encoder.encode(batch)?,
         };
         let bytes = buffers.iter().map(Buffer::len).sum();
-        Ok((batch.num_rows(), bytes, coalesce_buffers(buffers)))
+        Ok((batch.num_rows(), bytes, CoalescedBuffers(buffers.into())))
     }
 
-    fn finish(&mut self) -> Result<(usize, Vec<Buffer>)> {
+    fn finish(&mut self) -> Result<(usize, CoalescedBuffers)> {
         let buffers = self.encoder.take().unwrap().finish()?;
         let bytes = buffers.iter().map(Buffer::len).sum();
-        Ok((bytes, coalesce_buffers(buffers)))
+        Ok((bytes, CoalescedBuffers(buffers.into())))
     }
 }
 
-/// Buffers at least this large are written on their own, see [`coalesce_buffers`]
+/// Buffers at least this large are written on their own, see [`CoalescedBuffers`]
 const COALESCE_BUFFERS_BELOW: usize = 64 * 1024;
 
-/// Copies runs of small buffers into one, so that writing a batch takes a few
-/// writes instead of one per IPC buffer and padding. The copy lives only for
-/// the write, unlike a buffer kept by every open spill file.
-fn coalesce_buffers(buffers: Vec<Buffer>) -> Vec<Buffer> {
-    let mut coalesced = Vec::new();
-    let mut small: Vec<u8> = Vec::new();
-    for buffer in buffers {
-        if buffer.len() < COALESCE_BUFFERS_BELOW {
-            small.extend_from_slice(buffer.as_slice());
-            continue;
+/// The most bytes copied into one write, see [`CoalescedBuffers`]
+const MAX_COALESCED_BYTES: usize = 1024 * 1024;
+
+/// Yields the buffers of an IPC message, copying runs of small buffers into
+/// one, so that writing a batch takes a few writes instead of one per IPC
+/// buffer and padding.
+///
+/// A copy holds at most [`MAX_COALESCED_BYTES`], is made when the iterator
+/// reaches it and lives only for its write, unlike a buffer kept by every
+/// open spill file.
+struct CoalescedBuffers(VecDeque<Buffer>);
+
+impl Iterator for CoalescedBuffers {
+    type Item = Buffer;
+
+    fn next(&mut self) -> Option<Buffer> {
+        let mut count = 0;
+        let mut len = 0;
+        for buffer in &self.0 {
+            if buffer.len() >= COALESCE_BUFFERS_BELOW
+                || len + buffer.len() > MAX_COALESCED_BYTES
+            {
+                break;
+            }
+            count += 1;
+            len += buffer.len();
         }
-        if !small.is_empty() {
-            coalesced.push(Buffer::from_vec(std::mem::take(&mut small)));
+        if count < 2 {
+            return self.0.pop_front();
         }
-        coalesced.push(buffer);
+        let mut coalesced = Vec::with_capacity(len);
+        for buffer in self.0.drain(..count) {
+            coalesced.extend_from_slice(buffer.as_slice());
+        }
+        Some(Buffer::from_vec(coalesced))
     }
-    if !small.is_empty() {
-        coalesced.push(Buffer::from_vec(small));
-    }
-    coalesced
 }
 
 struct ArrowBufferOwner(Buffer);
@@ -1309,6 +1328,31 @@ mod tests {
             .collect::<arrow::error::Result<Vec<_>>>()?;
         assert_eq!(decoded, vec![batch1, batch2]);
         Ok(())
+    }
+
+    #[test]
+    fn test_coalesced_buffers_bound_each_copy() {
+        let large = Buffer::from(vec![0_u8; COALESCE_BUFFERS_BELOW]);
+        let large_ptr = large.as_ptr();
+        let mut buffers = vec![Buffer::from(vec![1_u8; 8])];
+        buffers.extend((2..32_u8).map(|i| Buffer::from(vec![i; 40_000])));
+        buffers.extend([
+            large,
+            Buffer::from(vec![32_u8; 8]),
+            Buffer::from(vec![33_u8; 8]),
+        ]);
+        let written = buffers.iter().flat_map(|b| b.to_vec()).collect::<Vec<_>>();
+
+        let coalesced = CoalescedBuffers(buffers.into()).collect::<Vec<_>>();
+        let lens = coalesced.iter().map(Buffer::len).collect::<Vec<_>>();
+        assert_eq!(lens, [1_040_008, 160_000, COALESCE_BUFFERS_BELOW, 16]);
+        // A buffer that is written on its own is not copied
+        assert_eq!(coalesced[2].as_ptr(), large_ptr);
+        let coalesced = coalesced
+            .iter()
+            .flat_map(|b| b.to_vec())
+            .collect::<Vec<_>>();
+        assert_eq!(coalesced, written);
     }
 
     #[test]
