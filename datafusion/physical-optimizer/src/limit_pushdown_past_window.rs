@@ -6,14 +6,11 @@ use crate::PhysicalOptimizerRule;
 use crate::row_bound::RowBound;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_expr::{AcrossPartitions, physical_exprs_contains};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::windows::BoundedWindowAggExec;
 use datafusion_physical_plan::{
-    ExecutionPlan, ExecutionPlanProperties, LimitBehavior, WindowLookahead,
+    ExecutionPlan, ExecutionPlanProperties, LimitBehavior, Partitioning, WindowLookahead,
 };
 use std::sync::Arc;
 
@@ -41,11 +38,9 @@ struct TraverseState {
     pub limit: Option<usize>,
     pub lookahead: usize,
     pub phase: Phase,
-    /// The ordering of the merge the limit came from, in the expression space of
-    /// the node being visited.
-    pub merge_exprs: Option<Vec<Arc<dyn PhysicalExpr>>>,
-    /// Whether it separates the groups of every window crossed so far.
-    pub partitions_separated: bool,
+    /// Whether rows that tie on the ordering of the merge the limit came from
+    /// share one of its input partitions.
+    pub ties_in_one_partition: bool,
 }
 
 impl TraverseState {
@@ -58,16 +53,11 @@ impl TraverseState {
     /// Start a chain from a limit we just found, abandoning whatever chain we
     /// were walking: that one never found a sort to apply to, and this limit is
     /// the one that governs everything below here.
-    pub fn reset_limit(
-        &mut self,
-        limit: Option<usize>,
-        merge_exprs: Option<Vec<Arc<dyn PhysicalExpr>>>,
-    ) {
+    pub fn reset_limit(&mut self, limit: Option<usize>, ties_in_one_partition: bool) {
         self.limit = limit;
         self.lookahead = 0;
         self.phase = Phase::FindOrGrow;
-        self.partitions_separated = merge_exprs.is_some();
-        self.merge_exprs = merge_exprs;
+        self.ties_in_one_partition = ties_in_one_partition;
     }
 }
 
@@ -114,8 +104,6 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                 if !grow_limit(lookahead, &mut ctx) {
                     return reset(node, &mut ctx);
                 }
-                ctx.partitions_separated &= separates_partitions(&node, &ctx);
-                carry_down(&node, &mut ctx);
                 return Ok(Transformed::no(node));
             }
 
@@ -129,10 +117,8 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             // The ordering only holds further down while the nodes in between
             // keep their input's order.
             if node.output_ordering().is_none() {
-                ctx.merge_exprs = None;
-                ctx.partitions_separated = false;
+                ctx.ties_in_one_partition = false;
             }
-            carry_down(&node, &mut ctx);
 
             // nodes along the way
             match node.limit_behavior() {
@@ -193,7 +179,7 @@ fn apply_limit(
     let TraverseState {
         limit,
         lookahead,
-        partitions_separated,
+        ties_in_one_partition,
         ..
     } = std::mem::take(ctx);
     // A fetch that overflows can't drop any rows, so skip the pushdown rather
@@ -206,7 +192,10 @@ fn apply_limit(
     // This sits before the early return below on purpose -- with no limit in hand
     // the merge is left alone, but its own fetch is still a bound to carry down.
     if let Some(merge) = node.downcast_ref::<SortPreservingMergeExec>() {
-        ctx.reset_limit(fetch.or_else(|| node.fetch()), Some(merge_ordering(merge)));
+        ctx.reset_limit(
+            fetch.or_else(|| node.fetch()),
+            ties_stay_in_one_partition(merge),
+        );
     }
     let Some(fetch) = fetch else {
         return Some(Transformed::no(Arc::clone(node)));
@@ -215,7 +204,7 @@ fn apply_limit(
     // `fetch` rows, not the first rows of each partition the window reads. An
     // ordered merge above the window makes it a bound again: a row the window
     // got wrong lost to `fetch` rows that all reach the merge before it.
-    if node.output_partitioning().partition_count() > 1 && !partitions_separated {
+    if node.output_partitioning().partition_count() > 1 && !ties_in_one_partition {
         return Some(Transformed::no(Arc::clone(node)));
     }
     // Carry on past this sort rather than stopping: the subtree below may hold
@@ -227,76 +216,38 @@ fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
     // In distributed execution, GlobalLimitExec becomes LocalLimitExec
     // per partition. Handle it the same way (LocalLimitExec has no skip).
     if let Some(limit) = RowBound::of_limit_node(node) {
-        ctx.reset_limit(limit.input_rows(), None);
+        ctx.reset_limit(limit.input_rows(), false);
         return true;
     }
     if let Some(merge) = node.downcast_ref::<SortPreservingMergeExec>() {
-        ctx.reset_limit(merge.fetch(), Some(merge_ordering(merge)));
+        ctx.reset_limit(merge.fetch(), ties_stay_in_one_partition(merge));
         return true;
     }
     false
 }
 
-fn merge_ordering(merge: &SortPreservingMergeExec) -> Vec<Arc<dyn PhysicalExpr>> {
-    merge
-        .expr()
-        .iter()
-        .map(|sort_expr| Arc::clone(&sort_expr.expr))
-        .collect()
-}
-
-/// Whether the ordering in hand sorts `node`'s rows into the groups its windows
-/// read: every `PARTITION BY` expression has to be one of the ordering's own. A
-/// window with no `PARTITION BY` reads one group that no ordering separates.
-fn separates_partitions(node: &Arc<dyn ExecutionPlan>, ctx: &TraverseState) -> bool {
-    let (Some(exprs), Some(window)) = (
-        ctx.merge_exprs.as_ref(),
-        node.downcast_ref::<BoundedWindowAggExec>(),
-    ) else {
+/// Whether rows that tie on `merge`'s ordering always share one of its input
+/// partitions. A fetch on a sort below that keeps several partitions then drops
+/// only rows behind at least `fetch` rows that reach the merge before them.
+fn ties_stay_in_one_partition(merge: &SortPreservingMergeExec) -> bool {
+    let input = merge.input();
+    let Partitioning::Hash(keys, _) = input.output_partitioning() else {
         return false;
     };
-    !window.window_expr().is_empty()
-        && window.window_expr().iter().all(|window_expr| {
-            !window_expr.partition_by().is_empty()
-                && window_expr
-                    .partition_by()
-                    .iter()
-                    .all(|key| exprs.iter().any(|expr| expr.eq(key)))
-        })
-}
-
-/// Carry the merge's ordering from `node`'s output into its input's expression
-/// space: a projection moves and renames columns, so the ordering is rewritten
-/// through it, a window only appends columns, and a node that changes the schema
-/// any other way ends the carry.
-fn carry_down(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) {
-    let Some(exprs) = ctx.merge_exprs.take() else {
-        return;
-    };
-    let Some(child) = node.children().into_iter().next() else {
-        return;
-    };
-    ctx.merge_exprs = if let Some(projection) = node.downcast_ref::<ProjectionExec>() {
-        exprs
-            .iter()
-            .map(|expr| projection.projection_expr().unproject_expr(expr).ok())
-            .collect()
-    } else if node.schema() == child.schema() {
-        Some(exprs)
-    } else if node.is::<BoundedWindowAggExec>() {
-        let input_columns = child.schema().fields().len();
-        exprs
-            .into_iter()
-            .map(|expr| {
-                collect_columns(&expr)
-                    .iter()
-                    .all(|column| column.index() < input_columns)
-                    .then_some(expr)
-            })
-            .collect()
-    } else {
-        None
-    };
+    let eq_properties = input.equivalence_properties();
+    let eq_group = eq_properties.eq_group();
+    let ordering = merge
+        .expr()
+        .iter()
+        .map(|sort_expr| eq_group.normalize_expr(Arc::clone(&sort_expr.expr)))
+        .collect::<Vec<_>>();
+    keys.iter().all(|key| {
+        physical_exprs_contains(&ordering, &eq_group.normalize_expr(Arc::clone(key)))
+            || matches!(
+                eq_properties.is_expr_constant(key),
+                Some(AcrossPartitions::Uniform(_))
+            )
+    })
 }
 
 #[cfg(test)]
@@ -699,8 +650,8 @@ mod tests {
         "#);
     }
 
-    /// A window only appends its columns, so the merge's ordering reaches the
-    /// window below it.
+    /// The check reads the merge's own input, so a second window below the
+    /// first does not reach it.
     #[test]
     fn a_merge_over_stacked_windows_takes_the_fetch() {
         let lower = sort_then_partitioned_window(hash_repartition(4), &["a"]).unwrap();
@@ -786,8 +737,9 @@ mod tests {
         Arc::new(ProjectionExec::try_new(exprs, input).unwrap())
     }
 
-    /// The ordering is rewritten through the projection, so `a2` is read as the
-    /// `a` the window partitions by. The `topk_repartition` benchmark plans this.
+    /// The projection puts `a` and its alias in one equivalence class, so the
+    /// ordering is read as the hash key. The `topk_repartition` benchmark plans
+    /// this.
     #[test]
     fn a_merge_ordered_by_an_alias_above_a_projection_takes_the_fetch() {
         let window = sort_then_partitioned_window(hash_repartition(4), &["a"]).unwrap();
@@ -815,8 +767,8 @@ mod tests {
         "#);
     }
 
-    /// `a2` is `a`, so `[a, a2]` separates the groups of a window partitioned by
-    /// `a` and not those of one partitioned by `a, b`, two expressions or not.
+    /// `a2` is `a`, so `[a, a2]` leaves the hash key `b` uncovered, two
+    /// expressions or not.
     #[test]
     fn a_merge_ordered_by_an_alias_of_a_key_does_not_cover_the_other_key() {
         let window =
@@ -846,7 +798,7 @@ mod tests {
     }
 
     /// `b % 2` leaves rows whose `b` differs tied. The rule does not tell which
-    /// expressions keep the groups apart, so only the key itself passes.
+    /// expressions over a key preserve it, so only the key itself covers it.
     #[test]
     fn a_merge_ordered_by_an_expression_of_a_key_blocks_the_pushdown() {
         let window =
