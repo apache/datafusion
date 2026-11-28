@@ -357,8 +357,29 @@ an official project release has been made, using the following instructions.
 
 Follow [these
 instructions](https://doc.rust-lang.org/cargo/reference/publishing.html) to
-create an account and login to crates.io before asking to be added as an owner
-to all DataFusion crates.
+create an account and log in to crates.io. PMC members taking on release manager
+duties should request ownership of all DataFusion crates on
+`dev@datafusion.apache.org`, including their GitHub username. An existing owner
+can send invitations using `cargo owner --add <github-username> <crate-name>`;
+accept the invitations on crates.io before publishing.
+
+The standard owners are `alamb`, `andygrove`, `comphead`, `mbutrovich`,
+`timsaucer`, and `xudong963`. Add other PMC members as they take on release manager
+duties rather than adding everyone up front, to limit the number of accounts
+with publish access. Keep the owner set consistent across all published DataFusion
+crates, including any additional PMC members granted publishing access.
+
+When publishing a new crate for the first time, the release manager must ensure
+the new crate has the same owner set as the existing DataFusion crates, including
+the six standard owners and any additional PMC members granted publishing access.
+For each owner to add, run:
+
+```shell
+cargo owner --add <github-username> <new-crate-name>
+```
+
+Verify that all required owners have accepted their invitations and appear in
+the crate's owner list on crates.io.
 
 Download and unpack the official release tarball:
 
