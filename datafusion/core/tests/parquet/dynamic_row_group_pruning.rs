@@ -213,6 +213,28 @@ async fn missing_null_count_is_zero_for_legacy_writers() {
         };
         assert_eq!(pruned, expected_pruned, "{created_by}\n{metrics}");
 
+        // `v >= 0` holds for every non-null value, so the groups that
+        // `IS NULL` pruned (proven null-free) are exactly the fully matched ones.
+        let plan = ctx
+            .sql("SELECT v FROM t WHERE v >= 0")
+            .await
+            .unwrap()
+            .create_physical_plan()
+            .await
+            .unwrap();
+        collect(plan.clone(), ctx.task_ctx()).await.unwrap();
+        let metrics = MetricsFinder::find_metrics(plan.as_ref()).unwrap();
+        let fully_matched = match metrics
+            .sum(|m| m.value().name() == "row_groups_pruned_statistics")
+            .unwrap()
+        {
+            MetricValue::PruningMetrics {
+                pruning_metrics, ..
+            } => pruning_metrics.fully_matched(),
+            other => panic!("unexpected metric {other:?}"),
+        };
+        assert_eq!(fully_matched, expected_pruned, "{created_by}\n{metrics}");
+
         let batches = ctx
             .sql("SELECT COUNT(v) FROM t")
             .await
@@ -225,6 +247,60 @@ async fn missing_null_count_is_zero_for_legacy_writers() {
             ScalarValue::Int64(Some(8)),
             "{created_by}",
         );
+    }
+}
+
+/// Runtime TopK pruning reads the same footer: with `NULLS FIRST` the live
+/// filter keeps `v IS NULL`, so a group can be skipped only when its omitted
+/// count means zero.
+#[tokio::test]
+async fn missing_null_count_is_zero_for_runtime_topk_pruning() {
+    for (created_by, expected_pruned) in [
+        ("parquet-rs version 53.0.0", 1),
+        ("parquet-rs version 53.1.0", 0),
+    ] {
+        let file = file_without_zero_null_counts(created_by);
+        let mut config = SessionConfig::new()
+            .with_target_partitions(1)
+            .with_batch_size(1)
+            .with_parquet_page_index_pruning(false);
+        // Keep the live filter on the row-group path, as in
+        // `dynamic_rg_pruning_preserves_missing_null_count`.
+        config.options_mut().execution.collect_statistics = false;
+        config.options_mut().optimizer.enable_sort_pushdown = false;
+        config
+            .options_mut()
+            .optimizer
+            .enable_topk_dynamic_filter_pushdown = true;
+        config.options_mut().execution.parquet.pushdown_filters = false;
+        let ctx = SessionContext::new_with_config(config);
+        ctx.register_parquet(
+            "t",
+            file.path().to_str().unwrap(),
+            ParquetReadOptions::default(),
+        )
+        .await
+        .unwrap();
+
+        let plan = ctx
+            .sql("SELECT v FROM t ORDER BY v NULLS FIRST LIMIT 1")
+            .await
+            .unwrap()
+            .create_physical_plan()
+            .await
+            .unwrap();
+        let batches = collect(plan.clone(), ctx.task_ctx()).await.unwrap();
+        assert_eq!(
+            ScalarValue::try_from_array(batches[0].column(0), 0).unwrap(),
+            ScalarValue::Int64(None),
+            "{created_by}",
+        );
+        let metrics = MetricsFinder::find_metrics(plan.as_ref()).unwrap();
+        let pruned = metrics
+            .sum_by_name("row_groups_pruned_dynamic_filter")
+            .unwrap()
+            .as_usize();
+        assert_eq!(pruned, expected_pruned, "{created_by}\n{metrics}");
     }
 }
 

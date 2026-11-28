@@ -677,8 +677,9 @@ impl<'a> DFParquetMetadata<'a> {
                 .for_each(|(idx, field)| {
                     match leaf_resolver.converter(field.name()) {
                         Ok(stats_converter) => {
-                            // An omitted count must not become an exact zero in
-                            // file statistics used for pruning and aggregates.
+                            // A missing count is zero only for writers that omitted
+                            // zero counts; otherwise it stays unknown, so file
+                            // statistics never report a guessed exact zero.
                             let stats_converter = stats_converter
                                 .with_missing_null_counts_as_zero(
                                     missing_null_counts_as_zero,
