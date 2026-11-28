@@ -34,8 +34,8 @@ use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_to_arrow_schema;
 use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
 use parquet::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
-    RowGroupMetaData, SortingColumn,
+    FileMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder,
+    ParquetMetaDataReader, RowGroupMetaData, SortingColumn,
 };
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
@@ -113,6 +113,33 @@ fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
         column.physical_type(),
         PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY
     ) && column.sort_order() != SortOrder::SIGNED
+}
+
+/// Whether a row group statistics entry without a `null_count` means zero.
+///
+/// parquet-rs before 53.1.0 left out `null_count` when it was zero
+/// (<https://github.com/apache/arrow-rs/pull/6490>), so for those writers a
+/// missing count is zero. For any other writer, or an unparsable `created_by`,
+/// it is unknown.
+pub(crate) fn missing_null_counts_are_zero(file_metadata: &FileMetaData) -> bool {
+    let Some((writer, version)) = file_metadata
+        .created_by()
+        .and_then(|created_by| created_by.split_once(" version "))
+    else {
+        return false;
+    };
+    let mut parts = version.split(['.', ' ', '-']).map(str::parse::<u64>);
+    let (Some(Ok(major)), Some(Ok(minor))) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    match writer {
+        "parquet-rs" => (major, minor) < (53, 1),
+        // DataFusion 42.1.0 was the first release to require parquet >= 53.1.0.
+        // A 42.0.x build may have resolved a newer parquet, but such a writer
+        // never omits a count, so a missing count still means zero.
+        "datafusion" => (major, minor) < (42, 1),
+        _ => false,
+    }
 }
 
 /// Whether a column's min/max bounds lack a comparison order matching Arrow's.
@@ -616,6 +643,7 @@ impl<'a> DFParquetMetadata<'a> {
         statistics.num_rows = Precision::Exact(num_rows);
 
         let file_metadata = metadata.file_metadata();
+        let missing_null_counts_as_zero = missing_null_counts_are_zero(file_metadata);
         let mut physical_file_schema = parquet_to_arrow_schema(
             file_metadata.schema_descr(),
             file_metadata.key_value_metadata(),
@@ -649,10 +677,13 @@ impl<'a> DFParquetMetadata<'a> {
                 .for_each(|(idx, field)| {
                     match leaf_resolver.converter(field.name()) {
                         Ok(stats_converter) => {
-                            // An omitted count must not become an exact zero in
-                            // file statistics used for pruning and aggregates.
-                            let stats_converter =
-                                stats_converter.with_missing_null_counts_as_zero(false);
+                            // A missing count is zero only for writers that omitted
+                            // zero counts; otherwise it stays unknown, so file
+                            // statistics never report a guessed exact zero.
+                            let stats_converter = stats_converter
+                                .with_missing_null_counts_as_zero(
+                                    missing_null_counts_as_zero,
+                                );
                             let parquet_index = stats_converter.parquet_column_index();
                             if parquet_index.is_some_and(|index| {
                                 has_untrusted_min_max_order(
@@ -1498,13 +1529,19 @@ mod tests {
             schema_descr: Arc<SchemaDescriptor>,
             row_groups: Vec<RowGroupMetaData>,
         ) -> ParquetMetaData {
-            use parquet::file::metadata::FileMetaData;
+            create_parquet_metadata_created_by(schema_descr, row_groups, None)
+        }
 
+        fn create_parquet_metadata_created_by(
+            schema_descr: Arc<SchemaDescriptor>,
+            row_groups: Vec<RowGroupMetaData>,
+            created_by: Option<&str>,
+        ) -> ParquetMetaData {
             let num_rows: i64 = row_groups.iter().map(|rg| rg.num_rows()).sum();
             let file_meta = FileMetaData::new(
-                1,            // version
-                num_rows,     // num_rows
-                None,         // created_by
+                1,        // version
+                num_rows, // num_rows
+                created_by.map(str::to_owned),
                 None,         // key_value_metadata
                 schema_descr, // schema_descr
                 None,         // column_orders
@@ -1584,6 +1621,103 @@ mod tests {
                 )
                 .unwrap();
                 assert_eq!(statistics.column_statistics[0].null_count, expected);
+            }
+        }
+
+        #[test]
+        fn test_missing_null_counts_are_zero_by_writer() {
+            for (created_by, expected) in [
+                (Some("parquet-rs version 53.0.0"), true),
+                (Some("parquet-rs version 52.2.0"), true),
+                (Some("parquet-rs version 53.0.0-SNAPSHOT"), true),
+                (Some("parquet-rs version 53.1.0"), false),
+                (Some("parquet-rs version 54.0.0"), false),
+                (Some("datafusion version 42.0.0"), true),
+                (Some("datafusion version 42.1.0"), false),
+                (Some("datafusion version 56.0.0"), false),
+                (Some("parquet-mr version 1.13.1 (build abc)"), false),
+                (Some("parquet-cpp-arrow version 53.0.0"), false),
+                (Some("impala version 4.0.0"), false),
+                (Some("parquet-rs 53.0.0"), false),
+                (Some("parquet-rs version unknown"), false),
+                (Some("parquet-rs version 53"), false),
+                (Some("custom writer"), false),
+                (Some(""), false),
+                (None, false),
+            ] {
+                let file_metadata = FileMetaData::new(
+                    1,
+                    0,
+                    created_by.map(str::to_owned),
+                    None,
+                    create_schema_descr(1),
+                    None,
+                );
+                assert_eq!(
+                    missing_null_counts_are_zero(&file_metadata),
+                    expected,
+                    "created_by: {created_by:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn test_statistics_missing_null_counts_for_legacy_writers() {
+            let schema_descr = create_schema_descr(1);
+            let arrow_schema = create_arrow_schema(1);
+            for (created_by, null_counts, expected) in [
+                (
+                    Some("parquet-rs version 53.0.0"),
+                    vec![None, None],
+                    Precision::Exact(0),
+                ),
+                (
+                    Some("datafusion version 42.0.0"),
+                    vec![Some(2), None],
+                    Precision::Exact(2),
+                ),
+                (
+                    Some("parquet-rs version 53.1.0"),
+                    vec![Some(0), None],
+                    Precision::Inexact(0),
+                ),
+                (
+                    Some("parquet-mr version 1.13.1"),
+                    vec![None],
+                    Precision::Absent,
+                ),
+                (None, vec![None], Precision::Absent),
+            ] {
+                let row_groups = null_counts
+                    .into_iter()
+                    .map(|null_count| {
+                        create_row_group_with_stats(
+                            &schema_descr,
+                            vec![Some(ParquetStatistics::int32(
+                                Some(1),
+                                Some(10),
+                                None,
+                                null_count,
+                                false,
+                            ))],
+                            10,
+                        )
+                    })
+                    .collect();
+                let metadata = create_parquet_metadata_created_by(
+                    Arc::clone(&schema_descr),
+                    row_groups,
+                    created_by,
+                );
+                let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+                    &metadata,
+                    &arrow_schema,
+                )
+                .unwrap();
+                assert_eq!(
+                    statistics.column_statistics[0].null_count, expected,
+                    "created_by: {created_by:?}"
+                );
             }
         }
 
