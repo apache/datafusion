@@ -6,6 +6,7 @@
 //! based on statistics (e.g. Parquet Row Groups)
 //!
 //! [`Expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html
+use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -21,8 +22,8 @@ use arrow::{
     record_batch::{RecordBatch, RecordBatchOptions},
 };
 // pub use for backwards compatibility
-pub use datafusion_common::pruning::PruningStatistics;
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
+pub use datafusion_physical_expr_common::pruning::{PruningStatistics, StatsExpr};
 use datafusion_physical_plan::metrics::Count;
 use log::{debug, trace};
 
@@ -35,7 +36,7 @@ use datafusion_common::{
 };
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use datafusion_expr_common::operator::Operator;
-use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
+use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee, collect_columns};
 use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr_opt;
 use datafusion_physical_plan::joins::HashTableLookupExpr;
@@ -369,10 +370,17 @@ pub struct PruningPredicate {
     ///
     /// See [`PruningPredicate::literal_guarantees`] for more details.
     literal_guarantees: Vec<LiteralGuarantee>,
+    /// Like `literal_guarantees`, for expressions with their own statistics
+    /// (see [`StatisticsExprMatcher`]).
+    expr_literal_guarantees: Vec<ExprLiteralGuarantee>,
     /// Maximum IN-list size used to build this predicate.
     max_in_list_size: usize,
     /// Whether its logical inverse can safely prove every row matches.
     can_be_inverted_for_full_match: bool,
+    /// Decides which expressions have their own statistics.
+    statistics_expr_matcher: Option<Arc<dyn StatisticsExprMatcher>>,
+    /// The distinct expressions in `orig_expr` that are statistics keys.
+    stats_key_exprs: Vec<StatsExpr>,
 }
 
 #[derive(Default)]
@@ -416,6 +424,7 @@ pub struct PruningPredicateBuilder<'a> {
     file_schema: Option<SchemaRef>,
     error_counter: Option<&'a Count>,
     max_in_list_size: usize,
+    statistics_expr_matcher: Option<Arc<dyn StatisticsExprMatcher>>,
 }
 
 impl<'a> PruningPredicateBuilder<'a> {
@@ -425,7 +434,22 @@ impl<'a> PruningPredicateBuilder<'a> {
             file_schema: None,
             error_counter: None,
             max_in_list_size: MAX_IN_LIST_SIZE,
+            statistics_expr_matcher: None,
         }
+    }
+
+    /// Treat the expressions that `matcher` accepts as having their own
+    /// statistics, read through [`PruningStatistics::min_values_for_expr`]
+    /// and related methods.
+    ///
+    /// Without a matcher (`None`, the default), only columns have
+    /// statistics.
+    pub fn with_statistics_expr_matcher(
+        mut self,
+        matcher: Option<Arc<dyn StatisticsExprMatcher>>,
+    ) -> Self {
+        self.statistics_expr_matcher = matcher;
+        self
     }
 
     /// Set the schema of the container that will be pruned (typically the
@@ -533,19 +557,25 @@ impl<'a> PruningPredicateBuilder<'a> {
         // build predicate expression once
         let mut required_columns = RequiredColumns::new();
         let mut properties = PruningExpressionProperties::default();
+        let ctx = PredicateBuildContext {
+            schema: &file_schema,
+            unhandled_hook: &unhandled_hook,
+            max_in_list_size: self.max_in_list_size,
+            statistics_expr_matcher: self.statistics_expr_matcher.as_deref(),
+        };
         let predicate_expr = build_predicate_expression(
             &predicate,
-            &file_schema,
+            &ctx,
             &mut required_columns,
-            &unhandled_hook,
-            self.max_in_list_size,
             &mut properties,
         );
         let predicate_schema = required_columns.schema();
         // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
         let predicate_expr =
             PhysicalExprSimplifier::new(&predicate_schema).simplify(predicate_expr)?;
-        let literal_guarantees = LiteralGuarantee::analyze(&predicate);
+        let (literal_guarantees, expr_literal_guarantees) =
+            analyze_literal_guarantees(&predicate, &ctx);
+        let stats_key_exprs = collect_stats_key_exprs(&predicate, &ctx);
 
         Ok(PruningPredicate {
             schema: file_schema,
@@ -553,10 +583,49 @@ impl<'a> PruningPredicateBuilder<'a> {
             required_columns,
             orig_expr: predicate,
             literal_guarantees,
+            expr_literal_guarantees,
             max_in_list_size: self.max_in_list_size,
             can_be_inverted_for_full_match: !properties.has_filter_semantics_only,
+            statistics_expr_matcher: self.statistics_expr_matcher,
+            stats_key_exprs,
         })
     }
+}
+
+/// Decides which expressions have their own statistics.
+///
+/// A statistics source can know statistics for an expression that pruning
+/// cannot compute from column statistics. For example, Parquet stores
+/// statistics for each struct field, so it knows the bounds of
+/// `get_field(s, 'a')`. A matcher tells [`PruningPredicate`] to treat such an
+/// expression as one unit and ask the source for its statistics.
+///
+/// The matcher runs while the predicate is built. A source can build one
+/// matcher per file and match only the expressions that the file has
+/// statistics for. When the matcher rejects an expression, the predicate
+/// looks for keys in its children. For example, `CAST(e AS Int64)` can use
+/// the statistics of `e`. A source may still return `None` for a matched
+/// expression, and then nothing is pruned for it.
+///
+/// The binding that the matcher returns is the only link between a key and
+/// its statistics. The source finds its binding again with
+/// [`StatsExpr::binding`], which checks only the type. So use a private type
+/// for the binding: two sources that bind a common type, such as `()` or
+/// an Arrow array, could read each other's bindings in a composite source.
+pub trait StatisticsExprMatcher: std::fmt::Debug + Send + Sync {
+    /// Returns a binding if `expr` is a statistics key, or `None` to let the
+    /// predicate use keys inside `expr` instead.
+    ///
+    /// The predicate stores the binding in a [`StatsExpr`] and passes it to
+    /// the `*_for_expr` methods of [`PruningStatistics`]. The source reads the
+    /// statistics from the binding, so it never looks `expr` up again.
+    ///
+    /// The predicate calls `bind` for many nodes of the predicate while it is
+    /// built, so rejecting an expression must be cheap.
+    ///
+    /// Pruning only uses a bound expression that reads exactly one column
+    /// and has a non-nested type.
+    fn bind(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<Arc<dyn Any + Send + Sync>>;
 }
 
 /// Rewrites predicates that [`PredicateRewriter`] can not handle, e.g. certain
@@ -679,6 +748,25 @@ impl PruningPredicate {
             }
         }
 
+        for ExprLiteralGuarantee {
+            expr,
+            guarantee,
+            literals,
+        } in &self.expr_literal_guarantees
+        {
+            if let Some(results) = statistics.contained_for_expr(expr, literals) {
+                match guarantee {
+                    Guarantee::In => builder.combine_array(&results),
+                    Guarantee::NotIn => {
+                        builder.combine_array(&arrow::compute::not(&results)?)
+                    }
+                }
+                if builder.check_all_pruned() {
+                    return Ok(builder.build());
+                }
+            }
+        }
+
         // Next, try to prove the predicate can't be true for the containers based
         // on min/max values
 
@@ -717,6 +805,21 @@ impl PruningPredicate {
         &self.literal_guarantees
     }
 
+    /// Returns the distinct expressions with their own statistics (see
+    /// [`StatisticsExprMatcher`]) that have literal guarantees, such as
+    /// `get_field(s, 'a')` for `get_field(s, 'a') = 5`. Like
+    /// [`Self::literal_guarantees`], all of the guarantees must hold for the
+    /// expression to possibly be `true`. Use this list for example to load only the bloom filters a predicate can use.
+    pub fn literal_exprs(&self) -> Vec<StatsExpr> {
+        let mut exprs: Vec<StatsExpr> = vec![];
+        for guarantee in &self.expr_literal_guarantees {
+            if !exprs.contains(&guarantee.expr) {
+                exprs.push(guarantee.expr.clone());
+            }
+        }
+        exprs
+    }
+
     /// Returns true if this pruning predicate can not prune anything.
     ///
     /// This happens if the predicate is a literal `true`  and
@@ -724,12 +827,26 @@ impl PruningPredicate {
     ///
     /// This can happen when a predicate is simplified to a constant `true`
     pub fn always_true(&self) -> bool {
-        is_always_true(&self.predicate_expr) && self.literal_guarantees.is_empty()
+        is_always_true(&self.predicate_expr)
+            && self.literal_guarantees.is_empty()
+            && self.expr_literal_guarantees.is_empty()
     }
 
     /// Returns the configured maximum IN-list size used to build this predicate.
     pub fn max_in_list_size(&self) -> usize {
         self.max_in_list_size
+    }
+
+    /// The matcher this predicate was built with, if any.
+    pub fn statistics_expr_matcher(&self) -> Option<&Arc<dyn StatisticsExprMatcher>> {
+        self.statistics_expr_matcher.as_ref()
+    }
+
+    /// Returns the distinct expressions of the original predicate that are
+    /// statistics keys (see [`StatisticsExprMatcher`]), such as
+    /// `get_field(s, 'a')`. Columns are not included.
+    pub fn stats_key_exprs(&self) -> &[StatsExpr] {
+        &self.stats_key_exprs
     }
 
     /// Returns whether pruning the logical inverse can safely prove that every
@@ -759,6 +876,111 @@ impl PruningPredicate {
             .map(|s| s.to_string())
             .collect()
     }
+}
+
+/// A [`LiteralGuarantee`] on an expression with its own statistics, such as
+/// `get_field(s, 'a') IN (1, 2)`.
+#[derive(Debug, Clone)]
+struct ExprLiteralGuarantee {
+    /// The expression, for example `get_field(s, 'a')`
+    expr: StatsExpr,
+    /// Whether `expr` must, or must not, be one of `literals`
+    guarantee: Guarantee,
+    /// The literal values
+    literals: HashSet<ScalarValue>,
+}
+
+/// Prefix of the placeholder columns that stand in for statistics keys
+/// while [`LiteralGuarantee::analyze`] runs.
+const STATS_EXPR_PLACEHOLDER: &str = "__datafusion_pruning_stats_expr_";
+
+/// Returns the literal guarantees of `predicate` on columns and on matched
+/// expressions.
+///
+/// [`LiteralGuarantee::analyze`] only understands columns. Each distinct
+/// matched expression is replaced with a placeholder column of a reserved
+/// name, so that the analysis treats it as one column, and the placeholder
+/// guarantees are mapped back to their expressions.
+fn analyze_literal_guarantees(
+    predicate: &Arc<dyn PhysicalExpr>,
+    ctx: &PredicateBuildContext,
+) -> (Vec<LiteralGuarantee>, Vec<ExprLiteralGuarantee>) {
+    // A real column with a placeholder name would be mistaken for a key.
+    if ctx.statistics_expr_matcher.is_none()
+        || collect_columns(predicate)
+            .iter()
+            .any(|c| c.name().starts_with(STATS_EXPR_PLACEHOLDER))
+    {
+        return (LiteralGuarantee::analyze(predicate), vec![]);
+    }
+    let mut keys: Vec<StatsExpr> = vec![];
+    let replaced = Arc::clone(predicate)
+        .transform_down(|expr| {
+            let Some(StatsKey {
+                expr: Some(key), ..
+            }) = matched_stats_key(&expr, ctx)
+            else {
+                return Ok(Transformed::no(expr));
+            };
+            let idx = keys.iter().position(|k| k == &key).unwrap_or_else(|| {
+                keys.push(key.clone());
+                keys.len() - 1
+            });
+            let placeholder =
+                phys_expr::Column::new(&format!("{STATS_EXPR_PLACEHOLDER}{idx}"), 0);
+            Ok(Transformed::new(
+                Arc::new(placeholder),
+                true,
+                TreeNodeRecursion::Jump,
+            ))
+        })
+        .data();
+    let Ok(replaced) = replaced else {
+        return (LiteralGuarantee::analyze(predicate), vec![]);
+    };
+    let mut column_guarantees = vec![];
+    let mut expr_guarantees = vec![];
+    for guarantee in LiteralGuarantee::analyze(&replaced) {
+        match guarantee
+            .column
+            .name
+            .strip_prefix(STATS_EXPR_PLACEHOLDER)
+            .and_then(|idx| idx.parse::<usize>().ok())
+            .and_then(|idx| keys.get(idx))
+        {
+            Some(key) => expr_guarantees.push(ExprLiteralGuarantee {
+                expr: key.clone(),
+                guarantee: guarantee.guarantee,
+                literals: guarantee.literals,
+            }),
+            None => column_guarantees.push(guarantee),
+        }
+    }
+    (column_guarantees, expr_guarantees)
+}
+
+/// Returns the distinct expressions in `predicate` that are statistics keys,
+/// outermost first. The children of a key are not searched.
+fn collect_stats_key_exprs(
+    predicate: &Arc<dyn PhysicalExpr>,
+    ctx: &PredicateBuildContext,
+) -> Vec<StatsExpr> {
+    let mut keys: Vec<StatsExpr> = vec![];
+    predicate
+        .apply(|expr| {
+            let Some(StatsKey {
+                expr: Some(key), ..
+            }) = matched_stats_key(expr, ctx)
+            else {
+                return Ok(TreeNodeRecursion::Continue);
+            };
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+            Ok(TreeNodeRecursion::Jump)
+        })
+        .expect("the visitor never fails");
+    keys
 }
 
 /// Builds the return `Vec` for [`PruningPredicate::prune`].
@@ -857,6 +1079,11 @@ pub struct RequiredColumns {
     /// * The field the statistics value should be placed in for
     ///   pruning predicate evaluation (e.g. `min_value` or `max_value`)
     columns: Vec<(phys_expr::Column, StatisticsType, Field)>,
+    /// The expression of each entry in `columns`, at the same index, when
+    /// the statistics are for an expression with its own statistics (such
+    /// as `get_field(s, 'a')`) rather than for the column itself. The
+    /// column in `columns` is then the one column the expression reads.
+    stats_exprs: Vec<Option<StatsExpr>>,
 }
 
 impl RequiredColumns {
@@ -873,6 +1100,12 @@ impl RequiredColumns {
     /// * `a > 5 OR b < 10` returns `None`
     /// * `true` returns None
     pub fn single_column(&self) -> Option<&phys_expr::Column> {
+        // An expression with its own statistics is not the column itself, so
+        // callers that read per-column statistics (such as the page index)
+        // must not treat it as one.
+        if self.stats_exprs.iter().any(Option::is_some) {
+            return None;
+        }
         if self.columns.windows(2).all(|w| {
             // check if all columns are the same (ignoring statistics and field)
             let c1 = &w[0].0;
@@ -883,6 +1116,21 @@ impl RequiredColumns {
         } else {
             None
         }
+    }
+
+    /// Returns `Some((column, expr))` if every statistic of this predicate is
+    /// for the same column or the same expression.
+    ///
+    /// Unlike [`Self::single_column`], this accepts an expression with its
+    /// own statistics (see [`StatisticsExprMatcher`]). `expr` is `None` for
+    /// the column itself.
+    pub fn single_key(&self) -> Option<(&phys_expr::Column, Option<&StatsExpr>)> {
+        let (first, rest) = self.columns.split_first()?;
+        let first_expr = self.stats_exprs[0].as_ref();
+        rest.iter()
+            .zip(&self.stats_exprs[1..])
+            .all(|((c, _, _), e)| c == &first.0 && e.as_ref() == first_expr)
+            .then_some((&first.0, first_expr))
     }
 
     /// Returns a schema that describes the columns required to evaluate this
@@ -908,9 +1156,16 @@ impl RequiredColumns {
         self.columns.iter()
     }
 
+    /// Drops entries appended after the first `len`.
+    fn truncate(&mut self, len: usize) {
+        self.columns.truncate(len);
+        self.stats_exprs.truncate(len);
+    }
+
     fn find_stat_column(
         &self,
         column: &phys_expr::Column,
+        stats_expr: Option<&StatsExpr>,
         statistics_type: StatisticsType,
     ) -> Option<usize> {
         match statistics_type {
@@ -926,32 +1181,39 @@ impl RequiredColumns {
                 .columns
                 .iter()
                 .enumerate()
-                .find(|(_i, (c, t, _f))| c == column && t == &statistics_type)
+                .find(|(i, (c, t, _f))| {
+                    c == column
+                        && t == &statistics_type
+                        && self.stats_exprs[*i].as_ref() == stats_expr
+                })
                 .map(|(i, (_c, _t, _f))| i),
         }
     }
 
-    /// Rewrites column_expr so that all appearances of column
-    /// are replaced with a reference to either the min or max
-    /// statistics column, while keeping track that a reference to the statistics
-    /// column is required
+    /// Rewrites `column_expr` so that every appearance of `key` (a column,
+    /// or an expression with its own statistics) is replaced with a
+    /// reference to its `stat_type` statistics column, and records that the
+    /// statistics column is required.
     ///
-    /// for example, an expression like `col("foo") > 5`, when called
-    /// with Max would result in an expression like `col("foo_max") >
-    /// 5` with the appropriate entry noted in self.columns
-    fn stat_column_expr(
+    /// For example, `col("foo") > 5` with Max becomes `col("foo_max") > 5`.
+    fn stat_key_expr(
         &mut self,
-        column: &phys_expr::Column,
+        key: &StatsKey,
         column_expr: &Arc<dyn PhysicalExpr>,
         field: &Field,
         stat_type: StatisticsType,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        let (idx, need_to_insert) = match self.find_stat_column(column, stat_type) {
-            Some(idx) => (idx, false),
-            None => (self.columns.len(), true),
-        };
+        let column = &key.column;
+        let (idx, need_to_insert) =
+            match self.find_stat_column(column, key.expr.as_ref(), stat_type) {
+                Some(idx) => (idx, false),
+                None => (self.columns.len(), true),
+            };
 
-        let column_name = column.name();
+        let column_name = match &key.expr {
+            None => column.name().to_string(),
+            Some(expr) => expr.expr().to_string(),
+        };
         let stat_column_name = match stat_type {
             StatisticsType::Min => format!("{column_name}_min"),
             StatisticsType::Max => format!("{column_name}_max"),
@@ -968,54 +1230,24 @@ impl RequiredColumns {
             let stat_field =
                 Field::new(stat_column.name(), field.data_type().clone(), nullable);
             self.columns.push((column.clone(), stat_type, stat_field));
+            self.stats_exprs.push(key.expr.clone());
         }
-        rewrite_column_expr(Arc::clone(column_expr), column, &stat_column)
-    }
-
-    /// rewrite col --> col_min
-    fn min_column_expr(
-        &mut self,
-        column: &phys_expr::Column,
-        column_expr: &Arc<dyn PhysicalExpr>,
-        field: &Field,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.stat_column_expr(column, column_expr, field, StatisticsType::Min)
-    }
-
-    /// rewrite col --> col_max
-    fn max_column_expr(
-        &mut self,
-        column: &phys_expr::Column,
-        column_expr: &Arc<dyn PhysicalExpr>,
-        field: &Field,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.stat_column_expr(column, column_expr, field, StatisticsType::Max)
-    }
-
-    /// rewrite col --> col_null_count
-    fn null_count_column_expr(
-        &mut self,
-        column: &phys_expr::Column,
-        column_expr: &Arc<dyn PhysicalExpr>,
-        field: &Field,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.stat_column_expr(column, column_expr, field, StatisticsType::NullCount)
-    }
-
-    /// rewrite col --> col_row_count
-    fn row_count_column_expr(
-        &mut self,
-        column: &phys_expr::Column,
-        column_expr: &Arc<dyn PhysicalExpr>,
-        field: &Field,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        self.stat_column_expr(column, column_expr, field, StatisticsType::RowCount)
+        match &key.expr {
+            None => rewrite_column_expr(Arc::clone(column_expr), column, &stat_column),
+            Some(expr) => {
+                rewrite_stats_expr(Arc::clone(column_expr), expr.expr(), &stat_column)
+            }
+        }
     }
 }
 
 impl From<Vec<(phys_expr::Column, StatisticsType, Field)>> for RequiredColumns {
     fn from(columns: Vec<(phys_expr::Column, StatisticsType, Field)>) -> Self {
-        Self { columns }
+        let stats_exprs = vec![None; columns.len()];
+        Self {
+            columns,
+            stats_exprs,
+        }
     }
 }
 
@@ -1050,17 +1282,25 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 ) -> Result<RecordBatch> {
     let mut arrays = Vec::<ArrayRef>::with_capacity(required_columns.columns.len());
     // For each needed statistics column:
-    for (column, statistics_type, stat_field) in required_columns.iter() {
+    for ((column, statistics_type, stat_field), stats_expr) in required_columns
+        .iter()
+        .zip(required_columns.stats_exprs.iter())
+    {
         let column = Column::from_name(column.name());
         let data_type = stat_field.data_type();
 
         let num_containers = statistics.num_containers();
 
-        let array = match statistics_type {
-            StatisticsType::Min => statistics.min_values(&column),
-            StatisticsType::Max => statistics.max_values(&column),
-            StatisticsType::NullCount => statistics.null_counts(&column),
-            StatisticsType::RowCount => statistics.row_counts(),
+        let array = match (statistics_type, stats_expr) {
+            (StatisticsType::Min, None) => statistics.min_values(&column),
+            (StatisticsType::Max, None) => statistics.max_values(&column),
+            (StatisticsType::NullCount, None) => statistics.null_counts(&column),
+            (StatisticsType::Min, Some(expr)) => statistics.min_values_for_expr(expr),
+            (StatisticsType::Max, Some(expr)) => statistics.max_values_for_expr(expr),
+            (StatisticsType::NullCount, Some(expr)) => {
+                statistics.null_counts_for_expr(expr)
+            }
+            (StatisticsType::RowCount, _) => statistics.row_counts(),
         };
         let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
@@ -1092,11 +1332,11 @@ fn build_statistics_record_batch<S: PruningStatistics + ?Sized>(
 }
 
 struct PruningExpressionBuilder<'a> {
-    column: phys_expr::Column,
+    key: StatsKey,
     column_expr: Arc<dyn PhysicalExpr>,
     op: Operator,
     scalar_expr: Arc<dyn PhysicalExpr>,
-    field: &'a Field,
+    field: Field,
     required_columns: &'a mut RequiredColumns,
 }
 
@@ -1111,15 +1351,15 @@ impl<'a> PruningExpressionBuilder<'a> {
         required_columns: &'a mut RequiredColumns,
     ) -> Result<Self> {
         // find column name; input could be a more complicated expression
-        let (column_expr, scalar_expr, column, correct_operator) = match (
+        let (column_expr, scalar_expr, key, correct_operator) = match (
             left_columns,
             right_columns,
         ) {
-            (ColumnReferenceCount::One(column), ColumnReferenceCount::Zero) => {
-                (left, right, column, op)
+            (ColumnReferenceCount::One(key), ColumnReferenceCount::Zero) => {
+                (left, right, key, op)
             }
-            (ColumnReferenceCount::Zero, ColumnReferenceCount::One(column)) => {
-                (right, left, column, reverse_operator(op)?)
+            (ColumnReferenceCount::Zero, ColumnReferenceCount::One(key)) => {
+                (right, left, key, reverse_operator(op)?)
             }
             (ColumnReferenceCount::One(_), ColumnReferenceCount::One(_)) => {
                 // both sides have one column - not supported
@@ -1140,14 +1380,17 @@ impl<'a> PruningExpressionBuilder<'a> {
             }
         };
 
-        let (column_expr, correct_operator, scalar_expr) =
-            rewrite_expr_to_prunable(column_expr, correct_operator, scalar_expr, schema)?;
-        let Some((_, field)) = schema.column_with_name(column.name()) else {
-            return plan_err!("Field not found in schema");
-        };
+        let (column_expr, correct_operator, scalar_expr) = rewrite_expr_to_prunable(
+            column_expr,
+            correct_operator,
+            scalar_expr,
+            schema,
+            key.expr.as_ref().map(StatsExpr::expr),
+        )?;
+        let field = key.field(schema)?;
 
         Ok(Self {
-            column,
+            key,
             column_expr,
             op: correct_operator,
             scalar_expr,
@@ -1165,13 +1408,21 @@ impl<'a> PruningExpressionBuilder<'a> {
     }
 
     fn min_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
-        self.required_columns
-            .min_column_expr(&self.column, &self.column_expr, self.field)
+        self.required_columns.stat_key_expr(
+            &self.key,
+            &self.column_expr,
+            &self.field,
+            StatisticsType::Min,
+        )
     }
 
     fn max_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
-        self.required_columns
-            .max_column_expr(&self.column, &self.column_expr, self.field)
+        self.required_columns.stat_key_expr(
+            &self.key,
+            &self.column_expr,
+            &self.field,
+            StatisticsType::Max,
+        )
     }
 
     /// This function is to simply retune the `null_count` physical expression no matter what the
@@ -1181,16 +1432,16 @@ impl<'a> PruningExpressionBuilder<'a> {
     ///       cast(x as int) < 10 => x_null_count,
     ///       try_cast(x as float) < 10.0 => x_null_count
     fn null_count_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
-        // Retune to [`phys_expr::Column`]
-        let column_expr = Arc::new(self.column.clone()) as _;
+        let key_expr = self.key.to_expr();
 
         // null_count is DataType::UInt64, which is different from the column's data type (i.e. self.field)
-        let null_count_field = &Field::new(self.field.name(), DataType::UInt64, true);
+        let null_count_field = Field::new(self.field.name(), DataType::UInt64, true);
 
-        self.required_columns.null_count_column_expr(
-            &self.column,
-            &column_expr,
-            null_count_field,
+        self.required_columns.stat_key_expr(
+            &self.key,
+            &key_expr,
+            &null_count_field,
+            StatisticsType::NullCount,
         )
     }
 
@@ -1201,16 +1452,16 @@ impl<'a> PruningExpressionBuilder<'a> {
     ///       cast(x as int) < 10 => x_row_count,
     ///       try_cast(x as float) < 10.0 => x_row_count
     fn row_count_column_expr(&mut self) -> Result<Arc<dyn PhysicalExpr>> {
-        // Retune to [`phys_expr::Column`]
-        let column_expr = Arc::new(self.column.clone()) as _;
+        let key_expr = self.key.to_expr();
 
         // row_count is DataType::UInt64, which is different from the column's data type (i.e. self.field)
-        let row_count_field = &Field::new(self.field.name(), DataType::UInt64, true);
+        let row_count_field = Field::new(self.field.name(), DataType::UInt64, true);
 
-        self.required_columns.row_count_column_expr(
-            &self.column,
-            &column_expr,
-            row_count_field,
+        self.required_columns.stat_key_expr(
+            &self.key,
+            &key_expr,
+            &row_count_field,
+            StatisticsType::RowCount,
         )
     }
 }
@@ -1232,13 +1483,15 @@ fn rewrite_expr_to_prunable(
     op: Operator,
     scalar_expr: &PhysicalExprRef,
     schema: &Schema,
+    key_expr: Option<&PhysicalExprRef>,
 ) -> Result<(PhysicalExprRef, Operator, PhysicalExprRef)> {
     if !is_compare_op(op) {
         return plan_err!("rewrite_expr_to_prunable only support compare expression");
     }
 
-    if column_expr.downcast_ref::<phys_expr::Column>().is_some() {
-        // `col op lit()`
+    if is_stats_leaf(column_expr, key_expr) {
+        // `col op lit()`, or `expr op lit()` for an expression with its own
+        // statistics
         Ok((Arc::clone(column_expr), op, Arc::clone(scalar_expr)))
     } else if let Some(cast) = column_expr.downcast_ref::<phys_expr::CastExpr>() {
         // `cast(col) op lit()`
@@ -1248,16 +1501,13 @@ fn rewrite_expr_to_prunable(
             op,
             scalar_expr,
             schema,
+            key_expr,
         )?;
         let left = Arc::new(phys_expr::CastExpr::new_with_target_field(
             left,
             Arc::clone(cast.target_field()),
             None,
         ));
-        // PruningPredicate does not support pruning on nested fields yet.
-        // End-to-end nested-field pruning also requires Parquet statistics
-        // extraction to agree with PruningPredicate on a stats representation
-        // for nested field expressions.
         Ok((left, op, right))
     } else if let Some(try_cast) = column_expr.downcast_ref::<phys_expr::TryCastExpr>() {
         // `try_cast(col) op lit()`
@@ -1267,6 +1517,7 @@ fn rewrite_expr_to_prunable(
             op,
             scalar_expr,
             schema,
+            key_expr,
         )?;
         let left = Arc::new(phys_expr::TryCastExpr::new(
             left,
@@ -1276,7 +1527,7 @@ fn rewrite_expr_to_prunable(
     } else if let Some(neg) = column_expr.downcast_ref::<phys_expr::NegativeExpr>() {
         // `-col > lit()`  --> `col < -lit()`
         let (left, op, right) =
-            rewrite_expr_to_prunable(neg.arg(), op, scalar_expr, schema)?;
+            rewrite_expr_to_prunable(neg.arg(), op, scalar_expr, schema, key_expr)?;
         let right = Arc::new(phys_expr::NegativeExpr::new(right));
         Ok((left, reverse_operator(op)?, right))
     } else if let Some(not) = column_expr.downcast_ref::<phys_expr::NotExpr>() {
@@ -1292,7 +1543,7 @@ fn rewrite_expr_to_prunable(
                 "Not with operator other than Eq / NotEq / IsDistinctFrom / IsNotDistinctFrom is not supported"
             );
         }
-        if not.arg().downcast_ref::<phys_expr::Column>().is_some() {
+        if is_stats_leaf(not.arg(), key_expr) {
             let left = Arc::clone(not.arg());
             let right = Arc::new(phys_expr::NotExpr::new(Arc::clone(scalar_expr)));
             Ok((left, reverse_operator(op)?, right))
@@ -1310,9 +1561,19 @@ fn rewrite_cast_child_to_prunable(
     op: Operator,
     scalar_expr: &PhysicalExprRef,
     schema: &Schema,
+    key_expr: Option<&PhysicalExprRef>,
 ) -> Result<(PhysicalExprRef, Operator, PhysicalExprRef)> {
     verify_support_type_for_prune(&cast_child_expr.data_type(schema)?, cast_type)?;
-    rewrite_expr_to_prunable(cast_child_expr, op, scalar_expr, schema)
+    rewrite_expr_to_prunable(cast_child_expr, op, scalar_expr, schema, key_expr)
+}
+
+/// Whether `expr` is what statistics are read for: a column, or `key_expr`
+/// (an expression with its own statistics).
+fn is_stats_leaf(expr: &PhysicalExprRef, key_expr: Option<&PhysicalExprRef>) -> bool {
+    match key_expr {
+        Some(key_expr) => expr == key_expr,
+        None => expr.downcast_ref::<phys_expr::Column>().is_some(),
+    }
 }
 
 fn is_compare_op(op: Operator) -> bool {
@@ -1376,6 +1637,25 @@ fn rewrite_column_expr(
     .data()
 }
 
+/// Replaces every occurrence of `stats_expr` in `e` with `column_new`.
+fn rewrite_stats_expr(
+    e: Arc<dyn PhysicalExpr>,
+    stats_expr: &Arc<dyn PhysicalExpr>,
+    column_new: &phys_expr::Column,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    e.transform_down(|expr| {
+        if &expr == stats_expr {
+            return Ok(Transformed::new(
+                Arc::new(column_new.clone()),
+                true,
+                TreeNodeRecursion::Jump,
+            ));
+        }
+        Ok(Transformed::no(expr))
+    })
+    .data()
+}
+
 fn reverse_operator(op: Operator) -> Result<Operator> {
     op.swap().ok_or_else(|| {
         internal_datafusion_err!(
@@ -1389,21 +1669,23 @@ fn reverse_operator(op: Operator) -> Result<Operator> {
 /// if the column may contain values, and false if definitely does not
 /// contain values
 fn build_single_column_expr(
-    column: &phys_expr::Column,
+    key: &StatsKey,
     schema: &Schema,
     required_columns: &mut RequiredColumns,
     is_not: bool, // if true, treat as !col
 ) -> Option<Arc<dyn PhysicalExpr>> {
-    let field = schema.field_with_name(column.name()).ok()?;
+    // The type of the expression, not of its root column: a boolean struct
+    // field has a struct root.
+    let field = key.field(schema).ok()?;
 
     if *field.data_type() == DataType::Boolean {
-        let col_ref = Arc::new(column.clone()) as _;
+        let key_expr = key.to_expr();
 
         let min = required_columns
-            .min_column_expr(column, &col_ref, field)
+            .stat_key_expr(key, &key_expr, &field, StatisticsType::Min)
             .ok()?;
         let max = required_columns
-            .max_column_expr(column, &col_ref, field)
+            .stat_key_expr(key, &key_expr, &field, StatisticsType::Max)
             .ok()?;
 
         // remember -- we want an expression that is:
@@ -1435,47 +1717,48 @@ fn build_single_column_expr(
 /// thus can prune the row group / value
 fn build_is_null_column_expr(
     expr: &Arc<dyn PhysicalExpr>,
-    schema: &Schema,
+    ctx: &PredicateBuildContext,
     required_columns: &mut RequiredColumns,
     with_not: bool,
 ) -> Option<Arc<dyn PhysicalExpr>> {
-    if let Some(col) = expr.downcast_ref::<phys_expr::Column>() {
-        let field = schema.field_with_name(col.name()).ok()?;
-
-        let null_count_field = &Field::new(field.name(), DataType::UInt64, true);
-        if with_not {
-            if let Ok(row_count_expr) =
-                required_columns.row_count_column_expr(col, expr, null_count_field)
-            {
-                required_columns
-                    .null_count_column_expr(col, expr, null_count_field)
-                    .map(|null_count_column_expr| {
-                        // IsNotNull(column) => null_count != row_count
-                        Arc::new(phys_expr::BinaryExpr::new(
-                            null_count_column_expr,
-                            Operator::NotEq,
-                            row_count_expr,
-                        )) as _
-                    })
-                    .ok()
-            } else {
-                None
-            }
-        } else {
-            required_columns
-                .null_count_column_expr(col, expr, null_count_field)
-                .map(|null_count_column_expr| {
-                    // IsNull(column) => null_count > 0
-                    Arc::new(phys_expr::BinaryExpr::new(
-                        null_count_column_expr,
-                        Operator::Gt,
-                        Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
-                    )) as _
-                })
-                .ok()
-        }
+    let key = as_stats_key(expr, ctx)?;
+    let name = key.field(ctx.schema).ok()?.name().clone();
+    let null_count_field = &Field::new(name, DataType::UInt64, true);
+    if with_not {
+        let row_count_expr = required_columns
+            .stat_key_expr(&key, expr, null_count_field, StatisticsType::RowCount)
+            .ok()?;
+        let null_count_expr = required_columns
+            .stat_key_expr(&key, expr, null_count_field, StatisticsType::NullCount)
+            .ok()?;
+        // IsNotNull(column) => null_count != row_count
+        Some(Arc::new(phys_expr::BinaryExpr::new(
+            null_count_expr,
+            Operator::NotEq,
+            row_count_expr,
+        )))
     } else {
-        None
+        let null_count_expr = required_columns
+            .stat_key_expr(&key, expr, null_count_field, StatisticsType::NullCount)
+            .ok()?;
+        // IsNull(column) => null_count > 0
+        Some(Arc::new(phys_expr::BinaryExpr::new(
+            null_count_expr,
+            Operator::Gt,
+            Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0)))),
+        )))
+    }
+}
+
+/// Returns the [`StatsKey`] for `expr` if it is a column, or an expression
+/// that `matcher` gives its own statistics.
+fn as_stats_key(
+    expr: &Arc<dyn PhysicalExpr>,
+    ctx: &PredicateBuildContext,
+) -> Option<StatsKey> {
+    match expr.downcast_ref::<phys_expr::Column>() {
+        Some(column) => Some(StatsKey::column(column.clone())),
+        None => matched_stats_key(expr, ctx),
     }
 }
 
@@ -1498,34 +1781,36 @@ impl CompactInListDomain {
 
 /// Statistics expressions for `column`: its min, its max, and "not every row is
 /// NULL". Appends to `required_columns`, rolling the appends back if any part
-/// cannot be built, since [`RequiredColumns::stat_column_expr`] only appends.
+/// cannot be built, since [`RequiredColumns::stat_key_expr`] only appends.
 fn min_max_non_null_exprs(
-    column: &phys_expr::Column,
+    key: &StatsKey,
     column_expr: &Arc<dyn PhysicalExpr>,
     field: &Field,
-    schema: &Schema,
+    ctx: &PredicateBuildContext,
     required_columns: &mut RequiredColumns,
 ) -> Option<(PhysicalExprRef, PhysicalExprRef, PhysicalExprRef)> {
     let appended = required_columns.columns.len();
     let statistics = (|| {
         let min = required_columns
-            .min_column_expr(column, column_expr, field)
+            .stat_key_expr(key, column_expr, field, StatisticsType::Min)
             .ok()?;
         let max = required_columns
-            .max_column_expr(column, column_expr, field)
+            .stat_key_expr(key, column_expr, field, StatisticsType::Max)
             .ok()?;
         // A cast on `column_expr` (widening it towards min/max's target type)
-        // does not affect nullability, so check it on the bare column beneath.
-        let bare_expr = match column_expr.downcast_ref::<phys_expr::CastExpr>() {
-            Some(cast) => cast.expr(),
-            None => column_expr,
-        };
-        let non_null =
-            build_is_null_column_expr(bare_expr, schema, required_columns, true)?;
+        // does not affect nullability, so check it on the key beneath.
+        let key_expr = key.to_expr();
+        let bare_expr =
+            match (&key.expr, column_expr.downcast_ref::<phys_expr::CastExpr>()) {
+                (Some(_), _) => &key_expr,
+                (None, Some(cast)) => cast.expr(),
+                (None, None) => column_expr,
+            };
+        let non_null = build_is_null_column_expr(bare_expr, ctx, required_columns, true)?;
         Some((min, max, non_null))
     })();
     if statistics.is_none() {
-        required_columns.columns.truncate(appended);
+        required_columns.truncate(appended);
     }
     statistics
 }
@@ -1536,7 +1821,7 @@ fn min_max_non_null_exprs(
 /// and built once with the join's hash table.
 fn build_hash_lookup_pruning_expr(
     lookup: &HashTableLookupExpr,
-    schema: &Schema,
+    ctx: &PredicateBuildContext,
     required_columns: &mut RequiredColumns,
 ) -> Option<Arc<dyn PhysicalExpr>> {
     let bitmap = Arc::clone(lookup.pruning_bitmap()?);
@@ -1546,21 +1831,19 @@ fn build_hash_lookup_pruning_expr(
     };
     // The schema adapter often wraps the column in a same-type or widening cast
     // (a nullable table column over a REQUIRED file column, or a narrower file
-    // type). `stat_column_expr` rewrites only the inner `Column`, keeping it.
-    let column = match column_expr.downcast_ref::<phys_expr::CastExpr>() {
-        Some(cast) => {
-            let column = cast.expr().downcast_ref::<phys_expr::Column>()?;
-            let from = schema.fields().get(column.index())?.data_type();
-            cast.is_bigger_cast(from).then_some(column)?
-        }
-        None => column_expr.downcast_ref::<phys_expr::Column>()?,
-    };
-    let field = schema.fields().get(column.index())?;
-    if field.name() != column.name() {
+    // type). `stat_key_expr` rewrites only the key under it, keeping the cast.
+    let cast = column_expr.downcast_ref::<phys_expr::CastExpr>();
+    let key_expr = cast.map_or(column_expr, |cast| cast.expr());
+    let key = as_stats_key(key_expr, ctx)?;
+    // The statistics have the type of the key itself, not of the cast.
+    let field = key.field_at_index(ctx.schema)?;
+    if let Some(cast) = cast
+        && !cast.is_bigger_cast(field.data_type())
+    {
         return None;
     }
     let (min, max, non_null) =
-        min_max_non_null_exprs(column, column_expr, field, schema, required_columns)?;
+        min_max_non_null_exprs(&key, column_expr, &field, ctx, required_columns)?;
     Some(Arc::new(phys_expr::BinaryExpr::new(
         non_null,
         Operator::And,
@@ -1585,7 +1868,7 @@ fn build_hash_lookup_pruning_expr(
 /// but prevents inversion from proving that a container is fully matched.
 fn build_compact_in_list_expr(
     in_list: &phys_expr::InListExpr,
-    schema: &Schema,
+    ctx: &PredicateBuildContext,
     required_columns: &mut RequiredColumns,
     properties: &mut PruningExpressionProperties,
 ) -> Option<Arc<dyn PhysicalExpr>> {
@@ -1594,15 +1877,12 @@ fn build_compact_in_list_expr(
     } else {
         SetMembership::In
     };
-    let column = in_list.expr().downcast_ref::<phys_expr::Column>()?;
-    let field = schema.fields().get(column.index())?;
+    let key = as_stats_key(in_list.expr(), ctx)?;
+    let field = key.field_at_index(ctx.schema)?;
     let data_type = match field.data_type() {
         DataType::Dictionary(_, value) => value.as_ref(),
         data_type => data_type,
     };
-    if field.name() != column.name() {
-        return None;
-    }
     let mut domain = if data_type.is_string() {
         CompactInListDomain::String(Vec::with_capacity(in_list.list().len()))
     } else if matches!(
@@ -1645,7 +1925,7 @@ fn build_compact_in_list_expr(
         ))));
     }
     let (min, max, non_null) =
-        min_max_non_null_exprs(column, in_list.expr(), field, schema, required_columns)?;
+        min_max_non_null_exprs(&key, in_list.expr(), &field, ctx, required_columns)?;
     let may_match = match domain {
         CompactInListDomain::String(values) => {
             Arc::new(StringInListPruningExpr::new(membership, min, max, values))
@@ -1738,15 +2018,24 @@ impl PredicateRewriter {
     ) -> Arc<dyn PhysicalExpr> {
         let mut required_columns = RequiredColumns::new();
         let mut properties = PruningExpressionProperties::default();
-        build_predicate_expression(
-            expr,
-            &Arc::new(schema.clone()),
-            &mut required_columns,
-            &self.unhandled_hook,
-            self.max_in_list_size,
-            &mut properties,
-        )
+        let schema = Arc::new(schema.clone());
+        let ctx = PredicateBuildContext {
+            schema: &schema,
+            unhandled_hook: &self.unhandled_hook,
+            max_in_list_size: self.max_in_list_size,
+            statistics_expr_matcher: None,
+        };
+        build_predicate_expression(expr, &ctx, &mut required_columns, &mut properties)
     }
+}
+
+/// Read-only settings for [`build_predicate_expression`].
+struct PredicateBuildContext<'a> {
+    schema: &'a SchemaRef,
+    unhandled_hook: &'a Arc<dyn UnhandledPredicateHook>,
+    max_in_list_size: usize,
+    /// Decides which expressions have their own statistics.
+    statistics_expr_matcher: Option<&'a dyn StatisticsExprMatcher>,
 }
 
 /// Translate logical filter expression into pruning predicate
@@ -1763,42 +2052,35 @@ impl PredicateRewriter {
 /// checks. Longer lists fall back to `unhandled_hook`.
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
-    schema: &SchemaRef,
+    ctx: &PredicateBuildContext,
     required_columns: &mut RequiredColumns,
-    unhandled_hook: &Arc<dyn UnhandledPredicateHook>,
-    max_in_list_size: usize,
     properties: &mut PruningExpressionProperties,
 ) -> Arc<dyn PhysicalExpr> {
     if is_always_false(expr) {
-        // Shouldn't return `unhandled_hook.handle(expr)`
+        // Shouldn't return `ctx.unhandled_hook.handle(expr)`
         // Because it will transfer false to true.
         return Arc::clone(expr);
     }
     // predicate expression can only be a binary expression
     if let Some(is_null) = expr.downcast_ref::<phys_expr::IsNullExpr>() {
-        return build_is_null_column_expr(is_null.arg(), schema, required_columns, false)
-            .unwrap_or_else(|| unhandled_hook.handle(expr));
+        return build_is_null_column_expr(is_null.arg(), ctx, required_columns, false)
+            .unwrap_or_else(|| ctx.unhandled_hook.handle(expr));
     }
     if let Some(is_not_null) = expr.downcast_ref::<phys_expr::IsNotNullExpr>() {
-        return build_is_null_column_expr(
-            is_not_null.arg(),
-            schema,
-            required_columns,
-            true,
-        )
-        .unwrap_or_else(|| unhandled_hook.handle(expr));
+        return build_is_null_column_expr(is_not_null.arg(), ctx, required_columns, true)
+            .unwrap_or_else(|| ctx.unhandled_hook.handle(expr));
     }
-    if let Some(col) = expr.downcast_ref::<phys_expr::Column>() {
-        return build_single_column_expr(col, schema, required_columns, false)
-            .unwrap_or_else(|| unhandled_hook.handle(expr));
+    if let Some(key) = as_stats_key(expr, ctx) {
+        return build_single_column_expr(&key, ctx.schema, required_columns, false)
+            .unwrap_or_else(|| ctx.unhandled_hook.handle(expr));
     }
     if let Some(not) = expr.downcast_ref::<phys_expr::NotExpr>() {
         // match !col (don't do so recursively)
-        if let Some(col) = not.arg().downcast_ref::<phys_expr::Column>() {
-            return build_single_column_expr(col, schema, required_columns, true)
-                .unwrap_or_else(|| unhandled_hook.handle(expr));
+        if let Some(key) = as_stats_key(not.arg(), ctx) {
+            return build_single_column_expr(&key, ctx.schema, required_columns, true)
+                .unwrap_or_else(|| ctx.unhandled_hook.handle(expr));
         } else {
-            return unhandled_hook.handle(expr);
+            return ctx.unhandled_hook.handle(expr);
         }
     }
     if let Some(in_list) = expr.downcast_ref::<phys_expr::InListExpr>() {
@@ -1807,13 +2089,13 @@ fn build_predicate_expression(
         // performance threshold; compact pruning is opt-in via a raised cap.
         // The compact form covers both `IN` and `NOT IN`.
         if in_list.list().len() > MAX_IN_LIST_SIZE
-            && in_list.list().len() <= max_in_list_size
+            && in_list.list().len() <= ctx.max_in_list_size
             && let Some(pruning_expr) =
-                build_compact_in_list_expr(in_list, schema, required_columns, properties)
+                build_compact_in_list_expr(in_list, ctx, required_columns, properties)
         {
             return pruning_expr;
         }
-        if !in_list.list().is_empty() && in_list.list().len() <= max_in_list_size {
+        if !in_list.list().is_empty() && in_list.list().len() <= ctx.max_in_list_size {
             let eq_op = if in_list.negated() {
                 Operator::NotEq
             } else {
@@ -1838,19 +2120,17 @@ fn build_predicate_expression(
                 .unwrap();
             return build_predicate_expression(
                 &change_expr,
-                schema,
+                ctx,
                 required_columns,
-                unhandled_hook,
-                max_in_list_size,
                 properties,
             );
         } else {
-            return unhandled_hook.handle(expr);
+            return ctx.unhandled_hook.handle(expr);
         }
     }
     if let Some(lookup) = expr.downcast_ref::<HashTableLookupExpr>() {
-        return build_hash_lookup_pruning_expr(lookup, schema, required_columns)
-            .unwrap_or_else(|| unhandled_hook.handle(expr));
+        return build_hash_lookup_pruning_expr(lookup, ctx, required_columns)
+            .unwrap_or_else(|| ctx.unhandled_hook.handle(expr));
     }
     // A partitioned hash join hides its per-partition filters under a `CASE` on the
     // repartition hash. A row takes exactly one branch, so a container may match
@@ -1859,13 +2139,13 @@ fn build_predicate_expression(
     if let Some(case) = expr.downcast_ref::<phys_expr::CaseExpr>() {
         // Only a Boolean `CASE` is a predicate; anything else is a value for
         // whatever compares it to handle.
-        if !matches!(case.data_type(schema), Ok(DataType::Boolean)) {
-            return unhandled_hook.handle(expr);
+        if !matches!(case.data_type(ctx.schema), Ok(DataType::Boolean)) {
+            return ctx.unhandled_hook.handle(expr);
         }
         // Without an `ELSE`, unmatched rows are UNKNOWN: not a match, but not
         // FALSE either, which full-match inference must be able to tell apart.
         if case.else_expr().is_none() {
-            return unhandled_hook.handle(expr);
+            return ctx.unhandled_hook.handle(expr);
         }
         return case
             .when_then_expr()
@@ -1873,19 +2153,12 @@ fn build_predicate_expression(
             .map(|(_, then)| then)
             .chain(case.else_expr())
             .map(|branch| {
-                build_predicate_expression(
-                    branch,
-                    schema,
-                    required_columns,
-                    unhandled_hook,
-                    max_in_list_size,
-                    properties,
-                )
+                build_predicate_expression(branch, ctx, required_columns, properties)
             })
             .reduce(|acc, branch| {
                 Arc::new(phys_expr::BinaryExpr::new(acc, Operator::Or, branch)) as _
             })
-            .unwrap_or_else(|| unhandled_hook.handle(expr));
+            .unwrap_or_else(|| ctx.unhandled_hook.handle(expr));
     }
 
     let (left, op, right) = {
@@ -1897,7 +2170,7 @@ fn build_predicate_expression(
             )
         } else if let Some(like_expr) = expr.downcast_ref::<phys_expr::LikeExpr>() {
             if like_expr.case_insensitive() {
-                return unhandled_hook.handle(expr);
+                return ctx.unhandled_hook.handle(expr);
             }
             let op = match (like_expr.negated(), like_expr.case_insensitive()) {
                 (false, false) => Operator::LikeMatch,
@@ -1911,27 +2184,15 @@ fn build_predicate_expression(
                 Arc::clone(like_expr.pattern()),
             )
         } else {
-            return unhandled_hook.handle(expr);
+            return ctx.unhandled_hook.handle(expr);
         }
     };
 
     if op == Operator::And || op == Operator::Or {
-        let left_expr = build_predicate_expression(
-            &left,
-            schema,
-            required_columns,
-            unhandled_hook,
-            max_in_list_size,
-            properties,
-        );
-        let right_expr = build_predicate_expression(
-            &right,
-            schema,
-            required_columns,
-            unhandled_hook,
-            max_in_list_size,
-            properties,
-        );
+        let left_expr =
+            build_predicate_expression(&left, ctx, required_columns, properties);
+        let right_expr =
+            build_predicate_expression(&right, ctx, required_columns, properties);
         // simplify boolean expression if applicable
         let expr = match (&left_expr, op, &right_expr) {
             (left, Operator::And, right)
@@ -1954,15 +2215,15 @@ fn build_predicate_expression(
         return expr;
     }
 
-    let left_columns = ColumnReferenceCount::from_expression(&left);
-    let right_columns = ColumnReferenceCount::from_expression(&right);
+    let left_columns = ColumnReferenceCount::from_expression(&left, ctx);
+    let right_columns = ColumnReferenceCount::from_expression(&right, ctx);
     let expr_builder = PruningExpressionBuilder::try_new(
         &left,
         &right,
         left_columns,
         right_columns,
         op,
-        schema,
+        ctx.schema,
         required_columns,
     );
     let mut expr_builder = match expr_builder {
@@ -1971,12 +2232,61 @@ fn build_predicate_expression(
         // this can still produce a useful predicate when multiple conditions are joined using AND
         Err(e) => {
             debug!("Error building pruning expression: {e}");
-            return unhandled_hook.handle(expr);
+            return ctx.unhandled_hook.handle(expr);
         }
     };
 
     build_statistics_expr(&mut expr_builder)
-        .unwrap_or_else(|_| unhandled_hook.handle(expr))
+        .unwrap_or_else(|_| ctx.unhandled_hook.handle(expr))
+}
+
+/// What a set of statistics describes: a column, or an expression that has
+/// its own statistics (see [`RequiredColumns`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct StatsKey {
+    /// The column, or the one column that `expr` reads.
+    column: phys_expr::Column,
+    /// `None` for the column itself.
+    expr: Option<StatsExpr>,
+}
+
+impl StatsKey {
+    fn column(column: phys_expr::Column) -> Self {
+        Self { column, expr: None }
+    }
+
+    /// The expression whose statistics are read.
+    fn to_expr(&self) -> Arc<dyn PhysicalExpr> {
+        match &self.expr {
+            Some(expr) => Arc::clone(expr.expr()),
+            None => Arc::new(self.column.clone()),
+        }
+    }
+
+    /// The field of the key in `schema`: the schema field of a column,
+    /// found by name, or a nullable field with the type of an expression.
+    fn field(&self, schema: &Schema) -> Result<Field> {
+        match &self.expr {
+            None => match schema.column_with_name(self.column.name()) {
+                Some((_, field)) => Ok(field.clone()),
+                None => plan_err!("Field not found in schema"),
+            },
+            Some(expr) => {
+                let expr = expr.expr();
+                Ok(Field::new(expr.to_string(), expr.data_type(schema)?, true))
+            }
+        }
+    }
+
+    /// Like [`Self::field`], but finds a column by its index and returns
+    /// `None` when the field at that index has a different name.
+    fn field_at_index(&self, schema: &Schema) -> Option<Field> {
+        if self.expr.is_none() {
+            let field = schema.fields().get(self.column.index())?;
+            return (field.name() == self.column.name()).then(|| field.as_ref().clone());
+        }
+        self.field(schema).ok()
+    }
 }
 
 /// Count of distinct column references in an expression.
@@ -1992,24 +2302,35 @@ fn build_predicate_expression(
 enum ColumnReferenceCount {
     /// no column references
     Zero,
-    /// Only one column reference
-    One(phys_expr::Column),
+    /// Only one column (or expression with its own statistics) reference
+    One(StatsKey),
     /// More than one column reference
     Many,
 }
 
 impl ColumnReferenceCount {
     /// Count the number of distinct column references in an expression
-    fn from_expression(expr: &Arc<dyn PhysicalExpr>) -> Self {
-        let mut seen = HashSet::<phys_expr::Column>::new();
+    fn from_expression(
+        expr: &Arc<dyn PhysicalExpr>,
+        ctx: &PredicateBuildContext,
+    ) -> Self {
+        let mut seen = HashSet::<StatsKey>::new();
         expr.apply(|expr| {
-            if let Some(column) = expr.downcast_ref::<phys_expr::Column>() {
-                seen.insert(column.clone());
-                if seen.len() > 1 {
-                    return Ok(TreeNodeRecursion::Stop);
+            let key = if let Some(key) = matched_stats_key(expr, ctx) {
+                // The expression is one unit. Its columns must not also
+                // count as separate references, so skip its children.
+                seen.insert(key);
+                TreeNodeRecursion::Jump
+            } else {
+                if let Some(column) = expr.downcast_ref::<phys_expr::Column>() {
+                    seen.insert(StatsKey::column(column.clone()));
                 }
+                TreeNodeRecursion::Continue
+            };
+            if seen.len() > 1 {
+                return Ok(TreeNodeRecursion::Stop);
             }
-            Ok(TreeNodeRecursion::Continue)
+            Ok(key)
         })
         // pre_visit always returns OK, so this will always too
         .expect("no way to return error during recursion");
@@ -2021,6 +2342,30 @@ impl ColumnReferenceCount {
             _ => ColumnReferenceCount::Many,
         }
     }
+}
+
+/// Returns a [`StatsKey`] for `expr` if `matcher` accepts it, it reads
+/// exactly one column, and its type is not nested.
+fn matched_stats_key(
+    expr: &Arc<dyn PhysicalExpr>,
+    ctx: &PredicateBuildContext,
+) -> Option<StatsKey> {
+    if expr.downcast_ref::<phys_expr::Column>().is_some() {
+        return None;
+    }
+    let binding = ctx.statistics_expr_matcher?.bind(expr)?;
+    if expr.data_type(ctx.schema).ok()?.is_nested() {
+        return None;
+    }
+    let mut columns = collect_columns(expr).into_iter();
+    let column = columns.next()?;
+    if columns.next().is_some() {
+        return None;
+    }
+    Some(StatsKey {
+        column,
+        expr: Some(StatsExpr::new(Arc::clone(expr), binding)),
+    })
 }
 
 fn build_statistics_expr(
@@ -6876,9 +7221,14 @@ mod tests {
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Int32(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
-        let (result_left, _, result_right) =
-            rewrite_expr_to_prunable(&left_input, Operator::Eq, &right_input, &schema)
-                .unwrap();
+        let (result_left, _, result_right) = rewrite_expr_to_prunable(
+            &left_input,
+            Operator::Eq,
+            &right_input,
+            &schema,
+            None,
+        )
+        .unwrap();
         assert_eq!(result_left.to_string(), left_input.to_string());
         assert_eq!(result_right.to_string(), right_input.to_string());
 
@@ -6887,9 +7237,14 @@ mod tests {
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Decimal128(Some(12), 20, 3));
         let right_input = logical2physical(&right_input, &schema);
-        let (result_left, _, result_right) =
-            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, &schema)
-                .unwrap();
+        let (result_left, _, result_right) = rewrite_expr_to_prunable(
+            &left_input,
+            Operator::Gt,
+            &right_input,
+            &schema,
+            None,
+        )
+        .unwrap();
         // The rewrite rebuilds the cast with its nullable target field
         assert_eq!(result_left.to_string(), "CAST(a@0 AS Decimal128(20, 3);N)");
         assert_eq!(result_right.to_string(), right_input.to_string());
@@ -6899,9 +7254,14 @@ mod tests {
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Int64(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
-        let (result_left, _, result_right) =
-            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, &schema)
-                .unwrap();
+        let (result_left, _, result_right) = rewrite_expr_to_prunable(
+            &left_input,
+            Operator::Gt,
+            &right_input,
+            &schema,
+            None,
+        )
+        .unwrap();
         assert_eq!(result_left.to_string(), left_input.to_string());
         assert_eq!(result_right.to_string(), right_input.to_string());
 
@@ -6985,8 +7345,13 @@ mod tests {
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Int64(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
-        let result =
-            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, &schema);
+        let result = rewrite_expr_to_prunable(
+            &left_input,
+            Operator::Gt,
+            &right_input,
+            &schema,
+            None,
+        );
         assert!(result.is_err());
 
         // other expr
@@ -6994,8 +7359,13 @@ mod tests {
         let left_input = logical2physical(&left_input, &schema);
         let right_input = lit(ScalarValue::Int64(Some(12)));
         let right_input = logical2physical(&right_input, &schema);
-        let result =
-            rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, &schema);
+        let result = rewrite_expr_to_prunable(
+            &left_input,
+            Operator::Gt,
+            &right_input,
+            &schema,
+            None,
+        );
         assert!(result.is_err());
         // TODO: add other negative test for other case and op
     }
@@ -7498,14 +7868,268 @@ mod tests {
         let expr = logical2physical(expr, schema);
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
         let mut properties = PruningExpressionProperties::default();
-        build_predicate_expression(
-            &expr,
-            &Arc::new(schema.clone()),
-            required_columns,
-            &unhandled_hook,
-            MAX_IN_LIST_SIZE,
-            &mut properties,
-        )
+        let schema = Arc::new(schema.clone());
+        let ctx = PredicateBuildContext {
+            schema: &schema,
+            unhandled_hook: &unhandled_hook,
+            max_in_list_size: MAX_IN_LIST_SIZE,
+            statistics_expr_matcher: None,
+        };
+        build_predicate_expression(&expr, &ctx, required_columns, &mut properties)
+    }
+
+    /// Matches `get_field` calls, as a statistics source for struct fields
+    /// would.
+    #[derive(Debug)]
+    struct GetFieldMatcher;
+
+    impl StatisticsExprMatcher for GetFieldMatcher {
+        fn bind(
+            &self,
+            expr: &Arc<dyn PhysicalExpr>,
+        ) -> Option<Arc<dyn Any + Send + Sync>> {
+            expr.downcast_ref::<datafusion_physical_expr::ScalarFunctionExpr>()
+                .is_some_and(|f| f.name() == "get_field")
+                .then(|| Arc::new(()) as _)
+        }
+    }
+
+    fn struct_schema() -> SchemaRef {
+        let s = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Int32, true),
+                Field::new("flag", DataType::Boolean, true),
+            ]
+            .into(),
+        );
+        Arc::new(Schema::new(vec![
+            Field::new("s", s, true),
+            Field::new("c", DataType::Int32, true),
+        ]))
+    }
+
+    fn build_with_matcher(expr: &Expr, matcher: bool) -> PruningPredicate {
+        let schema = struct_schema();
+        let matcher = matcher.then(|| Arc::new(GetFieldMatcher) as _);
+        PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .with_statistics_expr_matcher(matcher)
+            .try_build(logical2physical(expr, &schema))
+            .unwrap()
+    }
+
+    /// Binds `get_field(s, 'a')` to the maximum of each container.
+    #[derive(Debug)]
+    struct MaxBindingMatcher;
+
+    /// The private binding type of [`MaxBindingMatcher`].
+    struct Maxes(Int32Array);
+
+    impl StatisticsExprMatcher for MaxBindingMatcher {
+        fn bind(
+            &self,
+            expr: &Arc<dyn PhysicalExpr>,
+        ) -> Option<Arc<dyn Any + Send + Sync>> {
+            GetFieldMatcher.bind(expr)?;
+            Some(Arc::new(Maxes(Int32Array::from(vec![3, 10]))))
+        }
+    }
+
+    /// Two containers that know only what the bindings tell them.
+    struct BindingStatistics;
+
+    impl PruningStatistics for BindingStatistics {
+        fn min_values(&self, _: &Column) -> Option<ArrayRef> {
+            None
+        }
+        fn max_values(&self, _: &Column) -> Option<ArrayRef> {
+            None
+        }
+        fn num_containers(&self) -> usize {
+            2
+        }
+        fn null_counts(&self, _: &Column) -> Option<ArrayRef> {
+            None
+        }
+        fn row_counts(&self) -> Option<ArrayRef> {
+            None
+        }
+        fn contained(
+            &self,
+            _: &Column,
+            _: &HashSet<ScalarValue>,
+        ) -> Option<BooleanArray> {
+            None
+        }
+        fn max_values_for_expr(&self, expr: &StatsExpr) -> Option<ArrayRef> {
+            let Maxes(maxes) = expr.binding::<Maxes>()?;
+            Some(Arc::new(maxes.clone()))
+        }
+    }
+
+    #[test]
+    fn statistics_read_the_binding_of_the_matcher() {
+        use datafusion_functions::core::expr_fn::get_field;
+        let schema = struct_schema();
+        let expr = get_field(col("s"), "a").gt(lit(5));
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .with_statistics_expr_matcher(Some(Arc::new(MaxBindingMatcher)))
+            .try_build(logical2physical(&expr, &schema))
+            .unwrap();
+        // The first container has max 3, so `> 5` cannot hold there.
+        assert_eq!(predicate.prune(&BindingStatistics).unwrap(), [false, true]);
+    }
+
+    #[test]
+    fn matched_expression_reads_its_own_statistics() {
+        use datafusion_functions::core::expr_fn::get_field;
+        let expr = get_field(col("s"), "a").gt(lit(5));
+        let predicate = build_with_matcher(&expr, true);
+        assert_eq!(
+            predicate.predicate_expr().to_string(),
+            "get_field(s@0, a)_null_count@1 != row_count@2 AND get_field(s@0, a)_max@0 > 5"
+        );
+        let (column, key_expr) = predicate.required_columns().single_key().unwrap();
+        assert_eq!(column.name(), "s");
+        assert_eq!(key_expr.unwrap().to_string(), "get_field(s@0, a)");
+        // A key expression is not the column itself.
+        assert!(predicate.required_columns().single_column().is_none());
+
+        // Without a matcher, nothing can be pruned.
+        assert!(build_with_matcher(&expr, false).always_true());
+    }
+
+    #[test]
+    fn matched_expression_is_null() {
+        use datafusion_functions::core::expr_fn::get_field;
+        let a = || get_field(col("s"), "a");
+        let predicate = build_with_matcher(&a().is_null(), true);
+        assert_eq!(
+            predicate.predicate_expr().to_string(),
+            "get_field(s@0, a)_null_count@0 > 0"
+        );
+        let predicate = build_with_matcher(&a().is_not_null(), true);
+        assert_eq!(
+            predicate.predicate_expr().to_string(),
+            "get_field(s@0, a)_null_count@1 != row_count@0"
+        );
+    }
+
+    #[test]
+    fn matched_expression_under_cast() {
+        use datafusion_functions::core::expr_fn::get_field;
+        // The schema adapter wraps a drifted struct field in a cast.
+        let expr = cast(get_field(col("s"), "a"), DataType::Float64).gt(lit(6.5));
+        let predicate = build_with_matcher(&expr, true);
+        assert_eq!(
+            predicate.predicate_expr().to_string(),
+            "get_field(s@0, a)_null_count@1 != row_count@2 \
+             AND CAST(get_field(s@0, a)_max@0 AS Float64;N) > 6.5"
+        );
+    }
+
+    #[test]
+    fn matched_boolean_expression() {
+        use datafusion_functions::core::expr_fn::get_field;
+        let flag = || get_field(col("s"), "flag");
+        let predicate = build_with_matcher(&flag(), true);
+        assert_eq!(
+            predicate.predicate_expr().to_string(),
+            "get_field(s@0, flag)_min@0 OR get_field(s@0, flag)_max@1"
+        );
+        let predicate = build_with_matcher(&flag().not(), true);
+        assert_eq!(
+            predicate.predicate_expr().to_string(),
+            "NOT get_field(s@0, flag)_min@0 OR NOT get_field(s@0, flag)_max@1"
+        );
+    }
+
+    #[test]
+    fn matched_expression_compact_in_list() {
+        use datafusion_functions::core::expr_fn::get_field;
+        let schema = struct_schema();
+        let list: Vec<Expr> = (30..51).map(lit).collect();
+        let expr = get_field(col("s"), "a").in_list(list, false);
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .with_max_in_list_size(100)
+            .with_statistics_expr_matcher(Some(Arc::new(GetFieldMatcher)))
+            .try_build(logical2physical(&expr, &schema))
+            .unwrap();
+        // One compact check instead of 21 per-value comparisons.
+        assert_eq!(
+            predicate.predicate_expr().to_string(),
+            "get_field(s@0, a)_null_count@3 != row_count@2 AND \
+             IN_SET_INTERSECTS(get_field(s@0, a)_min@0, get_field(s@0, a)_max@1, 21 values)"
+        );
+    }
+
+    #[test]
+    fn matched_expression_literal_guarantees() {
+        use datafusion_functions::core::expr_fn::get_field;
+        let a = || get_field(col("s"), "a");
+        let b = || get_field(col("s"), "b");
+        let guarantees = |expr: &Expr| {
+            let predicate = build_with_matcher(expr, true);
+            // Placeholders never show up as column guarantees.
+            assert!(predicate.literal_guarantees().is_empty(), "{expr}");
+            predicate
+                .expr_literal_guarantees
+                .iter()
+                .map(|g| format!("{} {:?} {}", g.expr, g.guarantee, g.literals.len()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            guarantees(&a().eq(lit(1)).or(a().eq(lit(2)))),
+            ["get_field(s@0, a) In 2"]
+        );
+        assert_eq!(
+            guarantees(&a().not_eq(lit(1)).and(b().eq(lit(2)))),
+            ["get_field(s@0, a) NotIn 1", "get_field(s@0, b) In 1"]
+        );
+        // Two different keys in an OR guarantee nothing about either.
+        assert!(guarantees(&a().eq(lit(1)).or(b().eq(lit(2)))).is_empty());
+        // A cast key compares converted values, not the stored ones.
+        assert!(guarantees(&cast(a(), DataType::Int64).eq(lit(1i64))).is_empty());
+    }
+
+    #[test]
+    fn expr_literal_guarantee_alone_is_not_always_true() {
+        use datafusion_functions::core::expr_fn::get_field;
+        let schema = struct_schema();
+        let expr = get_field(col("s"), "a").in_list(vec![lit(1), lit(2)], false);
+        // A cap of zero disables the min/max rewrite of IN, so only the
+        // literal guarantee can prune.
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .with_max_in_list_size(0)
+            .with_statistics_expr_matcher(Some(Arc::new(GetFieldMatcher)))
+            .try_build(logical2physical(&expr, &schema))
+            .unwrap();
+        assert!(is_always_true(predicate.predicate_expr()));
+        assert!(!predicate.always_true());
+        assert_eq!(predicate.literal_exprs().len(), 1);
+    }
+
+    #[test]
+    fn matched_expressions_not_prunable() {
+        use datafusion_functions::core::expr_fn::get_field;
+        let a = || get_field(col("s"), "a");
+        let b = || get_field(col("s"), "b");
+        for expr in [
+            // Two different keys in one comparison.
+            a().gt(b()),
+            (a() + b()).gt(lit(5)),
+            (a() + col("c")).gt(lit(5)),
+        ] {
+            assert!(build_with_matcher(&expr, true).always_true(), "{expr}");
+        }
+        // Two keys in an OR are fine, but not a single key.
+        let predicate = build_with_matcher(&a().gt(lit(1)).or(col("c").lt(lit(2))), true);
+        assert!(!predicate.always_true());
+        assert!(predicate.required_columns().single_key().is_none());
     }
 
     #[test]
@@ -7597,6 +8221,27 @@ mod tests {
         // Containers 0 and 2 sit in the gap between 30 and 100000; container 1
         // holds 20. The bitmap excludes the first and third.
         assert_eq!(result, vec![false, true, false]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_hash_lookup_pruning_on_struct_field() -> Result<()> {
+        use datafusion_functions::core::expr_fn::get_field;
+        let s = DataType::Struct(vec![Field::new("a", DataType::Int64, true)].into());
+        let schema = Arc::new(Schema::new(vec![Field::new("s", s, true)]));
+        let key = logical2physical(&get_field(col("s"), "a"), &schema);
+        let lookup = hash_lookup(&key, &[10, 20, 30, 100_000])?;
+
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .with_statistics_expr_matcher(Some(Arc::new(GetFieldMatcher)))
+            .try_build(lookup)?;
+        // The bitmap term reads the struct field's own statistics.
+        assert_eq!(
+            predicate.predicate_expr().to_string(),
+            "get_field(s@0, a)_null_count@3 != row_count@2 AND \
+             KEY_RANGE_BITMAP(get_field(s@0, a)_min@0, get_field(s@0, a)_max@1, 4/131072 buckets)"
+        );
         Ok(())
     }
 

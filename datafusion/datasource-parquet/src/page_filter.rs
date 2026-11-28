@@ -4,6 +4,9 @@
 
 //! Contains code to filter entire pages
 
+use crate::statistics_resolver::{
+    ExprStatisticsKind, FileStatisticsResolvers, ParquetLeafStatistics, bound_statistics,
+};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -15,15 +18,16 @@ use crate::{ParquetAccessPlan, RowGroupAccess};
 use arrow::array::BooleanArray;
 use arrow::{
     array::ArrayRef,
-    datatypes::{Schema, SchemaRef},
+    datatypes::{Field, Schema, SchemaRef},
 };
 use datafusion_common::ScalarValue;
-use datafusion_common::pruning::PruningStatistics;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
+use datafusion_physical_expr_common::pruning::{PruningStatistics, StatsExpr};
 use datafusion_pruning::{MAX_IN_LIST_SIZE, PruningPredicate, PruningPredicateBuilder};
 
 use log::{debug, trace};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+use parquet::arrow::parquet_column;
 use parquet::file::metadata::page_index::PageIndexProvider;
 use parquet::file::page_index::offset_index::PageLocation;
 use parquet::schema::types::SchemaDescriptor;
@@ -134,6 +138,9 @@ impl PagePruningResult {
 impl PagePruningAccessPlanFilter {
     /// Create a new [`PagePruningAccessPlanFilter`] from a physical
     /// expression, using the default `IN (...)` pruning limit.
+    ///
+    /// The filter has no statistics resolvers, so only column statistics
+    /// prune pages.
     #[expect(clippy::needless_pass_by_value)]
     pub fn new(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Self {
         Self::new_with_max_in_list_size(expr, &schema, MAX_IN_LIST_SIZE)
@@ -145,17 +152,30 @@ impl PagePruningAccessPlanFilter {
         schema: &SchemaRef,
         max_in_list_size: usize,
     ) -> Self {
+        Self::new_with_statistics_resolvers(expr, schema, max_in_list_size, None)
+    }
+
+    /// Create a page filter that also prunes on the expressions that
+    /// `statistics_resolvers` provide statistics for.
+    pub(crate) fn new_with_statistics_resolvers(
+        expr: &Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
+        max_in_list_size: usize,
+        statistics_resolvers: Option<&Arc<FileStatisticsResolvers>>,
+    ) -> Self {
         let mut predicates = vec![];
         let mut all_predicates_supported = true;
 
         // Ordinary pruning can use any supported conjunct. Fully matched
         // ranges require every original conjunct to be supported.
         for predicate in split_conjunction(expr) {
-            let pp = match PruningPredicateBuilder::new()
+            let builder = PruningPredicateBuilder::new()
                 .with_file_schema(Arc::clone(schema))
                 .with_max_in_list_size(max_in_list_size)
-                .try_build(Arc::clone(predicate))
-            {
+                .with_statistics_expr_matcher(
+                    statistics_resolvers.cloned().map(|r| r as _),
+                );
+            let pp = match builder.try_build(Arc::clone(predicate)) {
                 Ok(pp) => pp,
                 Err(e) => {
                     debug!("Ignoring error creating page pruning predicate: {e}");
@@ -170,7 +190,7 @@ impl PagePruningAccessPlanFilter {
                 continue;
             }
 
-            if pp.required_columns().single_column().is_none() {
+            if pp.required_columns().single_key().is_none() {
                 debug!("Ignoring multi-column page pruning predicate: {predicate}");
                 all_predicates_supported = false;
                 continue;
@@ -256,7 +276,7 @@ impl PagePruningAccessPlanFilter {
                         let inverted = build_inverted_predicate(predicate, arrow_schema)?;
                         inverted
                             .required_columns()
-                            .single_column()
+                            .single_key()
                             .is_some()
                             .then_some(inverted)
                     })
@@ -471,14 +491,23 @@ impl PagePruningAccessPlanFilter {
         self.predicates.len()
     }
 
-    /// Returns the names of the columns referenced by the page pruning
-    /// predicates (each predicate references exactly one column, see
-    /// [`Self::new`]).
-    pub(crate) fn predicate_column_names(&self) -> impl Iterator<Item = &str> {
-        self.predicates
-            .iter()
-            .filter_map(|p| p.required_columns().single_column())
-            .map(|c| c.name())
+    /// Returns the Parquet leaf column indexes read by the page pruning
+    /// predicates (each predicate reads exactly one column or expression,
+    /// see [`Self::new`]).
+    pub(crate) fn predicate_leaf_indexes<'a>(
+        &'a self,
+        arrow_schema: &'a Schema,
+        parquet_schema: &'a SchemaDescriptor,
+    ) -> impl Iterator<Item = usize> + 'a {
+        self.predicates.iter().filter_map(move |p| {
+            match p.required_columns().single_key()? {
+                (column, None) => {
+                    parquet_column(parquet_schema, arrow_schema, column.name())
+                        .map(|(leaf, _)| leaf)
+                }
+                (_, Some(expr)) => bound_statistics(expr)?.page_index_leaf(),
+            }
+        })
     }
 }
 
@@ -605,26 +634,37 @@ fn prune_pages_for_predicate(
     #[cfg(test)]
     tests::PAGE_PREDICATE_CALLS.set(tests::PAGE_PREDICATE_CALLS.get() + 1);
 
-    let column = predicate.required_columns().single_column()?;
-    let converter =
-        match StatisticsConverter::try_new(column.name(), arrow_schema, parquet_schema) {
-            Ok(converter) => converter,
-            Err(e) => {
-                debug!(
-                    "Could not create statistics converter for column {}: {e}",
-                    column.name()
-                );
-                return None;
-            }
-        };
+    let (column, stats_expr) = predicate.required_columns().single_key()?;
+    // The converter of an expression key only selects the leaf whose pages
+    // are pruned. Its values come from the resolvers, so its Arrow field is
+    // the type of the expression.
+    let expr_field;
+    let converter = match stats_expr {
+        None => StatisticsConverter::try_new(column.name(), arrow_schema, parquet_schema),
+        Some(expr) => {
+            let leaf = bound_statistics(expr)?.page_index_leaf()?;
+            expr_field = Field::new(
+                expr.to_string(),
+                expr.expr().data_type(arrow_schema).ok()?,
+                true,
+            );
+            StatisticsConverter::from_column_index(leaf, &expr_field, parquet_schema)
+        }
+    };
+    let converter = match converter {
+        Ok(converter) => converter,
+        Err(e) => {
+            debug!(
+                "Could not create statistics converter for column {}: {e}",
+                column.name()
+            );
+            return None;
+        }
+    };
 
-    prune_pages_in_one_row_group(
-        row_group_index,
-        predicate,
-        converter,
-        parquet_metadata,
-        metrics,
-    )
+    let pruning_stats =
+        PagesPruningStatistics::try_new(row_group_index, converter, parquet_metadata)?;
+    prune_pages_in_one_row_group(row_group_index, predicate, &pruning_stats, metrics)
 }
 
 /// Returns a [`RowSelection`] for the rows in this row group to scan, in addition to a vec of
@@ -638,17 +678,13 @@ fn prune_pages_for_predicate(
 fn prune_pages_in_one_row_group(
     row_group_index: usize,
     pruning_predicate: &PruningPredicate,
-    converter: StatisticsConverter<'_>,
-    parquet_metadata: &ParquetMetaData,
+    pruning_stats: &PagesPruningStatistics<'_>,
     metrics: &ParquetFileMetrics,
 ) -> Option<(RowSelection, Vec<bool>)> {
-    let pruning_stats =
-        PagesPruningStatistics::try_new(row_group_index, converter, parquet_metadata)?;
-
     // Each element in values is a boolean indicating whether the page may have
     // values that match the predicate (true) or could not possibly have values
     // that match the predicate (false).
-    let values = match pruning_predicate.prune(&pruning_stats) {
+    let values = match pruning_predicate.prune(pruning_stats) {
         Ok(values) => values,
         Err(e) => {
             debug!("Error evaluating page index predicate values {e}");
@@ -706,6 +742,9 @@ struct PagesPruningStatistics<'a> {
     page_index: &'a dyn PageIndexProvider,
     page_offsets: &'a Vec<PageLocation>,
     trusted_min_max: bool,
+    /// The Parquet leaf whose pages are pruned
+    leaf: usize,
+    parquet_schema: &'a SchemaDescriptor,
 }
 
 impl<'a> PagesPruningStatistics<'a> {
@@ -757,6 +796,8 @@ impl<'a> PagesPruningStatistics<'a> {
             page_index,
             page_offsets,
             trusted_min_max,
+            leaf: parquet_column_index,
+            parquet_schema: file_metadata.schema_descr(),
         })
     }
 
@@ -781,7 +822,59 @@ impl<'a> PagesPruningStatistics<'a> {
         Some(vec)
     }
 }
+/// Page statistics are only known for the leaf whose pages are pruned,
+/// because the pages of other leaves do not line up with them.
+impl ParquetLeafStatistics for PagesPruningStatistics<'_> {
+    fn leaf_mins(&self, leaf: usize, field: &Field) -> Option<ArrayRef> {
+        if leaf != self.leaf || !self.trusted_min_max {
+            return None;
+        }
+        StatisticsConverter::from_column_index(leaf, field, self.parquet_schema)
+            .ok()?
+            .data_page_mins(self.page_index, [&self.row_group_index])
+            .ok()
+    }
+
+    fn leaf_maxes(&self, leaf: usize, field: &Field) -> Option<ArrayRef> {
+        if leaf != self.leaf || !self.trusted_min_max {
+            return None;
+        }
+        StatisticsConverter::from_column_index(leaf, field, self.parquet_schema)
+            .ok()?
+            .data_page_maxes(self.page_index, [&self.row_group_index])
+            .ok()
+    }
+
+    fn leaf_null_counts(&self, leaf: usize, field: &Field) -> Option<ArrayRef> {
+        if leaf != self.leaf {
+            return None;
+        }
+        let counts =
+            StatisticsConverter::from_column_index(leaf, field, self.parquet_schema)
+                .ok()?
+                .data_page_null_counts(self.page_index, [&self.row_group_index])
+                .ok()?;
+        Some(Arc::new(counts))
+    }
+
+    fn row_counts(&self) -> Option<ArrayRef> {
+        PruningStatistics::row_counts(self)
+    }
+}
+
 impl PruningStatistics for PagesPruningStatistics<'_> {
+    fn min_values_for_expr(&self, expr: &StatsExpr) -> Option<ArrayRef> {
+        bound_statistics(expr)?.statistics(ExprStatisticsKind::Min, self)
+    }
+
+    fn max_values_for_expr(&self, expr: &StatsExpr) -> Option<ArrayRef> {
+        bound_statistics(expr)?.statistics(ExprStatisticsKind::Max, self)
+    }
+
+    fn null_counts_for_expr(&self, expr: &StatsExpr) -> Option<ArrayRef> {
+        bound_statistics(expr)?.statistics(ExprStatisticsKind::NullCount, self)
+    }
+
     fn min_values(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
         if !self.trusted_min_max {
             return None;

@@ -7,10 +7,11 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{FieldRef, SchemaRef};
-use datafusion_common::{Result, internal_datafusion_err, pruning::PrunableStatistics};
+use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_datasource::PartitionedFile;
 use datafusion_physical_expr::DynamicFilterTracking;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::pruning::PrunableStatistics;
 use datafusion_physical_plan::metrics::Count;
 use log::debug;
 

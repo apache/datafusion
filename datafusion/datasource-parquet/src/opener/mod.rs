@@ -21,6 +21,9 @@ use crate::push_decoder::{
     RowFilterContext, RowGroupPruner, RowGroupReverser,
 };
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
+use crate::statistics_resolver::{
+    FileStatisticsResolvers, ParquetStatisticsResolvers, bound_statistics,
+};
 use crate::{
     Int96Coercer, ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     ParquetRowSelection, ParquetVirtualColumn, RowGroupAccess,
@@ -300,6 +303,8 @@ pub(super) struct ParquetMorselizer {
     /// Whether to also reverse the rows of each row group, making a reversed
     /// scan exactly ordered. Buffers one decoded row group at a time.
     pub reverse_rows: bool,
+    /// Statistics for expressions such as struct field accesses.
+    pub statistics_resolvers: ParquetStatisticsResolvers,
     /// Pool charged for the row group a `reverse_rows` scan buffers.
     pub memory_pool: Option<Arc<dyn MemoryPool>>,
     /// Optional sort order used to reorder row groups by their min/max statistics.
@@ -493,6 +498,7 @@ struct PreparedParquetOpen {
     row_group_range_assignment: RowGroupRangeAssignment,
     reverse_row_groups: bool,
     reverse_rows: bool,
+    statistics_resolvers: ParquetStatisticsResolvers,
     memory_pool: Option<Arc<dyn MemoryPool>>,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
@@ -517,6 +523,9 @@ struct FiltersPreparedParquetOpen {
     loaded: MetadataLoadedParquetOpen,
     pruning_predicate: Option<Arc<PruningPredicate>>,
     page_pruning_predicate: Option<Arc<PagePruningAccessPlanFilter>>,
+    /// The scan's statistics resolvers bound to this file. Every pruning
+    /// predicate of the file uses them as its matcher.
+    file_statistics_resolvers: Arc<FileStatisticsResolvers>,
 }
 
 /// State of [`ParquetOpenState`]
@@ -1002,6 +1011,7 @@ impl ParquetMorselizer {
             row_group_range_assignment: self.row_group_range_assignment,
             reverse_row_groups: self.reverse_row_groups,
             reverse_rows: self.reverse_rows,
+            statistics_resolvers: self.statistics_resolvers.clone(),
             memory_pool: self.memory_pool.clone(),
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
@@ -1226,11 +1236,20 @@ impl MetadataLoadedParquetOpen {
         }
 
         // Build predicates for this specific file
+        let file_statistics_resolvers = Arc::new(FileStatisticsResolvers::new(
+            prepared.statistics_resolvers.clone(),
+            Arc::clone(&physical_file_schema),
+            reader_metadata
+                .metadata()
+                .file_metadata()
+                .schema_descr_ptr(),
+        ));
         let pruning_predicate = build_pruning_predicates(
             prepared.predicate.as_ref(),
             &physical_file_schema,
             &prepared.predicate_creation_errors,
             prepared.max_in_list_size,
+            Some(&file_statistics_resolvers),
         );
 
         // Only build page pruning predicate if page index is enabled
@@ -1240,6 +1259,7 @@ impl MetadataLoadedParquetOpen {
                     predicate,
                     &physical_file_schema,
                     prepared.max_in_list_size,
+                    Some(&file_statistics_resolvers),
                 );
                 (p.filter_number() > 0).then_some(p)
             })
@@ -1255,6 +1275,7 @@ impl MetadataLoadedParquetOpen {
             },
             pruning_predicate,
             page_pruning_predicate,
+            file_statistics_resolvers,
         })
     }
 }
@@ -1458,17 +1479,15 @@ impl RowGroupsPrunedParquetOpen {
         // page index exists before attempting to read it.
         let arrow_schema = &self.prepared.loaded.prepared.physical_file_schema;
         let parquet_schema = parquet_metadata.file_metadata().schema_descr();
-        Ok(page_pruning_predicate.predicate_column_names().any(|name| {
-            let Some((leaf_idx, _)) = parquet_column(parquet_schema, arrow_schema, name)
-            else {
-                return false;
-            };
-            row_groups.row_group_indexes().any(|rg_idx| {
-                let column = parquet_metadata.row_group(rg_idx).column(leaf_idx);
-                column.column_index_offset().is_some()
-                    && column.offset_index_offset().is_some()
-            })
-        }))
+        Ok(page_pruning_predicate
+            .predicate_leaf_indexes(arrow_schema, parquet_schema)
+            .any(|leaf_idx| {
+                row_groups.row_group_indexes().any(|rg_idx| {
+                    let column = parquet_metadata.row_group(rg_idx).column(leaf_idx);
+                    column.column_index_offset().is_some()
+                        && column.offset_index_offset().is_some()
+                })
+            }))
     }
 
     /// Load the page index if pruning requires it and metadata did not include it.
@@ -1524,21 +1543,32 @@ impl RowGroupsPrunedParquetOpen {
                 reader_metadata,
             );
 
-            let parquet_columns = predicate
-                .literal_columns()
+            // Bloom filters of columns, and of expressions such as struct
+            // fields from the leaf that a statistics resolver names.
+            let parquet_schema = builder.parquet_schema();
+            let columns = predicate.literal_columns().into_iter().filter_map(|name| {
+                let (leaf, _) = parquet_column(
+                    parquet_schema,
+                    &prepared.physical_file_schema,
+                    &name,
+                )?;
+                Some((BloomFilterKey::Column(name), leaf))
+            });
+            let exprs = predicate.literal_exprs().into_iter().filter_map(|expr| {
+                let leaf = bound_statistics(&expr)?.bloom_filter_leaf()?;
+                Some((BloomFilterKey::Leaf(leaf), leaf))
+            });
+            let mut bloom_filter_leaves = columns.chain(exprs).collect::<Vec<_>>();
+            // Expressions that read the same leaf share its bloom filter.
+            let mut seen_leaves = HashSet::new();
+            bloom_filter_leaves.retain(|(key, leaf)| {
+                !matches!(key, BloomFilterKey::Leaf(_)) || seen_leaves.insert(*leaf)
+            });
+            let bloom_filter_leaves = bloom_filter_leaves
                 .into_iter()
-                .filter_map(|column_name| {
-                    let (column_idx, _) = parquet_column(
-                        builder.parquet_schema(),
-                        &prepared.physical_file_schema,
-                        &column_name,
-                    )?;
-                    Some((
-                        column_name,
-                        column_idx,
-                        builder.parquet_schema().column(column_idx).physical_type(),
-                        builder.parquet_schema().column(column_idx).type_length(),
-                    ))
+                .map(|(key, leaf)| {
+                    let descr = parquet_schema.column(leaf);
+                    (key, leaf, descr.physical_type(), descr.type_length())
                 })
                 .collect::<Vec<_>>();
 
@@ -1551,31 +1581,36 @@ impl RowGroupsPrunedParquetOpen {
                     continue;
                 }
                 let mut bloom_filter_stats =
-                    BloomFilterStatistics::with_capacity(parquet_columns.len());
+                    BloomFilterStatistics::with_capacity(bloom_filter_leaves.len());
                 let mut pruned = false;
 
-                for (column_name, column_idx, physical_type, type_length) in
-                    &parquet_columns
-                {
-                    let bf: Sbbf = match builder
-                        .get_row_group_column_bloom_filter(idx, *column_idx)
-                        .await
-                    {
-                        Ok(Some(bf)) => bf,
-                        Ok(None) => continue,
-                        Err(e) => {
-                            debug!("Ignoring error reading bloom filter: {e}");
-                            prepared.file_metrics.predicate_evaluation_errors.add(1);
-                            continue;
-                        }
-                    };
+                for (key, leaf, physical_type, type_length) in &bloom_filter_leaves {
+                    let bf: Sbbf =
+                        match builder.get_row_group_column_bloom_filter(idx, *leaf).await
+                        {
+                            Ok(Some(bf)) => bf,
+                            Ok(None) => continue,
+                            Err(e) => {
+                                debug!("Ignoring error reading bloom filter: {e}");
+                                prepared.file_metrics.predicate_evaluation_errors.add(1);
+                                continue;
+                            }
+                        };
 
-                    bloom_filter_stats.insert(
-                        column_name.clone(),
-                        bf,
-                        *physical_type,
-                        *type_length,
-                    );
+                    match key {
+                        BloomFilterKey::Column(name) => bloom_filter_stats.insert(
+                            name.clone(),
+                            bf,
+                            *physical_type,
+                            *type_length,
+                        ),
+                        BloomFilterKey::Leaf(leaf) => bloom_filter_stats.insert_for_leaf(
+                            *leaf,
+                            bf,
+                            *physical_type,
+                            *type_length,
+                        ),
+                    }
 
                     if self.row_groups.prune_row_group_with_bloom_filters(
                         idx,
@@ -1604,6 +1639,15 @@ impl RowGroupsPrunedParquetOpen {
     }
 }
 
+/// What a Bloom filter read for row group pruning belongs to.
+enum BloomFilterKey {
+    /// A column of the file schema, by name.
+    Column(String),
+    /// The leaf of an expression with its own statistics, such as a struct
+    /// field. The bloom filter statistics find it through the binding.
+    Leaf(usize),
+}
+
 impl RowGroupsPrunedParquetOpen {
     /// Build the final parquet stream once all pruning work is complete.
     fn build_stream(self) -> Result<BoxStream<'static, Result<RecordBatch>>> {
@@ -1616,6 +1660,7 @@ impl RowGroupsPrunedParquetOpen {
             loaded,
             pruning_predicate: _,
             page_pruning_predicate,
+            file_statistics_resolvers,
         } = prepared;
         let MetadataLoadedParquetOpen {
             prepared,
@@ -1888,14 +1933,17 @@ impl RowGroupsPrunedParquetOpen {
         // a threshold change is a single atomic load — not a tree walk per
         // RG check.
         let row_group_pruner = match &prepared.predicate {
-            Some(predicate) if pruner_eligible => Some(RowGroupPruner::new(
-                Arc::clone(predicate),
-                Arc::clone(&prepared.physical_file_schema),
-                Arc::clone(reader_metadata.metadata()),
-                prepared.predicate_creation_errors.clone(),
-                prepared.file_metrics.predicate_evaluation_errors.clone(),
-                prepared.max_in_list_size,
-            )),
+            Some(predicate) if pruner_eligible => Some(
+                RowGroupPruner::new(
+                    Arc::clone(predicate),
+                    Arc::clone(&prepared.physical_file_schema),
+                    Arc::clone(reader_metadata.metadata()),
+                    prepared.predicate_creation_errors.clone(),
+                    prepared.file_metrics.predicate_evaluation_errors.clone(),
+                    prepared.max_in_list_size,
+                )
+                .with_statistics_resolvers(file_statistics_resolvers),
+            ),
             _ => None,
         };
         let row_groups_pruned_dynamic = prepared
@@ -2099,11 +2147,13 @@ pub(crate) fn build_page_pruning_predicate(
     predicate: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
     max_in_list_size: usize,
+    statistics_resolvers: Option<&Arc<FileStatisticsResolvers>>,
 ) -> Arc<PagePruningAccessPlanFilter> {
-    Arc::new(PagePruningAccessPlanFilter::new_with_max_in_list_size(
+    Arc::new(PagePruningAccessPlanFilter::new_with_statistics_resolvers(
         predicate,
         file_schema,
         max_in_list_size,
+        statistics_resolvers,
     ))
 }
 
@@ -2112,13 +2162,15 @@ pub(crate) fn build_pruning_predicates(
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
     max_in_list_size: usize,
+    statistics_resolvers: Option<&Arc<FileStatisticsResolvers>>,
 ) -> Option<Arc<PruningPredicate>> {
     let predicate = predicate.as_ref()?;
-    PruningPredicateBuilder::new()
+    let builder = PruningPredicateBuilder::new()
         .with_file_schema(Arc::clone(file_schema))
         .with_error_counter(predicate_creation_errors)
         .with_max_in_list_size(max_in_list_size)
-        .build(Arc::clone(predicate))
+        .with_statistics_expr_matcher(statistics_resolvers.cloned().map(|r| r as _));
+    builder.build(Arc::clone(predicate))
 }
 
 /// Returns a `ArrowReaderMetadata` with the page index loaded, loading
@@ -2427,7 +2479,12 @@ mod test {
         );
         let page_pruning_predicate = predicate.map(|expr| {
             let predicate = logical2physical(&expr, &arrow_schema);
-            build_page_pruning_predicate(&predicate, &arrow_schema, MAX_IN_LIST_SIZE)
+            build_page_pruning_predicate(
+                &predicate,
+                &arrow_schema,
+                MAX_IN_LIST_SIZE,
+                None,
+            )
         });
 
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
@@ -2444,6 +2501,14 @@ mod test {
         let options = ArrowReaderOptions::new();
         let reader_metadata =
             ArrowReaderMetadata::try_new(Arc::new(metadata), options.clone()).unwrap();
+        let file_statistics_resolvers = Arc::new(FileStatisticsResolvers::new(
+            Default::default(),
+            arrow_schema,
+            reader_metadata
+                .metadata()
+                .file_metadata()
+                .schema_descr_ptr(),
+        ));
         let mut open = RowGroupsPrunedParquetOpen {
             prepared: FiltersPreparedParquetOpen {
                 loaded: MetadataLoadedParquetOpen {
@@ -2453,6 +2518,7 @@ mod test {
                 },
                 pruning_predicate: None,
                 page_pruning_predicate,
+                file_statistics_resolvers,
             },
             row_groups: RowGroupAccessPlanFilter::new(plan),
             decoder_read_plans: None,
@@ -2714,6 +2780,7 @@ mod test {
                 row_group_range_assignment: self.row_group_range_assignment,
                 reverse_row_groups: self.reverse_row_groups,
                 reverse_rows: self.reverse_rows,
+                statistics_resolvers: Default::default(),
                 memory_pool: self.memory_pool.clone(),
                 sort_order_for_reorder: None,
                 virtual_state,

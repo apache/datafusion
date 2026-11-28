@@ -14,5 +14,6 @@ mod string_in_list;
 pub use file_pruner::FilePruner;
 pub use pruning_predicate::{
     MAX_IN_LIST_SIZE, PredicateRewriter, PruningPredicate, PruningPredicateBuilder,
-    PruningStatistics, RequiredColumns, UnhandledPredicateHook, build_pruning_predicate,
+    PruningStatistics, RequiredColumns, StatisticsExprMatcher, StatsExpr,
+    UnhandledPredicateHook, build_pruning_predicate,
 };

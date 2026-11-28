@@ -3,6 +3,8 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! ParquetSource implementation for reading parquet files
+use crate::statistics_resolver::{FileStatisticsResolvers, ParquetStatisticsResolvers};
+use parquet::arrow::ArrowSchemaConverter;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -316,6 +318,9 @@ pub struct ParquetSource {
     ///
     /// [`ParquetOptions::enable_exact_reverse_scan`]: datafusion_common::config::ParquetOptions::enable_exact_reverse_scan
     reverse_rows: bool,
+    /// Statistics for expressions such as struct field accesses, used for
+    /// row group and page pruning.
+    statistics_resolvers: ParquetStatisticsResolvers,
     /// Pool charged for the row group a `reverse_rows` scan buffers. Set by
     /// [`FileSource::with_memory_pool`] when the scan is opened.
     memory_pool: Option<Arc<dyn MemoryPool>>,
@@ -349,6 +354,7 @@ impl ParquetSource {
             encryption_factory: None,
             reverse_row_groups: false,
             reverse_rows: false,
+            statistics_resolvers: ParquetStatisticsResolvers::default(),
             memory_pool: None,
             sort_order_for_reorder: None,
         }
@@ -477,6 +483,21 @@ impl ParquetSource {
     /// Return the value described in [`Self::with_enable_page_index`]
     fn enable_page_index(&self) -> bool {
         self.table_parquet_options.global.enable_page_index
+    }
+
+    /// Add a [`ParquetStatisticsResolver`], which provides statistics for
+    /// expressions such as `variant_get(v, 'a')` from Parquet leaf
+    /// statistics, so that predicates on them can prune row groups.
+    ///
+    /// The built-in resolver for struct fields is always present.
+    ///
+    /// [`ParquetStatisticsResolver`]: crate::statistics_resolver::ParquetStatisticsResolver
+    pub fn with_statistics_resolver(
+        mut self,
+        resolver: Arc<dyn crate::statistics_resolver::ParquetStatisticsResolver>,
+    ) -> Self {
+        self.statistics_resolvers = self.statistics_resolvers.with_resolver(resolver);
+        self
     }
 
     /// If enabled, the reader will read by the bloom filter
@@ -660,6 +681,7 @@ impl FileSource for ParquetSource {
                 .row_group_range_assignment,
             reverse_row_groups: self.reverse_row_groups,
             reverse_rows: self.reverse_rows,
+            statistics_resolvers: self.statistics_resolvers.clone(),
             memory_pool: self.memory_pool.clone(),
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
@@ -824,11 +846,25 @@ impl FileSource for ParquetSource {
                 // Instead, we use the logical schema of the file (the table schema without partition columns).
                 if let Some(predicate) = &self.predicate {
                     let predicate_creation_errors = Count::new();
+                    // Bind the resolvers to the Parquet schema that a file
+                    // written with the logical schema would have.
+                    let file_schema = self.table_schema.file_schema();
+                    let statistics_resolvers = ArrowSchemaConverter::new()
+                        .convert(file_schema)
+                        .ok()
+                        .map(|parquet_schema| {
+                            Arc::new(FileStatisticsResolvers::new(
+                                self.statistics_resolvers.clone(),
+                                Arc::clone(file_schema),
+                                Arc::new(parquet_schema),
+                            ))
+                        });
                     if let Some(pruning_predicate) = build_pruning_predicates(
                         Some(predicate),
-                        self.table_schema.table_schema(),
+                        file_schema,
                         &predicate_creation_errors,
                         self.max_in_list_size(),
+                        statistics_resolvers.as_ref(),
                     ) {
                         let mut guarantees = pruning_predicate
                             .literal_guarantees()
@@ -1165,12 +1201,14 @@ impl FileSource for ParquetSource {
                 encryption_factory: _,
             reverse_row_groups,
             reverse_rows,
+            // Custom resolvers require a custom codec for serialization.
+            statistics_resolvers,
             // Runtime only: set when the scan is opened.
             memory_pool: _,
             sort_order_for_reorder,
         } = self;
 
-        if schema_provider.is_some() {
+        if schema_provider.is_some() || statistics_resolvers.has_custom_resolvers() {
             return Ok(None);
         }
 

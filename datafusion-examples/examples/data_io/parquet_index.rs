@@ -12,7 +12,6 @@ use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow::util::pretty::pretty_format_batches;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::{
     DFSchema, DataFusionError, Result, ScalarValue, internal_datafusion_err,
 };
@@ -29,6 +28,7 @@ use datafusion::parquet::arrow::{
     ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder,
 };
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr_common::pruning::PruningStatistics;
 use datafusion::physical_optimizer::pruning::PruningPredicateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
