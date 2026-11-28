@@ -42,6 +42,12 @@ Calculates time intervals and returns the start of the interval nearest to the s
 For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
 
 For timestamp inputs, binning beyond the supported numeric or calendar range returns an error. A NULL source or interval still produces NULL.
+
+The origin is a single point in time, not a time of day that repeats. If you pick an origin so the bins start at local midnight, that alignment holds only until the timezone's offset changes: when daylight saving time starts or ends, the bins move an hour away from local midnight, and DataFusion raises no error or warning. PostgreSQL and DuckDB behave the same way.
+
+For example, if you bin `America/Denver` timestamps to a 1-day stride with the origin `2024-03-01 07:00:00Z`, every bin starts at local midnight, because that origin is midnight MST (UTC-7). After Denver switches to MDT (UTC-6) on 2024-03-10, the same bins start at `01:00` local time.
+
+To bin on calendar units such as day or month, use `date_trunc`. For strides that are not calendar units, bin on wall-clock time instead: `date_bin(<stride>, to_local_time(t AT TIME ZONE '<zone>'))`.
 "#,
     syntax_example = "date_bin(interval, expression[, origin_timestamp])",
     sql_example = r#"```sql
