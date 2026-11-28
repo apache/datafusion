@@ -11,13 +11,15 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::utils::apply_parent_nulls;
 use datafusion_common::{
-    Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, plan_datafusion_err,
+    ColumnStatistics, Result, ScalarValue, Statistics, exec_datafusion_err, exec_err,
+    internal_err, plan_datafusion_err,
 };
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ExpressionPlacement, ReturnFieldArgs,
-    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ExpressionPlacement, FieldPath,
+    NestedInputAccess, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -259,6 +261,87 @@ impl GetFieldFunc {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
         }
+    }
+}
+
+/// The struct field path a `get_field` call reads from its first argument.
+struct StructKeyPath {
+    /// The leading keys that name struct fields.
+    path: FieldPath,
+    /// Whether every key names a struct field. When `false`, the remaining
+    /// keys are runtime lookups into the `Map` that `path` ends at.
+    complete: bool,
+}
+
+impl GetFieldFunc {
+    /// Resolves the literal keys of a call against the type of its first
+    /// argument. Returns `None` when the argument must be read whole: a key is
+    /// not a literal string, names a missing struct field, or no leading key
+    /// names a struct field.
+    fn struct_key_path(args: &ReturnFieldArgs) -> Option<StructKeyPath> {
+        let source = args.arg_fields.first()?;
+        let mut path = args
+            .scalar_arguments
+            .iter()
+            .skip(1)
+            .map(|key| {
+                key.and_then(|key| key.try_as_str().flatten())
+                    .filter(|key| !key.is_empty())
+                    .map(str::to_string)
+            })
+            .collect::<Option<FieldPath>>()
+            .filter(|path| !path.is_empty())?;
+
+        let mut data_type = source.data_type();
+        let mut complete = true;
+        for (index, name) in path.iter().enumerate() {
+            match data_type {
+                DataType::Struct(fields) => {
+                    let field = fields.iter().find(|field| field.name() == name)?;
+                    data_type = field.data_type();
+                }
+                // A key into a Map is a runtime lookup: the whole Map is
+                // needed, but not its sibling fields.
+                DataType::Map(_, _) if index > 0 => {
+                    path.truncate(index);
+                    complete = false;
+                    break;
+                }
+                _ => return None,
+            }
+        }
+        Some(StructKeyPath { path, complete })
+    }
+}
+
+/// `get_field(s, 'a', 'b')` reads only `s.a.b` when every key is a literal
+/// string naming a struct field. A key into a `Map` is a runtime lookup, so
+/// the read stops at the `Map` field: `get_field(s, 'm', 'k')` reads all of
+/// `s.m`. A lookup directly into a `Map` argument reads the whole argument.
+impl NestedInputAccess for GetFieldFunc {
+    fn required_fields(&self, args: &ReturnFieldArgs) -> Vec<Option<Vec<FieldPath>>> {
+        match Self::struct_key_path(args) {
+            Some(keys) => vec![Some(vec![keys.path])],
+            None => vec![],
+        }
+    }
+
+    /// The output is the field itself, null wherever an ancestor struct is
+    /// null, which matches how Parquet counts nulls for a nested leaf. A `Map`
+    /// lookup has no such leaf, so it reports no statistics.
+    fn output_statistics(
+        &self,
+        args: &ReturnFieldArgs,
+        inputs: &Statistics,
+    ) -> Option<ColumnStatistics> {
+        let keys = Self::struct_key_path(args)?;
+        if !keys.complete {
+            return None;
+        }
+        let [statistics] = inputs.column_statistics.as_slice() else {
+            return None;
+        };
+        Some(statistics.clone())
     }
 }
 
@@ -550,6 +633,10 @@ impl ScalarUDFImpl for GetFieldFunc {
             ExpressionPlacement::KeepInPlace
         }
     }
+
+    fn as_nested_input_access(&self) -> Option<&dyn NestedInputAccess> {
+        Some(self)
+    }
 }
 
 #[cfg(test)]
@@ -560,7 +647,98 @@ mod tests {
         StructArray, UnionArray,
     };
     use arrow::buffer::NullBuffer;
-    use arrow::datatypes::{Fields, Int32Type, UnionFields};
+    use arrow::datatypes::{Fields, Int32Type, Schema, UnionFields};
+
+    /// `required_fields` for `get_field(source, keys...)`.
+    fn required_fields_for(
+        source: DataType,
+        keys: &[Option<ScalarValue>],
+    ) -> Vec<Option<Vec<FieldPath>>> {
+        let mut arg_fields = vec![Arc::new(Field::new("s", source, true))];
+        let mut scalar_arguments = vec![None];
+        for key in keys {
+            arg_fields.push(Arc::new(Field::new("k", DataType::Utf8, true)));
+            scalar_arguments.push(key.as_ref());
+        }
+        GetFieldFunc::new().required_fields(&ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &scalar_arguments,
+        })
+    }
+
+    #[test]
+    fn test_get_field_required_fields() {
+        let key = |name: &str| Some(ScalarValue::Utf8(Some(name.to_string())));
+        let inner =
+            DataType::Struct(Fields::from(vec![Field::new("b", DataType::Int32, true)]));
+        let source = DataType::Struct(Fields::from(vec![
+            Field::new("a", inner, true),
+            Field::new("c", DataType::Utf8, true),
+        ]));
+
+        // A literal struct path reads only that field.
+        assert_eq!(
+            required_fields_for(source.clone(), &[key("a"), key("b")]),
+            vec![Some(vec![vec!["a".to_string(), "b".to_string()]])]
+        );
+        assert_eq!(
+            required_fields_for(source.clone(), &[key("c")]),
+            vec![Some(vec![vec!["c".to_string()]])]
+        );
+
+        // Missing fields, paths below a primitive, non-literal and empty keys
+        // read the argument whole.
+        assert!(required_fields_for(source.clone(), &[key("missing")]).is_empty());
+        assert!(required_fields_for(source.clone(), &[key("c"), key("x")]).is_empty());
+        assert!(required_fields_for(source.clone(), &[None]).is_empty());
+        assert!(required_fields_for(source, &[key("")]).is_empty());
+
+        // A map lookup is a runtime operation, so the whole map is read.
+        let map = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int32, true),
+                ])),
+                false,
+            )),
+            false,
+        );
+        assert!(required_fields_for(map.clone(), &[key("k")]).is_empty());
+
+        // A map lookup below a struct field reads that field's whole map, but
+        // not its siblings, and reports no statistics for the lookup.
+        let with_map = DataType::Struct(Fields::from(vec![
+            Field::new("m", map, true),
+            Field::new("c", DataType::Utf8, true),
+        ]));
+        assert_eq!(
+            required_fields_for(with_map.clone(), &[key("m"), key("k")]),
+            vec![Some(vec![vec!["m".to_string()]])]
+        );
+        let arg_fields = vec![
+            Arc::new(Field::new("s", with_map, true)),
+            Arc::new(Field::new("k", DataType::Utf8, true)),
+            Arc::new(Field::new("k", DataType::Utf8, true)),
+        ];
+        let (m, k) = (key("m"), key("k"));
+        let statistics = Statistics {
+            column_statistics: vec![ColumnStatistics::new_unknown()],
+            ..Statistics::new_unknown(&Schema::empty())
+        };
+        assert!(
+            GetFieldFunc::new()
+                .output_statistics(
+                    &ReturnFieldArgs {
+                        arg_fields: &arg_fields,
+                        scalar_arguments: &[None, m.as_ref(), k.as_ref()],
+                    },
+                    &statistics,
+                )
+                .is_none()
+        );
+    }
 
     #[test]
     fn test_get_field_utf8view_key() -> Result<()> {
