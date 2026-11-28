@@ -635,15 +635,6 @@ impl ParquetAccessPlan {
         row_group_meta_data: &[RowGroupMetaData],
     ) -> Result<PreparedAccessPlan> {
         assert_eq!(row_group_meta_data.len(), self.row_groups.len());
-        // Keep the scan policies that previously depended on the presence of
-        // an overall selection, even when its partial groups are all empty.
-        // Local selections no longer require these restrictions to keep row
-        // offsets valid; enabling reordering and runtime pruning with selections
-        // is left to a follow-up (#24358).
-        let has_row_selection = self
-            .row_groups
-            .iter()
-            .any(|access| matches!(access, RowGroupAccess::Selection(_)));
         let mut row_groups = Vec::with_capacity(self.row_groups.len());
         for (index, (access, fully_matched)) in self
             .row_groups
@@ -654,11 +645,9 @@ impl ParquetAccessPlan {
             let selection = match access {
                 RowGroupAccess::Skip => continue,
                 RowGroupAccess::Scan => {
-                    // Preserve strip_empty_row_groups behavior: without an
-                    // overall selection it returned the scan list unchanged;
-                    // with one it dropped every group selecting zero rows,
-                    // including zero-row Scan groups.
-                    if has_row_selection && row_group_meta_data[index].num_rows() == 0 {
+                    // A zero-row group produces nothing, so the decoder never
+                    // needs to visit it.
+                    if row_group_meta_data[index].num_rows() == 0 {
                         continue;
                     }
                     None
@@ -686,10 +675,7 @@ impl ParquetAccessPlan {
                 fully_matched,
             });
         }
-        Ok(PreparedAccessPlan {
-            has_row_selection: has_row_selection && !row_groups.is_empty(),
-            row_groups,
-        })
+        Ok(PreparedAccessPlan { row_groups })
     }
 }
 
@@ -706,9 +692,6 @@ pub(crate) struct PreparedRowGroup {
 #[derive(Debug)]
 pub(crate) struct PreparedAccessPlan {
     pub(crate) row_groups: Vec<PreparedRowGroup>,
-    /// Preserve the existing reordering and dynamic-pruning eligibility policy.
-    /// This can remain true after an empty selection's group is removed.
-    pub(crate) has_row_selection: bool,
 }
 
 impl PreparedAccessPlan {
@@ -730,7 +713,6 @@ impl PreparedAccessPlan {
     /// dynamic filter converges only as fast as disk order allows.
     ///
     /// Gracefully skips reordering when:
-    /// - There are row selections (preserve the existing scan-order policy)
     /// - 0 or 1 row groups (nothing to reorder)
     /// - The leading sort expression is not a simple column reference
     /// - Statistics are unavailable
@@ -740,12 +722,6 @@ impl PreparedAccessPlan {
         file_metadata: &ParquetMetaData,
         arrow_schema: &Schema,
     ) -> Result<Self> {
-        // Preserve the current policy for scans with page or external selections.
-        if self.has_row_selection {
-            debug!("Skipping RG reorder: row_selection present");
-            return Ok(self);
-        }
-
         // Nothing to reorder
         if self.row_groups.len() <= 1 {
             return Ok(self);
@@ -916,7 +892,6 @@ impl PreparedAccessPlan {
                         RowSelector::select(take),
                     ])),
                 );
-                self.has_row_selection = true;
             }
             remaining -= take;
         }
@@ -1023,7 +998,6 @@ mod test {
             .prepare(&ROW_GROUP_METADATA)
             .unwrap();
         assert_eq!(plan.row_group_indexes(), vec![0, 1, 2, 3]);
-        assert!(!plan.has_row_selection);
         assert!(
             plan.row_groups
                 .iter()
@@ -1037,7 +1011,6 @@ mod test {
             .prepare(&ROW_GROUP_METADATA)
             .unwrap();
         assert!(plan.row_groups.is_empty());
-        assert!(!plan.has_row_selection);
     }
 
     #[test]
@@ -1056,7 +1029,6 @@ mod test {
         .prepare(&ROW_GROUP_METADATA)
         .unwrap();
         assert_eq!(plan.row_group_indexes(), vec![1, 2, 3]);
-        assert!(plan.has_row_selection);
         assert_eq!(
             plan.row_groups[0].selection,
             RowGroupSelection::new(1, None)
@@ -1073,7 +1045,6 @@ mod test {
 
     fn scan_plan(indexes: Vec<usize>) -> PreparedAccessPlan {
         PreparedAccessPlan {
-            has_row_selection: false,
             row_groups: indexes
                 .into_iter()
                 .map(|index| PreparedRowGroup {
@@ -1224,7 +1195,6 @@ mod test {
                 None,
             ]
         );
-        assert!(plan.has_row_selection);
     }
 
     /// A limit larger than a row group takes it whole and the rest from the
@@ -1264,7 +1234,6 @@ mod test {
         // Row group 3 is taken whole (40 < 50), row group 2 is not fully
         // matched, so neither it nor anything after it is cut.
         assert_eq!(selected_rows(&plan), vec![None, None, None, None]);
-        assert!(!plan.has_row_selection);
     }
 
     /// A row group that already has a selection (e.g. from the page index)
@@ -1571,14 +1540,14 @@ mod test {
         );
     }
 
-    /// Preserve the existing scan order when selections are present.
+    /// A row group's local selection moves with it when the scan reorders.
     #[test]
-    fn reorder_by_statistics_skips_when_row_selection_present() {
+    fn reorder_by_statistics_moves_selection_with_row_group() {
         let metadata = parquet_metadata_with_int_mins(&[50, 10]);
-        let selection = RowSelection::from(vec![RowSelector::select(100)]);
+        let selection =
+            RowSelection::from(vec![RowSelector::skip(1), RowSelector::select(99)]);
         let mut plan = scan_plan(vec![0, 1]);
-        plan.row_groups[0].selection = RowGroupSelection::new(0, Some(selection));
-        plan.has_row_selection = true;
+        plan.row_groups[0].selection = RowGroupSelection::new(0, Some(selection.clone()));
 
         let result = plan
             .reorder_by_statistics(
@@ -1588,7 +1557,15 @@ mod test {
             )
             .unwrap();
 
-        assert_eq!(result.row_group_indexes(), vec![0, 1]);
+        assert_eq!(result.row_group_indexes(), vec![1, 0]);
+        assert_eq!(
+            result.row_groups[0].selection,
+            RowGroupSelection::new(1, None)
+        );
+        assert_eq!(
+            result.row_groups[1].selection,
+            RowGroupSelection::new(0, Some(selection))
+        );
     }
 
     /// One row group means nothing to reorder.
@@ -1867,7 +1844,6 @@ mod test {
         .unwrap();
         assert_eq!(prepared.row_group_indexes(), vec![0]);
         assert!(prepared.row_groups[0].selection.selection().is_none());
-        assert!(prepared.has_row_selection);
     }
 
     #[test]

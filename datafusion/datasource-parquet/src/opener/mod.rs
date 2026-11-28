@@ -12,6 +12,7 @@ use self::early_stop::EarlyStoppingStream;
 #[cfg(feature = "parquet_encryption")]
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
+use crate::bloom_filter::BloomFilterStatistics;
 use crate::decoder_projection::DecoderProjection;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::page_filter::PagePruningAccessPlanFilter;
@@ -21,8 +22,8 @@ use crate::push_decoder::{
 };
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
-    BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
-    ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn, RowGroupAccess,
+    Int96Coercer, ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
+    ParquetRowSelection, ParquetVirtualColumn, RowGroupAccess,
     schema_coercion::apply_file_schema_type_coercions_with_rle,
 };
 use arrow::array::RecordBatch;
@@ -74,7 +75,6 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
-use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
 
@@ -358,9 +358,6 @@ impl Morselizer for ParquetMorselizer {
 ///  LoadBloomFilters
 ///        |
 ///        v
-/// PruneWithBloomFilters
-///        |
-///        v
 ///   BuildStream
 ///        |
 ///        v
@@ -392,9 +389,7 @@ enum ParquetOpenState {
     /// Loading [Parquet Page Index](https://parquet.apache.org/docs/file-format/pageindex/)
     LoadPageIndex(BoxFuture<'static, Result<RowGroupsPrunedParquetOpen>>),
     /// Loading bloom filters required for row-group pruning
-    LoadBloomFilters(BoxFuture<'static, Result<BloomFiltersLoadedParquetOpen>>),
-    /// Pruning with preloaded Bloom Filters
-    PruneWithBloomFilters(Box<BloomFiltersLoadedParquetOpen>),
+    LoadBloomFilters(BoxFuture<'static, Result<RowGroupsPrunedParquetOpen>>),
     /// Builds the final reader stream
     ///
     /// TODO: split state as this currently does both I/O and CPU work.
@@ -417,7 +412,6 @@ impl fmt::Debug for ParquetOpenState {
             ParquetOpenState::LoadPageIndex(_) => "LoadPageIndex",
             ParquetOpenState::PruneWithStatistics(_) => "PruneWithStatistics",
             ParquetOpenState::LoadBloomFilters(_) => "LoadBloomFilters",
-            ParquetOpenState::PruneWithBloomFilters(_) => "PruneWithBloomFilters",
             ParquetOpenState::BuildStream(_) => "BuildStream",
             ParquetOpenState::Ready(_) => "Ready",
             ParquetOpenState::Done => "Done",
@@ -593,16 +587,6 @@ impl DecoderReadPlans {
 }
 
 /// State of [`ParquetOpenState`]
-///
-/// Result of loading bloom filters needed for row-group pruning.
-struct BloomFiltersLoadedParquetOpen {
-    prepared: RowGroupsPrunedParquetOpen,
-    /// Bloom filters loaded for each row group that remains under consideration.
-    ///
-    /// indexed by parquet row-group index
-    row_group_bloom_filters: Vec<BloomFilterStatistics>,
-}
-
 impl ParquetOpenState {
     /// Applies one CPU-only state transition.
     ///
@@ -689,13 +673,6 @@ impl ParquetOpenState {
             }
             ParquetOpenState::LoadBloomFilters(future) => {
                 Ok(ParquetOpenState::LoadBloomFilters(future))
-            }
-            ParquetOpenState::PruneWithBloomFilters(loaded) => {
-                let pruned = loaded.prune_bloom_filters();
-                if pruned.row_groups.is_fully_pruned() {
-                    return Ok(ParquetOpenState::Done);
-                }
-                Ok(ParquetOpenState::BuildStream(Box::new(pruned)))
             }
             ParquetOpenState::BuildStream(prepared) => {
                 Ok(ParquetOpenState::Ready(prepared.build_stream()?))
@@ -811,9 +788,11 @@ impl MorselPlanner for ParquetMorselPlanner {
             }
             ParquetOpenState::LoadBloomFilters(future) => {
                 Ok(Some(Self::schedule_io(async move {
-                    Ok(ParquetOpenState::PruneWithBloomFilters(Box::new(
-                        future.await?,
-                    )))
+                    let pruned = future.await?;
+                    if pruned.row_groups.is_fully_pruned() {
+                        return Ok(ParquetOpenState::Done);
+                    }
+                    Ok(ParquetOpenState::BuildStream(Box::new(pruned)))
                 })))
             }
             ParquetOpenState::Ready(stream) => {
@@ -1516,16 +1495,7 @@ impl RowGroupsPrunedParquetOpen {
     }
 
     /// Load bloom filters needed for pruning when enabled and a pruning predicate exists.
-    async fn load_bloom_filters(mut self) -> Result<BloomFiltersLoadedParquetOpen> {
-        let num_row_groups = self
-            .prepared
-            .loaded
-            .reader_metadata
-            .metadata()
-            .num_row_groups();
-        let mut row_group_bloom_filters =
-            vec![BloomFilterStatistics::new(); num_row_groups];
-
+    async fn load_bloom_filters(mut self) -> Result<RowGroupsPrunedParquetOpen> {
         if let Some(predicate) =
             self.prepared.pruning_predicate.as_ref().map(|p| p.as_ref())
             && self.prepared.loaded.prepared.enable_bloom_filter
@@ -1553,33 +1523,37 @@ impl RowGroupsPrunedParquetOpen {
                 mem::replace(&mut prepared.async_file_reader, replacement_reader),
                 reader_metadata,
             );
-            let parquet_columns: Vec<(String, usize, Type, i32)> = predicate
+
+            let parquet_columns = predicate
                 .literal_columns()
                 .into_iter()
                 .filter_map(|column_name| {
-                    let parquet_schema = builder.parquet_schema();
                     let (column_idx, _) = parquet_column(
-                        parquet_schema,
+                        builder.parquet_schema(),
                         &prepared.physical_file_schema,
                         &column_name,
                     )?;
                     Some((
                         column_name,
                         column_idx,
-                        parquet_schema.column(column_idx).physical_type(),
-                        parquet_schema.column(column_idx).type_length(),
+                        builder.parquet_schema().column(column_idx).physical_type(),
+                        builder.parquet_schema().column(column_idx).type_length(),
                     ))
                 })
-                .collect();
+                .collect::<Vec<_>>();
 
-            for idx in self.row_groups.row_group_indexes() {
+            let row_group_indexes: Vec<usize> =
+                self.row_groups.row_group_indexes().collect();
+            for idx in row_group_indexes {
                 // Statistics have already proved that every row in this group
                 // matches the predicate, so its Bloom filters cannot prune it.
                 if self.row_groups.access_plan().is_fully_matched(idx) {
                     continue;
                 }
-                let mut row_group_filters =
+                let mut bloom_filter_stats =
                     BloomFilterStatistics::with_capacity(parquet_columns.len());
+                let mut pruned = false;
+
                 for (column_name, column_idx, physical_type, type_length) in
                     &parquet_columns
                 {
@@ -1595,53 +1569,38 @@ impl RowGroupsPrunedParquetOpen {
                             continue;
                         }
                     };
-                    row_group_filters.insert(
-                        column_name,
+
+                    bloom_filter_stats.insert(
+                        column_name.clone(),
                         bf,
                         *physical_type,
                         *type_length,
                     );
+
+                    if self.row_groups.prune_row_group_with_bloom_filters(
+                        idx,
+                        predicate,
+                        &bloom_filter_stats,
+                        &prepared.file_metrics,
+                    ) {
+                        pruned = true;
+                        break;
+                    }
                 }
-                row_group_bloom_filters[idx] = row_group_filters;
+
+                if !pruned
+                    && !bloom_filter_stats.is_empty()
+                    && self.row_groups.access_plan().should_scan(idx)
+                {
+                    prepared
+                        .file_metrics
+                        .row_groups_pruned_bloom_filter
+                        .add_matched(1);
+                }
             }
         }
 
-        Ok(BloomFiltersLoadedParquetOpen {
-            prepared: self,
-            row_group_bloom_filters,
-        })
-    }
-}
-
-impl BloomFiltersLoadedParquetOpen {
-    /// Apply bloom filter pruning using already loaded bloom filters.
-    fn prune_bloom_filters(mut self) -> RowGroupsPrunedParquetOpen {
-        let bloom_filter_eval_time = self
-            .prepared
-            .prepared
-            .loaded
-            .prepared
-            .file_metrics
-            .bloom_filter_eval_time
-            .clone();
-        let _timer_guard = bloom_filter_eval_time.timer();
-        if let Some(predicate) = self
-            .prepared
-            .prepared
-            .pruning_predicate
-            .as_ref()
-            .map(|p| p.as_ref())
-            && self.prepared.prepared.loaded.prepared.enable_bloom_filter
-            && !self.prepared.row_groups.is_empty()
-        {
-            self.prepared.row_groups.prune_by_bloom_filters(
-                predicate,
-                &self.prepared.prepared.loaded.prepared.file_metrics,
-                &self.row_group_bloom_filters,
-            );
-        }
-
-        self.prepared
+        Ok(self)
     }
 }
 
@@ -1787,7 +1746,7 @@ impl RowGroupsPrunedParquetOpen {
         let InitialDecoderState {
             decoder,
             rg_plan,
-            has_row_selection,
+            pruner_eligible,
             filter_installed,
             row_filter_context,
         } = {
@@ -1807,9 +1766,14 @@ impl RowGroupsPrunedParquetOpen {
             };
 
             let prepared_access_plan = prepare_access_plan(access_plan)?;
-            let has_row_selection = prepared_access_plan.has_row_selection;
+            let pruner_eligible = runtime_pruning_eligible(
+                prepared.predicate.as_ref(),
+                prepared_access_plan.row_groups.len(),
+            );
             // Move selections into the decoder, retaining only the metadata
-            // needed for pruning, filter toggles, and byte accounting.
+            // needed for pruning, filter toggles, and byte accounting. Only a
+            // pruning rebuild reads `RgPlanEntry::selection`, so a scan
+            // without a pruner does not hold a second copy of each selection.
             let (selections, rg_plan): (Vec<_>, VecDeque<RgPlanEntry>) =
                 prepared_access_plan
                     .row_groups
@@ -1820,6 +1784,9 @@ impl RowGroupsPrunedParquetOpen {
                             rg_index,
                             bytes: row_group_bytes(&rg_metadata[rg_index]),
                             fully_matched: rg.fully_matched,
+                            selection: pruner_eligible
+                                .then(|| rg.selection.selection().cloned())
+                                .flatten(),
                         };
                         (rg.selection, entry)
                     })
@@ -1868,7 +1835,7 @@ impl RowGroupsPrunedParquetOpen {
             InitialDecoderState {
                 decoder: builder.build()?,
                 rg_plan,
-                has_row_selection,
+                pruner_eligible,
                 filter_installed,
                 row_filter_context,
             }
@@ -1920,28 +1887,17 @@ impl RowGroupsPrunedParquetOpen {
         // via the `DynamicFilterTracker` watch channel (#22460), so detecting
         // a threshold change is a single atomic load — not a tree walk per
         // RG check.
-        // Preserve the current policy for scans with selections. Enabling
-        // runtime pruning for them is separate from adopting the local API
-        // and is tracked in https://github.com/apache/datafusion/issues/24358.
-        let row_group_pruner =
-            match (&prepared.predicate, rg_plan.len() > 1, has_row_selection) {
-                (Some(predicate), true, false)
-                    if matches!(
-                        DynamicFilterTracking::classify(predicate),
-                        DynamicFilterTracking::Watching(_)
-                    ) =>
-                {
-                    Some(RowGroupPruner::new(
-                        Arc::clone(predicate),
-                        Arc::clone(&prepared.physical_file_schema),
-                        Arc::clone(reader_metadata.metadata()),
-                        prepared.predicate_creation_errors.clone(),
-                        prepared.file_metrics.predicate_evaluation_errors.clone(),
-                        prepared.max_in_list_size,
-                    ))
-                }
-                _ => None,
-            };
+        let row_group_pruner = match &prepared.predicate {
+            Some(predicate) if pruner_eligible => Some(RowGroupPruner::new(
+                Arc::clone(predicate),
+                Arc::clone(&prepared.physical_file_schema),
+                Arc::clone(reader_metadata.metadata()),
+                prepared.predicate_creation_errors.clone(),
+                prepared.file_metrics.predicate_evaluation_errors.clone(),
+                prepared.max_in_list_size,
+            )),
+            _ => None,
+        };
         let row_groups_pruned_dynamic = prepared
             .file_metrics
             .row_groups_pruned_dynamic_filter
@@ -2201,6 +2157,23 @@ async fn load_page_index<T: AsyncFileReader>(
         // No need to load the page index again, just return the existing metadata
         Ok(reader_metadata)
     }
+}
+
+/// Whether the scan builds a runtime [`RowGroupPruner`]. It needs a predicate
+/// with a dynamic filter that is not yet complete (static or complete
+/// predicates were fully used at file open), and at least two row groups
+/// (the pruner only acts at a boundary, before a later row group).
+fn runtime_pruning_eligible(
+    predicate: Option<&Arc<dyn PhysicalExpr>>,
+    row_group_count: usize,
+) -> bool {
+    row_group_count > 1
+        && predicate.is_some_and(|predicate| {
+            matches!(
+                DynamicFilterTracking::classify(predicate),
+                DynamicFilterTracking::Watching(_)
+            )
+        })
 }
 
 #[cfg(test)]
@@ -4787,6 +4760,18 @@ mod test {
         );
     }
 
+    #[test]
+    fn test_runtime_pruning_eligible() {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let static_predicate = logical2physical(&col("a").lt(lit(200i32)), &schema);
+        let dynamic_predicate = make_dynamic_expr(Arc::clone(&static_predicate));
+
+        assert!(!runtime_pruning_eligible(None, 3));
+        assert!(!runtime_pruning_eligible(Some(&static_predicate), 3));
+        assert!(!runtime_pruning_eligible(Some(&dynamic_predicate), 1));
+        assert!(runtime_pruning_eligible(Some(&dynamic_predicate), 2));
+    }
+
     #[tokio::test]
     async fn test_dynamic_pruning_preserves_external_row_selection() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
@@ -4861,30 +4846,25 @@ mod test {
                 .update(logical2physical(&col("a").lt(lit(50i32)), &schema))
                 .unwrap();
 
-            // Apply the final predicate as the consumer would. Runtime
-            // pruning is best-effort, so RG1 may still be read when the
-            // selection disables it. RG2's unselected rows also satisfy
-            // this predicate and must never reach the consumer.
+            // Apply the final predicate as the consumer would. RG2's
+            // unselected rows (11 and 13) also satisfy it, so they reach the
+            // consumer only if the pruning rebuild drops RG2's selection.
             let remaining: Vec<i32> = collect_int32_values(stream)
                 .await
                 .into_iter()
                 .filter(|&value| value < 50)
                 .collect();
-            if has_selection {
-                // Do not assert that runtime pruning is disabled: enabling it
-                // later must preserve these rows through decoder rebuilds.
-                // Replacing RG2's selection with None would also return 11/13,
-                // which satisfy the predicate but not the external selection.
-                assert_eq!(remaining, vec![10, 12]);
+            let expected = if has_selection {
+                vec![10, 12]
             } else {
-                assert_eq!(remaining, vec![10, 11, 12, 13]);
-                // Control case: prove the late update exercises runtime
-                // pruning rather than only the per-row filter.
-                assert_eq!(
-                    counter_metric_value(&metrics, "row_groups_pruned_dynamic_filter"),
-                    1
-                );
-            }
+                vec![10, 11, 12, 13]
+            };
+            assert_eq!(remaining, expected);
+            // The late update prunes RG1 whether or not RG2 has a selection.
+            assert_eq!(
+                counter_metric_value(&metrics, "row_groups_pruned_dynamic_filter"),
+                1
+            );
         }
     }
 

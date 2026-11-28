@@ -1603,9 +1603,13 @@ for file_id in range(n_files):
     if not rgs:
         continue
     tables = [pf.read_row_group(rg) for rg in rgs]
+    # Write the page index with small pages (several per RG) so that
+    # queries with a WHERE clause get a page-level row selection.
     writer = pq.ParquetWriter(
         '${INEXACT_DIR}/part_%03d.parquet' % file_id,
-        pf.schema_arrow)
+        pf.schema_arrow,
+        write_page_index=True,
+        data_page_size=64 * 1024)
     for t in tables:
         writer.write_table(t)
     writer.close()

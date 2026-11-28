@@ -802,6 +802,9 @@ mod tests {
     fn common_opt(memory_limit: Option<usize>) -> CommonOpt {
         CommonOpt {
             iterations: 1,
+            max_time: None,
+            target_precision: 0.02,
+            max_iterations: 1000,
             partitions: None,
             batch_size: None,
             mem_pool_type: "fair".to_string(),

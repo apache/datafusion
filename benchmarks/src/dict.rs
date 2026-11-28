@@ -471,11 +471,13 @@ impl RunOpt {
         let sql = self.query_sql(query);
 
         let mut query_results = vec![];
-        for i in 0..self.common.iterations {
+        let mut sampler = self.common.sampler();
+        while let Some(i) = sampler.next_iteration() {
             let start = Instant::now();
             let row_count =
                 Self::execute_query_without_result_buffering(&sql, ctx).await?;
             let elapsed = start.elapsed();
+            sampler.record(elapsed);
             println!(
                 "Query '{}' iteration {i} returned {row_count} rows in {elapsed:?}",
                 query.name
@@ -690,6 +692,9 @@ mod tests {
             output_path: None,
             common: CommonOpt {
                 iterations: 1,
+                max_time: None,
+                target_precision: 0.02,
+                max_iterations: 1000,
                 partitions: Some(1),
                 batch_size: None,
                 mem_pool_type: "fair".to_string(),

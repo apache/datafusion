@@ -654,6 +654,15 @@ fn plan_copy_to() {
 }
 
 #[test]
+fn plan_copy_to_partitioned_by_normalizes_identifiers() {
+    let sql = r#"COPY person_quoted_cols TO 'output' STORED AS CSV PARTITIONED BY ("First Name", ID)"#;
+    let LogicalPlan::Copy(copy) = logical_plan(sql).unwrap() else {
+        panic!("expected a CopyTo plan");
+    };
+    assert_eq!(copy.partition_by, ["First Name", "id"]);
+}
+
+#[test]
 fn plan_explain_copy_to() {
     let sql = "EXPLAIN COPY test_decimal to 'output.csv'";
     let plan = logical_plan(sql).unwrap();
@@ -2726,6 +2735,35 @@ fn create_external_table_location_with_literal_comma() {
         panic!("expected a CreateExternalTable plan");
     };
     assert_eq!(cmd.locations, vec!["foo,bar.csv".to_string()]);
+}
+
+#[test]
+fn create_external_table_partitioned_by_normalizes_identifiers() {
+    let sql = r#"CREATE EXTERNAL TABLE t("'p'" int, c1 int) STORED AS CSV PARTITIONED BY ("'p'", C1) LOCATION 'foo.csv'"#;
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) =
+        logical_plan(sql).unwrap()
+    else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(cmd.table_partition_cols, ["'p'", "c1"]);
+
+    let sql = r#"CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY ("P1" int, P2 varchar) LOCATION 'foo.csv'"#;
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) =
+        logical_plan(sql).unwrap()
+    else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(cmd.table_partition_cols, ["P1", "p2"]);
+    let field_names: Vec<_> = cmd.schema.fields().iter().map(|f| f.name()).collect();
+    assert_eq!(field_names, ["c1", "P1", "p2"]);
+
+    let options = ParserOptions::default().with_enable_ident_normalization(false);
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) =
+        logical_plan_with_options(sql, options).unwrap()
+    else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(cmd.table_partition_cols, ["P1", "P2"]);
 }
 
 #[test]

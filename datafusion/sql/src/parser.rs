@@ -147,8 +147,8 @@ pub struct CopyToStatement {
     pub source: CopyToSource,
     /// The URL to where the data is heading
     pub target: String,
-    /// Partition keys
-    pub partitioned_by: Vec<String>,
+    /// Partition keys, as written in the SQL text
+    pub partitioned_by: Vec<Ident>,
     /// File type (Parquet, NDJSON, CSV etc.)
     pub stored_as: Option<String>,
     /// Target specific options
@@ -171,6 +171,8 @@ impl fmt::Display for CopyToStatement {
             write!(f, " STORED AS {file_type}")?;
         }
         if !partitioned_by.is_empty() {
+            let partitioned_by: Vec<_> =
+                partitioned_by.iter().map(ToString::to_string).collect();
             write!(f, " PARTITIONED BY ({})", partitioned_by.join(", "))?;
         }
 
@@ -238,8 +240,8 @@ pub struct CreateExternalTable {
     pub file_type: String,
     /// Paths to files
     pub locations: Vec<String>,
-    /// Partition Columns
-    pub table_partition_cols: Vec<String>,
+    /// Partition columns, as written in the SQL text
+    pub table_partition_cols: Vec<Ident>,
     /// Ordered expressions
     pub order_exprs: Vec<LexOrdering>,
     /// Option to not error if table already exists
@@ -780,7 +782,7 @@ impl<'a> DFParser<'a> {
         struct Builder {
             stored_as: Option<String>,
             target: Option<String>,
-            partitioned_by: Option<Vec<String>>,
+            partitioned_by: Option<Vec<Ident>>,
             options: Option<Vec<(String, Value)>>,
         }
 
@@ -1052,8 +1054,8 @@ impl<'a> DFParser<'a> {
         }
     }
 
-    fn parse_partitions(&mut self) -> Result<Vec<String>, DataFusionError> {
-        let mut partitions: Vec<String> = vec![];
+    fn parse_partitions(&mut self) -> Result<Vec<Ident>, DataFusionError> {
+        let mut partitions: Vec<Ident> = vec![];
         if !self.parser.consume_token(&Token::LParen)
             || self.parser.consume_token(&Token::RParen)
         {
@@ -1062,8 +1064,7 @@ impl<'a> DFParser<'a> {
 
         loop {
             if let Token::Word(_) = self.parser.peek_token().token {
-                let identifier = self.parser.parse_identifier()?;
-                partitions.push(identifier.to_string());
+                partitions.push(self.parser.parse_identifier()?);
             } else {
                 return self.expected("partition name", &self.parser.peek_token());
             }
@@ -1217,7 +1218,7 @@ impl<'a> DFParser<'a> {
         struct Builder {
             file_type: Option<String>,
             locations: Option<Vec<String>>,
-            table_partition_cols: Option<Vec<String>>,
+            table_partition_cols: Option<Vec<Ident>>,
             order_exprs: Vec<LexOrdering>,
             options: Option<Vec<(String, Value)>>,
         }
@@ -1282,9 +1283,8 @@ impl<'a> DFParser<'a> {
                         } else {
                             // List of column defs
                             let (cols, cons) = self.parse_columns()?;
-                            builder.table_partition_cols = Some(
-                                cols.iter().map(|col| col.name.to_string()).collect(),
-                            );
+                            builder.table_partition_cols =
+                                Some(cols.iter().map(|col| col.name.clone()).collect());
 
                             columns.extend(cols);
 
@@ -1664,7 +1664,7 @@ mod tests {
         let display = None;
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             columns: vec![make_column_def("c1", DataType::Int(display))],
-            table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
+            table_partition_cols: vec![Ident::new("p1"), Ident::new("p2")],
             ..make_create_external_table("foo.csv")
         });
         expect_parse_ok(sql, expected)?;
@@ -1743,7 +1743,7 @@ mod tests {
                 make_column_def("c1", DataType::Int(None)),
                 make_column_def("p1", DataType::Int(None)),
             ],
-            table_partition_cols: vec!["p1".to_string()],
+            table_partition_cols: vec![Ident::new("p1")],
             ..make_create_external_table("foo.csv")
         });
         expect_parse_ok(sql, expected)?;
@@ -1921,7 +1921,7 @@ mod tests {
                 make_column_def("c2", DataType::Float(ExactNumberInfo::None)),
             ],
             file_type: "PARQUET".to_string(),
-            table_partition_cols: vec!["c1".into()],
+            table_partition_cols: vec![Ident::new("c1")],
             order_exprs: vec![vec![OrderByExpr {
                 expr: Expr::BinaryOp {
                     left: Box::new(Identifier(Ident {
@@ -1985,7 +1985,7 @@ mod tests {
                 make_column_def("c2", DataType::Float(ExactNumberInfo::None)),
             ],
             file_type: "PARQUET".to_string(),
-            table_partition_cols: vec!["c1".into()],
+            table_partition_cols: vec![Ident::new("c1")],
             order_exprs: vec![vec![OrderByExpr {
                 expr: Expr::BinaryOp {
                     left: Box::new(Identifier(Ident {
@@ -2301,12 +2301,26 @@ mod tests {
     }
 
     #[test]
+    fn copy_to_partitioned_by_quoted_identifier() -> Result<(), DataFusionError> {
+        let sql = r#"COPY foo TO bar STORED AS CSV PARTITIONED BY ("'a'", B)"#;
+        let expected = Statement::CopyTo(CopyToStatement {
+            source: object_name("foo"),
+            target: "bar".to_string(),
+            partitioned_by: vec![Ident::with_quote('"', "'a'"), Ident::new("B")],
+            stored_as: Some("CSV".to_owned()),
+            options: vec![],
+        });
+        assert_eq!(verified_stmt(sql), expected);
+        Ok(())
+    }
+
+    #[test]
     fn copy_to_partitioned_by() -> Result<(), DataFusionError> {
         let sql = "COPY foo TO bar STORED AS CSV PARTITIONED BY (a) OPTIONS ('row_group_size' '55')";
         let expected = Statement::CopyTo(CopyToStatement {
             source: object_name("foo"),
             target: "bar".to_string(),
-            partitioned_by: vec!["a".to_string()],
+            partitioned_by: vec![Ident::new("a")],
             stored_as: Some("CSV".to_owned()),
             options: vec![(
                 "row_group_size".to_string(),

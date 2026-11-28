@@ -14,6 +14,7 @@ use arrow::array::{
     UInt16Array, UInt32Array, UInt32Builder, UInt64Array, UnionArray, record_batch,
 };
 use arrow::buffer::ScalarBuffer;
+use arrow::compute::kernels::numeric::add;
 use arrow::datatypes::{
     DataType, Field, Float32Type, Int32Type, Schema, UInt64Type, UnionFields, UnionMode,
 };
@@ -7433,7 +7434,7 @@ async fn test_insert_into_casting_support() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_dataframe_from_columns() -> Result<()> {
+async fn test_dataframe_from_arrays() -> Result<()> {
     let bools: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
     let i8s: ArrayRef = Arc::new(Int8Array::from(vec![-1, 0, 1]));
     let i16s: ArrayRef = Arc::new(Int16Array::from(vec![-1, 0, 1]));
@@ -7472,8 +7473,11 @@ async fn test_dataframe_from_columns() -> Result<()> {
         ("str", strings),
     ];
 
-    let df1 = DataFrame::from_columns(columns.clone())?;
-    let df2 = DataFrame::from_columns(columns.to_vec())?;
+    // any `IntoIterator<Item = (&str, ArrayRef)>` is accepted
+    let empty = dataframe!()?;
+    let df1 = empty.from_arrays(columns.clone())?;
+    let df2 = empty.from_arrays(columns.to_vec())?;
+    let df3 = empty.from_arrays(columns.into_iter())?;
 
     let expected_types = [
         ("bool", DataType::Boolean),
@@ -7491,7 +7495,7 @@ async fn test_dataframe_from_columns() -> Result<()> {
         ("str", DataType::Utf8),
     ];
 
-    for df in [df1, df2] {
+    for df in [df1, df2, df3] {
         assert_eq!(df.schema().fields().len(), expected_types.len());
         assert_eq!(df.clone().count().await?, 3);
 
@@ -7521,72 +7525,105 @@ async fn test_dataframe_from_columns() -> Result<()> {
 }
 
 #[test]
-fn test_dataframe_from_columns_empty() {
-    let result = DataFrame::from_columns(vec![]);
-    assert!(result.is_err());
+fn test_dataframe_from_arrays_invalid_input() {
+    let empty = dataframe!().unwrap();
 
-    let result = DataFrame::from_columns([]);
-    assert!(result.is_err());
+    // no columns
+    assert!(empty.from_arrays(vec![]).is_err());
+    assert!(empty.from_arrays([]).is_err());
+
+    // columns of different lengths
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let b: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+    let err = empty.from_arrays([("a", a), ("b", b)]).unwrap_err();
+    assert_contains!(err.to_string(), "must have the same length");
 }
 
 #[tokio::test]
-async fn test_dataframe_from_columns_with_iterator() -> Result<()> {
-    let bools: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
-    let i8s: ArrayRef = Arc::new(Int8Array::from(vec![-1, 0, 1]));
-    let i16s: ArrayRef = Arc::new(Int16Array::from(vec![-1, 0, 1]));
-    let i32s: ArrayRef = Arc::new(Int32Array::from(vec![-1, 0, 1]));
-    let i64s: ArrayRef = Arc::new(Int64Array::from(vec![-1, 0, 1]));
+async fn test_dataframe_from_arrays_nullability_follows_arrays() -> Result<()> {
+    let no_nulls: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let with_nulls: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+    // `null_count()` is 0 because the nulls live in the dictionary values, but
+    // a key may point at them, so the column must still be nullable. This is
+    // why nullability comes from `Array::is_nullable`, not `null_count() > 0`.
+    let keys = Int32Array::from(vec![0, 1, 0]);
+    let values = StringArray::from(vec![Some("a"), None]);
+    let dict: ArrayRef = Arc::new(DictionaryArray::new(keys, Arc::new(values)));
+    assert_eq!(dict.null_count(), 0);
 
-    let u8s: ArrayRef = Arc::new(UInt8Array::from(vec![0, 1, 2]));
-    let u16s: ArrayRef = Arc::new(UInt16Array::from(vec![0, 1, 2]));
-    let u32s: ArrayRef = Arc::new(UInt32Array::from(vec![0, 1, 2]));
-    let u64s: ArrayRef = Arc::new(UInt64Array::from(vec![0, 1, 2]));
+    let df =
+        dataframe!()?.from_arrays([("a", no_nulls), ("b", with_nulls), ("d", dict)])?;
 
-    let f16s: ArrayRef = Arc::new(Float16Array::from(vec![
-        half::f16::from_f64(1.0),
-        half::f16::from_f64(2.0),
-        half::f16::from_f64(3.0),
-    ]));
-    let f32s: ArrayRef = Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0]));
-    let f64s: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]));
+    let schema = df.schema();
+    assert!(!schema.field_with_unqualified_name("a")?.is_nullable());
+    assert!(schema.field_with_unqualified_name("b")?.is_nullable());
+    assert!(schema.field_with_unqualified_name("d")?.is_nullable());
 
-    let strings: ArrayRef =
-        Arc::new(StringArray::from(vec![Some("foo"), Some("bar"), None]));
+    // A non-nullable column lets the optimizer prove `a IS NULL` is never true
+    let plan = df
+        .clone()
+        .filter(col("a").is_null())?
+        .into_optimized_plan()?;
+    assert_contains!(plan.display_indent().to_string(), "EmptyRelation");
+    // while the dictionary column really does contain a logical null
+    assert_eq!(df.filter(col("d").is_null())?.count().await?, 1);
 
-    let columns = [
-        ("bool", bools),
-        ("i8", i8s),
-        ("i16", i16s),
-        ("i32", i32s),
-        ("i64", i64s),
-        ("u8", u8s),
-        ("u16", u16s),
-        ("u32", u32s),
-        ("u64", u64s),
-        ("f16", f16s),
-        ("f32", f32s),
-        ("f64", f64s),
-        ("str", strings),
-    ];
+    Ok(())
+}
 
-    let df = DataFrame::from_columns(columns.into_iter())?;
+#[tokio::test]
+async fn test_dataframe_from_arrays_uses_session() -> Result<()> {
+    let config = SessionConfig::new().with_target_partitions(1);
+    let ctx = SessionContext::new_with_config(config);
+    ctx.register_udf(create_udf(
+        "add_one",
+        vec![DataType::Int32],
+        DataType::Int32,
+        Volatility::Immutable,
+        Arc::new(|args: &[ColumnarValue]| {
+            let args = ColumnarValue::values_to_arrays(args)?;
+            let result = add(&args[0], &Int32Array::new_scalar(1))?;
+            Ok(ColumnarValue::Array(result))
+        }),
+    ));
 
-    assert_eq!(df.schema().fields().len(), 13);
-    assert_eq!(df.clone().count().await?, 3);
-    let rows = df.sort(vec![col("i32").sort(true, true)])?;
-    assert_batches_eq!(
-        &[
-            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
-            "| bool  | i8 | i16 | i32 | i64 | u8 | u16 | u32 | u64 | f16 | f32 | f64 | str |",
-            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
-            "| true  | -1 | -1  | -1  | -1  | 0  | 0   | 0   | 0   | 1   | 1.0 | 1.0 | foo |",
-            "| false | 0  | 0   | 0   | 0   | 1  | 1   | 1   | 1   | 2   | 2.0 | 2.0 | bar |",
-            "| true  | 1  | 1   | 1   | 1   | 2  | 2   | 2   | 2   | 3   | 3.0 | 3.0 |     |",
-            "+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
-        ],
-        &rows.collect().await?
+    let x: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let df = ctx.read_empty()?.from_arrays([("x", x)])?;
+
+    // The DataFrame is bound to `ctx`, not to a fresh default session ...
+    let task_ctx = df.task_ctx();
+    assert_eq!(task_ctx.session_id(), ctx.session_id());
+    assert_eq!(task_ctx.session_config().target_partitions(), 1);
+
+    // ... so functions registered on `ctx` resolve and run
+    let expr = df.parse_sql_expr("add_one(x)")?.alias("y");
+    let batches = df.select(vec![expr])?.collect().await?;
+    assert_snapshot!(
+        batches_to_string(&batches),
+        @r"
+    +---+
+    | y |
+    +---+
+    | 2 |
+    | 3 |
+    | 4 |
+    +---+
+    "
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+#[expect(
+    deprecated,
+    reason = "`DataFrame::from_columns` is a deprecated wrapper"
+)]
+async fn test_dataframe_from_columns_deprecated() -> Result<()> {
+    let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let df = DataFrame::from_columns([("id", id)])?;
+    assert_eq!(df.schema().fields().len(), 1);
+    assert_eq!(df.count().await?, 3);
     Ok(())
 }
 
@@ -7639,26 +7676,30 @@ async fn test_dataframe_macro() -> Result<()> {
     assert_eq!(df.schema().fields().len(), 13);
     assert_eq!(df.clone().count().await?, 3);
 
-    let expected_types = [
-        ("bool", DataType::Boolean),
-        ("i8", DataType::Int8),
-        ("i16", DataType::Int16),
-        ("i32", DataType::Int32),
-        ("i64", DataType::Int64),
-        ("u8", DataType::UInt8),
-        ("u16", DataType::UInt16),
-        ("u32", DataType::UInt32),
-        ("u64", DataType::UInt64),
-        ("f16", DataType::Float16),
-        ("f32", DataType::Float32),
-        ("f64", DataType::Float64),
-        ("str", DataType::Utf8),
+    // (name, type, nullable): a column is nullable only when its input
+    // contained a `None`
+    let expected_fields = [
+        ("bool", DataType::Boolean, false),
+        ("i8", DataType::Int8, false),
+        ("i16", DataType::Int16, false),
+        ("i32", DataType::Int32, false),
+        ("i64", DataType::Int64, true),
+        ("u8", DataType::UInt8, true),
+        ("u16", DataType::UInt16, true),
+        ("u32", DataType::UInt32, false),
+        ("u64", DataType::UInt64, false),
+        ("f16", DataType::Float16, false),
+        ("f32", DataType::Float32, true),
+        ("f64", DataType::Float64, true),
+        ("str", DataType::Utf8, true),
     ];
 
     let schema = df.schema();
 
-    for (name, data_type) in expected_types {
-        assert_eq!(schema.field_with_name(None, name)?.data_type(), &data_type);
+    for (name, data_type, nullable) in expected_fields {
+        let field = schema.field_with_name(None, name)?;
+        assert_eq!(field.data_type(), &data_type);
+        assert_eq!(field.is_nullable(), nullable, "column {name}");
     }
 
     let rows = df.sort(vec![col("i32").sort(true, true)])?;
@@ -7680,6 +7721,27 @@ async fn test_dataframe_macro() -> Result<()> {
     assert_eq!(df_empty.schema().fields().len(), 0);
     assert_eq!(df_empty.count().await?, 0);
 
+    // columns of different lengths are an error
+    let err = dataframe!("a" => [1, 2, 3], "b" => [1, 2]).unwrap_err();
+    assert_contains!(err.to_string(), "must have the same length");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_macro_does_not_shadow_caller_items() -> Result<()> {
+    // A caller type named like one the macro uses internally, referenced by
+    // path inside a macro argument. If the macro imported `SessionContext`
+    // by name, this would resolve to the wrong type and fail to compile.
+    struct SessionContext;
+    impl SessionContext {
+        fn ids() -> Vec<i32> {
+            vec![1, 2, 3]
+        }
+    }
+
+    let df = dataframe!("id" => SessionContext::ids())?;
+    assert_eq!(df.count().await?, 3);
     Ok(())
 }
 
@@ -7760,7 +7822,7 @@ async fn test_copy_to_preserves_order() -> Result<()> {
       DataSinkExec: sink=CsvSink(file_groups=[])
         SortExec: expr=[column1@0 DESC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[1]
-      ProjectionExec: expr=[CAST(column1@0 AS UInt64) as count]
+      ProjectionExec: expr=[column1@0 as count]
         DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );

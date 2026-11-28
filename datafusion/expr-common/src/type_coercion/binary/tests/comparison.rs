@@ -1271,3 +1271,116 @@ fn union_variants_match_by_type_id_not_position() {
     let swapped_ids = union_type(&[(1, "v0", foo.clone()), (0, "v1", bar)]);
     assert!(!struct_field_names_match(&ordered, &swapped_ids));
 }
+
+/// An integer too wide for the decimal's variant used to coerce the decimal to
+/// an integer and drop its fraction.
+#[test]
+fn test_integer_decimal_comparison_coercion() -> Result<()> {
+    // 2 + max(7, 10) = 12 digits, past Decimal32's 9
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal32(9, 2), &DataType::Int32),
+        Some(DataType::Decimal64(12, 2))
+    );
+
+    // 2 + max(7, 20) = 22, past Decimal64's 18
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal32(9, 2), &DataType::Int64),
+        Some(DataType::Decimal128(22, 2))
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal32(9, 2), &DataType::UInt64),
+        Some(DataType::Decimal128(22, 2))
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal64(18, 2), &DataType::Int64),
+        Some(DataType::Decimal128(22, 2))
+    );
+
+    // A pair whose required precision still fits leaves the variant alone
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal32(9, 2), &DataType::Int8),
+        Some(DataType::Decimal32(9, 2))
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal64(18, 2), &DataType::Int32),
+        Some(DataType::Decimal64(18, 2))
+    );
+
+    // A float that does not fit the variant still compares as a float
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal32(9, 2), &DataType::Float64),
+        Some(DataType::Float64)
+    );
+
+    // All nine digits are after the point: 9 + max(0, 3) = 12
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal32(9, 9), &DataType::Int8),
+        Some(DataType::Decimal64(12, 9))
+    );
+
+    // A negative scale is more integer digits: 0 + max(7, 10) = 10
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal32(5, -2), &DataType::Int32),
+        Some(DataType::Decimal64(10, 0))
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal32(5, -2), &DataType::Int64),
+        Some(DataType::Decimal128(20, 0))
+    );
+
+    Ok(())
+}
+
+/// Capping the required precision while keeping the scale leaves the integer's
+/// digits no room, so a wider variant takes them.
+#[test]
+fn test_integer_wide_scale_decimal_comparison_coercion() -> Result<()> {
+    // 38 + max(0, 10) = 48, past Decimal128's 38
+    assert_eq!(
+        comparison_coercion(&DataType::Int32, &DataType::Decimal128(38, 38)),
+        Some(DataType::Decimal256(48, 38))
+    );
+
+    assert_eq!(
+        comparison_coercion(&DataType::Int32, &DataType::Decimal128(38, 30)),
+        Some(DataType::Decimal256(40, 30))
+    );
+
+    // Not just the wide ones: Int8's three digits make 38 + max(0, 3) = 41
+    assert_eq!(
+        comparison_coercion(&DataType::Int8, &DataType::Decimal128(38, 38)),
+        Some(DataType::Decimal256(41, 38))
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Int16, &DataType::Decimal128(38, 38)),
+        Some(DataType::Decimal256(43, 38))
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::Int64, &DataType::Decimal128(38, 38)),
+        Some(DataType::Decimal256(58, 38))
+    );
+    assert_eq!(
+        comparison_coercion(&DataType::UInt64, &DataType::Decimal128(38, 38)),
+        Some(DataType::Decimal256(58, 38))
+    );
+
+    // 3 + max(17, 10) = 20 fits, so the variant does not change
+    assert_eq!(
+        comparison_coercion(&DataType::Int32, &DataType::Decimal128(20, 3)),
+        Some(DataType::Decimal128(20, 3))
+    );
+
+    // 70 + max(6, 20) = 90 is past every variant, so it is capped
+    assert_eq!(
+        comparison_coercion(&DataType::Decimal256(76, 70), &DataType::Int64),
+        Some(DataType::Decimal256(76, 70))
+    );
+
+    // A float keeps the capped type
+    assert_eq!(
+        comparison_coercion(&DataType::Float64, &DataType::Decimal128(38, 38)),
+        Some(DataType::Decimal128(38, 38))
+    );
+
+    Ok(())
+}

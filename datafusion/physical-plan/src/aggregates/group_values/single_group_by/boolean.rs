@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::{GroupValues, MISSING_GROUP};
 
 use arrow::array::{
     ArrayRef, AsArray as _, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
@@ -26,10 +26,13 @@ impl GroupValuesBoolean {
             null_group: None,
         }
     }
-}
 
-impl GroupValues for GroupValuesBoolean {
-    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+    /// [`GroupValues::intern`] if `INSERT`, else [`GroupValues::lookup`].
+    fn probe<const INSERT: bool>(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<usize>,
+    ) -> Result<()> {
         let array = cols[0].as_boolean();
         groups.clear();
 
@@ -38,6 +41,8 @@ impl GroupValues for GroupValuesBoolean {
                 Some(false) => {
                     if let Some(index) = self.false_group {
                         index
+                    } else if !INSERT {
+                        MISSING_GROUP
                     } else {
                         let index = self.len();
                         self.false_group = Some(index);
@@ -47,6 +52,8 @@ impl GroupValues for GroupValuesBoolean {
                 Some(true) => {
                     if let Some(index) = self.true_group {
                         index
+                    } else if !INSERT {
+                        MISSING_GROUP
                     } else {
                         let index = self.len();
                         self.true_group = Some(index);
@@ -56,6 +63,8 @@ impl GroupValues for GroupValuesBoolean {
                 None => {
                     if let Some(index) = self.null_group {
                         index
+                    } else if !INSERT {
+                        MISSING_GROUP
                     } else {
                         let index = self.len();
                         self.null_group = Some(index);
@@ -68,6 +77,20 @@ impl GroupValues for GroupValuesBoolean {
         }
 
         Ok(())
+    }
+}
+
+impl GroupValues for GroupValuesBoolean {
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+        self.probe::<true>(cols, groups)
+    }
+
+    fn lookup(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+        self.probe::<false>(cols, groups)
+    }
+
+    fn supports_lookup(&self) -> bool {
+        true
     }
 
     fn size(&self) -> usize {
@@ -166,5 +189,31 @@ impl GroupValues for GroupValuesBoolean {
         self.false_group = None;
         self.true_group = None;
         self.null_group = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lookup_finds_stored_groups_only() -> Result<()> {
+        let mut group_values = GroupValuesBoolean::new();
+        assert!(group_values.supports_lookup());
+        let mut groups = vec![];
+        let probe: ArrayRef =
+            Arc::new(BooleanArray::from(vec![Some(true), None, Some(false)]));
+        group_values.lookup(&[Arc::clone(&probe)], &mut groups)?;
+        assert_eq!(groups, vec![MISSING_GROUP; 3]);
+        assert!(group_values.is_empty());
+
+        let input: ArrayRef =
+            Arc::new(BooleanArray::from(vec![Some(true), Some(true), None]));
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups, vec![0, 0, 1]);
+        group_values.lookup(&[probe], &mut groups)?;
+        assert_eq!(groups, vec![0, 1, MISSING_GROUP]);
+        assert_eq!(group_values.len(), 2);
+        Ok(())
     }
 }
