@@ -907,6 +907,42 @@ SELECT bit_length(arrow_cast(
 ----
 16 Dictionary(Int32, Dictionary(UInt32, Int32))
 
+# bit_length over binary types: byte semantics, no string coercion
+query I
+SELECT bit_length(arrow_cast('foo', 'Binary'))
+----
+24
+
+query IT
+SELECT bit_length(arrow_cast('josé', 'Binary')),
+       arrow_typeof(bit_length(arrow_cast('josé', 'Binary')))
+----
+40 Int32
+
+query IT
+SELECT bit_length(arrow_cast('foo', 'BinaryView')),
+       arrow_typeof(bit_length(arrow_cast('foo', 'BinaryView')))
+----
+24 Int32
+
+# LargeBinary widens the return type to Int64, mirroring LargeUtf8
+query IT
+SELECT bit_length(arrow_cast('foo', 'LargeBinary')),
+       arrow_typeof(bit_length(arrow_cast('foo', 'LargeBinary')))
+----
+24 Int64
+
+query IT
+SELECT bit_length(arrow_cast(arrow_cast('foo', 'Binary'), 'FixedSizeBinary(3)')),
+       arrow_typeof(bit_length(arrow_cast(arrow_cast('foo', 'Binary'), 'FixedSizeBinary(3)')))
+----
+24 Int32
+
+query I
+SELECT bit_length(arrow_cast(NULL, 'Binary'))
+----
+NULL
+
 query I
 SELECT character_length('foo')
 ----

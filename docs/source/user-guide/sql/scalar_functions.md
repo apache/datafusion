@@ -1194,7 +1194,7 @@ ascii(str)
 
 ### `bit_length`
 
-Returns the bit length of a string.
+Returns the bit length of a string or a binary.
 
 ```sql
 bit_length(str)
