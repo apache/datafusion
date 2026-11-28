@@ -13,8 +13,11 @@
 //! An extension plan implements [`ExtensionPlanFromProto`] instead, and
 //! [`ExtensionPlanFromProto::register_proto`] puts its decoder in the
 //! [`ProtoDecoderRegistry`] the decoding session carries. Lookup is by name,
-//! so registration order does not matter. Built-ins cannot be registered;
-//! anything unnamed or unregistered still takes the codec chain, unchanged.
+//! so registration order does not matter. Built-ins with dedicated wire variants
+//! generally cannot be registered. `DataSourceExec` and `DataSinkExec` are exceptions:
+//! their registered decoders wrap custom sources and sinks, while built-in scans
+//! and sinks keep their wire variants.
+//! Anything unnamed or unregistered still takes the codec chain, unchanged.
 //!
 //! This is only the `ExecutionPlan` face of the registry: the store is shared
 //! with every other extension kind, keyed by the trait as well as the name.
@@ -34,8 +37,10 @@ use crate::proto::ExecutionPlanDecodeCtx;
 /// The wire name of an extension [`ExecutionPlan`], and the constructor that
 /// rebuilds it.
 ///
-/// Only extension plans implement this, so a built-in cannot be registered by
-/// mistake. One impl block carries both halves, and
+/// Extension plans implement this, as do the shared `DataSourceExec` and
+/// `DataSinkExec` wrappers for custom sources and sinks. Other built-ins keep
+/// their dedicated wire variants.
+/// One impl block carries both halves, and
 /// [`ExecutionPlan::try_to_proto`] writes the matching node:
 ///
 /// ```ignore
@@ -98,8 +103,10 @@ pub trait ExtensionPlanFromProto: ExecutionPlan + Sized {
     /// `config.update_extension(MyExec::register_proto)?`, which keeps the decoders
     /// that other libraries added. See [`ProtoDecoderRegistry`].
     ///
-    /// A built-in plan does not implement this trait, so it cannot be
-    /// registered:
+    /// Most built-in plans do not implement this trait, so they cannot be
+    /// registered. `DataSourceExec` and `DataSinkExec` implement it to wrap custom
+    /// sources and sinks; built-ins with dedicated wire variants, such as
+    /// `FilterExec`, do not:
     ///
     /// ```compile_fail
     /// use datafusion_physical_plan::filter::FilterExec;
