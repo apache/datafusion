@@ -8395,3 +8395,103 @@ async fn left_join_with_partial_filter_preserves_streamed_order() -> Result<()> 
     );
     Ok(())
 }
+
+/// Errors from coalescing filtered join output must be returned to the query
+/// instead of panicking the execution stream.
+#[tokio::test]
+async fn filtered_join_returns_output_coalescer_error() -> Result<()> {
+    use arrow::datatypes::Int8Type;
+
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("lk", DataType::Int32, false),
+        Field::new("lx", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("rk", DataType::Int32, false),
+        Field::new("rx", DataType::Int32, false),
+        Field::new(
+            "p",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            false,
+        ),
+    ]));
+    let left = RecordBatch::try_new(
+        Arc::clone(&left_schema),
+        vec![
+            Arc::new(Int32Array::from((0..300).collect::<Vec<_>>())),
+            Arc::new(Int32Array::from(vec![0; 300])),
+        ],
+    )?;
+    let right_batch = |base: i32, tag: &str| -> Result<RecordBatch> {
+        let (mut keys, mut values, mut labels) = (vec![], vec![], vec![]);
+        for i in 0..100 {
+            keys.extend([base + i, base + i]);
+            values.extend([-1, 0]);
+            labels.extend([format!("{tag}-fails"), format!("{tag}{i}")]);
+        }
+        Ok(RecordBatch::try_new(
+            Arc::clone(&right_schema),
+            vec![
+                Arc::new(Int32Array::from(keys)),
+                Arc::new(Int32Array::from(values)),
+                Arc::new(
+                    labels
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<DictionaryArray<Int8Type>>(),
+                ),
+            ],
+        )?)
+    };
+    let right = vec![
+        right_batch(0, "a")?,
+        right_batch(100, "b")?,
+        right_batch(200, "c")?,
+    ];
+    let left_exec =
+        TestMemoryExec::try_new_exec(&[vec![left]], Arc::clone(&left_schema), None)?;
+    let right_exec =
+        TestMemoryExec::try_new_exec(&[right], Arc::clone(&right_schema), None)?;
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("lk", &left_schema)?) as _,
+        Arc::new(Column::new_with_schema("rk", &right_schema)?) as _,
+    )];
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("lx", 0)),
+            Operator::LtEq,
+            Arc::new(Column::new("rx", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("lx", DataType::Int32, false),
+            Field::new("rx", DataType::Int32, false),
+        ])),
+    );
+    let join = SortMergeJoinExec::try_new(
+        left_exec,
+        right_exec,
+        on,
+        Some(filter),
+        Left,
+        vec![SortOptions::default()],
+        NullEquality::NullEqualsNothing,
+    )?;
+    let ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(200)),
+    );
+
+    let error = common::collect(join.execute(0, ctx)?).await.unwrap_err();
+    assert_contains!(error.to_string(), "Dictionary key bigger than the key type");
+    Ok(())
+}
