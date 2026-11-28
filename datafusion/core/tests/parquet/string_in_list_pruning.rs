@@ -9,8 +9,8 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, BinaryArray, Date64Array, Decimal128Array, Int64Array, StringArray,
-    TimestampMicrosecondArray,
+    ArrayRef, BinaryArray, Date64Array, Decimal128Array, FixedSizeBinaryArray,
+    Float64Array, Int64Array, StringArray, TimestampMicrosecondArray,
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -390,14 +390,22 @@ async fn check_string_in_list_pruning(page_pruning: bool) {
         assert_eq!(output.counter("output_rows"), MATCHING_ROWS);
     }
 
-    // The default remains 20: enabling the compact representation must not
-    // silently change the public cap's meaning.
+    // With the default cap (20), a 21-item positive IN list skips the compact
+    // representation and falls back to the enclosing range [v000000, v000200],
+    // pruning the unit outside the hull (v999999) while keeping the gap unit
+    // (v000001).
     let default = scan(&file, 21, None, page_pruning, false).await;
     default.assert_results();
     assert!(!default.plan.contains("IN_SET_INTERSECTS"));
-    assert_eq!(default.pruned("row_groups_pruned_statistics"), 0);
-    assert_eq!(default.pruned("page_index_rows_pruned"), 0);
-    assert_eq!(default.counter("output_rows"), TOTAL_ROWS);
+    assert_eq!(
+        default.pruned("row_groups_pruned_statistics"),
+        usize::from(!page_pruning)
+    );
+    assert_eq!(
+        default.pruned("page_index_rows_pruned"),
+        if page_pruning { ROWS_PER_UNIT } else { 0 }
+    );
+    assert_eq!(default.counter("output_rows"), TOTAL_ROWS - ROWS_PER_UNIT);
 }
 
 /// The compact `NOT IN` form must prune exactly the units whose single repeated
@@ -641,6 +649,103 @@ async fn string_not_in_list_page_pruning() {
 async fn string_not_in_list_with_truncated_bounds() {
     check_string_not_in_list_with_truncated_bounds(false).await;
     check_string_not_in_list_with_truncated_bounds(true).await;
+}
+
+#[tokio::test]
+async fn enclosing_range_parquet_pruning() {
+    let float_values = [-0.0_f64, 1.0, 2.0, 100.0]
+        .into_iter()
+        .flat_map(|v| std::iter::repeat_n(v, ROWS_PER_UNIT))
+        .collect::<Vec<_>>();
+    let fsb_values = repeated_ordered_values(1)
+        .into_iter()
+        .map(|v| [0x01_u8, v as u8])
+        .collect::<Vec<_>>();
+
+    let cases = [
+        (
+            "int64",
+            Arc::new(Int64Array::from(repeated_ordered_values(1))) as ArrayRef,
+            (0..21)
+                .map(|value| ScalarValue::Int64(Some(value * 2)))
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "float64_signed_zero",
+            Arc::new(Float64Array::from(float_values)) as ArrayRef,
+            (0..21)
+                .map(|value| ScalarValue::Float64(Some((value * 2) as f64)))
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "fixed_size_binary",
+            Arc::new(FixedSizeBinaryArray::try_from_iter(fsb_values.into_iter()).unwrap())
+                as ArrayRef,
+            (0..21)
+                .map(|value| {
+                    ScalarValue::FixedSizeBinary(2, Some(vec![0x01, (value * 2) as u8]))
+                })
+                .collect::<Vec<_>>(),
+        ),
+    ];
+
+    for (name, values, list) in cases {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            values.data_type().clone(),
+            false,
+        )]));
+        for page_pruning in [false, true] {
+            let file = write_ordered_file(&schema, Arc::clone(&values), page_pruning);
+            let control =
+                scan_ordered(&file, &schema, &list, 0, page_pruning, false).await;
+            let fallback =
+                scan_ordered(&file, &schema, &list, 20, page_pruning, false).await;
+            let not_in =
+                scan_ordered(&file, &schema, &list, 20, page_pruning, true).await;
+
+            control.assert_no_filter_interference();
+            fallback.assert_no_filter_interference();
+            not_in.assert_no_filter_interference();
+
+            assert_eq!(
+                pretty_format_batches(&fallback.batches)
+                    .unwrap()
+                    .to_string(),
+                pretty_format_batches(&control.batches).unwrap().to_string(),
+                "type={name}, page_pruning={page_pruning}"
+            );
+            assert_eq!(
+                fallback
+                    .batches
+                    .iter()
+                    .map(RecordBatch::num_rows)
+                    .sum::<usize>(),
+                MATCHING_ROWS,
+                "type={name}, page_pruning={page_pruning}"
+            );
+            assert!(!fallback.plan.contains("IN_SET_INTERSECTS"));
+            assert_eq!(
+                fallback.pruned("row_groups_pruned_statistics"),
+                usize::from(!page_pruning),
+                "type={name}, page_pruning={page_pruning}"
+            );
+            assert_eq!(
+                fallback.pruned("page_index_rows_pruned"),
+                if page_pruning { ROWS_PER_UNIT } else { 0 },
+                "type={name}, page_pruning={page_pruning}"
+            );
+            assert_eq!(
+                fallback.counter("output_rows"),
+                TOTAL_ROWS - ROWS_PER_UNIT,
+                "type={name}, page_pruning={page_pruning}"
+            );
+
+            // NOT IN above max_in_list_size does not use enclosing range.
+            assert_eq!(not_in.pruned("row_groups_pruned_statistics"), 0);
+            assert_eq!(not_in.pruned("page_index_rows_pruned"), 0);
+        }
+    }
 }
 
 async fn check_in_list_with_null_preserves_filter_semantics(

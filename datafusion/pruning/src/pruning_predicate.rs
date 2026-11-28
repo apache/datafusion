@@ -6,6 +6,7 @@
 //! based on statistics (e.g. Parquet Row Groups)
 //!
 //! [`Expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -443,7 +444,7 @@ impl<'a> PruningPredicateBuilder<'a> {
         self
     }
 
-    /// Cap on the input length of `IN (...)` lists eligible for min/max pruning.
+    /// Cap on the input length of `IN (...)` lists eligible for exact min/max pruning.
     ///
     /// For a nonempty list of `N` values (before deduplication) and cap `C`:
     ///
@@ -452,12 +453,14 @@ impl<'a> PruningPredicateBuilder<'a> {
     /// | `N <= min(20, C)` | Existing per-value rewrite |
     /// | `20 < N <= C`, supported ordered literals with optional NULLs | Compact pruning expression |
     /// | `20 < N <= C`, unsupported lists | Existing per-value rewrite |
-    /// | `N > C` | Unhandled-predicate hook, normally "keep the container" |
+    /// | `N > C` (`C > 0`), positive `IN` of ordered literals | Enclosing-range fallback (`[vmin, vmax]`) |
+    /// | `N > C` (`C > 0`), `NOT IN` or unsupported lists | Unhandled-predicate hook, normally "keep the container" |
     ///
-    /// Empty lists also use the unhandled-predicate hook. A cap of zero disables
-    /// this `IN` min/max rewrite, not other predicates or literal/containment
-    /// pruning (such as Bloom filters). The default cap is [`MAX_IN_LIST_SIZE`]
-    /// (20), so the compact path requires an explicitly raised cap.
+    /// Empty lists and `C == 0` also use the unhandled-predicate hook. A cap of
+    /// zero disables this `IN` min/max rewrite, not other predicates or
+    /// literal/containment pruning (such as Bloom filters). The default cap is
+    /// [`MAX_IN_LIST_SIZE`] (20), so the compact path requires an explicitly
+    /// raised cap.
     ///
     /// Compact domains support strings, binary values, integers, decimals,
     /// dates, times, timestamps, and durations. Floating-point values are
@@ -465,7 +468,9 @@ impl<'a> PruningPredicateBuilder<'a> {
     ///
     /// The compact form covers `IN` and `NOT IN` alike, including lists with
     /// NULL members. Raising the cap can still build large comparison trees for
-    /// unsupported lists.
+    /// unsupported lists. Above the cap (with `C > 0`), positive `IN` lists of
+    /// orderable literals (excluding `NaN`) fall back to an `O(1)`-sized
+    /// enclosing range check `[vmin, vmax]`.
     ///
     /// Query engines typically pass
     /// `datafusion.execution.parquet.max_in_list_size` here.
@@ -1667,10 +1672,169 @@ fn build_compact_in_list_expr(
     )))
 }
 
+fn is_orderable_enclosing_scalar(value: &ScalarValue) -> bool {
+    match value {
+        ScalarValue::Boolean(_)
+        | ScalarValue::Int8(_)
+        | ScalarValue::Int16(_)
+        | ScalarValue::Int32(_)
+        | ScalarValue::Int64(_)
+        | ScalarValue::UInt8(_)
+        | ScalarValue::UInt16(_)
+        | ScalarValue::UInt32(_)
+        | ScalarValue::UInt64(_)
+        | ScalarValue::Decimal32(_, _, _)
+        | ScalarValue::Decimal64(_, _, _)
+        | ScalarValue::Decimal128(_, _, _)
+        | ScalarValue::Decimal256(_, _, _)
+        | ScalarValue::Date32(_)
+        | ScalarValue::Date64(_)
+        | ScalarValue::Time32Second(_)
+        | ScalarValue::Time32Millisecond(_)
+        | ScalarValue::Time64Microsecond(_)
+        | ScalarValue::Time64Nanosecond(_)
+        | ScalarValue::TimestampSecond(_, _)
+        | ScalarValue::TimestampMillisecond(_, _)
+        | ScalarValue::TimestampMicrosecond(_, _)
+        | ScalarValue::TimestampNanosecond(_, _)
+        | ScalarValue::DurationSecond(_)
+        | ScalarValue::DurationMillisecond(_)
+        | ScalarValue::DurationMicrosecond(_)
+        | ScalarValue::DurationNanosecond(_)
+        | ScalarValue::Utf8(_)
+        | ScalarValue::LargeUtf8(_)
+        | ScalarValue::Utf8View(_)
+        | ScalarValue::Binary(_)
+        | ScalarValue::LargeBinary(_)
+        | ScalarValue::BinaryView(_)
+        | ScalarValue::FixedSizeBinary(_, _) => true,
+        ScalarValue::Float16(Some(v)) => !v.is_nan(),
+        ScalarValue::Float32(Some(v)) => !v.is_nan(),
+        ScalarValue::Float64(Some(v)) => !v.is_nan(),
+        _ => false,
+    }
+}
+
+/// Collapse a positive `IN (...)` literal list exceeding `max_in_list_size`
+/// into an enclosing-range check `[vmin, vmax]` (`expr >= vmin AND expr <= vmax`)
+/// in a single O(N) pass without sorting or allocating.
+///
+/// Containers outside `[vmin, vmax]` cannot match any element of the list.
+/// Lists containing `NaN`, non-literal items, incompatible types, or
+/// unprunable expressions return `None` so the caller falls back to
+/// `unhandled_hook`.
+fn build_enclosing_range_in_list_expr(
+    in_list: &phys_expr::InListExpr,
+    schema: &SchemaRef,
+    required_columns: &mut RequiredColumns,
+    unhandled_hook: &Arc<dyn UnhandledPredicateHook>,
+    max_in_list_size: usize,
+    properties: &mut PruningExpressionProperties,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    if in_list.negated() || in_list.list().is_empty() {
+        return None;
+    }
+    let mut contains_null = false;
+    let mut bounds: Option<(&ScalarValue, &ScalarValue)> = None;
+    for item in in_list.list() {
+        let literal = item.downcast_ref::<phys_expr::Literal>()?;
+        let value = unwrap_scalar(literal.value());
+        if value.is_null() {
+            contains_null = true;
+            continue;
+        }
+        if !is_orderable_enclosing_scalar(value) {
+            return None;
+        }
+        match &mut bounds {
+            None => {
+                bounds = Some((value, value));
+            }
+            Some((min_value, max_value)) => {
+                if value.partial_cmp(min_value)? == Ordering::Less {
+                    *min_value = value;
+                }
+                if value.partial_cmp(max_value)? == Ordering::Greater {
+                    *max_value = value;
+                }
+            }
+        }
+    }
+
+    let Some((min_value, max_value)) = bounds else {
+        // An all-NULL IN list can never evaluate to TRUE.
+        properties.has_filter_semantics_only = true;
+        return Some(Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(
+            Some(false),
+        ))));
+    };
+
+    let min_lit = Arc::new(phys_expr::Literal::new(min_value.clone())) as PhysicalExprRef;
+    let range_expr: PhysicalExprRef =
+        if min_value.partial_cmp(max_value)? == Ordering::Equal {
+            // Confirm `in_list.expr()` is prunable before rewriting so custom
+            // unhandled hooks still receive the original `InListExpr` otherwise.
+            PruningExpressionBuilder::try_new(
+                in_list.expr(),
+                &min_lit,
+                ColumnReferenceCount::from_expression(in_list.expr()),
+                ColumnReferenceCount::Zero,
+                Operator::Eq,
+                schema,
+                required_columns,
+            )
+            .ok()?;
+            Arc::new(phys_expr::BinaryExpr::new(
+                Arc::clone(in_list.expr()),
+                Operator::Eq,
+                min_lit,
+            ))
+        } else {
+            let max_lit =
+                Arc::new(phys_expr::Literal::new(max_value.clone())) as PhysicalExprRef;
+            PruningExpressionBuilder::try_new(
+                in_list.expr(),
+                &min_lit,
+                ColumnReferenceCount::from_expression(in_list.expr()),
+                ColumnReferenceCount::Zero,
+                Operator::GtEq,
+                schema,
+                required_columns,
+            )
+            .ok()?;
+            Arc::new(phys_expr::BinaryExpr::new(
+                Arc::new(phys_expr::BinaryExpr::new(
+                    Arc::clone(in_list.expr()),
+                    Operator::GtEq,
+                    min_lit,
+                )),
+                Operator::And,
+                Arc::new(phys_expr::BinaryExpr::new(
+                    Arc::clone(in_list.expr()),
+                    Operator::LtEq,
+                    max_lit,
+                )),
+            ))
+        };
+
+    if contains_null {
+        properties.has_filter_semantics_only = true;
+    }
+
+    Some(build_predicate_expression(
+        &range_expr,
+        schema,
+        required_columns,
+        unhandled_hook,
+        max_in_list_size,
+        properties,
+    ))
+}
+
 /// Default maximum number of entries in an `IN (...)` list eligible for
-/// statistics pruning. Eligible literal lists of supported ordered types above
-/// this threshold use a compact sorted domain instead of per-value min/max
-/// checks, for both `IN` and `NOT IN`.
+/// exact statistics pruning. Eligible literal lists of supported ordered types
+/// above this threshold use a compact sorted domain instead of per-value
+/// min/max checks, for both `IN` and `NOT IN`.
 /// Callers can raise the cap via [`PredicateRewriter::with_max_in_list_size`], and
 /// query engines can wire it from the
 /// `datafusion.execution.parquet.max_in_list_size` config option.
@@ -1707,15 +1871,16 @@ impl PredicateRewriter {
         self
     }
 
-    /// Set the maximum input length of an `IN (...)` list eligible for min/max
-    /// pruning. See [`PruningPredicateBuilder::with_max_in_list_size`] for the
-    /// exact boundaries and representations. Longer lists fall back to the
-    /// unhandled-predicate hook (typically "keep the container"); this skips
-    /// only that `IN` min/max rewrite, not all container-level pruning.
+    /// Set the maximum input length of an `IN (...)` list eligible for exact
+    /// min/max pruning. See [`PruningPredicateBuilder::with_max_in_list_size`]
+    /// for the exact boundaries and representations. Longer positive `IN` lists
+    /// of orderable literals (when `max_in_list_size > 0`) fall back to an
+    /// enclosing range `[vmin, vmax]`; `NOT IN` and unsupported lists fall back
+    /// to the unhandled-predicate hook (typically "keep the container").
     ///
     /// The default (see [`MAX_IN_LIST_SIZE`]) preserves the
-    /// historical behaviour. Callers wiring config through can override via
-    /// `datafusion.execution.parquet.max_in_list_size`.
+    /// historical behaviour for exact pruning. Callers wiring config through
+    /// can override via `datafusion.execution.parquet.max_in_list_size`.
     pub fn with_max_in_list_size(mut self, max_in_list_size: usize) -> Self {
         self.max_in_list_size = max_in_list_size;
         self
@@ -1729,8 +1894,10 @@ impl PredicateRewriter {
     ///
     /// Returns the pruning predicate as an [`PhysicalExpr`]
     ///
-    /// Notice: `IN (...)` lists longer than `max_in_list_size` (default
-    /// [`MAX_IN_LIST_SIZE`]) fall back to calling `unhandled_hook`.
+    /// Notice: positive `IN (...)` lists longer than `max_in_list_size`
+    /// (default [`MAX_IN_LIST_SIZE`]) fall back to an enclosing range check
+    /// when `max_in_list_size > 0`; `NOT IN` and unsupported lists fall back to
+    /// calling `unhandled_hook`.
     pub fn rewrite_predicate_to_statistics_predicate(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
@@ -1757,10 +1924,12 @@ impl PredicateRewriter {
 ///
 /// Returns the pruning predicate as an [`PhysicalExpr`]
 ///
-/// `max_in_list_size` is the largest `IN (...)` list eligible for statistics
-/// pruning. Large literal lists of supported ordered types use a compact
-/// representation for both `IN` and `NOT IN`; unsupported lists use per-value
-/// checks. Longer lists fall back to `unhandled_hook`.
+/// `max_in_list_size` is the largest `IN (...)` list eligible for exact
+/// statistics pruning. Large literal lists of supported ordered types use a
+/// compact representation for both `IN` and `NOT IN`; unsupported lists use
+/// per-value checks. Longer positive `IN` lists of orderable literals fall back
+/// to an enclosing range `[vmin, vmax]` when `max_in_list_size > 0`; `NOT IN`
+/// and unsupported lists fall back to `unhandled_hook`.
 fn build_predicate_expression(
     expr: &Arc<dyn PhysicalExpr>,
     schema: &SchemaRef,
@@ -1844,6 +2013,19 @@ fn build_predicate_expression(
                 max_in_list_size,
                 properties,
             );
+        } else if max_in_list_size > 0
+            && !in_list.negated()
+            && !in_list.list().is_empty()
+            && let Some(pruning_expr) = build_enclosing_range_in_list_expr(
+                in_list,
+                schema,
+                required_columns,
+                unhandled_hook,
+                max_in_list_size,
+                properties,
+            )
+        {
+            return pruning_expr;
         } else {
             return unhandled_hook.handle(expr);
         }
@@ -3734,15 +3916,27 @@ mod tests {
     #[test]
     fn row_group_predicate_in_list_to_many_values() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        // test c1 in(1..21)
-        // in pruning.rs has MAX_IN_LIST_SIZE = 20, more than this value will be rewrite
-        // always true
-        let expr = col("c1").in_list((1..=21).map(lit).collect(), false);
+        let values: Vec<_> = (1..=21).map(lit).collect();
+        // Lists exceeding MAX_IN_LIST_SIZE = 20 fall back to the enclosing
+        // range [vmin, vmax] for positive IN, while NOT IN falls back to true.
+        let positive = col("c1").in_list(values.clone(), false);
+        let positive_predicate = test_build_predicate_expression(
+            &positive,
+            &schema,
+            &mut RequiredColumns::new(),
+        );
+        assert_eq!(
+            positive_predicate.to_string(),
+            "c1_null_count@1 != row_count@2 AND c1_max@0 >= 1 AND c1_null_count@1 != row_count@2 AND c1_min@3 <= 21"
+        );
 
-        let expected_expr = "true";
-        let predicate_expr =
-            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
-        assert_eq!(predicate_expr.to_string(), expected_expr);
+        let negated = col("c1").in_list(values, true);
+        let negated_predicate = test_build_predicate_expression(
+            &negated,
+            &schema,
+            &mut RequiredColumns::new(),
+        );
+        assert_eq!(negated_predicate.to_string(), "true");
 
         Ok(())
     }
@@ -3785,9 +3979,9 @@ mod tests {
     }
 
     // The high-level [`PruningPredicateBuilder`] should thread
-    // `max_in_list_size` all the way through: a 25-item IN with the default
-    // cap must fall through to the unhandled hook (`predicate_expr = true`),
-    // while a raised cap produces a compact statistics predicate.
+    // `max_in_list_size` all the way through: a 25-item IN with cap=0 falls
+    // through to `true`, the default cap (20) uses the enclosing-range
+    // fallback, and a raised cap (32) produces a compact statistics predicate.
     #[test]
     fn pruning_predicate_builder_threads_max_in_list_size() -> Result<()> {
         let schema =
@@ -3795,16 +3989,24 @@ mod tests {
         let expr = col("c1").in_list((1..=25).map(lit).collect(), false);
         let physical = logical2physical(&expr, &schema);
 
-        // With the default cap the IN branch bails out and the pruning
-        // predicate expression collapses to `true` (i.e., no container
-        // pruning based on stats).
+        let disabled_pp = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .with_max_in_list_size(0)
+            .try_build(Arc::clone(&physical))?;
+        assert_eq!(
+            disabled_pp.predicate_expr().to_string(),
+            "true",
+            "cap=0 must fall through to `true` for 25-item IN"
+        );
+
         let default_pp = PruningPredicateBuilder::new()
             .with_file_schema(Arc::clone(&schema))
             .try_build(Arc::clone(&physical))?;
+        let default_expr = default_pp.predicate_expr().to_string();
         assert_eq!(
-            default_pp.predicate_expr().to_string(),
-            "true",
-            "default cap must fall through to `true` for 25-item IN"
+            default_expr,
+            "c1_null_count@1 != row_count@2 AND c1_max@0 >= 1 AND c1_null_count@1 != row_count@2 AND c1_min@3 <= 25",
+            "default cap must fall back to enclosing range for 25-item IN"
         );
 
         let raised_pp = PruningPredicateBuilder::new()
@@ -4476,6 +4678,7 @@ mod tests {
                     .with_file_schema(Arc::clone(&schema))
                     .with_max_in_list_size(limit)
                     .try_build(Arc::clone(&expr))?;
+                let uses_enclosing_range = !negated && limit > 0 && !compact;
                 assert_eq!(
                     predicate.predicate_expr().to_string().contains(marker),
                     compact,
@@ -4483,7 +4686,7 @@ mod tests {
                 );
                 assert_eq!(
                     is_always_true(predicate.predicate_expr()),
-                    !compact,
+                    !compact && !uses_enclosing_range,
                     "negated={negated}, limit={limit}"
                 );
                 assert!(predicate.can_be_inverted_for_full_match());
@@ -4493,8 +4696,9 @@ mod tests {
             let default = PruningPredicateBuilder::new()
                 .with_file_schema(Arc::clone(&schema))
                 .try_build(expr)?;
-            assert!(
+            assert_eq!(
                 is_always_true(default.predicate_expr()),
+                negated,
                 "negated={negated}"
             );
         }
@@ -4543,9 +4747,15 @@ mod tests {
             let default = PruningPredicateBuilder::new()
                 .with_file_schema(Arc::clone(&schema))
                 .try_build(Arc::clone(&physical))?;
-            assert!(is_always_true(default.predicate_expr()), "{expr}");
-            assert_eq!(default.prune(&stats)?, [true, true]);
-            assert!(default.can_be_inverted_for_full_match());
+            if negated {
+                assert!(is_always_true(default.predicate_expr()), "{expr}");
+                assert_eq!(default.prune(&stats)?, [true, true]);
+                assert!(default.can_be_inverted_for_full_match());
+            } else {
+                assert!(!is_always_true(default.predicate_expr()), "{expr}");
+                assert_eq!(default.prune(&stats)?, [true, false]);
+                assert!(!default.can_be_inverted_for_full_match());
+            }
 
             let raised = large_in_list_pruning_predicate(physical, Arc::clone(&schema))?;
             assert!(!raised.can_be_inverted_for_full_match());
@@ -4661,6 +4871,297 @@ mod tests {
             assert!(!predicate.can_be_inverted_for_full_match());
             assert!(predicate.required_columns.columns.is_empty());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn enclosing_range_fallback_prunes_outside_hull_but_keeps_gaps() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int64, true)]));
+        // Deliberately unsorted so extrema discovery cannot assume sorted input.
+        let values = (1..=25).rev().map(|i| lit(i * 10_i64)).collect::<Vec<_>>();
+        let expr = logical2physical(&col("c1").in_list(values, false), &schema);
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(expr)?;
+
+        assert_eq!(predicate.max_in_list_size(), MAX_IN_LIST_SIZE);
+        assert!(predicate.can_be_inverted_for_full_match());
+
+        let stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new_i64(
+                [
+                    Some(0),   // completely below vmin=10
+                    Some(10),  // overlaps vmin
+                    Some(15),  // strictly inside gap (10..20) -> must keep
+                    Some(250), // overlaps vmax
+                    Some(251), // completely above vmax=250
+                    None,      // unknown min, max below vmin
+                    None,      // unknown min, max inside hull
+                    Some(251), // min above vmax, unknown max
+                    Some(100), // inverted bounds [100, 50] inside hull -> kept conservatively
+                    Some(0),   // all-null container
+                ],
+                [
+                    Some(9),
+                    Some(12),
+                    Some(18),
+                    Some(260),
+                    Some(300),
+                    Some(9),
+                    Some(20),
+                    None,
+                    Some(50),
+                    Some(100),
+                ],
+            )
+            .with_null_counts([
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(4),
+            ])
+            .with_row_counts([Some(4); 10]),
+        );
+
+        assert_eq!(
+            predicate.prune(&stats)?,
+            [
+                false, true, true, true, false, false, true, false, true, false,
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn enclosing_range_fallback_handles_equal_bounds_and_all_null() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let repeated = std::iter::repeat_n(lit(42_i32), 25).collect::<Vec<_>>();
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(logical2physical(
+                &col("c1").in_list(repeated, false),
+                &schema,
+            ))?;
+        assert_eq!(
+            predicate.predicate_expr().to_string(),
+            "c1_null_count@2 != row_count@3 AND c1_min@0 <= 42 AND 42 <= c1_max@1"
+        );
+        let stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new_i32(
+                [Some(0), Some(40), Some(43)],
+                [Some(41), Some(45), Some(50)],
+            )
+            .with_null_counts([Some(0); 3])
+            .with_row_counts([Some(1); 3]),
+        );
+        assert_eq!(predicate.prune(&stats)?, [false, true, false]);
+
+        let all_null =
+            std::iter::repeat_n(lit(ScalarValue::Int32(None)), 25).collect::<Vec<_>>();
+        let null_predicate = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(logical2physical(
+                &col("c1").in_list(all_null, false),
+                &Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)])),
+            ))?;
+        assert!(is_always_false(null_predicate.predicate_expr()));
+        assert!(!null_predicate.can_be_inverted_for_full_match());
+        assert_eq!(null_predicate.prune(&stats)?, [false, false, false]);
+        Ok(())
+    }
+
+    #[test]
+    fn enclosing_range_fallback_supports_floats_binary_dict_and_casts() -> Result<()> {
+        // Float64: -0.0 container must match +0.0 lower bound; NaN in list disables fallback.
+        let float_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Float64, true)]));
+        let float_values = (0..21).map(|i| lit(i as f64)).collect::<Vec<_>>();
+        let float_pred = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&float_schema))
+            .try_build(logical2physical(
+                &col("c1").in_list(float_values.clone(), false),
+                &float_schema,
+            ))?;
+        let float_stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new()
+                .with_min(Arc::new(arrow::array::Float64Array::from(vec![
+                    Some(-5.0),
+                    Some(-0.0),
+                    Some(20.5),
+                ])))
+                .with_max(Arc::new(arrow::array::Float64Array::from(vec![
+                    Some(-1.0),
+                    Some(-0.0),
+                    Some(30.0),
+                ])))
+                .with_null_counts([Some(0); 3])
+                .with_row_counts([Some(1); 3]),
+        );
+        assert_eq!(float_pred.prune(&float_stats)?, [false, true, false]);
+
+        let mut with_nan = float_values;
+        with_nan.push(lit(f64::NAN));
+        let nan_pred = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&float_schema))
+            .try_build(logical2physical(
+                &col("c1").in_list(with_nan, false),
+                &float_schema,
+            ))?;
+        assert!(is_always_true(nan_pred.predicate_expr()));
+
+        // FixedSizeBinary(2)
+        let fsb_type = DataType::FixedSizeBinary(2);
+        let fsb_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", fsb_type.clone(), true)]));
+        let fsb_values = (10_u8..31_u8)
+            .map(|b| {
+                Arc::new(phys_expr::Literal::new(ScalarValue::FixedSizeBinary(
+                    2,
+                    Some(vec![0x01, b]),
+                ))) as PhysicalExprRef
+            })
+            .collect::<Vec<_>>();
+        let fsb_expr = phys_expr::in_list(
+            Arc::new(phys_expr::Column::new("c1", 0)),
+            fsb_values,
+            &false,
+            &fsb_schema,
+        )?;
+        let fsb_pred = PruningPredicateBuilder::new()
+            .with_file_schema(fsb_schema)
+            .try_build(fsb_expr)?;
+        let fsb_stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new()
+                .with_min(Arc::new(arrow::array::FixedSizeBinaryArray::try_from_iter(
+                    [[0x01_u8, 0x01], [0x01, 0x0f], [0x01, 0x20]].into_iter(),
+                )?))
+                .with_max(Arc::new(arrow::array::FixedSizeBinaryArray::try_from_iter(
+                    [[0x01_u8, 0x09], [0x01, 0x15], [0x01, 0x30]].into_iter(),
+                )?))
+                .with_null_counts([Some(0); 3])
+                .with_row_counts([Some(1); 3]),
+        );
+        assert_eq!(fsb_pred.prune(&fsb_stats)?, [false, true, false]);
+
+        // Dictionary(Int32, Int64) with dictionary-wrapped literals
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int64));
+        let dict_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", dict_type.clone(), true)]));
+        let dict_values = (10..31)
+            .map(|v| {
+                Arc::new(phys_expr::Literal::new(ordered_scalar(&dict_type, Some(v))))
+                    as PhysicalExprRef
+            })
+            .collect::<Vec<_>>();
+        let dict_expr = phys_expr::in_list(
+            Arc::new(phys_expr::Column::new("c1", 0)),
+            dict_values,
+            &false,
+            &dict_schema,
+        )?;
+        let dict_pred = PruningPredicateBuilder::new()
+            .with_file_schema(dict_schema)
+            .try_build(dict_expr)?;
+        let dict_array = |vals: Vec<Option<i64>>| -> Result<ArrayRef> {
+            let values = Arc::new(Int64Array::from(vals.clone()));
+            let keys =
+                Int32Array::from_iter((0..vals.len()).map(|i| vals[i].map(|_| i as i32)));
+            Ok(Arc::new(DictionaryArray::<Int32Type>::try_new(
+                keys, values,
+            )?))
+        };
+        let dict_stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new()
+                .with_min(dict_array(vec![Some(0), Some(15), Some(31)])?)
+                .with_max(dict_array(vec![Some(9), Some(20), Some(40)])?)
+                .with_null_counts([Some(0); 3])
+                .with_row_counts([Some(1); 3]),
+        );
+        assert_eq!(dict_pred.prune(&dict_stats)?, [false, true, false]);
+
+        // CastExpr: CAST(c1 AS Int64) IN (...)
+        let cast_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let cast_values = (10..31).map(|i| lit(i as i64)).collect::<Vec<_>>();
+        let cast_expr = logical2physical(
+            &cast(col("c1"), DataType::Int64).in_list(cast_values, false),
+            &cast_schema,
+        );
+        let cast_pred = PruningPredicateBuilder::new()
+            .with_file_schema(cast_schema)
+            .try_build(cast_expr)?;
+        let cast_stats = TestStatistics::new().with(
+            "c1",
+            ContainerStats::new_i32(
+                [Some(0), Some(15), Some(31)],
+                [Some(9), Some(20), Some(40)],
+            )
+            .with_null_counts([Some(0); 3])
+            .with_row_counts([Some(1); 3]),
+        );
+        assert_eq!(cast_pred.prune(&cast_stats)?, [false, true, false]);
+        Ok(())
+    }
+
+    #[test]
+    fn enclosing_range_fallback_skips_unprunable_and_non_literal_lists() -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+        struct CountingHook {
+            calls: AtomicUsize,
+        }
+        impl UnhandledPredicateHook for CountingHook {
+            fn handle(&self, expr: &Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+                assert!(
+                    expr.downcast_ref::<phys_expr::InListExpr>().is_some(),
+                    "expected original InListExpr in unhandled_hook, got: {expr}"
+                );
+                self.calls.fetch_add(1, AtomicOrdering::SeqCst);
+                Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(Some(true))))
+            }
+        }
+
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+        let values = (1..=25).map(lit).collect::<Vec<_>>();
+
+        // Multi-column expression is unprunable; hook should see the original InListExpr once.
+        let hook = Arc::new(CountingHook {
+            calls: AtomicUsize::new(0),
+        });
+        let rewriter = PredicateRewriter::new()
+            .with_unhandled_hook(Arc::clone(&hook) as Arc<dyn UnhandledPredicateHook>);
+        let multi_col = logical2physical(
+            &(col("c1") + col("c2")).in_list(values.clone(), false),
+            &schema,
+        );
+        let rewritten =
+            rewriter.rewrite_predicate_to_statistics_predicate(&multi_col, &schema);
+        assert!(is_always_true(&rewritten));
+        assert_eq!(hook.calls.load(AtomicOrdering::SeqCst), 1);
+
+        // Non-literal element in IN list; hook should see the original InListExpr once.
+        let mut with_col = values;
+        with_col.push(col("c2"));
+        let non_lit = logical2physical(&col("c1").in_list(with_col, false), &schema);
+        let rewritten_non_lit =
+            rewriter.rewrite_predicate_to_statistics_predicate(&non_lit, &schema);
+        assert!(is_always_true(&rewritten_non_lit));
+        assert_eq!(hook.calls.load(AtomicOrdering::SeqCst), 2);
         Ok(())
     }
 
