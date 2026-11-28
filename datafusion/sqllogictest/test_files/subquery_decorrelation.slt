@@ -995,3 +995,65 @@ DROP TABLE t;
 
 statement ok
 RESET datafusion.execution.batch_size;
+
+# https://github.com/apache/datafusion/issues/27764
+statement ok
+CREATE TABLE t1(a INT) AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE t2(a INT) AS VALUES (2), (3), (3);
+
+query I
+SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE t2.a > t1.a HAVING count(*) > 1) ORDER BY a;
+----
+1
+2
+
+query I
+SELECT a FROM t1 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t2.a > t1.a HAVING count(*) > 1) ORDER BY a;
+----
+3
+
+# Count across distinct inner keys and preserve duplicate outer rows.
+query I
+SELECT a FROM (VALUES (1), (1), (2)) AS o(a) WHERE EXISTS
+  (SELECT 1 FROM (VALUES (2), (3)) AS i(a) WHERE i.a > o.a HAVING count(*) > 1)
+ORDER BY a;
+----
+1
+1
+
+# A scalar aggregate still sees empty input for unmatched and NULL outer keys.
+query IB
+SELECT a, EXISTS (SELECT 1 FROM t2 WHERE t2.a > o.a HAVING count(*) = 0)
+FROM (VALUES (2), (3), (NULL)) AS o(a) ORDER BY a NULLS LAST;
+----
+2 false
+3 true
+NULL true
+
+# Two outer references define a group together. Retain the aggregate's own FILTER.
+query II
+SELECT lo, hi FROM (VALUES (1, 3), (1, 2), (2, 3)) AS o(lo, hi) WHERE EXISTS
+  (SELECT 1 FROM t2 WHERE t2.a > o.lo AND t2.a <= o.hi
+   HAVING count(*) FILTER (WHERE t2.a = 3) = 2)
+ORDER BY lo, hi;
+----
+1 3
+2 3
+
+# All domains have an empty aggregate input when the inner relation is empty.
+query I
+SELECT a FROM t1 WHERE EXISTS
+  (SELECT 1 FROM t2 WHERE t2.a > t1.a AND t2.a < 0 HAVING count(*) = 0 AND sum(t2.a) IS NULL)
+ORDER BY a;
+----
+1
+2
+3
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
