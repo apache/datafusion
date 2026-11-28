@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::session::Session;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::{Constraints, Statistics, not_impl_err};
+use datafusion_common::{Constraints, Statistics, TableReadSelector, not_impl_err};
 use datafusion_common::{DFSchemaRef, Result, internal_err};
 use datafusion_expr::Expr;
 use datafusion_expr::statistics::StatisticsRequest;
@@ -68,6 +68,35 @@ pub trait TableProvider: Any + Debug + Sync + Send {
 
     /// Get the default value for a column, if available.
     fn get_column_default(&self, _column: &str) -> Option<&Expr> {
+        None
+    }
+
+    /// The [`TableReadSelector`] this provider reads, such as a specific version
+    /// of the table.
+    ///
+    /// Providers returned by [`SchemaProvider::table_with_read_selector`] must
+    /// report the selector they read. This may differ from the requested
+    /// selector: for example, a [`TableReadSelector::AsOfTimestamp`] may resolve
+    /// to the [`TableReadSelector::AsOfVersion`] of the latest snapshot committed
+    /// at or before it. Reporting the resolved selector shows it in `EXPLAIN`,
+    /// and lets scans of the same snapshot compare equal regardless of how it
+    /// was requested.
+    ///
+    /// Providers returned by [`SchemaProvider::table`] may also report a
+    /// selector, such as the id of the current snapshot, to identify the
+    /// state of the table they read.
+    ///
+    /// Scans of the same table with equal selectors are assumed to read the
+    /// same data, and may be merged by the optimizer. Report a selector that
+    /// identifies the data exactly: two scans with equal selectors that read
+    /// different data can produce wrong results.
+    ///
+    /// Defaults to `None`, meaning the provider does not identify which read
+    /// of the table it performs.
+    ///
+    /// [`SchemaProvider::table`]: crate::SchemaProvider::table
+    /// [`SchemaProvider::table_with_read_selector`]: crate::SchemaProvider::table_with_read_selector
+    fn read_selector(&self) -> Option<&TableReadSelector> {
         None
     }
 

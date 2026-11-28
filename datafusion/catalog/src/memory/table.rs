@@ -19,8 +19,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraints, DFSchema, SchemaExt, internal_datafusion_err, internal_err,
-    not_impl_err, plan_err,
+    Constraints, DFSchema, SchemaExt, TableReadSelector, internal_datafusion_err,
+    internal_err, not_impl_err, plan_err,
 };
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
 use datafusion_datasource::sink::DataSinkExec;
@@ -70,6 +70,7 @@ pub struct MemTable {
     /// Optional pre-known sort order(s). Must be `SortExpr`s.
     /// inserting data into this table removes the order
     pub sort_order: Arc<Mutex<Vec<Vec<SortExpr>>>>,
+    read_selector: Option<TableReadSelector>,
 }
 
 impl MemTable {
@@ -103,7 +104,22 @@ impl MemTable {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             sort_order: Arc::new(Mutex::new(vec![])),
+            read_selector: None,
         })
+    }
+
+    /// Sets the [`TableReadSelector`] reported by
+    /// [`TableProvider::read_selector`], which identifies which read of the
+    /// table this provider performs, such as a version of the table.
+    ///
+    /// This only labels the provider, it does not change the data it reads:
+    /// the provider must already be set up for that read.
+    pub fn with_read_selector(
+        mut self,
+        read_selector: Option<TableReadSelector>,
+    ) -> Self {
+        self.read_selector = read_selector;
+        self
     }
 
     /// Assign constraints
@@ -176,6 +192,10 @@ impl TableProvider for MemTable {
 
     fn constraints(&self) -> Option<&Constraints> {
         Some(&self.constraints)
+    }
+
+    fn read_selector(&self) -> Option<&TableReadSelector> {
+        self.read_selector.as_ref()
     }
 
     fn table_type(&self) -> TableType {

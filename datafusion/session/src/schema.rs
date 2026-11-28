@@ -6,7 +6,7 @@
 //! representing collections of named tables.
 
 use async_trait::async_trait;
-use datafusion_common::{DataFusionError, exec_err};
+use datafusion_common::{DataFusionError, TableReadSelector, exec_err, not_impl_err};
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -37,6 +37,30 @@ pub trait SchemaProvider: Any + Debug + Sync + Send {
         &self,
         name: &str,
     ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError>;
+
+    /// Retrieves a table from the schema by name and [`TableReadSelector`], if it
+    /// exists, otherwise returns `None`.
+    ///
+    /// The selector specifies which read of the table to perform, see
+    /// [`TableReadSelector`].
+    ///
+    /// The returned provider must report the selector it reads from
+    /// [`TableProvider::read_selector`], otherwise planning fails. This may differ
+    /// from the requested `selector`, for example when a timestamp resolves to
+    /// the latest snapshot committed at or before it.
+    ///
+    /// The default implementation returns a "not implemented" error, as
+    /// returning the current state of the table would silently produce
+    /// wrong results.
+    async fn table_with_read_selector(
+        &self,
+        name: &str,
+        selector: &TableReadSelector,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        not_impl_err!(
+            "Table read selectors are not supported for table '{name}@{selector}'"
+        )
+    }
 
     /// Retrieves the type of a specific table from the schema by name, if it exists, otherwise
     /// returns `None`.  Implementations for which this operation is cheap but [Self::table] is

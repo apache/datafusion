@@ -4,7 +4,7 @@
 
 use crate::logical_plan::producer::{SubstraitProducer, to_substrait_named_struct};
 use datafusion::common::{
-    DFSchema, ToDFSchema, not_impl_datafusion_err, substrait_datafusion_err,
+    DFSchema, ToDFSchema, not_impl_datafusion_err, not_impl_err, substrait_datafusion_err,
 };
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values, lit};
@@ -50,6 +50,12 @@ pub fn from_table_scan(
     producer: &mut impl SubstraitProducer,
     scan: &TableScan,
 ) -> datafusion::common::Result<Box<Rel>> {
+    if let Some(selector) = scan.source.read_selector() {
+        return not_impl_err!(
+            "Table scans with a read selector are not supported in Substrait: {}@{selector}",
+            scan.table_name
+        );
+    }
     let skip = scan.skip.map(i64::try_from).transpose().map_err(|_| {
         not_impl_datafusion_err!("TableScan offset exceeds the supported Int64 range")
     })?;

@@ -11,8 +11,8 @@ use crate::TableProvider;
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::Column;
 use datafusion_common::error::Result;
+use datafusion_common::{Column, TableReadSelector};
 use datafusion_expr::TableType;
 use datafusion_expr::{Expr, LogicalPlan};
 use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
@@ -28,6 +28,7 @@ pub struct ViewTable {
     table_schema: SchemaRef,
     /// SQL used to create the view, if available
     definition: Option<String>,
+    read_selector: Option<TableReadSelector>,
 }
 
 impl ViewTable {
@@ -44,7 +45,22 @@ impl ViewTable {
             logical_plan,
             table_schema,
             definition,
+            read_selector: None,
         }
+    }
+
+    /// Sets the [`TableReadSelector`] reported by
+    /// [`TableProvider::read_selector`], which identifies which read of the
+    /// table this provider performs, such as a version of the table.
+    ///
+    /// This only labels the provider, it does not change the data it reads:
+    /// the provider must already be set up for that read.
+    pub fn with_read_selector(
+        mut self,
+        read_selector: Option<TableReadSelector>,
+    ) -> Self {
+        self.read_selector = read_selector;
+        self
     }
 
     /// Get definition ref
@@ -70,6 +86,10 @@ impl TableProvider for ViewTable {
 
     fn table_type(&self) -> TableType {
         TableType::View
+    }
+
+    fn read_selector(&self) -> Option<&TableReadSelector> {
+        self.read_selector.as_ref()
     }
 
     fn get_table_definition(&self) -> Option<&str> {

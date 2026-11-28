@@ -8,6 +8,7 @@ use super::{
         BuilderError, DerivedRelationBuilder, QueryBuilder, RelationBuilder,
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
+    dialect::TableVersionStyle,
     rewrite::{
         TableAliasRewriter, inject_column_aliases_into_subquery, normalize_union_schema,
         rewrite_plan_for_sort_on_non_projected_fields,
@@ -30,8 +31,9 @@ use crate::unparser::{
 };
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, Result, ScalarValue, TableReference,
-    assert_or_internal_err, internal_datafusion_err, internal_err, not_impl_err,
+    Column, DFSchema, DataFusionError, Result, ScalarValue, TableReadSelector,
+    TableReference, assert_or_internal_err, internal_datafusion_err, internal_err,
+    not_impl_err,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion},
     utils::combine_limit,
 };
@@ -869,6 +871,12 @@ impl Unparser<'_> {
                     self.new_ident_quoted_if_needs(scan.table_name.table().to_string()),
                 );
                 builder.name(ast::ObjectName::from(table_parts));
+                builder.version(
+                    scan.source
+                        .read_selector()
+                        .map(|v| self.read_selector_to_sql(v))
+                        .transpose()?,
+                );
                 relation.table(builder);
 
                 Ok(())
@@ -2335,6 +2343,74 @@ impl Unparser<'_> {
         flatten.outer(unnest.options.preserve_nulls());
 
         Ok(Some(flatten))
+    }
+
+    /// Converts the selector of a table scan to a time travel clause, using
+    /// the syntax of the dialect
+    fn read_selector_to_sql(
+        &self,
+        selector: &TableReadSelector,
+    ) -> Result<ast::TableVersion> {
+        let (name, value) = match selector {
+            TableReadSelector::AsOfVersion(value) => ("VERSION", value.clone()),
+            TableReadSelector::AsOfTimestamp(ns) => (
+                "TIMESTAMP",
+                ScalarValue::TimestampNanosecond(Some(*ns), Some("UTC".into())),
+            ),
+            TableReadSelector::Extension(extension) => {
+                return match self
+                    .dialect
+                    .read_selector_extension_to_sql(self, extension.as_ref())?
+                {
+                    Some(version) => Ok(version),
+                    None => not_impl_err!(
+                        "This dialect does not support table read selector {selector}"
+                    ),
+                };
+            }
+        };
+        let value = self.expr_to_sql(&Expr::Literal(value, None))?;
+        Ok(match (self.dialect.table_version_style(), selector) {
+            (TableVersionStyle::At, _) => {
+                ast::TableVersion::Function(ast::Expr::Function(ast::Function {
+                    name: ast::ObjectName::from(vec![Ident::new("AT")]),
+                    uses_odbc_syntax: false,
+                    parameters: ast::FunctionArguments::None,
+                    args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                        duplicate_treatment: None,
+                        args: vec![ast::FunctionArg::Named {
+                            name: Ident::new(name),
+                            arg: ast::FunctionArgExpr::Expr(value),
+                            operator: ast::FunctionArgOperator::RightArrow,
+                        }],
+                        clauses: vec![],
+                    }),
+                    filter: None,
+                    null_treatment: None,
+                    over: None,
+                    within_group: vec![],
+                }))
+            }
+            (TableVersionStyle::AsOf, TableReadSelector::AsOfVersion(_)) => {
+                ast::TableVersion::VersionAsOf(value)
+            }
+            (TableVersionStyle::AsOf, TableReadSelector::AsOfTimestamp(_)) => {
+                ast::TableVersion::TimestampAsOf(value)
+            }
+            (TableVersionStyle::ForSystemTime, TableReadSelector::AsOfTimestamp(_)) => {
+                ast::TableVersion::ForSystemTimeAsOf(value)
+            }
+            (TableVersionStyle::ForSystemTime, TableReadSelector::AsOfVersion(_)) => {
+                return not_impl_err!(
+                    "This dialect does not support time travel to version {selector}"
+                );
+            }
+            (_, TableReadSelector::Extension(_)) => {
+                return internal_err!(
+                    "Table read selector extensions are unparsed by the dialect"
+                );
+            }
+        })
     }
 
     fn is_scan_with_pushdown(scan: &TableScan) -> bool {

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::*;
 use async_trait::async_trait;
-use datafusion_common::{Result, project_schema};
+use datafusion_common::{Result, TableReadSelector, project_schema};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
@@ -22,6 +22,7 @@ use crate::TableProvider;
 pub struct EmptyTable {
     schema: SchemaRef,
     partitions: usize,
+    read_selector: Option<TableReadSelector>,
 }
 
 impl EmptyTable {
@@ -30,7 +31,22 @@ impl EmptyTable {
         Self {
             schema,
             partitions: 1,
+            read_selector: None,
         }
+    }
+
+    /// Sets the [`TableReadSelector`] reported by
+    /// [`TableProvider::read_selector`], which identifies which read of the
+    /// table this provider performs, such as a version of the table.
+    ///
+    /// This only labels the provider, it does not change the data it reads:
+    /// the provider must already be set up for that read.
+    pub fn with_read_selector(
+        mut self,
+        read_selector: Option<TableReadSelector>,
+    ) -> Self {
+        self.read_selector = read_selector;
+        self
     }
 
     /// Creates a new EmptyTable with specified partition number.
@@ -48,6 +64,10 @@ impl TableProvider for EmptyTable {
 
     fn table_type(&self) -> TableType {
         TableType::Base
+    }
+
+    fn read_selector(&self) -> Option<&TableReadSelector> {
+        self.read_selector.as_ref()
     }
 
     async fn scan(

@@ -6217,3 +6217,16 @@ fn test_reserved_column_name_explain_copy() {
         "Error during planning: __common_expr_1 is a reserved DataFusion column name, please use another name"
     );
 }
+
+// A source that does not report the selector it reads is rejected. With a
+// `SessionState`, the catalog's table provider is checked before planning
+// instead, see `time_travel.slt`.
+#[test]
+fn test_time_travel_source_must_report_read_selector() {
+    let err = logical_plan_with_dialect(
+        "SELECT * FROM person VERSION AS OF 3",
+        &DatabricksDialect {},
+    )
+    .unwrap_err();
+    assert_snapshot!(err.strip_backtrace(), @"Error during planning: The source of table 'person@3' must report the selector it reads");
+}

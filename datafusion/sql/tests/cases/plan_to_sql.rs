@@ -2,12 +2,12 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference,
-    assert_contains,
+    Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    TableReadSelector, TableReadSelectorExtension, TableReference, assert_contains,
 };
 use datafusion_expr::expr::{Alias, WindowFunction, WindowFunctionParams};
 use datafusion_expr::test::function_stub::{
@@ -15,10 +15,10 @@ use datafusion_expr::test::function_stub::{
 };
 use datafusion_expr::{
     ColumnarValue, EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
-    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScanBuilder, Union,
-    UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility, WindowFrame,
-    WindowFunctionDefinition, cast, col, exists, in_subquery, lit, scalar_subquery,
-    table_scan, wildcard,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScanBuilder,
+    TableSource, Union, UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility,
+    WindowFrame, WindowFunctionDefinition, cast, col, exists, in_subquery, lit,
+    scalar_subquery, table_scan, wildcard,
 };
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
@@ -31,10 +31,11 @@ use datafusion_sql::unparser::dialect::{
     BigQueryDialect, CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect,
     DefaultDialect, Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect,
     PostgreSqlDialect as UnparserPostgreSqlDialect, SnowflakeDialect, SqliteDialect,
+    TableVersionStyle,
 };
 use datafusion_sql::unparser::{Unparser, expr_to_sql, plan_to_sql};
 use insta::assert_snapshot;
-use sqlparser::ast::Statement;
+use sqlparser::ast::{self, Statement};
 use std::hash::Hash;
 use std::ops::Add;
 use std::sync::Arc;
@@ -1819,6 +1820,163 @@ fn test_table_scan_alias() -> Result<()> {
         @"SELECT a.id FROM (SELECT a.id, a.age FROM t1 AS a WHERE (a.id > 1) LIMIT 10) AS a"
     );
     Ok(())
+}
+
+#[test]
+fn test_table_scan_version_to_sql() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+    /// A source that reads a specific version of a table
+    struct VersionedSource {
+        schema: SchemaRef,
+        selector: TableReadSelector,
+    }
+
+    impl TableSource for VersionedSource {
+        fn schema(&self) -> SchemaRef {
+            Arc::clone(&self.schema)
+        }
+
+        fn read_selector(&self) -> Option<&TableReadSelector> {
+            Some(&self.selector)
+        }
+    }
+
+    let scan = |selector: TableReadSelector, filters: Vec<Expr>| -> Result<LogicalPlan> {
+        let source = Arc::new(VersionedSource {
+            schema: Arc::new(schema.clone()),
+            selector,
+        });
+        Ok(LogicalPlan::TableScan(
+            TableScanBuilder::new("t1", source)
+                .with_filters(filters)
+                .build()?,
+        ))
+    };
+    let version = TableReadSelector::AsOfVersion(ScalarValue::Int64(Some(3)));
+    let tag = TableReadSelector::AsOfVersion(ScalarValue::from("v1"));
+    // 2024-01-01T00:00:00Z
+    let timestamp = TableReadSelector::AsOfTimestamp(1_704_067_200_000_000_000);
+
+    let sql = plan_to_sql(&scan(version.clone(), vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 AT(VERSION => 3)");
+    let sql = plan_to_sql(&scan(tag.clone(), vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 AT(VERSION => 'v1')");
+    let sql = plan_to_sql(&scan(timestamp.clone(), vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 AT(TIMESTAMP => CAST('2024-01-01T00:00:00+00:00' AS TIMESTAMP WITH TIME ZONE))");
+
+    // The version is kept when filters are pushed down into the scan
+    let sql = plan_to_sql(&scan(version.clone(), vec![col("id").eq(lit("a"))])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 AT(VERSION => 3) WHERE (t1.id = 'a')");
+
+    let as_of = CustomDialectBuilder::new()
+        .with_table_version_style(TableVersionStyle::AsOf)
+        .build();
+    let unparser = Unparser::new(&as_of);
+    let sql = unparser.plan_to_sql(&scan(version.clone(), vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 VERSION AS OF 3");
+    let sql = unparser.plan_to_sql(&scan(timestamp.clone(), vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 TIMESTAMP AS OF CAST('2024-01-01T00:00:00+00:00' AS TIMESTAMP WITH TIME ZONE)");
+
+    let big_query = BigQueryDialect {};
+    let unparser = Unparser::new(&big_query);
+    let sql = unparser.plan_to_sql(&scan(timestamp, vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM `t1` FOR SYSTEM_TIME AS OF CAST('2024-01-01T00:00:00+00:00' AS TIMESTAMP)");
+    let err = unparser
+        .plan_to_sql(&scan(version, vec![])?)
+        .unwrap_err()
+        .strip_backtrace();
+    assert_snapshot!(err, @"This feature is not implemented: This dialect does not support time travel to version 3");
+
+    // Extensions are unparsed by the dialect
+    let before =
+        TableReadSelector::Extension(Arc::new(BeforeStatement("q1".to_string())));
+    let unparser = Unparser::new(&BeforeStatementDialect {});
+    let sql = unparser.plan_to_sql(&scan(before.clone(), vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 BEFORE(STATEMENT => 'q1')");
+    let err = plan_to_sql(&scan(before, vec![])?)
+        .unwrap_err()
+        .strip_backtrace();
+    assert_snapshot!(err, @r#"This feature is not implemented: This dialect does not support table read selector before statement "q1""#);
+
+    Ok(())
+}
+
+/// A table read selector for the state of a table before a statement was executed
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
+struct BeforeStatement(String);
+
+impl fmt::Display for BeforeStatement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "before statement {:?}", self.0)
+    }
+}
+
+impl TableReadSelectorExtension for BeforeStatement {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn dyn_eq(&self, other: &dyn TableReadSelectorExtension) -> bool {
+        other.as_any().downcast_ref::<Self>() == Some(self)
+    }
+
+    fn dyn_hash(&self, mut state: &mut dyn std::hash::Hasher) {
+        self.hash(&mut state)
+    }
+
+    fn dyn_ord(
+        &self,
+        other: &dyn TableReadSelectorExtension,
+    ) -> Option<std::cmp::Ordering> {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .and_then(|other| self.partial_cmp(other))
+    }
+}
+
+/// A dialect that unparses [`BeforeStatement`] to Snowflake's
+/// `BEFORE (STATEMENT => ...)` clause
+struct BeforeStatementDialect {}
+
+impl UnparserDialect for BeforeStatementDialect {
+    fn identifier_quote_style(&self, _identifier: &str) -> Option<char> {
+        None
+    }
+
+    fn read_selector_extension_to_sql(
+        &self,
+        unparser: &Unparser,
+        selector: &dyn TableReadSelectorExtension,
+    ) -> Result<Option<ast::TableVersion>> {
+        let Some(BeforeStatement(statement)) = selector.as_any().downcast_ref() else {
+            return Ok(None);
+        };
+        let statement = unparser.expr_to_sql(&lit(statement.as_str()))?;
+        Ok(Some(ast::TableVersion::Function(ast::Expr::Function(
+            ast::Function {
+                name: ast::ObjectName::from(vec![ast::Ident::new("BEFORE")]),
+                uses_odbc_syntax: false,
+                parameters: ast::FunctionArguments::None,
+                args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                    duplicate_treatment: None,
+                    args: vec![ast::FunctionArg::Named {
+                        name: ast::Ident::new("STATEMENT"),
+                        arg: ast::FunctionArgExpr::Expr(statement),
+                        operator: ast::FunctionArgOperator::RightArrow,
+                    }],
+                    clauses: vec![],
+                }),
+                filter: None,
+                null_treatment: None,
+                over: None,
+                within_group: vec![],
+            },
+        ))))
+    }
 }
 
 #[test]

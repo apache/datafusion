@@ -5728,6 +5728,9 @@ impl serde::Serialize for CustomTableScanNode {
         if self.skip.is_some() {
             len += 1;
         }
+        if self.read_selector.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CustomTableScanNode", len)?;
         if let Some(v) = self.table_name.as_ref() {
             struct_ser.serialize_field("tableName", v)?;
@@ -5756,6 +5759,9 @@ impl serde::Serialize for CustomTableScanNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("skip", ToString::to_string(&v).as_str())?;
         }
+        if let Some(v) = self.read_selector.as_ref() {
+            struct_ser.serialize_field("readSelector", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -5775,6 +5781,8 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
             "customTableData",
             "fetch",
             "skip",
+            "read_selector",
+            "readSelector",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5786,6 +5794,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
             CustomTableData,
             Fetch,
             Skip,
+            ReadSelector,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5814,6 +5823,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                             "customTableData" | "custom_table_data" => Ok(GeneratedField::CustomTableData),
                             "fetch" => Ok(GeneratedField::Fetch),
                             "skip" => Ok(GeneratedField::Skip),
+                            "readSelector" | "read_selector" => Ok(GeneratedField::ReadSelector),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5840,6 +5850,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                 let mut custom_table_data__ = None;
                 let mut fetch__ = None;
                 let mut skip__ = None;
+                let mut read_selector__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::TableName => {
@@ -5890,6 +5901,12 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::ReadSelector => {
+                            if read_selector__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("readSelector"));
+                            }
+                            read_selector__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(CustomTableScanNode {
@@ -5900,6 +5917,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                     custom_table_data: custom_table_data__.unwrap_or_default(),
                     fetch: fetch__,
                     skip: skip__,
+                    read_selector: read_selector__,
                 })
             }
         }
@@ -6831,6 +6849,9 @@ impl serde::Serialize for EmptyTableScanNode {
         if !self.filters.is_empty() {
             len += 1;
         }
+        if self.read_selector.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.EmptyTableScanNode", len)?;
         if let Some(v) = self.table_name.as_ref() {
             struct_ser.serialize_field("tableName", v)?;
@@ -6843,6 +6864,9 @@ impl serde::Serialize for EmptyTableScanNode {
         }
         if !self.filters.is_empty() {
             struct_ser.serialize_field("filters", &self.filters)?;
+        }
+        if let Some(v) = self.read_selector.as_ref() {
+            struct_ser.serialize_field("readSelector", v)?;
         }
         struct_ser.end()
     }
@@ -6859,6 +6883,8 @@ impl<'de> serde::Deserialize<'de> for EmptyTableScanNode {
             "schema",
             "projection",
             "filters",
+            "read_selector",
+            "readSelector",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6867,6 +6893,7 @@ impl<'de> serde::Deserialize<'de> for EmptyTableScanNode {
             Schema,
             Projection,
             Filters,
+            ReadSelector,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6892,6 +6919,7 @@ impl<'de> serde::Deserialize<'de> for EmptyTableScanNode {
                             "schema" => Ok(GeneratedField::Schema),
                             "projection" => Ok(GeneratedField::Projection),
                             "filters" => Ok(GeneratedField::Filters),
+                            "readSelector" | "read_selector" => Ok(GeneratedField::ReadSelector),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6915,6 +6943,7 @@ impl<'de> serde::Deserialize<'de> for EmptyTableScanNode {
                 let mut schema__ = None;
                 let mut projection__ = None;
                 let mut filters__ = None;
+                let mut read_selector__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::TableName => {
@@ -6941,6 +6970,12 @@ impl<'de> serde::Deserialize<'de> for EmptyTableScanNode {
                             }
                             filters__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::ReadSelector => {
+                            if read_selector__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("readSelector"));
+                            }
+                            read_selector__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(EmptyTableScanNode {
@@ -6948,6 +6983,7 @@ impl<'de> serde::Deserialize<'de> for EmptyTableScanNode {
                     schema: schema__,
                     projection: projection__,
                     filters: filters__.unwrap_or_default(),
+                    read_selector: read_selector__,
                 })
             }
         }
@@ -13228,6 +13264,9 @@ impl serde::Serialize for ListingTableScanNode {
         if self.skip.is_some() {
             len += 1;
         }
+        if self.read_selector.is_some() {
+            len += 1;
+        }
         if self.file_format_type.is_some() {
             len += 1;
         }
@@ -13265,6 +13304,9 @@ impl serde::Serialize for ListingTableScanNode {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("skip", ToString::to_string(&v).as_str())?;
+        }
+        if let Some(v) = self.read_selector.as_ref() {
+            struct_ser.serialize_field("readSelector", v)?;
         }
         if let Some(v) = self.file_format_type.as_ref() {
             match v {
@@ -13309,6 +13351,8 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             "fileSortOrder",
             "fetch",
             "skip",
+            "read_selector",
+            "readSelector",
             "csv",
             "parquet",
             "avro",
@@ -13328,6 +13372,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             FileSortOrder,
             Fetch,
             Skip,
+            ReadSelector,
             Csv,
             Parquet,
             Avro,
@@ -13364,6 +13409,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                             "fileSortOrder" | "file_sort_order" => Ok(GeneratedField::FileSortOrder),
                             "fetch" => Ok(GeneratedField::Fetch),
                             "skip" => Ok(GeneratedField::Skip),
+                            "readSelector" | "read_selector" => Ok(GeneratedField::ReadSelector),
                             "csv" => Ok(GeneratedField::Csv),
                             "parquet" => Ok(GeneratedField::Parquet),
                             "avro" => Ok(GeneratedField::Avro),
@@ -13398,6 +13444,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                 let mut file_sort_order__ = None;
                 let mut fetch__ = None;
                 let mut skip__ = None;
+                let mut read_selector__ = None;
                 let mut file_format_type__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -13465,6 +13512,12 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::ReadSelector => {
+                            if read_selector__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("readSelector"));
+                            }
+                            read_selector__ = map_.next_value()?;
+                        }
                         GeneratedField::Csv => {
                             if file_format_type__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("csv"));
@@ -13513,6 +13566,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                     file_sort_order: file_sort_order__.unwrap_or_default(),
                     fetch: fetch__,
                     skip: skip__,
+                    read_selector: read_selector__,
                     file_format_type: file_format_type__,
                 })
             }
@@ -28824,6 +28878,132 @@ impl<'de> serde::Deserialize<'de> for SymmetricHashJoinExecNode {
         deserializer.deserialize_struct("datafusion.SymmetricHashJoinExecNode", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for TableReadSelector {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if self.table_read_selector_enum.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("datafusion.TableReadSelector", len)?;
+        if let Some(v) = self.table_read_selector_enum.as_ref() {
+            match v {
+                table_read_selector::TableReadSelectorEnum::AsOfVersion(v) => {
+                    struct_ser.serialize_field("asOfVersion", v)?;
+                }
+                table_read_selector::TableReadSelectorEnum::AsOfTimestamp(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("asOfTimestamp", ToString::to_string(&v).as_str())?;
+                }
+                table_read_selector::TableReadSelectorEnum::Extension(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("extension", pbjson::private::base64::encode(&v).as_str())?;
+                }
+            }
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for TableReadSelector {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "as_of_version",
+            "asOfVersion",
+            "as_of_timestamp",
+            "asOfTimestamp",
+            "extension",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            AsOfVersion,
+            AsOfTimestamp,
+            Extension,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl serde::de::Visitor<'_> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "asOfVersion" | "as_of_version" => Ok(GeneratedField::AsOfVersion),
+                            "asOfTimestamp" | "as_of_timestamp" => Ok(GeneratedField::AsOfTimestamp),
+                            "extension" => Ok(GeneratedField::Extension),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = TableReadSelector;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct datafusion.TableReadSelector")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<TableReadSelector, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut table_read_selector_enum__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::AsOfVersion => {
+                            if table_read_selector_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("asOfVersion"));
+                            }
+                            table_read_selector_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(table_read_selector::TableReadSelectorEnum::AsOfVersion)
+;
+                        }
+                        GeneratedField::AsOfTimestamp => {
+                            if table_read_selector_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("asOfTimestamp"));
+                            }
+                            table_read_selector_enum__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| table_read_selector::TableReadSelectorEnum::AsOfTimestamp(x.0));
+                        }
+                        GeneratedField::Extension => {
+                            if table_read_selector_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("extension"));
+                            }
+                            table_read_selector_enum__ = map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| table_read_selector::TableReadSelectorEnum::Extension(x.0));
+                        }
+                    }
+                }
+                Ok(TableReadSelector {
+                    table_read_selector_enum: table_read_selector_enum__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("datafusion.TableReadSelector", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for TableReference {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -30167,6 +30347,9 @@ impl serde::Serialize for ViewTableScanNode {
         if self.skip.is_some() {
             len += 1;
         }
+        if self.read_selector.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.ViewTableScanNode", len)?;
         if let Some(v) = self.table_name.as_ref() {
             struct_ser.serialize_field("tableName", v)?;
@@ -30193,6 +30376,9 @@ impl serde::Serialize for ViewTableScanNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("skip", ToString::to_string(&v).as_str())?;
         }
+        if let Some(v) = self.read_selector.as_ref() {
+            struct_ser.serialize_field("readSelector", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -30211,6 +30397,8 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
             "definition",
             "fetch",
             "skip",
+            "read_selector",
+            "readSelector",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -30222,6 +30410,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
             Definition,
             Fetch,
             Skip,
+            ReadSelector,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -30250,6 +30439,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                             "definition" => Ok(GeneratedField::Definition),
                             "fetch" => Ok(GeneratedField::Fetch),
                             "skip" => Ok(GeneratedField::Skip),
+                            "readSelector" | "read_selector" => Ok(GeneratedField::ReadSelector),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -30276,6 +30466,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                 let mut definition__ = None;
                 let mut fetch__ = None;
                 let mut skip__ = None;
+                let mut read_selector__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::TableName => {
@@ -30324,6 +30515,12 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::ReadSelector => {
+                            if read_selector__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("readSelector"));
+                            }
+                            read_selector__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ViewTableScanNode {
@@ -30334,6 +30531,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                     definition: definition__.unwrap_or_default(),
                     fetch: fetch__,
                     skip: skip__,
+                    read_selector: read_selector__,
                 })
             }
         }

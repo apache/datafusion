@@ -5,20 +5,23 @@
 //! Tests for the RelationPlanner extension point
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use arrow::array::{Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::memory::MemTable;
 use datafusion::common::test_util::batches_to_string;
 use datafusion::prelude::*;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{DFSchema, Result, ScalarValue};
 use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::planner::{
     PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
 };
-use datafusion_sql::sqlparser::ast::{TableAlias, TableFactor};
+use datafusion_sql::sqlparser::ast::{TableAlias, TableFactor, TableVersion};
 use insta::assert_snapshot;
+
+use super::table_read_selector_planner::register_counting_schema;
 
 // ============================================================================
 // Test Planners - Example Implementations
@@ -366,6 +369,45 @@ fn create_context_with_simple_table(
 // TESTS: Ordered from Basic to Complex
 // ============================================================================
 
+/// Example planner that implements time travel itself, for tables whose
+/// catalog does not support [`SchemaProvider::table_with_read_selector`]. It
+/// emulates version `n` of a table by only returning the rows with an `id` of
+/// at most `n`.
+///
+/// [`SchemaProvider::table_with_read_selector`]: datafusion::catalog::SchemaProvider::table_with_read_selector
+#[derive(Debug)]
+struct EmulatedVersionPlanner;
+
+impl RelationPlanner for EmulatedVersionPlanner {
+    fn plan_relation(
+        &self,
+        relation: TableFactor,
+        context: &mut dyn RelationPlannerContext,
+    ) -> Result<RelationPlanning> {
+        let TableFactor::Table {
+            name,
+            alias,
+            args: None,
+            version: Some(TableVersion::VersionAsOf(version)),
+            ..
+        } = relation
+        else {
+            return Ok(RelationPlanning::Original(Box::new(relation)));
+        };
+        let table_ref = context.object_name_to_table_reference(name)?;
+        let version = context.sql_to_expr(version, &DFSchema::empty())?;
+        let source = context
+            .context_provider()
+            .get_table_source(table_ref.clone())?;
+        let plan = LogicalPlanBuilder::scan(table_ref, source, None)?
+            .filter(col("id").lt_eq(version))?
+            .build()?;
+        Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+            plan, alias,
+        ))))
+    }
+}
+
 /// Comprehensive test suite for RelationPlanner extension point.
 /// Tests are ordered from simplest smoke test to most complex scenarios.
 #[cfg(test)]
@@ -702,6 +744,85 @@ mod tests {
             error_msg.contains("premium feature") && error_msg.contains("DataFusion Pro"),
             "Expected custom rejection message, got: {error_msg}"
         );
+    }
+
+    // A RelationPlanner can handle time travel clauses itself, for tables
+    // whose catalog does not support time travel.
+    #[tokio::test]
+    async fn planner_handles_time_travel() {
+        let ctx =
+            create_context_with_catalog_table("t", vec![1, 2, 3], vec!["a", "b", "c"])
+                .with_planner(EmulatedVersionPlanner);
+        ctx.sql("SET datafusion.sql_parser.dialect = 'Databricks'")
+            .await
+            .unwrap();
+
+        let result =
+            execute_sql_to_string(&ctx, "SELECT * FROM t VERSION AS OF 2 ORDER BY id")
+                .await;
+        assert_snapshot!(result, @r"
+        +----+------+
+        | id | name |
+        +----+------+
+        | 1  | a    |
+        | 2  | b    |
+        +----+------+
+        ");
+
+        // Without the planner, the catalog's lack of time travel support is
+        // reported
+        let ctx =
+            create_context_with_catalog_table("t", vec![1, 2, 3], vec!["a", "b", "c"]);
+        ctx.sql("SET datafusion.sql_parser.dialect = 'Databricks'")
+            .await
+            .unwrap();
+        let error = execute_sql(&ctx, "SELECT * FROM t VERSION AS OF 2")
+            .await
+            .expect_err("time travel should not be supported");
+        assert_snapshot!(error.strip_backtrace(), @"This feature is not implemented: Table read selectors are not supported for table 't@2'");
+    }
+
+    // The current version of a table referenced with a time travel clause is
+    // only fetched when a RelationPlanner may handle the time travel clause
+    // itself, whether or not the catalog implements `table_with_read_selector`.
+    #[tokio::test]
+    async fn time_travel_fetches_current_version_only_for_relation_planners() {
+        for (supports_time_travel, with_planner) in
+            [(true, false), (true, true), (false, false), (false, true)]
+        {
+            let case = format!(
+                "supports_time_travel={supports_time_travel}, with_planner={with_planner}"
+            );
+            let mut ctx =
+                create_context_with_catalog_table("unused", vec![1, 2], vec!["a", "b"]);
+            if with_planner {
+                ctx = ctx.with_planner(EmulatedVersionPlanner);
+            }
+            ctx.sql("SET datafusion.sql_parser.dialect = 'Databricks'")
+                .await
+                .unwrap();
+            let schema = register_counting_schema(&ctx, supports_time_travel).await;
+
+            let result =
+                execute_sql(&ctx, "SELECT * FROM counting.t VERSION AS OF 1").await;
+            // Planned by the planner if registered, and by DataFusion
+            // otherwise
+            assert_eq!(
+                result.is_ok(),
+                supports_time_travel || with_planner,
+                "{case}: {result:?}"
+            );
+            assert_eq!(
+                schema.table_calls.load(Ordering::SeqCst),
+                usize::from(with_planner),
+                "{case}"
+            );
+            assert_eq!(
+                schema.table_with_read_selector_calls.load(Ordering::SeqCst),
+                1,
+                "{case}"
+            );
+        }
     }
 
     // SamplingJoinPlanner recursively calls `context.plan()` on both sides of a

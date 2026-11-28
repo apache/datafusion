@@ -11,7 +11,8 @@
 use datafusion_common::DataFusionError;
 use datafusion_common::display::{PlanType, StringifiedPlan};
 use datafusion_common::{
-    JoinConstraint, JoinType, NullEquality, TableReference, UnnestOptions,
+    JoinConstraint, JoinType, NullEquality, TableReadSelector, TableReference,
+    UnnestOptions,
 };
 
 use crate::generated::datafusion_common::EmptyMessage;
@@ -111,6 +112,30 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
             },
             plan: stringified_plan.plan.to_string(),
         }
+    }
+}
+
+impl TryFrom<&TableReadSelector> for protobuf::TableReadSelector {
+    type Error = datafusion_proto_common::ToProtoError;
+
+    fn try_from(selector: &TableReadSelector) -> Result<Self, Self::Error> {
+        use protobuf::table_read_selector::TableReadSelectorEnum;
+        let table_read_selector_enum = match selector {
+            TableReadSelector::AsOfVersion(value) => {
+                TableReadSelectorEnum::AsOfVersion(value.try_into()?)
+            }
+            TableReadSelector::AsOfTimestamp(ns) => {
+                TableReadSelectorEnum::AsOfTimestamp(*ns)
+            }
+            TableReadSelector::Extension(extension) => {
+                return Err(datafusion_proto_common::ToProtoError::General(format!(
+                    "Table read selector {extension} must be encoded with a LogicalExtensionCodec"
+                )));
+            }
+        };
+        Ok(protobuf::TableReadSelector {
+            table_read_selector_enum: Some(table_read_selector_enum),
+        })
     }
 }
 

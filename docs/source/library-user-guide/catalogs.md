@@ -203,6 +203,104 @@ impl SchemaProvider for Schema {
 }
 ```
 
+### Table read selectors and time travel
+
+A [`TableReadSelector`] specifies which read of a table to perform. For example, time
+travel queries such as `SELECT * FROM t VERSION AS OF 3` or
+`SELECT * FROM t TIMESTAMP AS OF '2024-01-01'` read a table as it existed at an
+earlier version or point in time. DataFusion evaluates the expression of the
+time travel clause during planning and passes the resulting `TableReadSelector` to
+`SchemaProvider::table_with_read_selector`. A `TableReadSelector` is one of:
+
+- an `AsOfVersion`, holding any `ScalarValue` such as a snapshot id, a tag, a branch
+  name or a commit hash,
+- an `AsOfTimestamp` in nanoseconds since the Unix epoch (UTC), or
+- an `Extension`, for reads that are specific to a catalog or engine, such as
+  the changes between two versions. See `TableReadSelectorExtension`.
+
+An `AsOfTimestamp` selects the latest state committed at or before that time, so
+a commit made exactly at that time is included.
+
+A selector determines which data is read, not how it is read: hints about how
+to scan a table do not belong in a selector. The schema of the table may differ
+between selectors, for example after the schema of the table evolved.
+
+The default implementation of `table_with_read_selector` returns a "not implemented" error.
+Schema providers that support table read selectors return a table provider that
+performs the requested read.
+
+The returned provider must report the selector it reads from
+`TableProvider::read_selector`. This may differ from the requested selector: a tag
+or a timestamp typically resolves to a snapshot id. The built-in providers, such
+as `ListingTable` and `MemTable`, report the selector set with `with_read_selector`:
+
+```rust
+# use async_trait::async_trait;
+# use std::sync::Arc;
+# use arrow::datatypes::DataType;
+# use datafusion::catalog::{MemTable, TableProvider, SchemaProvider};
+# use datafusion::common::{not_impl_err, Result, ScalarValue, TableReadSelector};
+#
+# #[derive(Debug)]
+# struct Schema {}
+#
+# impl Schema {
+#     fn snapshot(&self, _name: &str, _id: i64) -> Result<Option<MemTable>> { todo!() }
+#     fn latest_snapshot_at(&self, _nanos: i64) -> Result<i64> { todo!() }
+# }
+#
+#[async_trait]
+impl SchemaProvider for Schema {
+    async fn table_with_read_selector(
+        &self,
+        name: &str,
+        selector: &TableReadSelector,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        // Resolve the requested selector to a snapshot id
+        let id = match selector {
+            TableReadSelector::AsOfVersion(value) => {
+                i64::try_from(value.cast_to(&DataType::Int64)?)?
+            }
+            TableReadSelector::AsOfTimestamp(nanos) => self.latest_snapshot_at(*nanos)?,
+            _ => return not_impl_err!("Unsupported table read selector {selector}"),
+        };
+        let Some(table) = self.snapshot(name, id)? else {
+            return Ok(None);
+        };
+        // Report the snapshot that is read
+        let table =
+            table.with_read_selector(Some(TableReadSelector::AsOfVersion(ScalarValue::from(id))));
+        Ok(Some(Arc::new(table)))
+    }
+
+#    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> { todo!() }
+#    fn table_names(&self) -> Vec<std::string::String> { todo!() }
+#    fn table_exist(&self, _: &str) -> bool { todo!() }
+}
+```
+
+EXPLAIN shows the selector that each table scan reads. Scans of the same table
+with equal selectors are assumed to read the same data, and compare equal
+however the selector was requested:
+
+```text
+TableScan: t@3 projection=[id, name]
+```
+
+Providers returned by `SchemaProvider::table` may also report a selector, such
+as the id of the current snapshot, to identify the state of the table they
+read.
+
+SQL syntax other than time travel clauses can be mapped to a `TableReadSelector` by
+implementing a `TableReadSelectorPlanner`, registered with
+`SessionContext::register_table_read_selector_planner`.
+Plans with a `TableReadSelector::Extension` are serialized with
+`LogicalExtensionCodec::try_encode_read_selector` and
+`try_decode_read_selector`, and unparsed to SQL with
+`Dialect::read_selector_extension_to_sql`.
+
+[`tablereadselector`]: https://docs.rs/datafusion/latest/datafusion/common/enum.TableReadSelector.html
+
 ## Implementing `MemoryCatalogProvider`
 
 As mentioned, the `CatalogProvider` can manage the schemas in a catalog, and the `MemoryCatalogProvider` is a simple implementation of the `CatalogProvider` trait. It stores schemas in a `DashMap`. With that the `CatalogProvider` trait can be implemented.
