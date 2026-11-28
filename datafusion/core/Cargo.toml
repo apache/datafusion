@@ -268,6 +268,11 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
+name = "integer_statistics_ordering"
+required-features = ["parquet"]
+
+[[bench]]
+harness = false
 name = "parquet_struct_query"
 required-features = ["parquet"]
 
