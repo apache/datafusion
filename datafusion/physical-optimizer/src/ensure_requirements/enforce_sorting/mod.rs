@@ -207,6 +207,26 @@ pub fn replace_with_partial_sort(
     {
         common_prefix_length += 1;
     }
+    if common_prefix_length == sort_exprs.len() {
+        let fetch = sort_plan.fetch();
+        if sort_plan.preserve_partitioning() {
+            return Ok(match fetch {
+                Some(fetch) => Arc::new(LocalLimitExec::new(child, fetch)),
+                None => child,
+            });
+        }
+
+        if child.output_partitioning().partition_count() <= 1 {
+            return Ok(match fetch {
+                Some(fetch) => Arc::new(LocalLimitExec::new(child, fetch)),
+                None => child,
+            });
+        }
+
+        return Ok(Arc::new(
+            SortPreservingMergeExec::new(sort_exprs, child).with_fetch(fetch),
+        ));
+    }
     if common_prefix_length > 0 {
         return Ok(Arc::new(
             PartialSortExec::new(
@@ -489,27 +509,29 @@ fn analyze_immediate_sort_removal(
             return Ok(Transformed::no(node));
         }
     }
-    node.plan = if !sort_exec.preserve_partitioning()
+    if !sort_exec.preserve_partitioning()
         && sort_input.output_partitioning().partition_count() > 1
     {
         // Replace the sort with a sort-preserving merge:
-        Arc::new(
+        node.plan = Arc::new(
             SortPreservingMergeExec::new(
                 sort_exec.expr().clone(),
                 Arc::clone(sort_input),
             )
             .with_fetch(sort_exec.fetch()),
-        ) as _
+        ) as _;
     } else {
         // Remove the sort, keeping its fetch as a limit:
-        node.children = node.children.swap_remove(0).children;
         match sort_exec.fetch() {
             Some(fetch) => {
-                limit_node(Arc::clone(sort_input), RowBound::fetch(Some(fetch)))
+                node.plan =
+                    limit_node(Arc::clone(sort_input), RowBound::fetch(Some(fetch)));
+                // Keep the child plan itself in the context tree. Its own
+                // children are not direct inputs to the new limit node.
             }
-            None => Arc::clone(sort_input),
+            None => return Ok(Transformed::yes(node.children.swap_remove(0))),
         }
-    };
+    }
     for child in node.children.iter_mut() {
         child.data = false;
     }

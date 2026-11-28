@@ -32,7 +32,10 @@ use crate::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{Constraint, Constraints, HashMap, HashSet, Result, plan_err};
+use datafusion_common::{
+    Constraint, Constraints, Dependency, FunctionalDependence, FunctionalDependencies,
+    HashMap, HashSet, Result, plan_err,
+};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::physical_expr::is_volatile;
@@ -49,6 +52,7 @@ use itertools::{Either, Itertools};
 /// - Equivalent expressions; i.e. expressions known to have the same value.
 /// - Constants expressions; i.e. expressions known to contain a single constant
 ///   value.
+/// - Functional dependencies between columns.
 ///
 /// Please see the [Using Ordering for Better Plans] blog for more details.
 ///
@@ -65,6 +69,7 @@ use itertools::{Either, Itertools};
 /// | Orderings              | `[a ASC, b DESC]` after a sort            | An [`OrderingEquivalenceClass`]                                     |
 /// | Groupings              | `[a, b]` declared by a custom data source | A [`GroupingEquivalenceClass`]                                      |
 /// | Constraints            | A primary key or unique constraint        | [`Constraints`]                                                     |
+/// | Functional dependencies| `a` determines `b`                       | [`FunctionalDependencies`]                                          |
 ///
 /// [`EquivalenceClass`]: crate::equivalence::EquivalenceClass
 /// [Required orderings]: #required-orderings
@@ -394,6 +399,9 @@ pub struct EquivalenceProperties {
     /// across all output partitions, since operators that merge partitions
     /// keep them.
     constraints: Constraints,
+    /// Functional dependencies between output columns. These remain useful
+    /// after joins even when their determinant is no longer unique.
+    functional_dependencies: FunctionalDependencies,
     /// Schema associated with this object.
     schema: SchemaRef,
 }
@@ -509,12 +517,17 @@ impl EquivalenceProperties {
             oeq_cache: OrderingEquivalenceCache::default(),
             geq_cache: GroupingEquivalenceClass::default(),
             constraints: Constraints::default(),
+            functional_dependencies: FunctionalDependencies::empty(),
             schema,
         }
     }
 
     /// Adds constraints to the properties.
     pub fn set_constraints(&mut self, constraints: Constraints) {
+        self.functional_dependencies = FunctionalDependencies::new_from_constraints(
+            Some(&constraints),
+            self.schema.fields().len(),
+        );
         self.constraints = constraints;
     }
 
@@ -544,6 +557,7 @@ impl EquivalenceProperties {
             geq_cache: GroupingEquivalenceClass::default(),
             eq_group,
             constraints: Constraints::default(),
+            functional_dependencies: FunctionalDependencies::empty(),
             schema,
         }
     }
@@ -1592,6 +1606,79 @@ impl EquivalenceProperties {
         self.constraints.project(&source_indices)
     }
 
+    /// Projects functional dependencies onto direct column outputs. A
+    /// determinant may be represented by any directly projected member of
+    /// its equivalence class.
+    fn projected_functional_dependencies(
+        &self,
+        mapping: &ProjectionMapping,
+        output_len: usize,
+    ) -> FunctionalDependencies {
+        let mut projected_columns: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (source, targets) in mapping.iter() {
+            let Some(source_column) = source.downcast_ref::<Column>() else {
+                continue;
+            };
+            let mut equivalent_indices = vec![source_column.index()];
+            if let Some(class) = self.eq_group.get_equivalence_class(source) {
+                equivalent_indices.extend(
+                    class.iter().filter_map(|expr| {
+                        expr.downcast_ref::<Column>().map(Column::index)
+                    }),
+                );
+            }
+            equivalent_indices.sort_unstable();
+            equivalent_indices.dedup();
+            for (_, output_index) in targets.iter() {
+                for input_index in &equivalent_indices {
+                    projected_columns
+                        .entry(*input_index)
+                        .or_default()
+                        .push(*output_index);
+                }
+            }
+        }
+
+        let dependencies = self
+            .functional_dependencies
+            .iter()
+            .filter_map(|dependency| {
+                let source_indices = dependency
+                    .source_indices
+                    .iter()
+                    .map(|index| projected_columns.get(index)?.first().copied())
+                    .collect::<Option<Vec<_>>>()?;
+                let mut target_indices = if dependency.mode == Dependency::Single {
+                    (0..output_len).collect()
+                } else {
+                    dependency
+                        .target_indices
+                        .iter()
+                        .flat_map(|index| {
+                            projected_columns.get(index).into_iter().flatten()
+                        })
+                        .copied()
+                        .collect::<Vec<_>>()
+                };
+                target_indices.sort_unstable();
+                target_indices.dedup();
+                if target_indices.is_empty() {
+                    return None;
+                }
+                Some(
+                    FunctionalDependence::new(
+                        source_indices,
+                        target_indices,
+                        dependency.nullable,
+                    )
+                    .with_mode(dependency.mode)
+                    .with_null_equality(dependency.null_equality),
+                )
+            })
+            .collect();
+        FunctionalDependencies::new(dependencies)
+    }
+
     /// Projects these equivalence properties onto `output_schema` according to
     /// `mapping`, returning the properties that still hold for the projected
     /// output.
@@ -1611,7 +1698,8 @@ impl EquivalenceProperties {
     /// - Groupings: a complete grouping tuple is carried only when every
     ///   expression in the tuple can be represented in the output.
     /// - Equivalence group: each class is re-expressed on the output columns.
-    /// - Constraints: projected onto the surviving column indices.
+    /// - Constraints and functional dependencies: projected onto the
+    ///   surviving column indices.
     ///
     /// Expressions and orderings not representable in `output_schema` are
     /// dropped.
@@ -1666,12 +1754,15 @@ impl EquivalenceProperties {
             .iter()
             .cloned()
             .map(|o| eq_group.normalize_sort_exprs(o));
+        let functional_dependencies =
+            self.projected_functional_dependencies(mapping, output_schema.fields().len());
         let mut result = Self {
             oeq_cache: OrderingEquivalenceCache::new(normal_orderings),
             oeq_class: OrderingEquivalenceClass::new(orderings),
             geq_class: GroupingEquivalenceClass::default(),
             geq_cache: GroupingEquivalenceClass::default(),
             constraints: self.projected_constraints(mapping).unwrap_or_default(),
+            functional_dependencies,
             schema: output_schema,
             eq_group,
         };

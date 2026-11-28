@@ -11,7 +11,7 @@ use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 
 use arrow::compute::SortOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{HashSet, Result};
+use datafusion_common::{HashSet, NullEquality, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::sort_expr::options_compatible;
@@ -40,8 +40,8 @@ use itertools::Itertools;
 /// An expression is *fixed* if it has one value for all rows that tie on the
 /// currently pinned expressions: it is a literal, a constant, pinned, a leaf
 /// that reports itself as a singleton (e.g. an uncorrelated scalar subquery),
-/// or not volatile and computed only from fixed expressions (e.g. `a + 1`
-/// once `a` is pinned).
+/// functionally determined by pinned columns, or not volatile and computed
+/// only from fixed expressions (e.g. `a + 1` once `a` is pinned).
 ///
 /// ## Heads
 ///
@@ -126,6 +126,8 @@ pub(super) struct SortKeyWalk<'a> {
     props: &'a EquivalenceProperties,
     /// Pinned expressions.
     pinned: HashSet<Arc<dyn PhysicalExpr>>,
+    /// Columns functionally determined by the pinned columns.
+    functionally_determined_columns: HashSet<usize>,
     /// Orderings that hold among the rows that tie on the pinned expressions,
     /// found by [`EquivalenceProperties::implied_ordering`] as the walk goes.
     implied: Vec<LexOrdering>,
@@ -151,6 +153,7 @@ impl<'a> SortKeyWalk<'a> {
         let mut walk = Self {
             props,
             pinned: HashSet::new(),
+            functionally_determined_columns: HashSet::new(),
             implied: vec![],
             head_idxs: vec![],
         };
@@ -265,6 +268,7 @@ impl<'a> SortKeyWalk<'a> {
                 self.pinned.insert(expr);
             }
         }
+        self.update_functionally_determined_columns();
         let ordering_count = self.props.oeq_cache.normal_cls.len() + self.implied.len();
         self.head_idxs.resize(ordering_count, 0);
         // Pins do not change below, so after the first round only the
@@ -412,7 +416,10 @@ impl<'a> SortKeyWalk<'a> {
         // value in each row, so it is not fixed. The leaf check below gives
         // the same answer; returning here skips it:
         if expr.is::<Column>() {
-            return false;
+            return expr.downcast_ref::<Column>().is_some_and(|column| {
+                self.functionally_determined_columns
+                    .contains(&column.index())
+            });
         }
         // A volatile expression can change from row to row, even when all of
         // its inputs are fixed:
@@ -428,6 +435,41 @@ impl<'a> SortKeyWalk<'a> {
                 .is_ok_and(|props| props.sort_properties == SortProperties::Singleton);
         }
         children.into_iter().all(|child| self.is_fixed(child))
+    }
+
+    /// Extends the pinned columns through every functional dependency whose
+    /// determinant is already pinned. Dependencies that distinguish NULLs
+    /// cannot fix a sort key's NULL group when their determinant is nullable.
+    fn update_functionally_determined_columns(&mut self) {
+        let mut determined = self
+            .pinned
+            .iter()
+            .filter_map(|expr| expr.downcast_ref::<Column>().map(Column::index))
+            .collect::<HashSet<_>>();
+        loop {
+            let previous_len = determined.len();
+            for dependency in self.props.functional_dependencies.iter() {
+                let nulls_are_safe = dependency.null_equality
+                    == NullEquality::NullEqualsNull
+                    || !dependency.nullable
+                    || dependency
+                        .source_indices
+                        .iter()
+                        .all(|index| !self.props.schema.field(*index).is_nullable());
+                if nulls_are_safe
+                    && dependency
+                        .source_indices
+                        .iter()
+                        .all(|index| determined.contains(index))
+                {
+                    determined.extend(dependency.target_indices.iter().copied());
+                }
+            }
+            if determined.len() == previous_len {
+                break;
+            }
+        }
+        self.functionally_determined_columns = determined;
     }
 
     /// The ordering at `idx`: the orderings of `props` in [normal form], then
@@ -462,11 +504,32 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::{Constraint, Constraints, Result, ScalarValue};
     use datafusion_expr::physical_planning_context::{
         ScalarSubqueryResults, SubqueryIndex,
     };
     use datafusion_expr::{ColumnarValue, Operator, Volatility, create_udf};
+
+    #[test]
+    fn nullable_unique_key_does_not_fix_null_ties() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, true),
+            Field::new("payload", DataType::Int32, true),
+        ]));
+        let key = col("key", &schema)?;
+        let payload = col("payload", &schema)?;
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.set_constraints(Constraints::new_unverified(vec![
+            Constraint::Unique(vec![0]),
+        ]));
+        properties.add_ordering([PhysicalSortExpr::new_default(Arc::clone(&key))]);
+
+        assert!(!properties.ordering_satisfy([
+            PhysicalSortExpr::new_default(key),
+            PhysicalSortExpr::new_default(payload),
+        ])?);
+        Ok(())
+    }
 
     /// With `CAST(c AS DATE) = a`, the ordering `[a, c]` implies `[c]` when
     /// `a` and `c` have the same sort options, whether the ordering or the
