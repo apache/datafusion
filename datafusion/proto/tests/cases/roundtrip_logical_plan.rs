@@ -897,21 +897,14 @@ fn parse_merge_into_action_missing_oneof_errors() {
 async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let dir = tempfile::tempdir()?;
-    for (name, options, expected) in [
-        ("default", "", "id,s\n1,\"hello,world\"\n"),
-        (
-            "never",
-            "OPTIONS ('format.has_header' 'false', 'format.quote_style' 'Never', 'execution.keep_partition_by_columns' 'true')",
-            "1,hello,world\n",
-        ),
-        (
-            "non_numeric",
-            "OPTIONS ('format.quote_style' 'NonNumeric')",
-            "\"id\",\"s\"\n1,\"hello,world\"\n",
-        ),
+    for options in [
+        "",
+        "OPTIONS ('format.has_header' 'false', 'format.quote_style' 'Never')",
+        "OPTIONS ('format.quote_style' 'NonNumeric')",
+        "OPTIONS ('execution.keep_partition_by_columns' 'true')",
     ] {
-        let path = dir.path().join(format!("{name}.csv"));
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("out.csv");
         let sql = format!(
             "COPY (SELECT 1 AS id, 'hello,world' AS s) TO '{}' STORED AS CSV {options}",
             path.display()
@@ -919,8 +912,13 @@ async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
         let plan = ctx.state().create_logical_plan(&sql).await?;
         let bytes = logical_plan_to_bytes(&plan)?;
         let decoded = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+        ctx.execute_logical_plan(plan).await?.collect().await?;
+        let direct = std::fs::read(&path)?;
+        std::fs::remove_file(&path)?;
+
         ctx.execute_logical_plan(decoded).await?.collect().await?;
-        assert_eq!(std::fs::read_to_string(path)?, expected, "{name}");
+        assert_eq!(std::fs::read(path)?, direct, "{sql}");
     }
 
     Ok(())
