@@ -119,6 +119,8 @@ SELECT evaluations();
 
 # `x BETWEEN low AND high` evaluates `x` two times. This is accepted behaviour,
 # Postgres does the same: https://github.com/apache/datafusion/issues/25457
+# The second evaluation (`x <= high`) is short-circuited, so it only runs for
+# the 8 rows where `x >= low`.
 
 query I
 SELECT count(*) FROM t WHERE counted_volatile(a) BETWEEN 3 AND 5;
@@ -128,7 +130,7 @@ SELECT count(*) FROM t WHERE counted_volatile(a) BETWEEN 3 AND 5;
 query I
 SELECT evaluations();
 ----
-20
+18
 
 # A repeated call that is not volatile is evaluated one time:
 # `CommonSubexprEliminate` computes it once and field accesses read the result.

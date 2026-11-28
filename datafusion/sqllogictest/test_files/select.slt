@@ -1743,10 +1743,16 @@ select coalesce(1, y/x), coalesce(2, y/x) from t;
 1 2
 1 2
 
-# due to the reason describe in https://github.com/apache/datafusion/issues/8927,
-# the following queries will fail
-query error
+# The divisions fail on the whole batch (`y = 0`), so they are retried on the
+# undecided rows only (https://github.com/apache/datafusion/issues/8927)
+query BB
 SELECT y > 0 and 1 / y < 1, x > 0 and y > 0 and 1 / y < 1 / x from t;
+----
+false false
+true false
+true false
+false false
+false false
 
 query BB
 SELECT y = 0 or 1 / y < 1, x = 0 or y = 0 or 1 / y < 1 / x from t;
@@ -1756,6 +1762,28 @@ true false
 true false
 true true
 true true
+
+# The plan keeps `y > 0` before the division, so it is retried on the
+# undecided rows only
+query TT
+EXPLAIN SELECT * FROM t WHERE y > 0 AND 1 / y < 1;
+----
+logical_plan
+01)Filter: t.y > Int32(0) AND Int64(1) / CAST(t.y AS Int64) < Int64(1)
+02)--TableScan: t projection=[x, y]
+physical_plan
+01)FilterExec: y@1 > 0 AND 1 / CAST(y@1 AS Int64) < 1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II rowsort
+SELECT * FROM t WHERE y > 0 AND 1 / y < 1;
+----
+2 2
+3 3
+
+# `(4, 0)` is still undecided after `x > 0`, so the retry fails too
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT x > 0 AND 1 / y < 1 FROM t;
 
 statement ok
 DROP TABLE t;
