@@ -1,0 +1,11 @@
+name Q01
+group clickbench_sorted
+
+init sql_benchmarks/clickbench/init/set_config.sql
+
+load sql_benchmarks/clickbench_sorted/init/load.sql
+
+expect_plan group_clustering_mode=Partial
+
+run
+SELECT "EventTime", "URL", count(*) FROM hits GROUP BY "EventTime", "URL";
