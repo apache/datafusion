@@ -227,8 +227,22 @@ pub fn inexact_memory_exec(
     partitions: &[Vec<RecordBatch>],
     schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let source = InexactMemorySource {
+    let source = PushdownMemorySource {
         inner: MemorySourceConfig::try_new(partitions, schema, None)?,
+        exact: false,
+    };
+    Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+}
+
+/// A memory scan that answers `Exact` to any sort pushdown. The batches
+/// must already be in the order the test requests.
+pub fn exact_memory_exec(
+    partitions: &[Vec<RecordBatch>],
+    schema: SchemaRef,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let source = PushdownMemorySource {
+        inner: MemorySourceConfig::try_new(partitions, schema, None)?,
+        exact: true,
     };
     Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
 }
@@ -1165,11 +1179,13 @@ pub fn test_scan_with_ordering(
 }
 
 #[derive(Debug, Clone)]
-struct InexactMemorySource {
+struct PushdownMemorySource {
     inner: MemorySourceConfig,
+    /// If true, `try_pushdown_sort` returns `Exact` instead of `Inexact`.
+    exact: bool,
 }
 
-impl DataSource for InexactMemorySource {
+impl DataSource for PushdownMemorySource {
     fn apply_expressions(
         &self,
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
@@ -1222,8 +1238,11 @@ impl DataSource for InexactMemorySource {
         &self,
         _order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
-        Ok(SortOrderPushdownResult::Inexact {
-            inner: Arc::new(self.clone()),
-        })
+        let inner: Arc<dyn DataSource> = Arc::new(self.clone());
+        if self.exact {
+            Ok(SortOrderPushdownResult::Exact { inner })
+        } else {
+            Ok(SortOrderPushdownResult::Inexact { inner })
+        }
     }
 }

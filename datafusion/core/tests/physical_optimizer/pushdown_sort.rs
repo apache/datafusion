@@ -16,6 +16,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, assert_batches_eq};
 use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -30,11 +31,12 @@ use datafusion_physical_plan::{ExecutionPlan, collect};
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    OptimizationTest, TestScan, coalesce_partitions_exec, inexact_memory_exec,
-    parquet_exec, parquet_exec_with_sort, projection_exec, projection_exec_with_alias,
-    repartition_exec, schema, simple_projection_exec, sort_exec, sort_exec_with_fetch,
-    sort_exec_with_fetch_and_preserve_partitioning, sort_expr, sort_expr_named,
-    sort_preserving_merge_exec_with_fetch, test_scan_with_ordering,
+    OptimizationTest, TestScan, coalesce_partitions_exec, exact_memory_exec,
+    inexact_memory_exec, parquet_exec, parquet_exec_with_sort, projection_exec,
+    projection_exec_with_alias, repartition_exec, schema, simple_projection_exec,
+    sort_exec, sort_exec_with_fetch, sort_exec_with_fetch_and_preserve_partitioning,
+    sort_expr, sort_expr_named, sort_preserving_merge_exec_with_fetch,
+    test_scan_with_ordering,
 };
 
 #[test]
@@ -1429,4 +1431,127 @@ fn test_sort_pushdown_standalone_partitioned_exact_pushes_fetch_through_projecti
           -     TestScan: requested_ordering=[a@0 DESC NULLS LAST]
     "
     );
+}
+
+#[test]
+fn test_sort_pushdown_exact_keeps_limit_above_repartition() {
+    // A round robin repartition splits one input partition into several, so a
+    // per-partition limit can't go below it.
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let projection = simple_projection_exec(exact_scan(1, true), vec![0, 1]);
+    let repartition = repartition_exec(projection);
+
+    let ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let sort = sort_exec_with_fetch_and_preserve_partitioning(
+        ordering.clone(),
+        Some(10),
+        repartition,
+    );
+    let plan = sort_preserving_merge_exec_with_fetch(ordering, sort, 10);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortPreservingMergeExec: [a@0 DESC NULLS LAST], fetch=10
+        -   SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[true]
+        -     RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+        -       ProjectionExec: expr=[a@0 as a, b@1 as b]
+        -         TestScan
+      output:
+        Ok:
+          - SortPreservingMergeExec: [a@0 DESC NULLS LAST], fetch=10
+          -   BufferExec: capacity=1073741824
+          -     LocalLimitExec: fetch=10
+          -       RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1, maintains_sort_order=true
+          -         ProjectionExec: expr=[a@0 as a, b@1 as b]
+          -           TestScan: requested_ordering=[a@0 DESC NULLS LAST]
+    "
+    );
+}
+
+/// One batch with column `a`.
+fn batch_of(schema: &Arc<Schema>, values: Vec<i64>) -> Result<RecordBatch> {
+    Ok(RecordBatch::try_new(
+        Arc::clone(schema),
+        vec![Arc::new(Int64Array::from(values)) as ArrayRef],
+    )?)
+}
+
+/// Runs `PushdownSort` on `plan`, checks that a scan below a projection holds
+/// `scan_fetch`, and returns the rows of the optimized plan.
+async fn optimize_and_collect(
+    plan: Arc<dyn ExecutionPlan>,
+    scan_fetch: usize,
+) -> Result<Vec<RecordBatch>> {
+    let mut config = ConfigOptions::new();
+    config.optimizer.enable_sort_pushdown = true;
+    let optimized = PushdownSort::new().optimize(plan, &config)?;
+
+    let mut fetch_below_projection = None;
+    optimized.apply(|node| {
+        if node.name() == "ProjectionExec" {
+            fetch_below_projection = node.children()[0].fetch();
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert_eq!(fetch_below_projection, Some(scan_fetch));
+
+    let ctx = SessionContext::new();
+    collect(optimized, ctx.task_ctx()).await
+}
+
+#[tokio::test]
+async fn test_sort_pushdown_exact_fetch_through_projection_returns_top_rows() -> Result<()>
+{
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let source = exact_memory_exec(
+        &[vec![
+            batch_of(&schema, vec![9, 8, 7])?,
+            batch_of(&schema, vec![6, 5, 4])?,
+        ]],
+        Arc::clone(&schema),
+    )?;
+    let projection = simple_projection_exec(source, vec![0]);
+    let ordering = LexOrdering::new(vec![sort_expr("a", &schema).reverse()]).unwrap();
+    let sort = sort_exec_with_fetch(ordering, Some(4), projection);
+    let plan = Arc::new(GlobalLimitExec::new(sort, 1, Some(3)));
+
+    let batches = optimize_and_collect(plan, 4).await?;
+    let expected = [
+        "+---+", "| a |", "+---+", "| 8 |", "| 7 |", "| 6 |", "+---+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_sort_pushdown_exact_partitioned_fetch_through_projection_returns_top_rows()
+-> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let source = exact_memory_exec(
+        &[
+            vec![batch_of(&schema, vec![9, 7, 5, 3])?],
+            vec![batch_of(&schema, vec![8, 6, 4, 2])?],
+        ],
+        Arc::clone(&schema),
+    )?;
+    let projection = simple_projection_exec(source, vec![0]);
+    let ordering = LexOrdering::new(vec![sort_expr("a", &schema).reverse()]).unwrap();
+    let sort = sort_exec_with_fetch_and_preserve_partitioning(
+        ordering.clone(),
+        Some(3),
+        projection,
+    );
+    let plan = sort_preserving_merge_exec_with_fetch(ordering, sort, 3);
+
+    let batches = optimize_and_collect(plan, 3).await?;
+    let expected = [
+        "+---+", "| a |", "+---+", "| 9 |", "| 8 |", "| 7 |", "+---+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    Ok(())
 }
