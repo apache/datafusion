@@ -377,7 +377,7 @@ FROM employees;
 Returns value evaluated at the row that is offset rows before the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).
 
 ```sql
-lag(expression, offset, default)
+lag(expression[, offset[, default]])
 ```
 
 #### Arguments
@@ -443,7 +443,7 @@ FROM employees;
 Returns value evaluated at the row that is offset rows after the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).
 
 ```sql
-lead(expression, offset, default)
+lead(expression[, offset[, default]])
 ```
 
 #### Arguments
