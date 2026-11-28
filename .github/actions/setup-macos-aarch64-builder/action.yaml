@@ -35,4 +35,4 @@ runs:
       with:
            save-if: ${{ github.ref_name == 'main' }}
     - name: Configure rust runtime env
-      uses: ./.github/actions/setup-rust-runtime        
+      uses: ./.github/actions/setup-rust-runtime
