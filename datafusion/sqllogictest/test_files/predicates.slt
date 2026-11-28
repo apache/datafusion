@@ -396,6 +396,67 @@ Barrr
 statement ok
 DROP TABLE test;
 
+# `\` is the escape character of `LIKE`, so a regex literal containing a
+# backslash must not become a `LIKE` pattern that drops it.
+statement ok
+CREATE TABLE test_regex_backslash(s VARCHAR) AS VALUES
+  ('Kitchen'), ('/Kitchen'), ('\Kitchen'), ('Kitchen\'), ('kitchen\');
+
+query T
+SELECT * FROM test_regex_backslash WHERE s ~ '\\Kitchen'
+----
+\Kitchen
+
+query T
+SELECT * FROM test_regex_backslash WHERE regexp_like(s, '\\Kitchen')
+----
+\Kitchen
+
+query T rowsort
+SELECT * FROM test_regex_backslash WHERE s !~ '\\Kitchen'
+----
+/Kitchen
+Kitchen
+Kitchen\
+kitchen\
+
+query T
+SELECT * FROM test_regex_backslash WHERE s ~ '^\\Kit'
+----
+\Kitchen
+
+query T rowsort
+SELECT * FROM test_regex_backslash WHERE s ~ 'n\\$'
+----
+Kitchen\
+kitchen\
+
+query T
+SELECT * FROM test_regex_backslash WHERE s ~* '\\kitchen'
+----
+\Kitchen
+
+query T rowsort
+SELECT * FROM test_regex_backslash WHERE s ~* '^kitchen\\$'
+----
+Kitchen\
+kitchen\
+
+query T
+SELECT * FROM test_regex_backslash WHERE s ~ '^Kitchen\\$'
+----
+Kitchen\
+
+query T rowsort
+SELECT * FROM test_regex_backslash WHERE s ~ '\\Kitchen|n\\'
+----
+Kitchen\
+\Kitchen
+kitchen\
+
+statement ok
+DROP TABLE test_regex_backslash;
+
 statement ok
 CREATE TABLE IF NOT EXISTS test AS VALUES('foo'),('bar'),('fazzz');
 
