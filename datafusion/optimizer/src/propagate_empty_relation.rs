@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use datafusion_common::JoinType;
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{Column, DFSchemaRef, Result, ScalarValue, plan_err};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, ScalarValue, plan_err};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{EmptyRelation, Expr, Projection, Union, cast, lit};
 
@@ -195,23 +195,25 @@ impl OptimizerRule for PropagateEmptyRelation {
                         // The union takes its field names from its first
                         // input, which may be gone. Map the remaining
                         // input's columns by position.
-                        let exprs = child
-                            .schema()
-                            .columns()
-                            .into_iter()
-                            .zip(plan.schema().iter())
-                            .map(|(col, (qualifier, field))| {
-                                Expr::Column(col)
-                                    .alias_qualified(qualifier.cloned(), field.name())
-                            })
-                            .collect::<Vec<_>>();
-                        Ok(Transformed::yes(LogicalPlan::Projection(
-                            Projection::try_new(exprs, Arc::new(child))?,
-                        )))
+                        Ok(Transformed::yes(align_union_input(child, plan.schema())?))
                     }
                 } else {
+                    // Same name mismatch as the single-input case, but the
+                    // union itself remains. Physical planning matches input
+                    // fields to these names and asserts when they differ.
+                    let inputs = new_inputs
+                        .into_iter()
+                        .map(|input| {
+                            let child = Arc::unwrap_or_clone(input);
+                            if union_input_names_match(&child, plan.schema()) {
+                                Ok(Arc::new(child))
+                            } else {
+                                align_union_input(child, plan.schema()).map(Arc::new)
+                            }
+                        })
+                        .collect::<Result<Vec<_>>>()?;
                     Ok(Transformed::yes(LogicalPlan::Union(Union {
-                        inputs: new_inputs,
+                        inputs,
                         schema: Arc::clone(&union.schema),
                     })))
                 }
@@ -307,6 +309,33 @@ fn build_null_padded_projection(
         surviving_plan,
         Arc::clone(join_schema),
     )?))
+}
+
+/// Aliases `child`'s columns, by position, to `union_schema`'s field names.
+fn align_union_input(child: LogicalPlan, union_schema: &DFSchema) -> Result<LogicalPlan> {
+    let exprs = child
+        .schema()
+        .columns()
+        .into_iter()
+        .zip(union_schema.iter())
+        .map(|(col, (qualifier, field))| {
+            Expr::Column(col).alias_qualified(qualifier.cloned(), field.name())
+        })
+        .collect::<Vec<_>>();
+    Ok(LogicalPlan::Projection(Projection::try_new(
+        exprs,
+        Arc::new(child),
+    )?))
+}
+
+fn union_input_names_match(child: &LogicalPlan, union_schema: &DFSchema) -> bool {
+    let fields = child.schema().fields();
+    let union_fields = union_schema.fields();
+    fields.len() == union_fields.len()
+        && fields
+            .iter()
+            .zip(union_fields.iter())
+            .all(|(field, union_field)| field.name() == union_field.name())
 }
 
 #[cfg(test)]
@@ -484,8 +513,47 @@ mod tests {
             .build()?;
 
         let expected = "Union\
-            \n  TableScan: test2\
-            \n  TableScan: test3";
+            \n  Projection: test2.t2a AS t1a\
+            \n    TableScan: test2\
+            \n  Projection: test3.t3a AS t1a\
+            \n    TableScan: test3";
+        assert_together_optimized_plan(plan, expected, true)
+    }
+
+    #[test]
+    fn propagate_union_multiple_remaining_inputs_with_other_names() -> Result<()> {
+        // The first input is removed. Two inputs remain, and neither is named
+        // like the union schema (which came from the removed input).
+        let left = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(lit(false))?
+            .build()?;
+        let middle = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
+            .project(vec![
+                col("a").alias("x"),
+                col("b").alias("y"),
+                col("c").alias("z"),
+            ])?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test3")?)
+            .project(vec![
+                col("a").alias("p"),
+                col("b").alias("q"),
+                col("c").alias("r"),
+            ])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(left)
+            .union(middle)?
+            .union(right)?
+            .build()?;
+
+        let expected = "Union\
+            \n  Projection: x AS a, y AS b, z AS c\
+            \n    Projection: test2.a AS x, test2.b AS y, test2.c AS z\
+            \n      TableScan: test2\
+            \n  Projection: p AS a, q AS b, r AS c\
+            \n    Projection: test3.a AS p, test3.b AS q, test3.c AS r\
+            \n      TableScan: test3";
         assert_together_optimized_plan(plan, expected, true)
     }
 
