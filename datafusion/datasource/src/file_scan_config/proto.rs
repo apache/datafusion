@@ -71,9 +71,7 @@ impl FileScanConfig {
             file_source,
             batch_size,
             expr_adapter_factory,
-            // Serialized through `statistics()` so its pushed-filter policy
-            // remains centralized.
-            statistics: _,
+            statistics,
             output_partitioning,
         } = self;
 
@@ -139,11 +137,11 @@ impl FileScanConfig {
                     (*file_compression_type.get_variant()).into();
                 compression as i32
             });
-        let statistics = self.statistics();
-
+        // Serialize the original statistics so decoded scans retain trusted bounds.
+        // The decoded scan still applies the filter policy in `statistics()`.
         Ok(protobuf::FileScanExecConf {
             file_groups: proto_file_groups,
-            statistics: Some((&statistics).into()),
+            statistics: Some(statistics.into()),
             limit: limit
                 .map(|limit| usize_to_wire::<u32>(limit, "FileScanConfig", "limit"))
                 .transpose()?

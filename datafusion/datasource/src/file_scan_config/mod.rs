@@ -198,15 +198,16 @@ pub struct FileScanConfig {
     /// Expression adapter used to adapt filters and projections that are pushed down into the scan
     /// from the logical schema to the physical schema of the file.
     pub expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
-    /// Statistics for the entire table (file schema + partition columns).
+    /// Statistics for the entire table (file schema + partition columns), before
+    /// projection or filtering.
     /// See [`FileScanConfigBuilder::with_statistics`] for more details.
     ///
     /// The effective statistics are computed on-demand via
     /// [`ProjectionExprs::project_statistics`].
     ///
-    /// Note that this field is pub(crate) because accessing it directly from outside
-    /// would be incorrect if there are filters being applied, thus this should be accessed
-    /// via [`FileScanConfig::statistics`].
+    /// Retained for serialization and conservative bounds used by ordering inference.
+    /// Use [`FileScanConfig::statistics`] for filter-adjusted statistics; these raw
+    /// values may no longer be exact for the scan output.
     pub(crate) statistics: Statistics,
     /// Declared physical output partitioning for this scan.
     ///
@@ -952,6 +953,15 @@ impl DataSource for FileScanConfig {
             self.validated_output_ordering(),
         )
         .with_constraints(self.constraints.clone());
+        // Filters only remove rows. A custom adapter can change their values.
+        if self
+            .expr_adapter_factory
+            .as_ref()
+            .is_none_or(|factory| factory.is_equivalent_to_default())
+        {
+            eq_properties =
+                eq_properties.with_column_statistics(&self.statistics.column_statistics);
+        }
 
         // Only a filter that the source applies exactly gives valid equivalences.
         // A filter that is used only for pruning lets non-matching rows through.
@@ -2420,6 +2430,74 @@ mod tests {
             FileCompressionType::UNCOMPRESSED
         );
         assert_eq!(config.output_ordering.len(), 1);
+    }
+
+    #[test]
+    fn ordering_inference_respects_expression_adapters() -> Result<()> {
+        use datafusion_physical_expr::expressions::lit;
+        use datafusion_physical_expr_adapter::{
+            DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter,
+        };
+
+        #[derive(Debug)]
+        struct CustomAdapterFactory;
+
+        impl PhysicalExprAdapterFactory for CustomAdapterFactory {
+            fn create(
+                &self,
+                logical_file_schema: SchemaRef,
+                physical_file_schema: SchemaRef,
+            ) -> Result<Arc<dyn PhysicalExprAdapter>> {
+                DefaultPhysicalExprAdapterFactory
+                    .create(logical_file_schema, physical_file_schema)
+            }
+        }
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let a = col("a", &schema)?;
+        let ordering = [PhysicalSortExpr::new_default(Arc::clone(&a))];
+        let required = [PhysicalSortExpr::new_default(Arc::new(BinaryExpr::new(
+            a,
+            Operator::Plus,
+            lit(1_i64),
+        )))];
+        let statistics = Statistics {
+            column_statistics: vec![
+                ColumnStatistics::new_unknown()
+                    .with_min_value(Precision::Exact(ScalarValue::from(1_i64)))
+                    .with_max_value(Precision::Exact(ScalarValue::from(3_i64))),
+            ],
+            ..Statistics::new_unknown(&schema)
+        };
+        let default_factory: Arc<dyn PhysicalExprAdapterFactory> =
+            Arc::new(DefaultPhysicalExprAdapterFactory);
+        let custom_factory: Arc<dyn PhysicalExprAdapterFactory> =
+            Arc::new(CustomAdapterFactory);
+        for (factory, expected) in [
+            (None, true),
+            (Some(default_factory), true),
+            (Some(custom_factory), false),
+        ] {
+            let config = FileScanConfigBuilder::new(
+                ObjectStoreUrl::local_filesystem(),
+                Arc::new(MockSource::new(Arc::clone(&schema))),
+            )
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "test.parquet".to_owned(),
+                1024,
+            )])])
+            .with_output_ordering(vec![ordering.clone().into()])
+            .with_statistics(statistics.clone())
+            .with_expr_adapter(factory)
+            .build();
+            assert_eq!(
+                config.eq_properties().ordering_satisfy(required.clone())?,
+                expected,
+                "adapter: {:?}",
+                config.expr_adapter_factory,
+            );
+        }
+        Ok(())
     }
 
     #[test]
