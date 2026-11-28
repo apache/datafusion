@@ -9,12 +9,15 @@ use std::{
     task::{Context, Poll},
 };
 
-use arrow::array::record_batch;
+use arrow::array::{ArrayRef, Int32Array, record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion::datasource::MemTable;
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::test_util::batches_to_string;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{ColumnStatistics, JoinType, ScalarValue, stats::Precision};
 use datafusion_common::{JoinSide, NullEquality};
@@ -31,8 +34,10 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_optimizer::PhysicalOptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
+use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::collect;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
@@ -2262,5 +2267,105 @@ async fn test_join_selection_skips_real_dynamic_filter_pushdown() -> Result<()> 
         "expected 2 inner-join matches, got {batches:?}"
     );
 
+    Ok(())
+}
+
+/// A session whose physical optimizer runs [`JoinSelection`] right after
+/// [`EnsureRequirements`] instead of before it.
+fn session_with_join_selection_after_enforcement() -> SessionContext {
+    let mut rules = PhysicalOptimizer::new().rules;
+    let position = |rules: &[Arc<dyn PhysicalOptimizerRule + Send + Sync>],
+                    name: &str| {
+        rules.iter().position(|rule| rule.name() == name).unwrap()
+    };
+    let join_selection = rules.remove(position(&rules, JoinSelection::new().name()));
+    let enforcement = position(&rules, EnsureRequirements::new().name());
+    rules.insert(enforcement + 1, join_selection);
+    let state = SessionStateBuilder::new()
+        .with_config(SessionConfig::new().with_target_partitions(2))
+        .with_default_features()
+        .with_physical_optimizer_rules(rules)
+        .build();
+    SessionContext::new_with_state(state)
+}
+
+/// `EnsureRequirements` merges the larger input of the cross join into one
+/// partition for the build side. Swapping the inputs afterwards would build on
+/// the smaller input's two partitions, which nothing merges again.
+#[tokio::test]
+async fn join_selection_after_enforcement_keeps_merged_build_side() -> Result<()> {
+    let ctx = session_with_join_selection_after_enforcement();
+    let big = [
+        record_batch!(("a", Int32, [1, 2]))?,
+        record_batch!(("a", Int32, [3, 4]))?,
+    ];
+    let small = [
+        record_batch!(("b", Int32, [10]))?,
+        record_batch!(("b", Int32, [20]))?,
+    ];
+    for (name, batches) in [("big", big), ("small", small)] {
+        let schema = batches[0].schema();
+        let partitions = batches.into_iter().map(|batch| vec![batch]).collect();
+        ctx.register_table(name, Arc::new(MemTable::try_new(schema, partitions)?))?;
+    }
+
+    let batches = ctx
+        .sql("SELECT a, b FROM big, small ORDER BY a, b")
+        .await?
+        .collect()
+        .await?;
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +---+----+
+    | a | b  |
+    +---+----+
+    | 1 | 10 |
+    | 1 | 20 |
+    | 2 | 10 |
+    | 2 | 20 |
+    | 3 | 10 |
+    | 3 | 20 |
+    | 4 | 10 |
+    | 4 | 20 |
+    +---+----+
+    ");
+    Ok(())
+}
+
+/// Before `EnsureRequirements` runs, the larger input of a cross join can have
+/// one partition only because it is one batch, and `JoinSelection` still moves it
+/// to the probe side so the smaller input is built.
+#[tokio::test]
+async fn join_selection_swaps_larger_single_partition_input() -> Result<()> {
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(2));
+    let big = RecordBatch::try_from_iter([(
+        "a",
+        Arc::new(Int32Array::from_iter_values(0..10_000)) as ArrayRef,
+    )])?;
+    let small = [
+        record_batch!(("b", Int32, [10]))?,
+        record_batch!(("b", Int32, [20]))?,
+    ];
+    ctx.register_table(
+        "big",
+        Arc::new(MemTable::try_new(big.schema(), vec![vec![big]])?),
+    )?;
+    let schema = small[0].schema();
+    let partitions = small.into_iter().map(|batch| vec![batch]).collect();
+    ctx.register_table("small", Arc::new(MemTable::try_new(schema, partitions)?))?;
+
+    let plan = ctx
+        .sql("SELECT a, b FROM big, small")
+        .await?
+        .create_physical_plan()
+        .await?;
+    assert_snapshot!(displayable(plan.as_ref()).indent(true), @r"
+    ProjectionExec: expr=[a@1 as a, b@0 as b]
+      CrossJoinExec
+        CoalescePartitionsExec
+          DataSourceExec: partitions=2, partition_sizes=[1, 1]
+        RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+          DataSourceExec: partitions=1, partition_sizes=[1]
+    ");
     Ok(())
 }
