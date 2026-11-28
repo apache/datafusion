@@ -398,3 +398,27 @@ incremental = false
 [profile.ci-bench]
 inherits = "ci"
 opt-level = 1
+
+# EXPERIMENT: pin arrow-rs to the 60.2.0 release plus the squashed diff of
+# apache/arrow-rs#11238 (batch-granular `ParquetPushDecoder`). The commit is on
+# pydantic/arrow-rs, branch claude/push-decoder-batch-granularity-60.2.0.
+# The patch covers every arrow crate, so that all of them come from one source.
+[patch.crates-io]
+arrow = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-arith = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-array = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-avro = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-buffer = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-cast = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-cmp = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-csv = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-data = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-flight = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-ipc = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-json = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-ord = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-row = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-schema = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-select = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+arrow-string = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
+parquet = { git = "https://github.com/pydantic/arrow-rs.git", rev = "d3dc9a19328b5850d1585b8ff0f6141f58f4e279" }
