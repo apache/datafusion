@@ -21,6 +21,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::ScalarValue;
 use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::utils::has_float_leaf;
 use datafusion_common::{
     DataFusionError, Result, downcast_value, internal_datafusion_err, internal_err,
     not_impl_err,
@@ -733,7 +734,14 @@ impl AggregateUDFImpl for ApproxDistinct {
         Ok(ScalarValue::UInt64(Some(0)))
     }
 
-    fn return_field(&self, _arg_fields: &[FieldRef]) -> Result<FieldRef> {
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        let data_type = arg_fields[0].data_type();
+        if !is_supported_type(data_type) {
+            return not_impl_err!(
+                "Support for 'approx_distinct' for data type {data_type} is not implemented"
+            );
+        }
+
         Ok(Arc::new(Field::new(self.name(), DataType::UInt64, false)))
     }
 
@@ -769,6 +777,12 @@ impl AggregateUDFImpl for ApproxDistinct {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let data_type = acc_args.expr_fields[0].data_type();
+
+        if !is_supported_type(data_type) {
+            return not_impl_err!(
+                "Support for 'approx_distinct' for data type {data_type} is not implemented"
+            );
+        }
 
         // For primitive types, use specialized accumulators for better performance.
         let accumulator: Box<dyn Accumulator> = match data_type {
@@ -853,17 +867,16 @@ impl AggregateUDFImpl for ApproxDistinct {
             | DataType::Struct(_)
             | DataType::Union(_, _)
             | DataType::LargeBinary => Box::new(HLLAccumulator::new()),
-            DataType::Dictionary(_, _) | DataType::RunEndEncoded(_, _)
-                if is_supported_type(data_type) =>
-            {
+            DataType::Dictionary(_, _) | DataType::RunEndEncoded(_, _) => {
                 Box::new(HLLAccumulator::new())
             }
             DataType::Null => {
                 Box::new(NoopAccumulator::new(ScalarValue::UInt64(Some(0))))
             }
+            // Should be unreachable due to the is_supported_type check
             other => {
-                return not_impl_err!(
-                    "Support for 'approx_distinct' for data type {other} is not implemented"
+                return internal_err!(
+                    "approx_distinct supports data type {other}, but no accumulator is implemented"
                 );
             }
         };
@@ -913,21 +926,59 @@ fn is_fixed_domain_type(data_type: &DataType) -> bool {
     )
 }
 
+/// Returns true if `approx_distinct` can run on this data type
 fn is_supported_type(data_type: &DataType) -> bool {
-    let value_type = encoded_value_type(data_type);
-    matches!(value_type, DataType::Null)
-        || is_fixed_domain_type(value_type)
-        || is_hll_groups_type(value_type)
-}
+    if has_float_leaf(data_type) {
+        return false;
+    }
 
-fn encoded_value_type(data_type: &DataType) -> &DataType {
-    let mut value_type = data_type;
-    loop {
-        match value_type {
-            DataType::Dictionary(_, inner) => value_type = inner,
-            DataType::RunEndEncoded(_, values) => value_type = values.data_type(),
-            _ => return value_type,
-        }
+    match data_type {
+        DataType::Dictionary(_, values) => is_supported_type(values),
+        DataType::RunEndEncoded(_, values) => is_supported_type(values.data_type()),
+        DataType::Null
+        | DataType::Boolean
+        | DataType::UInt8
+        | DataType::Int8
+        | DataType::UInt16
+        | DataType::Int16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(TimeUnit::Second)
+        | DataType::Time32(TimeUnit::Millisecond)
+        | DataType::Time64(TimeUnit::Microsecond)
+        | DataType::Time64(TimeUnit::Nanosecond)
+        | DataType::Timestamp(TimeUnit::Second, _)
+        | DataType::Timestamp(TimeUnit::Millisecond, _)
+        | DataType::Timestamp(TimeUnit::Microsecond, _)
+        | DataType::Timestamp(TimeUnit::Nanosecond, _)
+        | DataType::Interval(IntervalUnit::YearMonth)
+        | DataType::Interval(IntervalUnit::DayTime)
+        | DataType::Interval(IntervalUnit::MonthDayNano)
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _)
+        | DataType::Duration(_)
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Binary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_)
+        | DataType::LargeBinary
+        | DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::FixedSizeList(_, _)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_)
+        | DataType::Map(_, _)
+        | DataType::Struct(_)
+        | DataType::Union(_, _) => true,
+        _ => false,
     }
 }
 
@@ -935,53 +986,9 @@ fn encoded_value_type(data_type: &DataType) -> &DataType {
 /// [`HllGroupsAccumulator`]. The fixed-domain types (booleans / small ints) and
 /// `Null` fall back to the per-group [`Accumulator`] path.
 fn is_hll_groups_type(data_type: &DataType) -> bool {
-    if matches!(
-        data_type,
-        DataType::Dictionary(_, _) | DataType::RunEndEncoded(_, _)
-    ) {
-        return is_supported_type(data_type);
-    }
-
-    matches!(
-        data_type,
-        DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Date32
-            | DataType::Date64
-            | DataType::Time32(TimeUnit::Second)
-            | DataType::Time32(TimeUnit::Millisecond)
-            | DataType::Time64(TimeUnit::Microsecond)
-            | DataType::Time64(TimeUnit::Nanosecond)
-            | DataType::Timestamp(TimeUnit::Second, _)
-            | DataType::Timestamp(TimeUnit::Millisecond, _)
-            | DataType::Timestamp(TimeUnit::Microsecond, _)
-            | DataType::Timestamp(TimeUnit::Nanosecond, _)
-            | DataType::Interval(IntervalUnit::YearMonth)
-            | DataType::Interval(IntervalUnit::DayTime)
-            | DataType::Interval(IntervalUnit::MonthDayNano)
-            | DataType::Decimal32(_, _)
-            | DataType::Decimal64(_, _)
-            | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _)
-            | DataType::Duration(_)
-            | DataType::Utf8
-            | DataType::LargeUtf8
-            | DataType::Utf8View
-            | DataType::Binary
-            | DataType::BinaryView
-            | DataType::FixedSizeBinary(_)
-            | DataType::LargeBinary
-            | DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::FixedSizeList(_, _)
-            | DataType::ListView(_)
-            | DataType::LargeListView(_)
-            | DataType::Map(_, _)
-            | DataType::Struct(_)
-            | DataType::Union(_, _)
-    )
+    is_supported_type(data_type)
+        && !matches!(data_type, DataType::Null)
+        && !is_fixed_domain_type(data_type)
 }
 
 #[cfg(test)]
