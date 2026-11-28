@@ -1,0 +1,17 @@
+description = "Grouped first_value and DISTINCT ON ordered by a time zone aware timestamp vs the same instants without a time zone (issue #27046), and multi-column integer and string orderings; compare --partitions 1, 4 and 12"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[options]]
+name = "rows"
+env = "FIRST_LAST_ROWS"
+default = "2000000"
+help = "Input rows generated outside the timed query, in groups of two rows."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- first_last_orderings"
+description = "Run first_value (Q01) and DISTINCT ON (Q03) over a time zone aware timestamp, their controls without a time zone (Q02, Q04), and first_value / last_value ordered by (int, int) (Q05) and (string, int) (Q06)."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- first_last_orderings --partitions 12"
+description = "Run at 12 target partitions, where the time zone aware queries were several times slower than the controls."

@@ -1,0 +1,13 @@
+name Q02
+group first_last_orderings
+
+load sql_benchmarks/first_last_orderings/init/load.sql
+
+expect_plan AggregateExec
+
+run
+-- Control for Q01: the same instants without a time zone.
+SELECT count(*), sum(a)
+FROM (SELECT k, first_value(v ORDER BY tsn, o) AS a FROM first_last_orderings GROUP BY k);
+
+cleanup sql_benchmarks/first_last_orderings/init/cleanup.sql
