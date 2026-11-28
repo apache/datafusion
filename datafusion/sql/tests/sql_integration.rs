@@ -57,6 +57,39 @@ mod cases;
 mod common;
 
 #[test]
+fn unsupported_national_character_types() {
+    for sql_type in [
+        "NATIONAL CHARACTER",
+        "NATIONAL CHARACTER VARYING",
+        "NATIONAL CHAR",
+        "NATIONAL CHAR VARYING",
+        "NCHAR",
+        "NCHAR VARYING",
+    ] {
+        let sql = format!("CREATE TABLE t (c {sql_type}(10))");
+        let err = logical_plan(&sql).unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            format!("Unsupported SQL type {sql_type}(10)")
+        );
+    }
+}
+
+#[test]
+fn unsupported_table_not_null_constraint() {
+    for sql in [
+        "CREATE TABLE t (c INT, NOT NULL c)",
+        "CREATE TABLE t (c INT, CONSTRAINT nn NOT NULL c NO INHERIT)",
+    ] {
+        let err = logical_plan(sql).unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Table-level NOT NULL constraints are not currently supported"
+        );
+    }
+}
+
+#[test]
 fn parse_decimals_1() {
     let sql = "SELECT 1";
     let options = parse_decimals_parser_options();

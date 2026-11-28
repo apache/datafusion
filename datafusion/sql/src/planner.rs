@@ -906,6 +906,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::FixedString(_)
             | SQLDataType::Tuple(_)
             | SQLDataType::Nested(_)
+            | SQLDataType::Object(_)
+            | SQLDataType::Zerofill(_)
+            | SQLDataType::Collate(_, _)
             | SQLDataType::Union(_)
             | SQLDataType::Nullable(_)
             | SQLDataType::LowCardinality(_)
@@ -932,6 +935,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::TsVector
             | SQLDataType::TsQuery
             | SQLDataType::GeometricType(_)
+            | SQLDataType::NationalCharacter(_)
+            | SQLDataType::NationalCharacterVarying(_)
+            | SQLDataType::NationalChar(_)
+            | SQLDataType::NationalCharVarying(_)
+            | SQLDataType::Nchar(_)
+            | SQLDataType::NcharVarying(_)
             | SQLDataType::DecimalUnsigned(_) // deprecated mysql type
             | SQLDataType::FloatUnsigned(_) // deprecated mysql type
             | SQLDataType::RealUnsigned // deprecated mysql type
