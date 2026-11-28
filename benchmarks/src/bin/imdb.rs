@@ -35,7 +35,7 @@ enum ImdbOpt {
 #[derive(Debug, Subcommand)]
 enum BenchmarkSubCommandOpt {
     #[command(name = "datafusion")]
-    DataFusionBenchmark(imdb::RunOpt),
+    DataFusionBenchmark(Box<imdb::RunOpt>),
 }
 
 #[tokio::main]

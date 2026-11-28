@@ -695,6 +695,8 @@ mod tests {
                 max_time: None,
                 target_precision: 0.02,
                 max_iterations: 1000,
+                lockstep_in: None,
+                lockstep_out: None,
                 partitions: Some(1),
                 batch_size: None,
                 mem_pool_type: "fair".to_string(),
