@@ -3202,6 +3202,18 @@ mod tests {
         )
     }
 
+    #[test]
+    fn join_condition_guard_rejects_nested_exists() -> Result<()> {
+        let comparison = col("test.a").eq(col("test2.a"));
+        assert!(can_evaluate_as_join_condition(&comparison)?);
+
+        let subquery = Arc::new(test_table_scan_with_name("sq")?);
+        assert!(!can_evaluate_as_join_condition(
+            &comparison.or(exists(subquery))
+        )?);
+        Ok(())
+    }
+
     /// single table predicate parts of ON condition should be pushed to both inputs
     #[test]
     fn join_on_with_filter() -> Result<()> {
