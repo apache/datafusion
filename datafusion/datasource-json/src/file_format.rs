@@ -18,7 +18,7 @@ use arrow::error::ArrowError;
 use arrow::json;
 use arrow::json::reader::{ValueIter, infer_json_schema_from_iterator};
 use bytes::{Buf, Bytes};
-use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};
+use datafusion_common::config::{ConfigFileType, JsonOptions};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::{
     DEFAULT_JSON_EXTENSION, GetExt, Result, Statistics, not_impl_err,
@@ -30,7 +30,7 @@ use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
-    DEFAULT_SCHEMA_INFER_MAX_RECORD, FileFormat, FileFormatFactory,
+    DEFAULT_SCHEMA_INFER_MAX_RECORD, FileFormat, FileFormatFactory, with_format_options,
 };
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -83,13 +83,7 @@ impl FileFormatFactory for JsonFormatFactory {
                 table_options.alter_with_string_hash_map(format_options)?;
                 table_options.json
             }
-            Some(json_options) => {
-                let mut json_options = json_options.clone();
-                for (k, v) in format_options {
-                    json_options.set(k, v)?;
-                }
-                json_options
-            }
+            Some(options) => with_format_options(options, format_options)?,
         };
 
         Ok(Arc::new(JsonFormat::default().with_options(json_options)))

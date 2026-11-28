@@ -1022,7 +1022,12 @@ impl DefaultPhysicalPlanner {
                 // Filter out sink-related options that are not format options
                 let format_options: HashMap<String, String> = source_option_tuples
                     .iter()
-                    .filter(|(k, _)| k.as_str() != "single_file_output")
+                    .filter(|(k, _)| {
+                        !matches!(
+                            k.as_str(),
+                            "single_file_output" | "execution.keep_partition_by_columns"
+                        )
+                    })
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
 

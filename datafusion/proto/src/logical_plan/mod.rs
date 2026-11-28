@@ -1295,7 +1295,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     copy.output_url.clone(),
                     copy.partition_by.clone(),
                     file_type,
-                    Default::default(),
+                    copy.options.clone(),
                 )))
             }
             LogicalPlanType::Unnest(unnest) => {
@@ -2376,6 +2376,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 output_url,
                 file_type,
                 partition_by,
+                options,
                 ..
             }) => {
                 let input =
@@ -2391,6 +2392,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             output_url: output_url.to_string(),
                             file_type: buf,
                             partition_by: partition_by.clone(),
+                            options: options.clone(),
                         },
                     ))),
                 })

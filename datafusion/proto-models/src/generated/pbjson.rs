@@ -3888,6 +3888,9 @@ impl serde::Serialize for CopyToNode {
         if !self.partition_by.is_empty() {
             len += 1;
         }
+        if !self.options.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.CopyToNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
@@ -3902,6 +3905,9 @@ impl serde::Serialize for CopyToNode {
         }
         if !self.partition_by.is_empty() {
             struct_ser.serialize_field("partitionBy", &self.partition_by)?;
+        }
+        if !self.options.is_empty() {
+            struct_ser.serialize_field("options", &self.options)?;
         }
         struct_ser.end()
     }
@@ -3920,6 +3926,7 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
             "fileType",
             "partition_by",
             "partitionBy",
+            "options",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -3928,6 +3935,7 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
             OutputUrl,
             FileType,
             PartitionBy,
+            Options,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -3953,6 +3961,7 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                             "outputUrl" | "output_url" => Ok(GeneratedField::OutputUrl),
                             "fileType" | "file_type" => Ok(GeneratedField::FileType),
                             "partitionBy" | "partition_by" => Ok(GeneratedField::PartitionBy),
+                            "options" => Ok(GeneratedField::Options),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -3976,6 +3985,7 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                 let mut output_url__ = None;
                 let mut file_type__ = None;
                 let mut partition_by__ = None;
+                let mut options__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -4004,6 +4014,14 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                             }
                             partition_by__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Options => {
+                            if options__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("options"));
+                            }
+                            options__ = Some(
+                                map_.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
                     }
                 }
                 Ok(CopyToNode {
@@ -4011,6 +4029,7 @@ impl<'de> serde::Deserialize<'de> for CopyToNode {
                     output_url: output_url__.unwrap_or_default(),
                     file_type: file_type__.unwrap_or_default(),
                     partition_by: partition_by__.unwrap_or_default(),
+                    options: options__.unwrap_or_default(),
                 })
             }
         }

@@ -27,11 +27,11 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::FileSinkConfig;
 
 use datafusion_datasource::file_format::{
-    FileFormat, FileFormatFactory, ensure_unique_field_names,
+    FileFormat, FileFormatFactory, ensure_unique_field_names, with_format_options,
 };
 
 use datafusion_common::Statistics;
-use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
+use datafusion_common::config::{ConfigFileType, TableParquetOptions};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::parquet_config::DFTimeUnit;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -98,13 +98,7 @@ impl FileFormatFactory for ParquetFormatFactory {
                 table_options.alter_with_string_hash_map(format_options)?;
                 table_options.parquet
             }
-            Some(parquet_options) => {
-                let mut parquet_options = parquet_options.clone();
-                for (k, v) in format_options {
-                    parquet_options.set(k, v)?;
-                }
-                parquet_options
-            }
+            Some(options) => with_format_options(options, format_options)?,
         };
 
         Ok(Arc::new(

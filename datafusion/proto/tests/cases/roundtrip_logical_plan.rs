@@ -22,7 +22,7 @@ use datafusion::optimizer::optimize_unions::OptimizeUnions;
 use datafusion_common::parquet_config::{
     DFParquetWriterVersion, RowGroupRangeAssignment,
 };
-use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
 use std::any::Any;
@@ -897,22 +897,31 @@ fn parse_merge_into_action_missing_oneof_errors() {
 async fn roundtrip_logical_plan_copy_to_sql_options() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let input = create_csv_scan(&ctx).await?;
-    let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new()));
-
-    let plan = LogicalPlan::Copy(CopyTo::new(
-        Arc::new(input),
-        "test.csv".to_string(),
-        vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        file_type,
-        Default::default(),
-    ));
-
-    let codec = CsvLogicalExtensionCodec {};
-    let bytes = logical_plan_to_bytes_with_extension_codec(&plan, &codec)?;
-    let logical_round_trip =
-        logical_plan_from_bytes_with_extension_codec(&bytes, &ctx.task_ctx(), &codec)?;
-    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
+    let dir = tempfile::tempdir()?;
+    for (name, options, expected) in [
+        ("default", "", "id,s\n1,\"hello,world\"\n"),
+        (
+            "never",
+            "OPTIONS ('format.has_header' 'false', 'format.quote_style' 'Never', 'execution.keep_partition_by_columns' 'true')",
+            "1,hello,world\n",
+        ),
+        (
+            "non_numeric",
+            "OPTIONS ('format.quote_style' 'NonNumeric')",
+            "\"id\",\"s\"\n1,\"hello,world\"\n",
+        ),
+    ] {
+        let path = dir.path().join(format!("{name}.csv"));
+        let sql = format!(
+            "COPY (SELECT 1 AS id, 'hello,world' AS s) TO '{}' STORED AS CSV {options}",
+            path.display()
+        );
+        let plan = ctx.state().create_logical_plan(&sql).await?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let decoded = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+        ctx.execute_logical_plan(decoded).await?.collect().await?;
+        assert_eq!(std::fs::read_to_string(path)?, expected, "{name}");
+    }
 
     Ok(())
 }
@@ -1008,6 +1017,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
         TableOptions::default_from_session_config(ctx.state().config_options());
     let mut csv_format = table_options.csv;
 
+    csv_format.quote_style = CsvQuoteStyle::Always;
     csv_format.delimiter = b'*';
     csv_format.date_format = Some("dd/MM/yyyy".to_string());
     csv_format.datetime_format = Some("dd/MM/yyyy HH:mm:ss".to_string());
@@ -1054,6 +1064,7 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
                 .downcast_ref::<CsvFormatFactory>()
                 .unwrap();
             let csv_config = csv_factory.options.as_ref().unwrap();
+            assert_eq!(csv_format.quote_style, csv_config.quote_style);
             assert_eq!(csv_format.delimiter, csv_config.delimiter);
             assert_eq!(csv_format.date_format, csv_config.date_format);
             assert_eq!(csv_format.datetime_format, csv_config.datetime_format);

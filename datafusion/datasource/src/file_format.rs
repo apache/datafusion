@@ -16,6 +16,7 @@ use crate::file_scan_config::FileScanConfig;
 use crate::file_sink_config::FileSinkConfig;
 
 use arrow::datatypes::{Schema, SchemaRef};
+use datafusion_common::config::ConfigField;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     GetExt, Result, SchemaError, Statistics, internal_err, not_impl_err, schema_err,
@@ -207,6 +208,36 @@ impl dyn FileFormat {
     pub fn downcast_ref<T: FileFormat>(&self) -> Option<&T> {
         (self as &dyn Any).downcast_ref()
     }
+}
+
+/// Applies SQL `format.*` options or bare option keys to a factory's defaults.
+///
+/// ```
+/// use datafusion_common::config::CsvOptions;
+/// use datafusion_datasource::file_format::with_format_options;
+/// use std::collections::HashMap;
+///
+/// let overrides = HashMap::from([("format.has_header".into(), "false".into())]);
+/// let csv = with_format_options(&CsvOptions::default(), &overrides)?;
+/// assert_eq!(csv.has_header, Some(false));
+/// # Ok::<(), datafusion_common::DataFusionError>(())
+/// ```
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub fn with_format_options<T: ConfigField + Clone>(
+    defaults: &T,
+    format_options: &HashMap<String, String>,
+) -> Result<T> {
+    let mut options = defaults.clone();
+    for (key, value) in format_options {
+        options.set(key.strip_prefix("format.").unwrap_or(key), value)?;
+    }
+    Ok(options)
 }
 
 /// Factory for creating [`FileFormat`] instances based on session and command level options
