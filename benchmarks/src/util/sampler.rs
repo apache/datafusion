@@ -11,10 +11,19 @@
 //! |              | of: the median converges to `--target-precision`, the query |
 //! |              | used `--max-time` seconds, or `--max-iterations` runs.      |
 //!
+//! With `--lockstep-in` and `--lockstep-out`, an external orchestrator
+//! (`benchmarks/interleave.py`) makes every stopping decision. It runs a
+//! baseline and a branch process side by side and alternates their
+//! iterations. See [`Lockstep`].
+//!
 //! There is no warmup. A warmup run of a slow query costs as much as a
 //! measured run, and the convergence check already absorbs a slow first run.
 
 use datafusion_common::instant::Instant;
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 /// Fewest samples for which [`median_ci_rel_half_width`] gives a 95% interval
@@ -38,6 +47,7 @@ pub struct Sampler {
     min_iterations: usize,
     max_iterations: usize,
     adaptive: Option<Adaptive>,
+    lockstep: Option<&'static Mutex<Lockstep>>,
     started: Instant,
     samples: Vec<f64>,
 }
@@ -55,6 +65,7 @@ impl Sampler {
             min_iterations: iterations,
             max_iterations: iterations,
             adaptive: None,
+            lockstep: None,
             started: Instant::now(),
             samples: Vec::with_capacity(iterations),
         }
@@ -77,6 +88,20 @@ impl Sampler {
                 budget,
                 target_precision,
             }),
+            lockstep: None,
+            started: Instant::now(),
+            samples: vec![],
+        }
+    }
+
+    /// A sampler that asks the orchestrator behind `lockstep` before each
+    /// iteration and reports each duration to it.
+    pub fn lockstep(lockstep: &'static Mutex<Lockstep>) -> Self {
+        Self {
+            min_iterations: 0,
+            max_iterations: usize::MAX,
+            adaptive: None,
+            lockstep: Some(lockstep),
             started: Instant::now(),
             samples: vec![],
         }
@@ -85,6 +110,10 @@ impl Sampler {
     /// Returns the index of the next iteration to run, or `None` to stop.
     pub fn next_iteration(&mut self) -> Option<usize> {
         let n = self.samples.len();
+        if let Some(lockstep) = self.lockstep {
+            let run = lockstep.lock().expect("lockstep poisoned").ask();
+            return run.then_some(n);
+        }
         if n == 0 {
             self.started = Instant::now();
         }
@@ -108,6 +137,70 @@ impl Sampler {
     /// last returned.
     pub fn record(&mut self, elapsed: Duration) {
         self.samples.push(elapsed.as_secs_f64());
+        if let Some(lockstep) = self.lockstep {
+            lockstep.lock().expect("lockstep poisoned").report(elapsed);
+        }
+    }
+}
+
+/// A line protocol over two FIFOs between a benchmark process and an
+/// orchestrator that decides when each iteration runs.
+///
+/// | Direction            | Line             | Meaning                               |
+/// |----------------------|------------------|---------------------------------------|
+/// | process → orchestrator | `ready`        | The process wants to run an iteration. |
+/// | orchestrator → process | `run` / `stop` | Run it, or end the current query.      |
+/// | process → orchestrator | `elapsed <s>`  | The iteration took `<s>` seconds.      |
+///
+/// After `stop`, the next `ready` belongs to the next query. Both processes
+/// must run the same queries in the same order. The process blocks while it
+/// waits for `run`, so the other process has the machine to itself.
+#[derive(Debug)]
+pub struct Lockstep {
+    from_orchestrator: BufReader<File>,
+    to_orchestrator: File,
+}
+
+impl Lockstep {
+    /// Opens the FIFOs once per process. The open order (input first)
+    /// must match the orchestrator, or both sides block forever.
+    pub fn global(input: &Path, output: &Path) -> &'static Mutex<Lockstep> {
+        static LOCKSTEP: OnceLock<Mutex<Lockstep>> = OnceLock::new();
+        LOCKSTEP.get_or_init(|| {
+            let from_orchestrator =
+                BufReader::new(File::open(input).expect("failed to open --lockstep-in"));
+            let to_orchestrator = OpenOptions::new()
+                .write(true)
+                .open(output)
+                .expect("failed to open --lockstep-out");
+            Mutex::new(Lockstep {
+                from_orchestrator,
+                to_orchestrator,
+            })
+        })
+    }
+
+    fn ask(&mut self) -> bool {
+        self.send("ready");
+        let mut line = String::new();
+        self.from_orchestrator
+            .read_line(&mut line)
+            .expect("failed to read from orchestrator");
+        match line.trim() {
+            "run" => true,
+            "stop" => false,
+            other => panic!("unexpected orchestrator reply {other:?}"),
+        }
+    }
+
+    fn report(&mut self, elapsed: Duration) {
+        self.send(&format!("elapsed {}", elapsed.as_secs_f64()));
+    }
+
+    fn send(&mut self, line: &str) {
+        writeln!(self.to_orchestrator, "{line}")
+            .and_then(|()| self.to_orchestrator.flush())
+            .expect("failed to write to orchestrator");
     }
 }
 

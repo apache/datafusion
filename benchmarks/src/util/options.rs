@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, path::PathBuf, sync::Arc, time::Duration};
 
 use clap::Args;
 use datafusion::{
@@ -20,7 +20,7 @@ use datafusion::{
 use datafusion_common::{DataFusionError, Result};
 use object_store::local::LocalFileSystem;
 
-use super::sampler::Sampler;
+use super::sampler::{Lockstep, Sampler};
 use super::simulated_object_store::{
     BYTES_PER_SECOND, MAX_CONNECTIONS, SimulatedObjectStore,
 };
@@ -79,6 +79,15 @@ pub struct CommonOpt {
     /// [`crate::util::simulated_object_store`].
     #[arg(long = "simulate-latency", env)]
     pub simulate_latency: bool,
+
+    /// FIFO that an orchestrator such as `benchmarks/interleave.py` writes `run` / `stop` to.
+    /// Requires --lockstep-out. The orchestrator then decides every iteration
+    #[arg(long = "lockstep-in", requires = "lockstep_out")]
+    pub lockstep_in: Option<PathBuf>,
+
+    /// FIFO that this process reports `ready` / `elapsed` to. Requires --lockstep-in
+    #[arg(long = "lockstep-out", requires = "lockstep_in")]
+    pub lockstep_out: Option<PathBuf>,
 }
 
 /// Session configuration overrides shared by query benchmarks.
@@ -126,6 +135,9 @@ impl QueryOpt {
 impl CommonOpt {
     /// Returns the [`Sampler`] that controls the iteration loop of one query.
     pub fn sampler(&self) -> Sampler {
+        if let (Some(input), Some(output)) = (&self.lockstep_in, &self.lockstep_out) {
+            return Sampler::lockstep(Lockstep::global(input, output));
+        }
         match self.max_time {
             None => Sampler::fixed(self.iterations),
             Some(secs) => Sampler::adaptive(
@@ -373,6 +385,8 @@ mod tests {
             max_time: None,
             target_precision: 0.02,
             max_iterations: 1000,
+            lockstep_in: None,
+            lockstep_out: None,
             partitions: None,
             batch_size: None,
             mem_pool_type: "fair".to_string(),
