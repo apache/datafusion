@@ -1192,21 +1192,33 @@ pub(crate) fn sort_expr_to_sorting_column(
 
 /// Convert a [`LexOrdering`] to `Vec<SortingColumn>` for Parquet.
 ///
-/// Columns that are not present in `writer_schema` are omitted from the resulting
-/// metadata. Returns `Err` if any expression is not a simple column reference or
-/// references a column outside `input_schema`.
+/// Keeps the longest prefix of sort expressions that can be represented as Parquet
+/// sorting columns (simple column references present in `writer_schema` or omitted
+/// partition columns). Columns not in `writer_schema` (e.g. partition keys) are
+/// omitted. As soon as an expression cannot be represented (e.g. a computed expression),
+/// subsequent expressions are stopped because tie-breaking order cannot be encoded.
+///
+/// Returns `Err` if a referenced column is outside `input_schema`.
 pub(crate) fn lex_ordering_to_sorting_columns(
     ordering: &LexOrdering,
     input_schema: &Schema,
     writer_schema: &Schema,
 ) -> Result<Vec<SortingColumn>> {
-    ordering
-        .iter()
-        .filter_map(|sort_expr| {
-            sort_expr_to_sorting_column(sort_expr, input_schema, writer_schema)
-                .transpose()
-        })
-        .collect()
+    let mut sorting_columns = Vec::new();
+    for sort_expr in ordering.iter() {
+        if sort_expr.expr.downcast_ref::<Column>().is_none() {
+            // Parquet sorting_columns only supports simple column references.
+            // As soon as a non-column expression is encountered, subsequent
+            // sort expressions cannot maintain ordering in Parquet metadata.
+            break;
+        }
+        if let Some(col) =
+            sort_expr_to_sorting_column(sort_expr, input_schema, writer_schema)?
+        {
+            sorting_columns.push(col);
+        }
+    }
+    Ok(sorting_columns)
 }
 
 /// Extracts ordering information from Parquet metadata.
@@ -1328,6 +1340,62 @@ mod tests {
                 },
             ]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_lex_ordering_to_sorting_columns_prefix_on_non_column() -> Result<()> {
+        use datafusion_expr::Operator;
+        use datafusion_physical_expr::PhysicalExpr;
+        use datafusion_physical_expr::expressions::binary;
+        use datafusion_physical_expr::expressions::lit;
+
+        let input_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let writer_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+
+        let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let col_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 1));
+        let computed = binary(Arc::clone(&col_a), Operator::Plus, lit(1), &input_schema)?;
+
+        // [a ASC, a + 1 ASC, b ASC] -> only prefix [a ASC] is encodable
+        let ordering = LexOrdering::new(vec![
+            PhysicalSortExpr::new(col_a, SortOptions::default()),
+            PhysicalSortExpr::new(computed.clone(), SortOptions::default()),
+            PhysicalSortExpr::new(col_b.clone(), SortOptions::default()),
+        ])
+        .unwrap();
+
+        let sorting_columns =
+            lex_ordering_to_sorting_columns(&ordering, &input_schema, &writer_schema)?;
+        assert_eq!(
+            sorting_columns,
+            vec![SortingColumn {
+                column_idx: 0,
+                descending: false,
+                nulls_first: true,
+            }]
+        );
+
+        // Leading non-column expression [a + 1 ASC, b ASC] -> empty prefix
+        let ordering_leading_non_col = LexOrdering::new(vec![
+            PhysicalSortExpr::new(computed, SortOptions::default()),
+            PhysicalSortExpr::new(col_b, SortOptions::default()),
+        ])
+        .unwrap();
+
+        let sorting_columns_empty = lex_ordering_to_sorting_columns(
+            &ordering_leading_non_col,
+            &input_schema,
+            &writer_schema,
+        )?;
+        assert!(sorting_columns_empty.is_empty());
 
         Ok(())
     }
