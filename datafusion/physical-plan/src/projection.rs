@@ -169,6 +169,34 @@ impl ProjectionExec {
         Self::try_from_projector(projector, input, overrides_metadata)
     }
 
+    pub(crate) fn with_pruned_input(
+        &self,
+        exprs: Vec<ProjectionExpr>,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Self> {
+        // Input pruning must preserve output values, metadata, ordering, and partitioning.
+        let projector = self
+            .projector
+            .with_new_projection_preserving_schema(ProjectionExprs::new(exprs));
+        debug_assert_eq!(
+            projector.output_schema(),
+            projector
+                .projection()
+                .make_projector_with_schema_metadata(
+                    &input.schema(),
+                    self.schema().as_ref()
+                )?
+                .output_schema()
+        );
+        Ok(Self {
+            projector,
+            input,
+            metrics: ExecutionPlanMetricsSet::new(),
+            cache: Arc::clone(&self.cache),
+            overrides_metadata: self.overrides_metadata,
+        })
+    }
+
     fn try_from_projector(
         projector: Projector,
         input: Arc<dyn ExecutionPlan>,

@@ -35,6 +35,9 @@ use arrow::datatypes::{DataType, Field, Fields, Int32Type, Schema};
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion_common::Result;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_datasource::source::DataSourceExec;
+use datafusion_physical_plan::displayable;
 use parquet::arrow::ArrowWriter;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -784,6 +787,55 @@ async fn leaf_pushdown_parquet_fuzz() {
         seed(),
     )
     .await;
+}
+
+#[tokio::test]
+async fn leaf_pushdown_prunes_filter_only_columns() -> Result<()> {
+    let dir = TempDir::new()?;
+    let reference = memory_ctx(false);
+    for seed in seed()..seed() + env_usize("LEAF_PUSHDOWN_FUZZ_CASES", 64) as u64 {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mut cfg = config(true, true).with_batch_size(1);
+        cfg.options_mut().execution.target_partitions = rng.random_range(2..=4);
+        let ctx = SessionContext::new_with_config(cfg);
+        let path = dir.path().join(format!("{seed}.parquet"));
+        write_parquet(&path, &table_batch(0));
+        ctx.register_parquet("t1", path.to_str().unwrap(), ParquetReadOptions::default())
+            .await?;
+
+        let left = pick(&mut rng, &["b", "s['a']", "t['x']"]);
+        let right = pick(&mut rng, &["b", "s['a']", "t['x']"]);
+        let op = pick(&mut rng, &["+", "-", "*"]);
+        let threshold = rng.random_range(-4..=1);
+        let sql = format!(
+            "SELECT {left} {op} {right} AS result, CAST({right} AS BIGINT) AS other \
+             FROM t1 WHERE a > {threshold} AND lower(s['b']) <> 'never'"
+        );
+        let plan = ctx.sql(&sql).await?.create_physical_plan().await?;
+        let text = displayable(plan.as_ref()).indent(true).to_string();
+        assert!(
+            text.contains("RoundRobinBatch"),
+            "seed {seed}: {sql}\n{text}"
+        );
+        let mut scans = 0;
+        plan.apply(|node| {
+            if node.downcast_ref::<DataSourceExec>().is_some() {
+                scans += 1;
+                assert!(
+                    node.schema().field_with_name("a").is_err(),
+                    "seed {seed}: filter-only column remains: {sql}\n{text}"
+                );
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(scans, 1, "seed {seed}: {sql}\n{text}");
+        assert_eq!(
+            normalize(&collect(&reference, &sql).await?),
+            normalize(&collect(&ctx, &sql).await?),
+            "seed {seed}: {sql}\n{text}"
+        );
+    }
+    Ok(())
 }
 
 #[rstest]
