@@ -633,6 +633,23 @@ that aligns with the SQL specification.</p>
 </pre></div>
 </div>
 </section>
+<section id="partitioned-by-column-names-are-normalized-like-other-identifiers">
+<h3><code class="docutils literal notranslate"><span class="pre">PARTITIONED</span> <span class="pre">BY</span></code> column names are normalized like other identifiers<a class="headerlink" href="#partitioned-by-column-names-are-normalized-like-other-identifiers" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">PARTITIONED</span> <span class="pre">BY</span></code> column names in <code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">TO</span></code> and <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> are now
+normalized the same way as other SQL identifiers. Unquoted names are lowercased
+when <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.enable_ident_normalization</span></code> is enabled (the default),
+and quoted names keep their exact spelling without the quotes. Previously, a
+quoted name such as <code class="docutils literal notranslate"><span class="pre">&quot;'p'&quot;</span></code> kept its quotes, so it did not match the column <code class="docutils literal notranslate"><span class="pre">'p'</span></code>,
+and an unquoted name such as <code class="docutils literal notranslate"><span class="pre">P</span></code> was not lowercased. See
+<a class="reference external" href="https://github.com/apache/datafusion/issues/9714">#9714</a> for details.</p>
+<p>Quote partition column names that contain uppercase letters, for example
+<code class="docutils literal notranslate"><span class="pre">PARTITIONED</span> <span class="pre">BY</span> <span class="pre">(&quot;Year&quot;)</span></code> for a <code class="docutils literal notranslate"><span class="pre">Year=2024/</span></code> directory layout, or
+<code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">t</span> <span class="pre">TO</span> <span class="pre">...</span> <span class="pre">PARTITIONED</span> <span class="pre">BY</span> <span class="pre">(&quot;Year&quot;)</span></code> for a source column named <code class="docutils literal notranslate"><span class="pre">&quot;Year&quot;</span></code>.</p>
+<p>The Rust fields <code class="docutils literal notranslate"><span class="pre">CopyToStatement::partitioned_by</span></code> and
+<code class="docutils literal notranslate"><span class="pre">CreateExternalTable::table_partition_cols</span></code> in <code class="docutils literal notranslate"><span class="pre">datafusion_sql::parser</span></code> changed
+from <code class="docutils literal notranslate"><span class="pre">Vec&lt;String&gt;</span></code> to <code class="docutils literal notranslate"><span class="pre">Vec&lt;Ident&gt;</span></code>. Use <code class="docutils literal notranslate"><span class="pre">Ident::new(&quot;p&quot;)</span></code> to build an unquoted
+name, or <code class="docutils literal notranslate"><span class="pre">Ident::with_quote('&quot;',</span> <span class="pre">&quot;P&quot;)</span></code> to build a quoted one.</p>
+</section>
 <section id="deprecated-expr-wildcard-has-been-removed">
 <span id="deprecated-exprwildcard-has-been-removed"></span><h3>Deprecated <code class="docutils literal notranslate"><span class="pre">Expr::Wildcard</span></code> has been removed<a class="headerlink" href="#deprecated-expr-wildcard-has-been-removed" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">Expr::Wildcard</span></code> has been deprecated since version 46.0.0, and has been removed.
@@ -736,6 +753,7 @@ that does not remap the scans now fails with an error that names the rule.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sparkoptions-mapkeydeduppolicy-and-configoptions-spark-removed"><code class="docutils literal notranslate"><span class="pre">SparkOptions</span></code>, <code class="docutils literal notranslate"><span class="pre">MapKeyDedupPolicy</span></code>, and <code class="docutils literal notranslate"><span class="pre">ConfigOptions::spark</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetfilereaderfactory-adds-any-as-a-supertrait"><code class="docutils literal notranslate"><span class="pre">ParquetFileReaderFactory</span></code> adds <code class="docutils literal notranslate"><span class="pre">Any</span></code> as a supertrait</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#copy-to-ordering"><code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">TO</span></code> ordering</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partitioned-by-column-names-are-normalized-like-other-identifiers"><code class="docutils literal notranslate"><span class="pre">PARTITIONED</span> <span class="pre">BY</span></code> column names are normalized like other identifiers</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#deprecated-expr-wildcard-has-been-removed">Deprecated <code class="docutils literal notranslate"><span class="pre">Expr::Wildcard</span></code> has been removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-must-have-one-columnstatistics-per-schema-field">Statistics must have one <code class="docutils literal notranslate"><span class="pre">ColumnStatistics</span></code> per schema field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#materialized-cte-scans-have-a-projection">Materialized CTE scans have a projection</a></li>
