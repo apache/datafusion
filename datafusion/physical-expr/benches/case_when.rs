@@ -94,6 +94,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     benchmark_lookup_table_case_when(c, 8192);
     benchmark_lookup_table_by_number_of_entries(c, 8192);
+    benchmark_lookup_table_contiguous_literals(c, 8192);
     benchmark_divide_by_zero_protection(c, 8192);
     benchmark_struct_field_case_when(c, 8192);
 }
@@ -584,6 +585,91 @@ fn benchmark_lookup_table_by_number_of_entries(c: &mut Criterion, batch_size: us
                     b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
                 },
             );
+        }
+    }
+
+    group.finish();
+}
+
+/// `CASE c WHEN b THEN 0 WHEN b + 1 THEN 1 ... ELSE -1 END` with literals forming a
+/// contiguous range, for a range of numbers of literals, with no nulls and with 50%
+/// nulls. 90% of the non-null values match one of the literals, either in random order
+/// or in runs of the same value, and the rest fall just outside the range.
+fn benchmark_lookup_table_contiguous_literals(c: &mut Criterion, batch_size: usize) {
+    let mut group = c.benchmark_group("lookup_table_case_when_contiguous");
+
+    const RUN_LENGTH: usize = 512;
+
+    type ToScalar = fn(i32) -> ScalarValue;
+    let types: [(&str, DataType, ToScalar); 4] = [
+        ("i8", DataType::Int8, |v| ScalarValue::Int8(Some(v as i8))),
+        ("i16", DataType::Int16, |v| {
+            ScalarValue::Int16(Some(v as i16))
+        }),
+        ("i32", DataType::Int32, |v| ScalarValue::Int32(Some(v))),
+        ("i64", DataType::Int64, |v| {
+            ScalarValue::Int64(Some(v as i64))
+        }),
+    ];
+
+    for (type_name, data_type, to_scalar) in types {
+        // The values just outside the range of the literals must fit in i8
+        let (base, entry_counts): (i32, &[i32]) = match data_type {
+            DataType::Int8 => (-30, &[2, 4, 8, 16, 32]),
+            _ => (1000, &[2, 4, 8, 16, 32, 64, 256]),
+        };
+        for &num_entries in entry_counts {
+            for (order, null_percent) in ["random", "runs"]
+                .into_iter()
+                .flat_map(|order| [(order, 0), (order, 50)])
+            {
+                let rng = &mut seedable_rng();
+                let mut value = || {
+                    if rng.random_ratio(null_percent, 100) {
+                        None
+                    } else if rng.random_bool(0.9) {
+                        Some(base + rng.random_range(0..num_entries))
+                    } else if rng.random_bool(0.5) {
+                        Some(base - 1 - rng.random_range(0..num_entries))
+                    } else {
+                        Some(base + num_entries + rng.random_range(0..num_entries))
+                    }
+                };
+                let array: Int32Array = match order {
+                    "random" => (0..batch_size).map(|_| value()).collect(),
+                    _ => (0..batch_size.div_ceil(RUN_LENGTH))
+                        .flat_map(|_| std::iter::repeat_n(value(), RUN_LENGTH))
+                        .take(batch_size)
+                        .collect(),
+                };
+                let array = cast(&array, &data_type).unwrap();
+                let batch = RecordBatch::try_new(
+                    Arc::new(Schema::new(vec![Field::new("c", data_type.clone(), true)])),
+                    vec![array],
+                )
+                .unwrap();
+
+                group.bench_function(
+                    format!(
+                        "{batch_size} rows: {type_name} -> i32, {num_entries} entries, {order}, {null_percent}% nulls"
+                    ),
+                    |b| {
+                        let when_thens = (0..num_entries)
+                            .map(|i| (lit(to_scalar(base + i)), lit(i)))
+                            .collect();
+                        let expr = Arc::new(
+                            case(
+                                Some(col("c", batch.schema_ref()).unwrap()),
+                                when_thens,
+                                Some(lit(-1)),
+                            )
+                            .unwrap(),
+                        );
+
+                        b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+                    },
+                );
+            }
         }
     }
 
