@@ -258,6 +258,60 @@ select a, p from null_part_write order by a;
 statement ok
 set datafusion.execution.listing_table_hive_default_partition_name = '__HIVE_DEFAULT_PARTITION__';
 
+
+# Test: a NULL (__HIVE_DEFAULT_PARTITION__) partition must not wipe out the
+# merged min/max statistics of the partition column. See #26748.
+
+query I
+copy (values(1, 100))
+to 'test_files/scratch/listing_table_partitions/null_part_stats/d=2024-01-01/data.parquet';
+----
+1
+
+query I
+copy (values(2, 200))
+to 'test_files/scratch/listing_table_partitions/null_part_stats/d=2024-06-15/data.parquet';
+----
+1
+
+query I
+copy (values(3, 300))
+to 'test_files/scratch/listing_table_partitions/null_part_stats/d=2024-12-31/data.parquet';
+----
+1
+
+query I
+copy (values(4, 400))
+to 'test_files/scratch/listing_table_partitions/null_part_stats/d=__HIVE_DEFAULT_PARTITION__/data.parquet';
+----
+1
+
+statement count 0
+create external table null_part_stats (column1 int, column2 int, d date)
+stored as parquet
+partitioned by (d)
+location 'test_files/scratch/listing_table_partitions/null_part_stats/';
+
+# min/max on the partition column is answered from statistics (no scan)
+# despite the NULL partition.
+query TT
+explain select min(d), max(d) from null_part_stats;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[min(null_part_stats.d), max(null_part_stats.d)]]
+02)--TableScan: null_part_stats projection=[d]
+physical_plan
+01)ProjectionExec: expr=[2024-01-01 as min(null_part_stats.d), 2024-12-31 as max(null_part_stats.d)]
+02)--PlaceholderRowExec
+
+query DD
+select min(d), max(d) from null_part_stats;
+----
+2024-01-01 2024-12-31
+
+statement ok
+drop table null_part_stats;
+
 # A root filename cannot supply an integer partition value, so the stray
 # year=2025.parquet below is skipped instead of being cast to INT.
 query I
