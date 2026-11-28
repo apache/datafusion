@@ -28,6 +28,8 @@ use crate::aggregates::{
     order::GroupClustering,
 };
 
+mod growth;
+pub(crate) use growth::{hash_table_growth, vec_growth};
 mod metrics;
 mod null_builder;
 
@@ -109,6 +111,32 @@ pub trait GroupValues: Send {
     ///
     /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
+
+    /// Returns an upper bound on the bytes, above [`Self::size`], that
+    /// [`Self::intern`] may hold at its peak while it interns `num_rows` rows.
+    ///
+    /// The bound includes the old and the new storage of every buffer that
+    /// grows, because both are live while the buffer copies. A caller can
+    /// reserve `size() + max_intern_growth(num_rows)` before it interns, so
+    /// that the memory pool sees the allocation before it happens.
+    ///
+    /// The default returns 0, which means that the implementation makes no
+    /// prediction.
+    fn max_intern_growth(&self, _num_rows: usize) -> usize {
+        0
+    }
+
+    /// Returns an upper bound like [`Self::max_intern_growth`] for interning
+    /// exactly `cols`.
+    ///
+    /// An implementation can look up the rows to count only the keys that
+    /// are not stored yet. Then a batch of existing keys does not reserve a
+    /// table growth that does not happen, even when the table is full.
+    ///
+    /// The default returns `max_intern_growth` for the number of rows.
+    fn max_intern_growth_for(&self, cols: &[ArrayRef]) -> usize {
+        self.max_intern_growth(cols.first().map_or(0, |c| c.len()))
+    }
 
     /// Returns true if this [`GroupValues`] is empty
     fn is_empty(&self) -> bool;

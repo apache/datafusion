@@ -151,8 +151,8 @@ impl AggregateTableMetrics {
 }
 
 pub(super) use common::{
-    AggregateHashTable, FinalMarker, PartialMarker, PartialReduceMarker,
-    PartialSkipMarker, SingleMarker,
+    AggregateHashTable, EvaluatedAggregateBatch, FinalMarker, PartialMarker,
+    PartialReduceMarker, PartialSkipMarker, SingleMarker,
 };
 pub(super) use common_clustered::{
     ClusteredAggregateTable, ClusteredAggregateTableMetrics,

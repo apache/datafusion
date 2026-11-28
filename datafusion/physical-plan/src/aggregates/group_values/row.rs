@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::aggregates::group_values::{GroupValues, MISSING_GROUP};
+use crate::aggregates::group_values::{GroupValues, MISSING_GROUP, hash_table_growth};
 use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, LargeListViewArray, ListArray,
     ListViewArray, MapArray, PrimitiveArray, RunArray, StructArray,
@@ -193,6 +193,12 @@ impl GroupValues for GroupValuesRows {
 
     fn supports_lookup(&self) -> bool {
         true
+    }
+
+    fn max_intern_growth(&self, num_rows: usize) -> usize {
+        // The `Rows` buffer grows by row width, which depends on the data, so
+        // only the hash table is bounded here.
+        hash_table_growth(&self.map, num_rows)
     }
 
     fn size(&self) -> usize {

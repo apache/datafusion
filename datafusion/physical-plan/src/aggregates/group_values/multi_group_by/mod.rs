@@ -24,7 +24,7 @@ use crate::aggregates::group_values::multi_group_by::{
     fixed_size_binary::FixedSizeBinaryGroupValueBuilder,
     primitive::PrimitiveGroupValueBuilder, row_backed::RowsGroupColumn,
 };
-use crate::aggregates::group_values::{GroupValues, MISSING_GROUP};
+use crate::aggregates::group_values::{GroupValues, MISSING_GROUP, hash_table_growth};
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::array::AsArray;
 use arrow::array::{
@@ -1194,6 +1194,12 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
 
     fn supports_lookup(&self) -> bool {
         true
+    }
+
+    fn max_intern_growth(&self, num_rows: usize) -> usize {
+        // The column builders grow by value width, which depends on the
+        // data, so only the hash table is bounded here.
+        hash_table_growth(&self.map, num_rows)
     }
 
     fn size(&self) -> usize {

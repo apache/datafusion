@@ -18,8 +18,8 @@ use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
 
 use super::aggregate_hash_table::{
-    AggregateHashTable, ClusteredAggregateTableMetrics, FinalMarker, PartialMarker,
-    PartialSkipMarker,
+    AggregateHashTable, ClusteredAggregateTableMetrics, EvaluatedAggregateBatch,
+    FinalMarker, PartialMarker, PartialSkipMarker,
 };
 use super::order::GroupClusteringMode;
 use super::skip_partial::SkipAggregationProbe;
@@ -291,8 +291,29 @@ impl PartialHashAggregateStream {
 
             let mut last_state = HandleInputResult::ProcessNext;
             while let Some(batch) = self.input.next().await.transpose()? {
-                let timer = elapsed_compute.timer();
-                last_state = self.handle_input_batch(&batch, &mut hash_table)?;
+                let mut timer = elapsed_compute.timer();
+                let evaluated = hash_table.evaluate_batch(&batch)?;
+                if self.reserve_batch_peak(&hash_table, &evaluated)?
+                    == HandleInputResult::OOM
+                {
+                    let materialized_group_states = hash_table.take_state_batch()?.ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "Partial hash aggregate ran out of memory with no aggregated groups"
+                        )
+                    })?;
+
+                    self.early_emit_count.add(1);
+                    timer.done();
+                    self.emit_on_memory_pressure(
+                        materialized_group_states,
+                        &mut emitter,
+                        hash_table.memory_size(),
+                    )
+                    .await?;
+                    timer = elapsed_compute.timer();
+                }
+                last_state =
+                    self.handle_input_batch(&batch, evaluated, &mut hash_table)?;
 
                 match last_state {
                     HandleInputResult::ProcessNext => {}
@@ -372,10 +393,40 @@ impl PartialHashAggregateStream {
         self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
     }
 
+    /// Reserves the peak memory of aggregating `num_rows` more rows before the
+    /// group values grow.
+    ///
+    /// Returns [`HandleInputResult::OOM`] if the reservation fails while the
+    /// table holds groups that an early emit can release. An empty table has
+    /// nothing to emit, so the check after the batch decides whether its
+    /// actual size fits.
+    fn reserve_batch_peak(
+        &mut self,
+        hash_table: &AggregateHashTable<PartialMarker>,
+        evaluated: &EvaluatedAggregateBatch,
+    ) -> Result<HandleInputResult> {
+        let peak_size = hash_table
+            .memory_size()
+            .saturating_add(hash_table.max_evaluated_growth(evaluated));
+        match self.reservation.try_resize(peak_size) {
+            Ok(()) => Ok(HandleInputResult::ProcessNext),
+            Err(DataFusionError::ResourcesExhausted(_))
+                if hash_table.building_group_count() > 0 =>
+            {
+                Ok(HandleInputResult::OOM)
+            }
+            Err(DataFusionError::ResourcesExhausted(_)) => {
+                Ok(HandleInputResult::ProcessNext)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Aggregate input batch into the hash table
     fn handle_input_batch(
         &mut self,
         batch: &RecordBatch,
+        evaluated: EvaluatedAggregateBatch,
         hash_table: &mut AggregateHashTable<PartialMarker>,
     ) -> Result<HandleInputResult> {
         // ----------------------------------
@@ -384,7 +435,8 @@ impl PartialHashAggregateStream {
         let input_rows = batch.num_rows();
         self.reduction_factor.add_total(input_rows);
         let groups_before = hash_table.building_group_count();
-        hash_table.aggregate_batch(batch)?;
+        hash_table.aggregate_evaluated(&evaluated)?;
+        drop(evaluated);
 
         // --------------------------------
         // Step 2: Soft limit optimization
@@ -666,6 +718,27 @@ impl FinalHashAggregateStream {
         }
     }
 
+    /// Returns the bytes that aggregating `num_rows` rows may add to
+    /// [`Self::reservation_size_for_table`] at its peak, including the spill
+    /// headroom for the groups that the batch can add.
+    fn max_batch_growth(
+        hash_table: &AggregateHashTable<FinalMarker>,
+        spill_context: Option<&AggregateSpill>,
+        evaluated: &EvaluatedAggregateBatch,
+        num_rows: usize,
+    ) -> usize {
+        let headroom = if spill_context.is_some() {
+            hash_table
+                .max_new_groups(num_rows)
+                .saturating_mul(size_of::<u32>())
+        } else {
+            0
+        };
+        hash_table
+            .max_evaluated_growth(evaluated)
+            .saturating_add(headroom)
+    }
+
     fn spill_table(
         hash_table: &mut AggregateHashTable<FinalMarker>,
         spill_context: &mut AggregateSpill,
@@ -725,7 +798,37 @@ impl FinalHashAggregateStream {
                 }
                 Err(e) => return Err(e),
             }
-            hash_table.aggregate_batch(&batch)?;
+
+            // Reserve the peak of the batch before the group values grow.
+            let evaluated = hash_table.evaluate_batch(&batch)?;
+            let growth = Self::max_batch_growth(
+                hash_table,
+                spill_context.as_deref(),
+                &evaluated,
+                batch.num_rows(),
+            );
+            match self.reservation.try_grow(growth) {
+                Ok(()) => {}
+                Err(DataFusionError::ResourcesExhausted(_))
+                    if hash_table.building_group_count() > 0
+                        && let Some(spill_ctx) = spill_context.as_mut() =>
+                {
+                    Self::spill_table(hash_table, spill_ctx.as_mut(), &self.reservation)?;
+                    // The spill drops the batch's reservation with the table.
+                    // Without it, the check after the batch decides.
+                    if batch_memory > 0 {
+                        let _ = self.reservation.try_grow(batch_memory);
+                    }
+                }
+                // Without groups or without spilling there is nothing to
+                // release first. The check after the batch decides whether
+                // its actual size fits.
+                Err(DataFusionError::ResourcesExhausted(_)) => {}
+                Err(e) => return Err(e),
+            }
+
+            hash_table.aggregate_evaluated(&evaluated)?;
+            drop(evaluated);
 
             // Soft group limits are usually small and rarely coincide with
             // spilling. Once spilling has occurred, skip this optimization to
@@ -748,9 +851,6 @@ impl FinalHashAggregateStream {
 
             match resize_result {
                 Ok(()) => {}
-
-                // The table cannot reserve enough memory.
-                // Move all current states into one fully group-key-sorted spill run.
                 Err(e @ DataFusionError::ResourcesExhausted(_)) => {
                     let Some(spill_ctx) = spill_context.as_mut() else {
                         return Err(e.context(

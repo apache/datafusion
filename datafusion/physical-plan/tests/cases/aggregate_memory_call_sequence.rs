@@ -495,7 +495,7 @@ async fn spills_twice_then_replays() -> Result<()> {
     let _bound = hide_byte_counts().bind_to_scope();
     let run = run_final_and_single(|mode| Case {
         batch_size: 256,
-        memory_limit: 39_000,
+        memory_limit: 40_000,
         ..case(mode, &["a"], false, hash_input_repeated())
     })
     .await?;
@@ -505,13 +505,16 @@ async fn spills_twice_then_replays() -> Result<()> {
     FinalHashAggregateStream[0] register can_spill=true
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
+    FinalHashAggregateStream[0] shrink [bytes]
+    FinalHashAggregateStream[0] try_grow [bytes]
+    FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes] -> refused
     FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
-    FinalHashAggregateStream[0] try_grow [bytes] -> refused
     FinalHashAggregateStream[0] shrink [bytes]
+    FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
@@ -564,6 +567,7 @@ async fn without_spilling_returns_refusal() -> Result<()> {
     FinalHashAggregateStream[0] register can_spill=false
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes] -> refused
+    FinalHashAggregateStream[0] try_grow [bytes] -> refused
     FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] unregister
     => Err(Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager
@@ -599,6 +603,7 @@ async fn output_materialization_refused() -> Result<()> {
     FinalHashAggregateStream[0] register can_spill=true
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
+    FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes] -> refused
     FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] unregister
@@ -630,6 +635,7 @@ async fn output_materialization_refused() -> Result<()> {
     SingleHashAggregateStream[0] register can_spill=true
     SingleHashAggregateStream[0] try_grow [bytes]
     SingleHashAggregateStream[0] try_grow [bytes]
+    SingleHashAggregateStream[0] try_grow [bytes]
     SingleHashAggregateStream[0] try_grow [bytes] -> refused
     SingleHashAggregateStream[0] shrink [bytes]
     SingleHashAggregateStream[0] unregister
@@ -641,6 +647,7 @@ async fn output_materialization_refused() -> Result<()> {
     assert_eq!(run.output_batch_rows, vec![64; 4]);
     assert_snapshot!(run.snapshot, @r"
     PartialHashAggregateStream[0] register can_spill=true
+    PartialHashAggregateStream[0] try_grow [bytes]
     PartialHashAggregateStream[0] try_grow [bytes]
     PartialHashAggregateStream[0] try_grow [bytes]
     PartialHashAggregateStream[0] try_grow [bytes] -> refused
@@ -656,6 +663,7 @@ async fn output_materialization_refused() -> Result<()> {
     assert_eq!(run.output_batch_rows, vec![64; 4]);
     assert_snapshot!(run.snapshot, @r"
     PartialReduceHashAggregateStream[0] register can_spill=true
+    PartialReduceHashAggregateStream[0] try_grow [bytes]
     PartialReduceHashAggregateStream[0] try_grow [bytes]
     PartialReduceHashAggregateStream[0] try_grow [bytes]
     PartialReduceHashAggregateStream[0] try_grow [bytes] -> refused
