@@ -618,10 +618,21 @@ impl Statistics {
             }
             _ => None,
         };
+        // The output is a subset of the input rows: it cannot gain nulls or
+        // distinct values, and holds at most `num_rows` of either
+        let subset_count = |count: Precision<usize>| match (count, self.num_rows) {
+            (Precision::Exact(0), _) => count,
+            (_, Precision::Exact(rows) | Precision::Inexact(rows)) => {
+                count.to_inexact().min(&Precision::Inexact(rows))
+            }
+            (_, Precision::Absent) => count.to_inexact(),
+        };
         self.column_statistics = self
             .column_statistics
             .into_iter()
             .map(|cs| {
+                let null_count = cs.null_count;
+                let distinct_count = cs.distinct_count;
                 let mut cs = cs.to_inexact();
                 // Scale byte_size by the row ratio
                 cs.byte_size = match (cs.byte_size, ratio) {
@@ -630,10 +641,8 @@ impl Statistics {
                     }
                     _ => Precision::Absent,
                 };
-                // NDV can never exceed the number of rows
-                if let Some(&rows) = self.num_rows.get_value() {
-                    cs.distinct_count = cs.distinct_count.min(&Precision::Inexact(rows));
-                }
+                cs.null_count = subset_count(null_count);
+                cs.distinct_count = subset_count(distinct_count);
                 cs
             })
             .collect();
@@ -2762,6 +2771,100 @@ mod tests {
             result.column_statistics[0].distinct_count,
             Precision::Inexact(5)
         );
+    }
+
+    fn zero_count_stats(num_rows: Precision<usize>) -> Statistics {
+        Statistics {
+            num_rows,
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    distinct_count: Precision::Exact(0),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(10),
+                    distinct_count: Precision::Exact(10),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    null_count: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    ..Default::default()
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn test_with_fetch_preserves_exact_zero_counts() {
+        let cases = [
+            ("skip", Precision::Exact(1000), None, 100),
+            ("fetch", Precision::Exact(1000), Some(100), 0),
+            ("skip and fetch", Precision::Exact(1000), Some(100), 100),
+            ("skip all rows", Precision::Exact(1000), Some(100), 2000),
+            ("inexact num_rows", Precision::Inexact(1000), Some(100), 100),
+            ("absent num_rows", Precision::Absent, Some(100), 100),
+            ("skip with absent num_rows", Precision::Absent, None, 100),
+        ];
+
+        for (name, num_rows, fetch, skip) in cases {
+            let result = zero_count_stats(num_rows)
+                .with_fetch(fetch, skip, 1)
+                .unwrap();
+            let columns = &result.column_statistics;
+            assert_eq!(columns[0].null_count, Precision::Exact(0), "case {name}");
+            assert_eq!(columns[1].null_count.is_exact(), Some(false), "case {name}");
+            assert_eq!(columns[2].null_count, Precision::Absent, "case {name}");
+            assert_eq!(
+                columns[0].distinct_count,
+                Precision::Exact(0),
+                "case {name}"
+            );
+            assert_eq!(
+                columns[1].distinct_count.is_exact(),
+                Some(false),
+                "case {name}"
+            );
+            assert_eq!(columns[2].distinct_count, Precision::Absent, "case {name}");
+        }
+    }
+
+    #[test]
+    fn test_with_fetch_caps_null_count_at_row_count() {
+        let cases = [
+            (Precision::Exact(1000), Some(5), 0, Precision::Inexact(5)),
+            (
+                Precision::Exact(1000),
+                Some(100),
+                995,
+                Precision::Inexact(5),
+            ),
+            (
+                Precision::Exact(1000),
+                Some(100),
+                2000,
+                Precision::Inexact(0),
+            ),
+            (Precision::Exact(1000), Some(100), 0, Precision::Inexact(10)),
+            (Precision::Inexact(1000), Some(5), 0, Precision::Inexact(5)),
+            (Precision::Absent, Some(5), 0, Precision::Inexact(5)),
+        ];
+
+        for (num_rows, fetch, skip, expected) in cases {
+            let result = zero_count_stats(num_rows)
+                .with_fetch(fetch, skip, 1)
+                .unwrap();
+            let rows = *result.num_rows.get_value().unwrap();
+            for cs in &result.column_statistics {
+                assert!(cs.null_count.get_value().is_none_or(|&n| n <= rows));
+            }
+            assert_eq!(
+                result.column_statistics[1].null_count, expected,
+                "num_rows {num_rows:?}, fetch {fetch:?}, skip {skip}"
+            );
+        }
     }
 
     #[test]
