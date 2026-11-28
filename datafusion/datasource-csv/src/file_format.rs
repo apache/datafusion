@@ -14,7 +14,7 @@ use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::error::ArrowError;
-use datafusion_common::config::{ConfigFileType, CsvOptions};
+use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
     DEFAULT_CSV_EXTENSION, DataFusionError, GetExt, Result, Statistics,
@@ -28,7 +28,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
     DEFAULT_SCHEMA_INFER_MAX_RECORD, FileFormat, FileFormatFactory,
-    ensure_unique_field_names, with_format_options,
+    ensure_unique_field_names,
 };
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
@@ -94,7 +94,13 @@ impl FileFormatFactory for CsvFormatFactory {
                 table_options.alter_with_string_hash_map(format_options)?;
                 table_options.csv
             }
-            Some(options) => with_format_options(options, format_options)?,
+            Some(csv_options) => {
+                let mut csv_options = csv_options.clone();
+                for (k, v) in format_options {
+                    csv_options.set(k.strip_prefix("format.").unwrap_or(k), v)?;
+                }
+                csv_options
+            }
         };
 
         Ok(Arc::new(CsvFormat::default().with_options(csv_options)))
