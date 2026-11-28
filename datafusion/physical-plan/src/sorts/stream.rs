@@ -3,8 +3,9 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
-use crate::spill::gc_columns;
 use crate::spill::spilled_row_sizes::SpilledRowSizes;
+use crate::spill::{gc_columns, get_record_batch_memory_size};
+use crate::stream::RecordBatchStreamAdapter;
 use crate::{EmptyRecordBatchStream, SendableRecordBatchStream};
 use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::array::{Array, UInt32Array};
@@ -13,7 +14,7 @@ use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow_ord::sort::lexsort_to_indices;
-use datafusion_common::{Result, internal_datafusion_err};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
@@ -168,6 +169,9 @@ pub struct RowCursorStream {
     /// buffer the `RowValues` returned for a partition, since the old
     /// `Arc<Rows>` must be dropped before that partition can be polled again.
     rows: ReusableRows,
+    /// The first batch and keys of each partition added by [`Self::try_prime`],
+    /// until it is polled. The reservation covers the batch until then.
+    primed: Vec<Option<(RowValues, RecordBatch, MemoryReservation)>>,
 }
 
 impl RowCursorStream {
@@ -199,7 +203,65 @@ impl RowCursorStream {
                 reserved_sizes: vec![0; stream_count],
                 reservation: rows_reservation,
             },
+            primed: (0..stream_count).map(|_| None).collect(),
         })
+    }
+
+    /// Adds `stream` as a partition and converts its first batch now, before
+    /// a merge polls it. Then a merge of several streams finds out whether
+    /// the keys of all their first batches fit while the caller still owns
+    /// the streams that do not.
+    ///
+    /// If the pool cannot fit the first batch and its keys, returns a stream
+    /// that yields that batch and then the rest of `stream`, and leaves this
+    /// stream as it was. The batch stays reserved until it is yielded. Other
+    /// errors are returned as errors, and `stream` is dropped.
+    pub(crate) async fn try_prime(
+        &mut self,
+        mut stream: SendableRecordBatchStream,
+    ) -> Result<Option<SendableRecordBatchStream>> {
+        let batch = loop {
+            match stream.next().await.transpose()? {
+                // An empty run adds nothing to merge
+                None => return Ok(None),
+                Some(batch) if batch.num_rows() == 0 => {}
+                Some(batch) => break batch,
+            }
+        };
+        let size = get_record_batch_memory_size(&batch);
+        let batch_reservation = self.reservation.new_empty();
+        let stream_idx = self.streams.0.len();
+        self.streams.0.push(stream.fuse());
+        self.rows.inner.push(None);
+        self.rows.reserved_sizes.push(0);
+        let converted = batch_reservation
+            .try_grow(size)
+            .and_then(|()| self.convert_batch(&batch, stream_idx));
+        match converted {
+            Ok(rows) => {
+                self.primed.push(Some((rows, batch, batch_reservation)));
+                Ok(None)
+            }
+            Err(DataFusionError::ResourcesExhausted(_)) => {
+                self.rows.release(stream_idx);
+                self.rows.inner.pop();
+                self.rows.reserved_sizes.pop();
+                let stream = self.streams.0.pop().unwrap().into_inner();
+                // The batch is already in memory
+                batch_reservation.resize(size);
+                let schema = stream.schema();
+                let mut batch_reservation = Some(batch_reservation);
+                let first = futures::stream::iter([batch]).map(move |batch| {
+                    batch_reservation.take();
+                    Ok(batch)
+                });
+                Ok(Some(Box::pin(RecordBatchStreamAdapter::new(
+                    schema,
+                    first.chain(stream),
+                ))))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn convert_batch(
@@ -241,6 +303,9 @@ impl PartitionedStream for RowCursorStream {
         cx: &mut Context<'_>,
         stream_idx: usize,
     ) -> Poll<Option<Self::Output>> {
+        if let Some((rows, batch, _reservation)) = self.primed[stream_idx].take() {
+            return Poll::Ready(Some(Ok((rows, batch))));
+        }
         let polled = ready!(self.streams.poll_next(cx, stream_idx));
         if polled.is_none() {
             // The stream is finished, so its retained buffer will never be reused.

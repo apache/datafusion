@@ -12,12 +12,15 @@ use crate::spill::get_record_batch_memory_size;
 use crate::spill::spill_manager::GetSlicedSize;
 use crate::test::TestMemoryExec;
 use arrow::array::{
-    ArrayRef, Decimal128Array, DictionaryArray, FixedSizeBinaryArray, Int8Array,
-    Int32Array, Int64Array, StringArray, StringViewArray,
+    Array, ArrayRef, AsArray, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
+    Int8Array, Int32Array, Int64Array, RunArray, StringArray, StringViewArray,
+    StructArray,
 };
 use arrow::compute::{SortOptions, cast, concat_batches};
-use arrow::datatypes::{DataType, Field, Int8Type, Schema};
+use arrow::datatypes::{DataType, Field, Int8Type, Int32Type, Int64Type, Schema};
 use arrow::record_batch::RecordBatch;
+use async_trait::async_trait;
+use bytes::Bytes;
 use datafusion_common::config::{ExecutionOptions, SpillCompression};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::TaskContext;
@@ -27,13 +30,16 @@ use datafusion_execution::memory_pool::{
     GreedyMemoryPool, MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
 };
 use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+use datafusion_execution::{AsyncSpillWriter, SpillFile, SpillWriter, TempFileFactory};
 use datafusion_physical_expr::expressions::{CastExpr, Column};
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
-use futures::TryStreamExt;
+use futures::{Stream, TryStreamExt};
 use std::fmt::{Display, Formatter};
-use std::sync::atomic::AtomicUsize;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::Notify;
 
 const MERGE_BYTES: usize = 64 * 1024;
 const BUFFERED_BATCHES: usize = 9;
@@ -1638,4 +1644,468 @@ fn headroom_sort_exec(
             .with_runtime(runtime),
     );
     Ok((sort, context, total_rows))
+}
+
+/// How each sort key column wraps its dictionary.
+#[derive(Debug, Clone, Copy)]
+enum KeyShape {
+    Dictionary,
+    RunEndEncoded,
+    Struct,
+}
+
+/// Sort keys whose row format can be much larger than their dictionaries.
+struct EncodedKeys {
+    shape: KeyShape,
+    key_columns: usize,
+    rows: usize,
+    batches: usize,
+    /// Length of the values in each batch
+    value_len: fn(usize) -> usize,
+}
+
+impl EncodedKeys {
+    const VALUE_COUNT: u64 = 8;
+
+    fn new(shape: KeyShape, value_len: fn(usize) -> usize) -> Self {
+        Self {
+            shape,
+            key_columns: 8,
+            rows: 256,
+            batches: 64,
+            value_len,
+        }
+    }
+
+    /// The key of `column` in row `id`. Equal first keys are common, so later
+    /// keys decide the order.
+    fn key(&self, column: usize, id: usize) -> String {
+        let mixed = (id as u64)
+            .wrapping_mul(2654435761)
+            .wrapping_add(column as u64 * 40503)
+            >> 7;
+        let len = (self.value_len)(id / self.rows);
+        format!("{:02}-{}", mixed % Self::VALUE_COUNT, "x".repeat(len))
+    }
+
+    fn batch(&self, batch: usize) -> Result<RecordBatch> {
+        let ids = batch * self.rows..(batch + 1) * self.rows;
+        let mut columns = vec![];
+        for column in 0..self.key_columns {
+            let values: Vec<String> =
+                ids.clone().map(|id| self.key(column, id)).collect();
+            let dictionary: DictionaryArray<Int32Type> =
+                values.iter().map(String::as_str).collect();
+            let array: ArrayRef = match self.shape {
+                KeyShape::Dictionary => Arc::new(dictionary),
+                KeyShape::RunEndEncoded => {
+                    let run_ends = Int32Array::from_iter_values(1..=self.rows as i32);
+                    Arc::new(RunArray::<Int32Type>::try_new(&run_ends, &dictionary)?)
+                }
+                KeyShape::Struct => {
+                    let field = Field::new("v", dictionary.data_type().clone(), false);
+                    Arc::new(StructArray::from(vec![(
+                        Arc::new(field),
+                        Arc::new(dictionary) as ArrayRef,
+                    )]))
+                }
+            };
+            columns.push((format!("k{column}"), array));
+        }
+        let id = Int64Array::from_iter_values(ids.map(|id| id as i64));
+        columns.push(("id".to_string(), Arc::new(id)));
+        Ok(RecordBatch::try_from_iter(columns)?)
+    }
+
+    fn batches(&self) -> Result<Vec<RecordBatch>> {
+        (0..self.batches).map(|batch| self.batch(batch)).collect()
+    }
+
+    fn ordering(&self) -> LexOrdering {
+        LexOrdering::new((0..=self.key_columns).map(|i| {
+            let name = if i == self.key_columns {
+                "id".to_string()
+            } else {
+                format!("k{i}")
+            };
+            PhysicalSortExpr::new_default(Arc::new(Column::new(&name, i)))
+        }))
+        .unwrap()
+    }
+
+    /// Checks the schema, rows, and order of `output` against an order
+    /// computed from the generated strings.
+    fn check(&self, output: &[RecordBatch]) -> Result<()> {
+        let schema = self.batch(0)?.schema();
+        let output = concat_batches(&schema, output)?;
+        assert_eq!(output.schema(), schema);
+        let total = self.rows * self.batches;
+        let mut ids: Vec<usize> = (0..total).collect();
+        ids.sort_by_cached_key(|&id| {
+            let keys: Vec<String> =
+                (0..self.key_columns).map(|c| self.key(c, id)).collect();
+            (keys, id)
+        });
+        let actual_ids = output.column(self.key_columns).as_primitive::<Int64Type>();
+        let expected_ids = Int64Array::from_iter_values(ids.iter().map(|&id| id as i64));
+        assert_eq!(actual_ids, &expected_ids);
+        for column in 0..self.key_columns {
+            let keys = match self.shape {
+                KeyShape::Struct => {
+                    Arc::clone(output.column(column).as_struct().column(0))
+                }
+                _ => Arc::clone(output.column(column)),
+            };
+            let keys = cast(&keys, &DataType::Utf8)?;
+            let expected =
+                StringArray::from_iter_values(ids.iter().map(|&id| self.key(column, id)));
+            assert_eq!(keys.as_string::<i32>(), &expected, "column {column}");
+        }
+        Ok(())
+    }
+}
+
+/// Small enough that the keys of all buffered runs do not fit with 64 byte
+/// values, but large enough to buffer more than `sort_in_place_threshold_bytes`.
+const ENCODED_KEYS_POOL: usize = 1536 * 1024;
+
+/// A `SortExec` of `batches` by `ordering` under a pool of `pool_bytes`.
+fn spilling_sort(
+    batches: Vec<RecordBatch>,
+    ordering: LexOrdering,
+    pool_bytes: usize,
+    batch_size: usize,
+    disk: DiskManagerBuilder,
+) -> Result<(Arc<SortExec>, Arc<TaskContext>, Arc<AdjustablePool>)> {
+    let schema = batches[0].schema();
+    let input = TestMemoryExec::try_new_exec(&[batches], schema, None)?;
+    let sort = Arc::new(SortExec::new(ordering, input));
+    let pool = AdjustablePool::new(pool_bytes);
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::clone(&pool) as _)
+        .with_disk_manager_builder(disk)
+        .build_arc()?;
+    let context = Arc::new(
+        TaskContext::default()
+            .with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(batch_size)
+                    .with_sort_spill_reservation_bytes(MERGE_BYTES),
+            )
+            .with_runtime(runtime),
+    );
+    Ok((sort, context, pool))
+}
+
+/// Sorts `keys`, checks the output, and that the sort spilled and released
+/// its memory and spill files. Returns the number of spill files.
+///
+/// Unless `within_pool`, the pool may be exceeded by an unchecked `grow`: the
+/// spill writer accounts for a merged batch that is already in memory, then
+/// writes it.
+async fn sort_encoded_keys(
+    keys: &EncodedKeys,
+    pool_bytes: usize,
+    within_pool: bool,
+) -> Result<usize> {
+    let (sort, context, pool) = spilling_sort(
+        keys.batches()?,
+        keys.ordering(),
+        pool_bytes,
+        keys.rows,
+        DiskManagerBuilder::default(),
+    )?;
+    let runtime = context.runtime_env();
+    let output = crate::collect(Arc::clone(&sort) as _, context).await?;
+    keys.check(&output)?;
+    let spill_files = sort.metrics().unwrap().spill_count().unwrap();
+    assert!(spill_files > 0);
+    drop(sort);
+    if within_pool {
+        assert_released(&pool, &runtime).await;
+    } else {
+        wait_until_released(&pool, &runtime).await;
+    }
+    Ok(spill_files)
+}
+
+/// Merging every buffered run before writing the first spill file converts
+/// the keys of all of them at once, which needs far more than the pool. The
+/// sort must spill groups of runs whose keys fit instead.
+#[rstest::rstest]
+#[case::dictionary(KeyShape::Dictionary)]
+#[case::run_end_encoded(KeyShape::RunEndEncoded)]
+#[case::struct_wrapped(KeyShape::Struct)]
+#[tokio::test]
+async fn test_ingestion_spill_with_expanding_keys(#[case] shape: KeyShape) -> Result<()> {
+    let keys = EncodedKeys::new(shape, |_| 64);
+    sort_encoded_keys(&keys, ENCODED_KEYS_POOL, false).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_ingestion_spill_with_expanding_keys_multithreaded() -> Result<()> {
+    let keys = EncodedKeys::new(KeyShape::Dictionary, |_| 64);
+    sort_encoded_keys(&keys, ENCODED_KEYS_POOL, false).await?;
+    Ok(())
+}
+
+/// Only the later batches have long keys, so the first runs fit together.
+#[tokio::test]
+async fn test_ingestion_spill_with_skewed_keys() -> Result<()> {
+    let keys = EncodedKeys::new(
+        KeyShape::Dictionary,
+        |batch| {
+            if batch < 24 { 1 } else { 64 }
+        },
+    );
+    sort_encoded_keys(&keys, ENCODED_KEYS_POOL, false).await?;
+    Ok(())
+}
+
+/// The keys of short dictionary values fit, so each ingestion spill merges
+/// all buffered runs into a single file, within the pool.
+#[rstest::rstest]
+#[case::dictionary(KeyShape::Dictionary)]
+#[case::run_end_encoded(KeyShape::RunEndEncoded)]
+#[case::struct_wrapped(KeyShape::Struct)]
+#[tokio::test]
+async fn test_ingestion_spill_with_short_keys(#[case] shape: KeyShape) -> Result<()> {
+    let keys = EncodedKeys::new(shape, |_| 1);
+    let pool = 512 * 1024;
+    let spill_files = sort_encoded_keys(&keys, pool, true).await?;
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(AdjustablePool::new(pool))
+        .build_arc()?;
+    let mut sorter = ExternalSorter::new(
+        0,
+        keys.batch(0)?.schema(),
+        keys.ordering(),
+        keys.rows,
+        MERGE_BYTES,
+        SessionConfig::new()
+            .options()
+            .execution
+            .sort_in_place_threshold_bytes,
+        SpillCompression::Uncompressed,
+        &ExecutionPlanMetricsSet::new(),
+        runtime,
+    )?;
+    let mut spills = 0;
+    for batch in keys.batches()? {
+        let buffered = sorter.in_mem_batches.len();
+        let files = sorter.finished_spill_files.len();
+        sorter.insert_batch(batch).await?;
+        if sorter.finished_spill_files.len() != files {
+            assert!(buffered > 1);
+            assert_eq!(sorter.finished_spill_files.len(), files + 1);
+            spills += 1;
+        }
+    }
+    assert!(spills > 0);
+    // The plan also spills what is still buffered at the end
+    assert_eq!(spill_files, spills + 1);
+    Ok(())
+}
+
+/// Short string keys merge in the row format too, but fit, so the sort writes
+/// as few spill files as before and stays within a small disk quota.
+#[tokio::test]
+async fn test_ingestion_spill_short_utf8_keys_with_disk_quota() -> Result<()> {
+    const ROWS: usize = 4096;
+    const ROWS_PER_BATCH: usize = 4;
+    const KEYS: [&str; 4] = [
+        "key-000000000003",
+        "key-000000000000",
+        "key-000000000002",
+        "key-000000000001",
+    ];
+    let batches = (0..ROWS / ROWS_PER_BATCH)
+        .map(|batch| {
+            let ids = batch * ROWS_PER_BATCH..(batch + 1) * ROWS_PER_BATCH;
+            let keys = StringArray::from_iter_values(ids.clone().map(|id| KEYS[id % 4]));
+            let ids = Int64Array::from_iter_values(ids.map(|id| id as i64));
+            RecordBatch::try_from_iter([
+                ("key", Arc::new(keys) as ArrayRef),
+                ("id", Arc::new(ids) as ArrayRef),
+            ])
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let schema = batches[0].schema();
+    let ordering: LexOrdering = [
+        PhysicalSortExpr::new_default(Arc::new(Column::new("key", 0))),
+        PhysicalSortExpr::new_default(Arc::new(Column::new("id", 1))),
+    ]
+    .into();
+    let (sort, context, pool) = spilling_sort(
+        batches,
+        ordering,
+        256 * 1024,
+        128,
+        DiskManagerBuilder::default().with_max_temp_directory_size(300 * 1024),
+    )?;
+    let runtime = context.runtime_env();
+    let output = crate::collect(Arc::clone(&sort) as _, context).await?;
+    let mut ids: Vec<usize> = (0..ROWS).collect();
+    ids.sort_by_key(|&id| (KEYS[id % 4], id));
+    let expected = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(StringArray::from_iter_values(
+                ids.iter().map(|&id| KEYS[id % 4]),
+            )),
+            Arc::new(Int64Array::from_iter_values(
+                ids.iter().map(|&id| id as i64),
+            )),
+        ],
+    )?;
+    assert_eq!(concat_batches(&schema, &output)?, expected);
+    let spill_files = sort.metrics().unwrap().spill_count().unwrap();
+    assert!(spill_files > 0);
+    drop(sort);
+    assert_released(&pool, &runtime).await;
+    Ok(())
+}
+
+/// Spill files that discard what is written to them, except that writing the
+/// file created `gate`-th, counting from 0, fails or never finishes.
+#[derive(Default)]
+struct GatedFiles {
+    gate: usize,
+    fail: bool,
+    created: AtomicUsize,
+    live: Arc<AtomicUsize>,
+    aborted: Arc<AtomicUsize>,
+    gate_reached: Arc<Notify>,
+}
+
+impl TempFileFactory for GatedFiles {
+    fn create_temp_file(&self, _description: &str) -> Result<Arc<dyn SpillFile>> {
+        let gated = self.created.fetch_add(1, AtomicOrdering::SeqCst) == self.gate;
+        self.live.fetch_add(1, AtomicOrdering::SeqCst);
+        Ok(Arc::new(GatedFile {
+            gated: gated.then(|| (self.fail, Arc::clone(&self.gate_reached))),
+            live: Arc::clone(&self.live),
+            aborted: Arc::clone(&self.aborted),
+        }))
+    }
+}
+
+struct GatedFile {
+    /// Whether the write fails, and how to report reaching it
+    gated: Option<(bool, Arc<Notify>)>,
+    live: Arc<AtomicUsize>,
+    aborted: Arc<AtomicUsize>,
+}
+
+impl Drop for GatedFile {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, AtomicOrdering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl SpillFile for GatedFile {
+    fn size(&self) -> Option<u64> {
+        Some(0)
+    }
+
+    fn read_stream(&self) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>> {
+        Ok(Box::pin(futures::stream::empty()))
+    }
+
+    fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
+        datafusion_common::not_impl_err!("only asynchronous writes")
+    }
+
+    async fn open_async_writer(&self) -> Result<Box<dyn AsyncSpillWriter>> {
+        Ok(Box::new(GatedWriter {
+            gated: self.gated.clone(),
+            aborted: Arc::clone(&self.aborted),
+        }))
+    }
+}
+
+struct GatedWriter {
+    gated: Option<(bool, Arc<Notify>)>,
+    aborted: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl AsyncSpillWriter for GatedWriter {
+    async fn write_all(&mut self, _data: Bytes) -> Result<()> {
+        match &self.gated {
+            None => Ok(()),
+            Some((fail, reached)) => {
+                reached.notify_one();
+                if *fail {
+                    datafusion_common::exec_err!("injected spill write failure")
+                } else {
+                    std::future::pending().await
+                }
+            }
+        }
+    }
+
+    async fn finish(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn abort(&mut self) -> Result<()> {
+        self.aborted.fetch_add(1, AtomicOrdering::SeqCst);
+        Ok(())
+    }
+}
+
+/// A write that fails or is cancelled after the first ingestion spill has
+/// already written groups of runs releases all memory and spill files.
+#[rstest::rstest]
+#[case::write_error(true)]
+#[case::cancel(false)]
+#[tokio::test]
+async fn test_ingestion_spill_groups_cleanup(#[case] fail: bool) -> Result<()> {
+    let keys = EncodedKeys::new(KeyShape::Dictionary, |_| 64);
+    let files = Arc::new(GatedFiles {
+        // The fourth file of the first ingestion spill
+        gate: 3,
+        fail,
+        ..Default::default()
+    });
+    let (sort, context, pool) = spilling_sort(
+        keys.batches()?,
+        keys.ordering(),
+        ENCODED_KEYS_POOL,
+        keys.rows,
+        DiskManagerBuilder::default()
+            .with_temp_file_factory(Arc::clone(&files) as Arc<dyn TempFileFactory>),
+    )?;
+    let reached = files.gate_reached.notified();
+    #[expect(clippy::disallowed_methods)] // spawn allowed only in tests
+    let task = tokio::spawn(crate::collect(sort as _, context));
+    tokio::time::timeout(Duration::from_secs(10), reached)
+        .await
+        .expect("the sort must reach the gated write");
+    if fail {
+        let error = task.await.unwrap().unwrap_err();
+        assert!(error.to_string().contains("injected spill write failure"));
+    } else {
+        // Earlier groups were written, and their files are kept for the
+        // final merge
+        assert_eq!(files.live.load(AtomicOrdering::SeqCst), 4);
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while pool.reserved() != 0
+            || files.live.load(AtomicOrdering::SeqCst) != 0
+            || files.aborted.load(AtomicOrdering::SeqCst) == 0
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("memory and spill files must be released");
+    assert_eq!(files.aborted.load(AtomicOrdering::SeqCst), 1);
+    Ok(())
 }
