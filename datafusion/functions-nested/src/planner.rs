@@ -82,6 +82,19 @@ impl ExprPlanner for NestedFunctionPlanner {
             }
         }
 
+        // `Operator` has no overlap variant, so `&&` only reaches this planner via sqlparser
+        #[cfg(feature = "sql")]
+        if op == BinaryOperator::PGOverlap {
+            let left_type = left.get_type(schema)?;
+            let right_type = right.get_type(schema)?;
+            if list_ndims(&left_type) > 0 && list_ndims(&right_type) > 0 {
+                // array1 && array2 -> array_has_any(array1, array2)
+                return Ok(PlannerResult::Planned(crate::array_has::array_has_any(
+                    left, right,
+                )));
+            }
+        }
+
         Ok(PlannerResult::Original(RawBinaryExpr { op, left, right }))
     }
 

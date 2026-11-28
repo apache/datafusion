@@ -114,6 +114,32 @@ physical_plan
 01)ProjectionExec: expr=[true as array_has_all(make_array(Int64(1),Int64(2),Int64(3)),make_array(Int64(1),Int64(3)))]
 02)--PlaceholderRowExec
 
+## array overlap operator
+
+# array overlap operator on List, LargeList and FixedSizeList
+query BBBB
+select make_array(1,2) && make_array(2,3),
+       make_array(1,2) && make_array(3,4),
+       arrow_cast(make_array(1,2), 'LargeList(Int64)') && arrow_cast(make_array(2,3), 'LargeList(Int64)'),
+       arrow_cast(make_array(1,2), 'FixedSizeList(2, Int64)') && make_array(3,4);
+----
+true false true false
+
+# Make sure it is rewritten to function array_has_any()
+query TT
+explain select [1,2] && [2,3];
+----
+logical_plan
+01)Projection: Boolean(true) AS array_has_any(make_array(Int64(1),Int64(2)),make_array(Int64(2),Int64(3)))
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[true as array_has_any(make_array(Int64(1),Int64(2)),make_array(Int64(2),Int64(3)))]
+02)--PlaceholderRowExec
+
+# array overlap operator is not supported on non-array operands
+query error DataFusion error: This feature is not implemented: Unsupported binary operator: PGOverlap
+select 1 && 2;
+
 ### Array casting tests
 
 

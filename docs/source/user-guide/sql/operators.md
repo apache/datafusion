@@ -494,6 +494,7 @@ Bitwise Shift Left
 - [|| (string concatenation)](#op_str_cat)
 - [@> (array contains)](#op_arr_contains)
 - [<@ (array is contained by)](#op_arr_contained_by)
+- [&& (array overlap)](#op_arr_overlap)
 - [AT TIME ZONE](#op_at_time_zone)
 - [LIKE ANY (like any of a list of patterns)](#op_like_any)
 - [ILIKE ANY (case-insensitive like any of a list of patterns)](#op_ilike_any)
@@ -541,6 +542,22 @@ Array Is Contained By
 +-------------------------------------------------------------------------+
 | true                                                                    |
 +-------------------------------------------------------------------------+
+```
+
+(op_arr_overlap)=
+
+### `&&`
+
+Array Overlap: true if the arrays have at least one element in common. Equivalent to
+[`array_has_any`](scalar_functions.md#array_has_any).
+
+```sql
+> SELECT make_array(1,2) && make_array(2,3);
++----------------------------------------------------------------------------+
+| array_has_any(make_array(Int64(1),Int64(2)),make_array(Int64(2),Int64(3))) |
++----------------------------------------------------------------------------+
+| true                                                                       |
++----------------------------------------------------------------------------+
 ```
 
 (op_at_time_zone)=
