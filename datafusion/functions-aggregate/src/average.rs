@@ -885,8 +885,7 @@ impl Accumulator for DurationAvgAccumulator {
         };
 
         if let Some(x) = sum_value {
-            let v = self.sum.get_or_insert(0);
-            *v += x;
+            self.sum = Some(self.sum.get_or_insert(0).add_wrapping(x));
         }
         Ok(())
     }
@@ -948,8 +947,7 @@ impl Accumulator for DurationAvgAccumulator {
         };
 
         if let Some(x) = sum_value {
-            let v = self.sum.get_or_insert(0);
-            *v += x;
+            self.sum = Some(self.sum.get_or_insert(0).add_wrapping(x));
         }
         Ok(())
     }
@@ -966,7 +964,7 @@ impl Accumulator for DurationAvgAccumulator {
         };
 
         if let Some(x) = sum_value {
-            self.sum = Some(self.sum.unwrap() - x);
+            self.sum = Some(self.sum.get_or_insert(0).sub_wrapping(x));
         }
         Ok(())
     }
@@ -1626,6 +1624,82 @@ mod tests {
                 case.name
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn avg_duration_accumulator_wraps_on_overflow() -> Result<()> {
+        let input_type = DataType::Duration(TimeUnit::Second);
+        let return_type = DataType::Duration(TimeUnit::Second);
+        let mut acc = avg_accumulator(&input_type, &return_type)?;
+
+        let values: ArrayRef = Arc::new(DurationSecondArray::from(vec![Some(i64::MAX)]));
+        acc.update_batch(std::slice::from_ref(&values))?;
+        acc.update_batch(std::slice::from_ref(&values))?;
+
+        // Wrapping matches `arrow::compute::sum`: i64::MAX + i64::MAX == -2,
+        // and -2 / 2 == -1.
+        assert_eq!(acc.evaluate()?, ScalarValue::DurationSecond(Some(-1)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn avg_duration_accumulator_merge_wraps_on_overflow() -> Result<()> {
+        let input_type = DataType::Duration(TimeUnit::Second);
+        let return_type = DataType::Duration(TimeUnit::Second);
+        let mut acc = avg_accumulator(&input_type, &return_type)?;
+
+        // Merge two single-value partial sums in separate calls so the
+        // accumulator's own running sum overflows i64.
+        let partial_counts: ArrayRef = Arc::new(UInt64Array::from(vec![1]));
+        let partial_sums: ArrayRef =
+            Arc::new(DurationSecondArray::from(vec![Some(i64::MAX)]));
+        acc.merge_batch(&[Arc::clone(&partial_counts), Arc::clone(&partial_sums)])?;
+        acc.merge_batch(&[Arc::clone(&partial_counts), Arc::clone(&partial_sums)])?;
+
+        assert_eq!(acc.evaluate()?, ScalarValue::DurationSecond(Some(-1)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn avg_duration_accumulator_retract_wraps_on_underflow() -> Result<()> {
+        let input_type = DataType::Duration(TimeUnit::Second);
+        let return_type = DataType::Duration(TimeUnit::Second);
+        let mut acc = avg_accumulator(&input_type, &return_type)?;
+
+        let seed: ArrayRef =
+            Arc::new(DurationSecondArray::from(vec![Some(i64::MIN), Some(0)]));
+        acc.update_batch(std::slice::from_ref(&seed))?;
+
+        // Retracting a positive value underflows i64: i64::MIN - 1 wraps to i64::MAX.
+        let leaving: ArrayRef = Arc::new(DurationSecondArray::from(vec![Some(1)]));
+        acc.retract_batch(std::slice::from_ref(&leaving))?;
+
+        assert_eq!(acc.evaluate()?, ScalarValue::DurationSecond(Some(i64::MAX)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn avg_duration_accumulator_retract_updates_average() -> Result<()> {
+        let input_type = DataType::Duration(TimeUnit::Second);
+        let return_type = DataType::Duration(TimeUnit::Second);
+        let mut acc = avg_accumulator(&input_type, &return_type)?;
+
+        let window: ArrayRef = Arc::new(DurationSecondArray::from(vec![
+            Some(10),
+            Some(20),
+            Some(30),
+        ]));
+        acc.update_batch(std::slice::from_ref(&window))?;
+        let leaving: ArrayRef = Arc::new(DurationSecondArray::from(vec![Some(10)]));
+        acc.retract_batch(std::slice::from_ref(&leaving))?;
+
+        // (10 + 20 + 30 - 10) / 2 = 25
+        assert_eq!(acc.evaluate()?, ScalarValue::DurationSecond(Some(25)));
 
         Ok(())
     }
