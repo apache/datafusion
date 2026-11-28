@@ -11,6 +11,8 @@
 
 use std::sync::Arc;
 
+use arrow::datatypes::Schema;
+
 use crate::PhysicalOptimizerRule;
 
 use datafusion_common::config::ConfigOptions;
@@ -20,6 +22,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::Distribution;
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
 use datafusion_physical_plan::execution_plan::{
     Boundedness, replace_children_if_necessary,
@@ -380,7 +383,7 @@ fn require_top_ordering(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Executio
     }
     let (new_plan, is_changed) = require_top_ordering_helper(plan)?;
     if is_changed {
-        Ok(new_plan)
+        lift_ordering_requirement_to_root(new_plan)
     } else {
         // Add `OutputRequirementExec` to the top, with no specified ordering and distribution requirement.
         Ok(Arc::new(OutputRequirementExec::new(
@@ -480,6 +483,101 @@ fn require_top_ordering_helper(
         // Stop searching, there is no global ordering desired for the query.
         Ok((plan, false))
     }
+}
+
+/// Moves the single-partition requirement of an `OutputRequirementExec` placed
+/// below the root by [`require_top_ordering_helper`] to a new
+/// `OutputRequirementExec` at the root, when its ordering can be expressed in
+/// the root's schema.
+///
+/// Operators between the root and the sort keep their input order, but
+/// `EnsureRequirements` may still repartition below them to parallelize their
+/// work, which splits the global ordering across partitions. A requirement at
+/// the root makes `EnsureRequirements` merge such partitions back in order.
+/// When a sort key is not available at the root, the requirement stays at the
+/// sort, and `EnsureRequirements` does not add round-robin repartitioning
+/// between the two.
+fn lift_ordering_requirement_to_root(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let mut path = vec![];
+    let mut node = Arc::clone(&plan);
+    let requirement = loop {
+        if let Some(output_requirement) = node.downcast_ref::<OutputRequirementExec>() {
+            break output_requirement;
+        }
+        let Some(idx) = output_requirement_child(node.as_ref()) else {
+            return Ok(plan);
+        };
+        let child = Arc::clone(node.children()[idx]);
+        path.push((node, idx));
+        node = child;
+    };
+    if path.is_empty()
+        || !matches!(requirement.dist_requirement, Distribution::SinglePartition)
+    {
+        return Ok(plan);
+    }
+    let Some(ordering) = requirement.order_requirement.clone() else {
+        return Ok(plan);
+    };
+    // A merge above a repartition evaluates the sort expressions again.
+    let (mut lexes, soft) = ordering.clone().into_alternatives();
+    if lexes
+        .iter()
+        .flatten()
+        .any(|sort_expr| is_volatile(&sort_expr.expr))
+    {
+        return Ok(plan);
+    }
+
+    // The sort keeps its requirement, but only the root now needs a single
+    // partition, so `EnsureRequirements` may repartition in between.
+    let mut below: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
+        requirement.input(),
+        Some(ordering),
+        Distribution::UnspecifiedDistribution,
+        requirement.fetch,
+    ));
+    for (parent, idx) in path.into_iter().rev() {
+        let child = parent.children()[idx];
+        lexes = if let Some(projection) = parent.downcast_ref::<ProjectionExec>() {
+            let mut updated = Vec::with_capacity(lexes.len());
+            for lex in lexes {
+                let Some(lex) = update_ordering_requirement(lex, projection.expr())?
+                else {
+                    return Ok(plan);
+                };
+                updated.push(lex);
+            }
+            updated
+        } else if same_columns(parent.schema().as_ref(), child.schema().as_ref()) {
+            lexes
+        } else {
+            return Ok(plan);
+        };
+        let mut children: Vec<_> = parent.children().into_iter().cloned().collect();
+        children[idx] = below;
+        below = replace_children_if_necessary(parent, children)?;
+    }
+    let Some(ordering) = OrderingRequirements::new_alternatives(lexes, soft) else {
+        return Ok(plan);
+    };
+    Ok(Arc::new(OutputRequirementExec::new(
+        below,
+        Some(ordering),
+        Distribution::SinglePartition,
+        None,
+    )))
+}
+
+fn same_columns(left: &Schema, right: &Schema) -> bool {
+    left.fields().len() == right.fields().len()
+        && left
+            .fields()
+            .iter()
+            .zip(right.fields())
+            .all(|(l, r)| l.name() == r.name() && l.data_type() == r.data_type())
 }
 
 // See tests in datafusion/core/tests/physical_optimizer

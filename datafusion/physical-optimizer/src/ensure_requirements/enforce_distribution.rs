@@ -1330,6 +1330,12 @@ fn get_repartition_requirement_status(
     for (child, requirement, roundrobin_beneficial) in
         izip!(children.into_iter(), requirements, rr_beneficial)
     {
+        // Round robin over this child would deal its batches to several
+        // partitions and lose the global ordering it carries to the output,
+        // which no operator above can restore without the sort key.
+        let roundrobin_beneficial = roundrobin_beneficial
+            && !(matches!(requirement, Distribution::UnspecifiedDistribution)
+                && carries_required_global_ordering(child));
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
         let roundrobin_beneficial_stats = match stats_ctx
@@ -1375,6 +1381,36 @@ fn get_repartition_requirement_status(
         .into_iter()
         .map(|(_, status)| status)
         .collect())
+}
+
+/// Whether `plan` passes the single, ordered partition of an
+/// [`OutputRequirementExec`] that requires a global ordering up to its
+/// output, through operators that each have one child and one output
+/// partition and keep their input order.
+///
+/// Below the plan root, `OutputRequirements` leaves such a requirement only
+/// when the root's schema cannot express the ordering, as when a projection
+/// drops a sort key.
+fn carries_required_global_ordering(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let mut node = plan;
+    loop {
+        if node.output_partitioning().partition_count() != 1 {
+            return false;
+        }
+        if let Some(output_requirement) = node.downcast_ref::<OutputRequirementExec>() {
+            return output_requirement.required_input_ordering()[0].is_some()
+                && matches!(
+                    output_requirement
+                        .input_distribution_requirements()
+                        .child_distribution(0),
+                    Some(Distribution::SinglePartition)
+                );
+        }
+        match node.children().as_slice() {
+            [child] if node.maintains_input_order()[0] => node = *child,
+            _ => return false,
+        }
+    }
 }
 
 /// Helper to rank execution plans by estimated data size (bytes, then rows)
