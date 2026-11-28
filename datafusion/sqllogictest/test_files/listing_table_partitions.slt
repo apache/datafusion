@@ -335,3 +335,51 @@ RESET datafusion.runtime.list_files_cache_limit;
 
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema;
+
+# Test: Empty partition does not corrupt MIN/MAX statistics. See #27456.
+#
+# Set up a table with one non-empty partition (q=1, 1 row) and one empty partition (q=7, 0 rows).
+
+query I
+copy (values(1))
+to 'test_files/scratch/listing_table_partitions/empty_part_stats/q=1/data.parquet';
+----
+1
+
+query I
+copy (select 1 where 1 = 0)
+to 'test_files/scratch/listing_table_partitions/empty_part_stats/q=7/data.parquet';
+----
+0
+
+statement count 0
+create external table empty_part_stats (column1 int, q int)
+stored as parquet
+partitioned by (q)
+location 'test_files/scratch/listing_table_partitions/empty_part_stats/';
+
+# Before the #27456 fix, min(q) and max(q) returned 1 and 7 because the empty
+# partition file in q=7 erroneously declared exact min=7 and max=7.
+# After the fix, the empty partition does not corrupt the aggregate bounds.
+query III
+select count(*), min(q), max(q) from empty_part_stats;
+----
+1 1 1
+
+# GROUP BY q should only return partition q=1 (empty partition q=7 produces 0 rows)
+query IIII
+select q, count(*), min(q), max(q) from empty_part_stats group by q order by q;
+----
+1 1 1 1
+
+# When statistics collection is disabled, physical scan produces the same result
+statement ok
+set datafusion.execution.collect_statistics = false;
+
+query III
+select count(*), min(q), max(q) from empty_part_stats;
+----
+1 1 1
+
+statement ok
+set datafusion.execution.collect_statistics = true;
