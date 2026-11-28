@@ -1,0 +1,301 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+#############
+## to_json: a value as JSON text, written like DataFusion's JSON writer (arrow-json defaults)
+#############
+
+## Structs
+
+query T
+SELECT to_json(named_struct('a', 1, 'b', 'x'));
+----
+{"a":1,"b":"x"}
+
+# NULL struct fields are omitted
+query T
+SELECT to_json(named_struct('a', 1, 'b', NULL));
+----
+{"a":1}
+
+query T
+SELECT to_json(named_struct('a', CAST(NULL AS INT)));
+----
+{}
+
+# a NULL struct produces NULL
+query T
+SELECT to_json(CASE WHEN false THEN named_struct('a', 1) END);
+----
+NULL
+
+query T
+SELECT to_json(struct(1, 'x', true));
+----
+{"c0":1,"c1":"x","c2":true}
+
+# nested structs, lists and maps are serialized recursively
+query T
+SELECT to_json(named_struct('n', named_struct('x', 1, 'y', NULL), 'l', [1, NULL, 3], 'm', MAP {'k': 1}));
+----
+{"n":{"x":1},"l":[1,null,3],"m":{"k":1}}
+
+query T
+SELECT to_json(named_struct('l', [named_struct('a', 1), named_struct('a', NULL)]));
+----
+{"l":[{"a":1},{}]}
+
+# a NULL nested struct is a NULL field, and is omitted
+query T
+SELECT to_json(named_struct('n', CASE WHEN false THEN named_struct('x', 1) END));
+----
+{}
+
+# columns
+query T rowsort
+SELECT to_json(named_struct('id', id, 'name', name))
+FROM (VALUES (1, 'a'), (2, NULL), (NULL, 'c')) AS t(id, name);
+----
+{"id":1,"name":"a"}
+{"id":2}
+{"name":"c"}
+
+# deeper nesting: a list of structs holding a map of lists, with NULLs at every level
+query T
+SELECT to_json(named_struct('l', [named_struct('m', MAP {'k': [1, NULL]})], 'n', named_struct('n', named_struct('x', 1, 'y', NULL))));
+----
+{"l":[{"m":{"k":[1,null]}}],"n":{"n":{"x":1}}}
+
+## Lists and maps
+
+query T
+SELECT to_json([1, 2, 3]);
+----
+[1,2,3]
+
+# NULL list elements are kept
+query T
+SELECT to_json([1, NULL, 3]);
+----
+[1,null,3]
+
+query T
+SELECT to_json([[1, 2], [3]]);
+----
+[[1,2],[3]]
+
+query T
+SELECT to_json(MAP {'a': 1, 'b': 2});
+----
+{"a":1,"b":2}
+
+# a NULL map entry is omitted, like a NULL struct field
+query T
+SELECT to_json(MAP {'a': 1, 'b': NULL});
+----
+{"a":1}
+
+query T
+SELECT to_json(MAP {'k': named_struct('a', [1, 2])});
+----
+{"k":{"a":[1,2]}}
+
+## Scalars
+
+query T
+SELECT to_json(1);
+----
+1
+
+query T
+SELECT to_json(-7);
+----
+-7
+
+query T
+SELECT to_json(true);
+----
+true
+
+query T
+SELECT to_json('text');
+----
+"text"
+
+query T
+SELECT to_json(NULL);
+----
+NULL
+
+query T
+SELECT to_json(CAST(NULL AS VARCHAR));
+----
+NULL
+
+query T rowsort
+SELECT to_json(x) FROM (VALUES (1), (NULL), (3)) AS t(x);
+----
+1
+3
+NULL
+
+## Numbers
+
+query T
+SELECT to_json(1.5);
+----
+1.5
+
+query T
+SELECT to_json(CAST(1.5 AS DOUBLE));
+----
+1.5
+
+query T
+SELECT to_json(1e-5);
+----
+0.00001
+
+query T
+SELECT to_json(1e10);
+----
+1.0e10
+
+query T
+SELECT to_json(arrow_cast(0.1, 'Float32'));
+----
+0.1
+
+# non-finite floats are JSON null
+query T
+SELECT to_json(CAST('NaN' AS DOUBLE));
+----
+null
+
+query T
+SELECT to_json([CAST('Infinity' AS DOUBLE), CAST('-Infinity' AS DOUBLE)]);
+----
+[null,null]
+
+# large values are written as bare numbers
+query T
+SELECT to_json([9223372036854775807, -9223372036854775808]);
+----
+[9223372036854775807,-9223372036854775808]
+
+query T
+SELECT to_json(18446744073709551615);
+----
+18446744073709551615
+
+# (a bare literal this large is parsed as a double)
+query T
+SELECT to_json(CAST('99999999999999999999999999999999999999' AS DECIMAL(38, 0)));
+----
+99999999999999999999999999999999999999
+
+# decimals keep their scale
+query T
+SELECT to_json(CAST(1.5 AS DECIMAL(10, 2)));
+----
+1.50
+
+query T
+SELECT to_json(CAST(0 AS DECIMAL(38, 10)));
+----
+0.0000000000
+
+## Strings
+
+query T
+SELECT to_json('he said "hi"');
+----
+"he said \"hi\""
+
+query T
+SELECT to_json('a' || chr(10) || 'b');
+----
+"a\nb"
+
+query T
+SELECT to_json('a' || chr(31) || 'b');
+----
+"a\u001fb"
+
+# backslashes are escaped, non-ASCII is written as is
+query T
+SELECT to_json(named_struct('s', 'a\b', 'u', 'π', 'e', '🦀'));
+----
+{"s":"a\\b","u":"π","e":"🦀"}
+
+query T
+SELECT to_json(arrow_cast('a', 'Dictionary(Int32, Utf8)'));
+----
+"a"
+
+## Binary, dates and timestamps
+
+query T
+SELECT to_json(X'0001FF');
+----
+"0001ff"
+
+query T
+SELECT to_json(DATE '2024-01-01');
+----
+"2024-01-01"
+
+# a timestamp without a time zone is written as is, with as many fraction digits as needed
+query T
+SELECT to_json(TIMESTAMP '2024-01-01 01:02:03.123456');
+----
+"2024-01-01T01:02:03.123456"
+
+query T
+SELECT to_json(TIMESTAMP '2024-01-01 01:02:03');
+----
+"2024-01-01T01:02:03"
+
+# a timestamp with a time zone is written in that zone, RFC 3339 style
+query T
+SELECT to_json(arrow_cast('2024-01-01T01:02:03.123456Z', 'Timestamp(Microsecond, Some("UTC"))'));
+----
+"2024-01-01T01:02:03.123456Z"
+
+query T
+SELECT to_json(arrow_cast('2024-01-01T01:02:03.123456Z', 'Timestamp(Microsecond, Some("+02:00"))'));
+----
+"2024-01-01T03:02:03.123456+02:00"
+
+## Times, durations and intervals
+
+query T
+SELECT to_json(TIME '01:02:03');
+----
+"01:02:03"
+
+query T
+SELECT to_json(arrow_cast(90, 'Duration(Second)'));
+----
+"PT90S"
+
+query T
+SELECT to_json([INTERVAL '1' DAY, INTERVAL '1' MONTH]);
+----
+["1 days","1 mons"]
+
+## Errors
+
+query error DataFusion error: Error during planning: 'to_json' does not support zero arguments
+SELECT to_json();
+
+query error to_json.* but received 2
+SELECT to_json(1, 2);
+
+# map keys must be strings
+query error DataFusion error: Error during planning: to_json does not support Map
+SELECT to_json(MAP {1: 'v'});
+
+query error DataFusion error: Error during planning: to_json does not support Struct
+SELECT to_json(named_struct('m', MAP {1: 'v'}));
