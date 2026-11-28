@@ -251,27 +251,22 @@ impl MaterializedCte {
     /// Call `f` with the body, then with the continuation, so that a rule can
     /// change them in place. Return `true` if a call of `f` returns `true`.
     ///
-    /// Returns an error if `f` changes the names or the types of the columns
-    /// of the body, because the scans read them by position. The continuation
-    /// is not checked: its schema can change, and the optimizer then
-    /// recomputes the schema of this node.
+    /// After both calls, if an input changed, check the scans of this CTE in
+    /// the continuation against the body, as [`LogicalPlan::check_invariants`]
+    /// does. Returns an error if a scan does not have the names and types of
+    /// the columns of the body that it reads. A rule can remove a column of
+    /// the body that no scan reads. The continuation can change its schema,
+    /// and the optimizer then recomputes the schema of this node.
     pub fn map_inputs_mut(
         &mut self,
         mut f: impl FnMut(&mut LogicalPlan) -> Result<bool>,
     ) -> Result<bool> {
         let schema = Arc::clone(self.cte.schema());
         let body = f(Arc::make_mut(&mut self.cte))?;
-        if !Arc::ptr_eq(&schema, self.cte.schema()) {
-            schema
-                .has_equivalent_names_and_types(self.cte.schema())
-                .map_err(|e| {
-                    e.context(format!(
-                        "The body of the materialized CTE {} changed its columns",
-                        self.name
-                    ))
-                })?;
-        }
         let continuation = f(Arc::make_mut(&mut self.continuation))?;
+        if body || continuation || !Arc::ptr_eq(&schema, self.cte.schema()) {
+            self.check_scans()?;
+        }
         Ok(body || continuation)
     }
 
@@ -1079,39 +1074,108 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn map_inputs_mut_rejects_a_body_with_other_columns() -> Result<()> {
+    /// A body with the columns `a` and `b`, and a scan that reads only `a`.
+    fn cte_that_reads_a() -> Result<MaterializedCte> {
         let id = MaterializedCteId::next();
-        let mut cte = MaterializedCte::try_new(
-            id,
-            "c",
-            body(DataType::Int32),
-            Arc::new(scan(id, DataType::Int32)),
-        )?;
-        assert!(!cte.map_inputs_mut(|_| Ok(false))?);
+        let body = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: wide_schema(),
+        }));
+        let scan =
+            MaterializedCteScan::new(id, "c", wide_schema()).with_projection(&[0])?;
+        MaterializedCte::try_new(id, "c", body, Arc::new(scan.into()))
+    }
 
-        // A new body with the same names and types is accepted.
+    /// The body with only the first `n` columns of [`wide_schema`].
+    fn narrow_body(
+        cte: &MaterializedCte,
+        n: usize,
+        data_type: DataType,
+    ) -> Result<LogicalPlan> {
+        let fields = cte.body().schema().fields()[..n]
+            .iter()
+            .map(|f| Field::new(f.name(), data_type.clone(), true))
+            .collect::<Vec<_>>();
+        Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::try_from_qualified_schema(
+                "c",
+                &Schema::new(fields),
+            )?),
+        }))
+    }
+
+    #[test]
+    fn map_inputs_mut_checks_the_scans_after_both_calls() -> Result<()> {
+        let mut cte = cte_that_reads_a()?;
         let mut visited = 0;
-        assert!(cte.map_inputs_mut(|input| {
+        assert!(!cte.map_inputs_mut(|_| {
             visited += 1;
-            if visited == 1 {
-                *input = LogicalPlan::clone(&body(DataType::Int32));
-            }
-            Ok(visited == 1)
+            Ok(false)
         })?);
         assert_eq!(visited, 2);
 
+        // A rule can remove the column `b`, because no scan reads it.
+        let mut pruned = cte.clone();
+        let new_body = narrow_body(&pruned, 1, DataType::Int32)?;
+        let mut new_body = Some(new_body);
+        assert!(pruned.map_inputs_mut(|input| {
+            if let Some(body) = new_body.take() {
+                *input = body;
+                return Ok(true);
+            }
+            Ok(false)
+        })?);
+        assert_eq!(pruned.body().schema().fields().len(), 1);
+        LogicalPlan::from(pruned).check_invariants(InvariantLevel::Executable)?;
+
+        // A rule cannot change the type of the column `a`, because a scan
+        // reads it.
+        let mut new_body = Some(narrow_body(&cte, 1, DataType::Utf8)?);
         let err = cte
             .map_inputs_mut(|input| {
-                if matches!(input, LogicalPlan::EmptyRelation(_)) {
-                    *input = LogicalPlan::clone(&body(DataType::Utf8));
+                if let Some(body) = new_body.take() {
+                    *input = body;
                 }
                 Ok(true)
             })
             .unwrap_err();
         assert!(
-            err.to_string()
-                .contains("The body of the materialized CTE c changed its columns"),
+            err.to_string().contains(
+                "A scan of the materialized CTE c does not have the schema of the CTE"
+            ),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    /// The same body changes through [`TreeNode::map_children`], which does
+    /// not check the scans. [`LogicalPlan::check_invariants`] gives the
+    /// result of [`MaterializedCte::map_inputs_mut`].
+    #[test]
+    fn check_invariants_agrees_with_map_inputs_mut() -> Result<()> {
+        use datafusion_common::tree_node::TreeNode;
+        let cte = cte_that_reads_a()?;
+        let replace_body = |data_type: DataType| -> Result<LogicalPlan> {
+            let new_body = narrow_body(&cte, 1, data_type)?;
+            let mut new_body = Some(new_body);
+            LogicalPlan::from(cte.clone())
+                .map_children(|child| {
+                    Ok(match new_body.take() {
+                        Some(body) => Transformed::yes(body),
+                        None => Transformed::no(child),
+                    })
+                })
+                .map(|t| t.data)
+        };
+        replace_body(DataType::Int32)?.check_invariants(InvariantLevel::Executable)?;
+        let err = replace_body(DataType::Utf8)?
+            .check_invariants(InvariantLevel::Executable)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "A scan of the materialized CTE c does not have the schema of the CTE"
+            ),
             "{err}"
         );
         Ok(())
