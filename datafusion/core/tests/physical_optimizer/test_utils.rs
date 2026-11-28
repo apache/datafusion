@@ -58,8 +58,9 @@ use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_window_expr};
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
-    InputDistributionRequirements, InputOrderMode, Partitioning, PlanProperties,
-    ReplaceChildrenOptions, SortOrderPushdownResult, StatisticsArgs, displayable,
+    InputDistributionRequirements, InputOrderMode, LimitBehavior, Partitioning,
+    PlanProperties, ReplaceChildrenOptions, SortOrderPushdownResult, StatisticsArgs,
+    displayable,
 };
 
 /// Create a non sorted parquet exec
@@ -226,8 +227,22 @@ pub fn inexact_memory_exec(
     partitions: &[Vec<RecordBatch>],
     schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let source = InexactMemorySource {
+    let source = PushdownMemorySource {
         inner: MemorySourceConfig::try_new(partitions, schema, None)?,
+        exact: false,
+    };
+    Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+}
+
+/// A memory scan that answers `Exact` to any sort pushdown. The batches
+/// must already be in the order the test requests.
+pub fn exact_memory_exec(
+    partitions: &[Vec<RecordBatch>],
+    schema: SchemaRef,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let source = PushdownMemorySource {
+        inner: MemorySourceConfig::try_new(partitions, schema, None)?,
+        exact: true,
     };
     Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
 }
@@ -1093,6 +1108,11 @@ impl ExecutionPlan for TestScan {
         self.supports_fetch
     }
 
+    // A leaf: it takes a limit as its own fetch, like `DataSourceExec`.
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Stops
+    }
+
     fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         if self.supports_fetch {
             let mut new_scan = self.clone();
@@ -1128,7 +1148,7 @@ impl ExecutionPlan for TestScan {
             );
             new_scan.plan_properties = Arc::new(PlanProperties::new(
                 eq_properties,
-                Partitioning::UnknownPartitioning(1),
+                self.plan_properties.output_partitioning().clone(),
                 EmissionType::Incremental,
                 Boundedness::Bounded,
             ));
@@ -1159,11 +1179,13 @@ pub fn test_scan_with_ordering(
 }
 
 #[derive(Debug, Clone)]
-struct InexactMemorySource {
+struct PushdownMemorySource {
     inner: MemorySourceConfig,
+    /// If true, `try_pushdown_sort` returns `Exact` instead of `Inexact`.
+    exact: bool,
 }
 
-impl DataSource for InexactMemorySource {
+impl DataSource for PushdownMemorySource {
     fn apply_expressions(
         &self,
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
@@ -1216,8 +1238,11 @@ impl DataSource for InexactMemorySource {
         &self,
         _order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
-        Ok(SortOrderPushdownResult::Inexact {
-            inner: Arc::new(self.clone()),
-        })
+        let inner: Arc<dyn DataSource> = Arc::new(self.clone());
+        if self.exact {
+            Ok(SortOrderPushdownResult::Exact { inner })
+        } else {
+            Ok(SortOrderPushdownResult::Inexact { inner })
+        }
     }
 }

@@ -196,6 +196,15 @@ fn combines_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
     input_partitions > plan.output_partitioning().partition_count()
 }
 
+/// Runs [`LimitPushdown`] on `plan`, for rules that add a limit node to a
+/// subtree after `LimitPushdown` has run.
+pub(crate) fn push_down_limits(
+    plan: Arc<dyn ExecutionPlan>,
+    stats_ctx: &StatisticsContext,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    push_limits(plan, Above::Nothing, stats_ctx)
+}
+
 /// Pushes the bounds of all limit nodes in `plan` down as far as they pass,
 /// and writes each one once, at the first node that can enforce it:
 ///
