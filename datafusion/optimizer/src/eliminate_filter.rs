@@ -226,7 +226,9 @@ fn simplify_filter_or(left: Expr, right: Expr) -> SimplifiedFilterPredicate {
 /// Logical expressions do not currently expose general infallibility metadata,
 /// so this is deliberately a small allowlist. In particular, arithmetic,
 /// casts, and function calls are retained even when another branch proves that
-/// a filter cannot accept a row.
+/// a filter cannot accept a row. `LIKE` is included only with the default
+/// backslash escape: other escapes fail during physical planning, and that
+/// error must not be suppressed.
 fn is_safe_to_discard(expr: &Expr) -> bool {
     match expr {
         Expr::Column(_) | Expr::Literal(_, _) => true,
@@ -246,6 +248,13 @@ fn is_safe_to_discard(expr: &Expr) -> bool {
             ) =>
         {
             is_safe_to_discard(&binary.left) && is_safe_to_discard(&binary.right)
+        }
+        Expr::Like(like)
+            if matches!(like.escape_char, None | Some('\\'))
+                && is_safe_to_discard(&like.expr)
+                && is_safe_to_discard(&like.pattern) =>
+        {
+            true
         }
         Expr::Not(expr)
         | Expr::IsNotNull(expr)
@@ -278,10 +287,12 @@ mod tests {
     use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{Expr, col, lit, logical_plan::builder::LogicalPlanBuilder};
+    use datafusion_expr::{
+        Expr, Like, col, lit, logical_plan::builder::LogicalPlanBuilder,
+    };
 
     use crate::eliminate_filter::{
-        EliminateFilter, FilterPredicate, simplify_filter_predicate,
+        EliminateFilter, FilterPredicate, is_safe_to_discard, simplify_filter_predicate,
     };
     use crate::test::*;
     use datafusion_expr::test::function_stub::sum;
@@ -375,6 +386,83 @@ mod tests {
         )?;
 
         Ok(())
+    }
+
+    #[test]
+    fn filter_and_null_with_like() -> Result<()> {
+        let null = Expr::Literal(ScalarValue::Boolean(None), None);
+
+        let like = Expr::Like(Like::new(
+            false,
+            Box::new(lit("val_1")),
+            Box::new(lit("val_%")),
+            None,
+            false,
+        ));
+        let ilike = Expr::Like(Like::new(
+            false,
+            Box::new(lit("val_1")),
+            Box::new(lit("val_%")),
+            None,
+            true,
+        ));
+
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(like.clone().and(null.clone()))?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")?;
+
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(null.clone().and(like))?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")?;
+
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(ilike.clone().and(null.clone()))?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")?;
+
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(null.and(ilike))?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn like_with_fallible_child_is_not_discardable() {
+        let fallible = (col("a") / lit(0u32)).gt(lit(0u32));
+
+        let like = Expr::Like(Like::new(
+            false,
+            Box::new(fallible.clone()),
+            Box::new(lit("val_%")),
+            None,
+            false,
+        ));
+        assert!(!is_safe_to_discard(&like));
+
+        let like = Expr::Like(Like::new(
+            false,
+            Box::new(lit("val_1")),
+            Box::new(fallible),
+            None,
+            true,
+        ));
+        assert!(!is_safe_to_discard(&like));
+    }
+
+    #[test]
+    fn like_with_unsupported_escape_char_is_not_discardable() {
+        let like = Expr::Like(Like::new(
+            false,
+            Box::new(lit("val_1")),
+            Box::new(lit("val_%")),
+            Some('!'),
+            false,
+        ));
+        assert!(!is_safe_to_discard(&like));
     }
 
     #[test]
