@@ -435,6 +435,7 @@ impl FilterExec {
                     .unwrap_or_else(|| {
                         compute_fallback_selectivity(
                             predicate,
+                            &input_num_rows,
                             &input_stats.column_statistics,
                             default_selectivity,
                         )
@@ -1238,12 +1239,22 @@ fn holds_each_value_once(column: &ColumnStatistics, num_rows: &Precision<usize>)
 /// Splits the predicate into AND conjuncts. For each equality (`col = expr`)
 /// where at least one side is a [`Column`] with a known NDV, the selectivity
 /// contribution is `1 / NDV`. When both sides are columns with known NDV,
-/// `1 / max(left_NDV, right_NDV)` is used. All remaining conjuncts that
-/// cannot be estimated are covered by a single application of
-/// `default_selectivity`, preserving the pre-existing estimate for predicates
-/// that contain no recognizable equality.
+/// `1 / max(left_NDV, right_NDV)` is used.
+///
+/// A disjunction (`a OR b`) combines its branches with the inclusion-exclusion
+/// rule, `s(a) + s(b) - s(a) * s(b)`, so the estimate never falls below either
+/// branch on its own. A branch is estimated from the column's null count for a
+/// bare null check, from its NDV for an equality, and recursively for a nested
+/// disjunction; a branch that cannot be estimated contributes the default
+/// selectivity. A disjunction with no estimable branch stays unhandled, so it
+/// keeps the pre-existing flat default estimate.
+///
+/// All remaining conjuncts that cannot be estimated are covered by a single
+/// application of `default_selectivity`, preserving the pre-existing estimate
+/// for predicates that contain no recognizable equality.
 fn compute_fallback_selectivity(
     predicate: &Arc<dyn PhysicalExpr>,
+    num_rows: &Precision<usize>,
     column_statistics: &[ColumnStatistics],
     default_selectivity: u8,
 ) -> f64 {
@@ -1254,21 +1265,38 @@ fn compute_fallback_selectivity(
     for expr in conjuncts {
         let mut handled = false;
 
-        if let Some(binary) = expr.downcast_ref::<BinaryExpr>()
-            && *binary.op() == Operator::Eq
-        {
-            let left_ndv = column_ndv(binary.left(), column_statistics);
-            let right_ndv = column_ndv(binary.right(), column_statistics);
-
-            let ndv = match (left_ndv, right_ndv) {
-                (Some(l), Some(r)) => Some(l.max(r)),
-                (Some(n), None) | (None, Some(n)) => Some(n),
-                (None, None) => None,
-            };
-
-            if let Some(n) = ndv {
-                selectivity *= 1.0 / (n as f64);
-                handled = true;
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+            match binary.op() {
+                Operator::Eq => {
+                    if let Some(eq_selectivity) =
+                        equality_selectivity(binary, column_statistics)
+                    {
+                        selectivity *= eq_selectivity;
+                        handled = true;
+                    }
+                }
+                Operator::Or => {
+                    let left =
+                        disjunct_selectivity(binary.left(), num_rows, column_statistics);
+                    let right =
+                        disjunct_selectivity(binary.right(), num_rows, column_statistics);
+                    // The unknown branch of a disjunction contributes the
+                    // default selectivity, keeping the combined estimate at
+                    // least the known branch's own estimate.
+                    match (left, right) {
+                        (Some(l), Some(r)) => {
+                            selectivity *= l + r - l * r;
+                            handled = true;
+                        }
+                        (Some(known), None) | (None, Some(known)) => {
+                            let unknown = default_selectivity as f64 / 100.0;
+                            selectivity *= known + unknown - known * unknown;
+                            handled = true;
+                        }
+                        (None, None) => {}
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -1284,6 +1312,79 @@ fn compute_fallback_selectivity(
     }
 
     selectivity
+}
+
+/// The selectivity of an equality `col = expr`, `1 / NDV`, when at least one
+/// side is a [`Column`] with a known NDV. When both sides are columns with
+/// known NDV, `1 / max(left_NDV, right_NDV)` is used.
+fn equality_selectivity(
+    binary: &BinaryExpr,
+    column_statistics: &[ColumnStatistics],
+) -> Option<f64> {
+    let left_ndv = column_ndv(binary.left(), column_statistics);
+    let right_ndv = column_ndv(binary.right(), column_statistics);
+
+    let ndv = match (left_ndv, right_ndv) {
+        (Some(l), Some(r)) => Some(l.max(r)),
+        (Some(n), None) | (None, Some(n)) => Some(n),
+        (None, None) => None,
+    };
+
+    Some(1.0 / (ndv? as f64))
+}
+
+/// The selectivity of one branch of a disjunction, when column statistics can
+/// estimate it: a bare null check from the column's null count, an equality
+/// from its NDV, and a nested disjunction from its branches via the
+/// inclusion-exclusion rule. See `compute_fallback_selectivity`.
+fn disjunct_selectivity(
+    expr: &Arc<dyn PhysicalExpr>,
+    num_rows: &Precision<usize>,
+    column_statistics: &[ColumnStatistics],
+) -> Option<f64> {
+    if let Some((column, is_null)) = null_check_column(expr)
+        && let Some(selectivity) =
+            null_check_selectivity(column, is_null, num_rows, column_statistics)
+    {
+        return Some(selectivity);
+    }
+
+    let binary = expr.downcast_ref::<BinaryExpr>()?;
+    match binary.op() {
+        Operator::Or => {
+            let left = disjunct_selectivity(binary.left(), num_rows, column_statistics)?;
+            let right =
+                disjunct_selectivity(binary.right(), num_rows, column_statistics)?;
+            Some(left + right - left * right)
+        }
+        Operator::Eq => equality_selectivity(binary, column_statistics),
+        _ => None,
+    }
+}
+
+/// The selectivity of a bare `IS NULL` / `IS NOT NULL` check on a column, from
+/// the column's null count: the share of rows that are null, or are not.
+fn null_check_selectivity(
+    column: usize,
+    is_null: bool,
+    num_rows: &Precision<usize>,
+    column_statistics: &[ColumnStatistics],
+) -> Option<f64> {
+    let nulls = column_statistics.get(column)?.null_count.get_value()?;
+    let rows = num_rows.get_value()?;
+    if *rows == 0 {
+        // The selectivity does not change what a filter over no rows returns.
+        return Some(1.0);
+    }
+    // Estimates can disagree, but a null count above the row count still
+    // selects every row at most.
+    let nulls = (*nulls).min(*rows) as f64;
+    let selectivity = nulls / *rows as f64;
+    Some(if is_null {
+        selectivity
+    } else {
+        1.0 - selectivity
+    })
 }
 
 /// Returns true if `predicate` compares a decimal value with `=`.
@@ -3979,9 +4080,10 @@ mod tests {
                         Arc::new(Literal::new(ScalarValue::Utf8(Some("b".to_string())))),
                     )),
                 )),
-                // Input NDV is 50, but the 20% default selectivity on 100 rows
-                // estimates 20 output rows, so NDV is capped at 20.
-                vec![Precision::Inexact(20)],
+                // Both branches estimate 1/50 from the column's NDV, so the
+                // disjunction selects 1/50 + 1/50 - 1/50 * 1/50 = 0.0396 of
+                // 100 rows, and NDV is capped at the resulting 4 rows.
+                vec![Precision::Inexact(4)],
             ),
             (
                 "AND with mixed types (Utf8 + Int32)",
@@ -5079,18 +5181,22 @@ mod tests {
 
         let statistics =
             StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
-        assert_eq!(statistics.num_rows, Precision::Inexact(20));
+        // The `IS NULL` branch alone selects 80 of 100 rows, so the disjunction
+        // is estimated at 0.8 + 0.2 - 0.8 * 0.2 = 0.84 of 100 rows: never below
+        // the null branch's own estimate. The 80 nulls all survive, capping
+        // byte size and NDV below the selectivity share of the input.
+        assert_eq!(statistics.num_rows, Precision::Inexact(84));
         assert_eq!(
             statistics.column_statistics[0].null_count,
-            Precision::Inexact(20)
+            Precision::Inexact(80)
         );
         assert_eq!(
             statistics.column_statistics[0].byte_size,
-            Precision::Inexact(200)
+            Precision::Inexact(840)
         );
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
-            Precision::Inexact(20)
+            Precision::Inexact(60)
         );
         Ok(())
     }
@@ -5985,7 +6091,12 @@ mod tests {
             distinct_count: Precision::Inexact(100),
             ..Default::default()
         }];
-        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        let result = compute_fallback_selectivity(
+            &predicate,
+            &Precision::Inexact(1000),
+            &col_stats,
+            20,
+        );
         assert!(
             (result - 0.01).abs() < 1e-12,
             "expected 1/100 = 0.01, got {result}"
@@ -6005,7 +6116,12 @@ mod tests {
         .unwrap();
         // Empty column statistics, so getting index 0 will return None
         let col_stats = vec![];
-        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        let result = compute_fallback_selectivity(
+            &predicate,
+            &Precision::Inexact(1000),
+            &col_stats,
+            20,
+        );
         assert!(
             (result - 0.2).abs() < 1e-12,
             "expected default selectivity 0.2, got {result}"
@@ -6049,7 +6165,12 @@ mod tests {
             ColumnStatistics::new_unknown(),
             ColumnStatistics::new_unknown(),
         ];
-        let result = compute_fallback_selectivity(&combined, &col_stats, 20);
+        let result = compute_fallback_selectivity(
+            &combined,
+            &Precision::Inexact(1000),
+            &col_stats,
+            20,
+        );
         // default_selectivity applied exactly once: 0.2
         assert!((result - 0.2).abs() < 1e-12, "expected 0.2, got {result}");
     }
@@ -6085,7 +6206,12 @@ mod tests {
             },
             ColumnStatistics::new_unknown(),
         ];
-        let result = compute_fallback_selectivity(&combined, &col_stats, 20);
+        let result = compute_fallback_selectivity(
+            &combined,
+            &Precision::Inexact(1000),
+            &col_stats,
+            20,
+        );
         let expected = (1.0 / 50.0) * 0.2;
         assert!(
             (result - expected).abs() < 1e-12,
@@ -6120,7 +6246,12 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let result_ab = compute_fallback_selectivity(&pred_ab, &stats_ab, 20);
+        let result_ab = compute_fallback_selectivity(
+            &pred_ab,
+            &Precision::Inexact(1000),
+            &stats_ab,
+            20,
+        );
         assert!(
             (result_ab - 1.0 / 200.0).abs() < 1e-12,
             "expected 1/200 (right NDV dominates), got {result_ab}"
@@ -6144,11 +6275,203 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let result_ba = compute_fallback_selectivity(&pred_ba, &stats_ba, 20);
+        let result_ba = compute_fallback_selectivity(
+            &pred_ba,
+            &Precision::Inexact(1000),
+            &stats_ba,
+            20,
+        );
         assert!(
             (result_ba - 1.0 / 500.0).abs() < 1e-12,
             "expected 1/500 (left NDV dominates), got {result_ba}"
         );
+    }
+
+    #[test]
+    fn test_fallback_selectivity_or_null_check_not_below_branch() {
+        // s IS NOT NULL OR k > 2, where 100 of 1000 rows of `s` are null: the
+        // IS NOT NULL branch alone selects 0.9, so the disjunction must not
+        // fall back to the flat 20% default.
+        let schema = Schema::new(vec![
+            Field::new("s", DataType::Utf8, true),
+            Field::new("k", DataType::Int32, false),
+        ]);
+        let predicate = binary(
+            is_not_null(col("s", &schema).unwrap()).unwrap(),
+            Operator::Or,
+            binary(col("k", &schema).unwrap(), Operator::Gt, lit(2i32), &schema).unwrap(),
+            &schema,
+        )
+        .unwrap();
+        let col_stats = vec![
+            ColumnStatistics {
+                null_count: Precision::Inexact(100),
+                ..Default::default()
+            },
+            ColumnStatistics::new_unknown(),
+        ];
+        let result = compute_fallback_selectivity(
+            &predicate,
+            &Precision::Inexact(1000),
+            &col_stats,
+            20,
+        );
+        // 0.9 for the known branch, 0.2 for the unknown one:
+        // 0.9 + 0.2 - 0.9 * 0.2 = 0.92
+        assert!(
+            (result - 0.92).abs() < 1e-12,
+            "expected 0.92, not below the IS NOT NULL branch, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_fallback_selectivity_or_both_branches_known() {
+        // s IS NULL OR k = 2, where `s` holds 100 nulls in 1000 rows and `k`
+        // holds 4 distinct values: 0.1 + 0.25 - 0.1 * 0.25 = 0.325
+        let schema = Schema::new(vec![
+            Field::new("s", DataType::Utf8, true),
+            Field::new("k", DataType::Int32, false),
+        ]);
+        let predicate = binary(
+            is_null(col("s", &schema).unwrap()).unwrap(),
+            Operator::Or,
+            binary(col("k", &schema).unwrap(), Operator::Eq, lit(2i32), &schema).unwrap(),
+            &schema,
+        )
+        .unwrap();
+        let col_stats = vec![
+            ColumnStatistics {
+                null_count: Precision::Inexact(100),
+                ..Default::default()
+            },
+            ColumnStatistics {
+                distinct_count: Precision::Inexact(4),
+                ..Default::default()
+            },
+        ];
+        let result = compute_fallback_selectivity(
+            &predicate,
+            &Precision::Inexact(1000),
+            &col_stats,
+            20,
+        );
+        assert!(
+            (result - 0.325).abs() < 1e-12,
+            "expected 0.325 from inclusion-exclusion, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_fallback_selectivity_or_both_branches_unknown_keeps_default() {
+        // a > 1 OR b < 2: neither branch can be estimated, so the disjunction
+        // keeps the single default application of 0.2.
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let predicate = binary(
+            binary(col("a", &schema).unwrap(), Operator::Gt, lit(1i32), &schema).unwrap(),
+            Operator::Or,
+            binary(col("b", &schema).unwrap(), Operator::Lt, lit(2i32), &schema).unwrap(),
+            &schema,
+        )
+        .unwrap();
+        let col_stats = vec![
+            ColumnStatistics::new_unknown(),
+            ColumnStatistics::new_unknown(),
+        ];
+        let result = compute_fallback_selectivity(
+            &predicate,
+            &Precision::Inexact(1000),
+            &col_stats,
+            20,
+        );
+        assert!(
+            (result - 0.2).abs() < 1e-12,
+            "expected default 0.2 when no branch is estimable, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_fallback_selectivity_nested_or() {
+        // s IS NOT NULL OR (k = 2 OR s IS NULL): the inner disjunction is
+        // 0.25 + 0.1 - 0.25 * 0.1 = 0.325, the outer
+        // 0.9 + 0.325 - 0.9 * 0.325 = 0.9325
+        let schema = Schema::new(vec![
+            Field::new("s", DataType::Utf8, true),
+            Field::new("k", DataType::Int32, false),
+        ]);
+        let predicate = binary(
+            is_not_null(col("s", &schema).unwrap()).unwrap(),
+            Operator::Or,
+            binary(
+                binary(col("k", &schema).unwrap(), Operator::Eq, lit(2i32), &schema)
+                    .unwrap(),
+                Operator::Or,
+                is_null(col("s", &schema).unwrap()).unwrap(),
+                &schema,
+            )
+            .unwrap(),
+            &schema,
+        )
+        .unwrap();
+        let col_stats = vec![
+            ColumnStatistics {
+                null_count: Precision::Inexact(100),
+                ..Default::default()
+            },
+            ColumnStatistics {
+                distinct_count: Precision::Inexact(4),
+                ..Default::default()
+            },
+        ];
+        let result = compute_fallback_selectivity(
+            &predicate,
+            &Precision::Inexact(1000),
+            &col_stats,
+            20,
+        );
+        assert!(
+            (result - 0.9325).abs() < 1e-12,
+            "expected 0.9325 from nested inclusion-exclusion, got {result}"
+        );
+    }
+
+    /// A disjunction whose `IS NOT NULL` branch has known null statistics must
+    /// not fall back to the flat 20% default: `s IS NOT NULL OR k > 2` over
+    /// 1000 rows with 100 nulls estimates 920 rows, not 200.
+    #[tokio::test]
+    async fn test_filter_statistics_disjunction_null_check_branch() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("s", DataType::Utf8, true),
+            Field::new("k", DataType::Int32, false),
+        ]);
+        let input: Arc<dyn ExecutionPlan> = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![
+                    ColumnStatistics {
+                        null_count: Precision::Inexact(100),
+                        ..Default::default()
+                    },
+                    ColumnStatistics::new_unknown(),
+                ],
+            },
+            schema.clone(),
+        ));
+        let predicate = binary(
+            is_not_null(col("s", &schema)?)?,
+            Operator::Or,
+            binary(col("k", &schema)?, Operator::Gt, lit(2i32), &schema)?,
+            &schema,
+        )?;
+        let filter = FilterExecBuilder::new(predicate, input).build()?;
+        let stats = StatisticsContext::new().compute(&filter, &StatisticsArgs::new())?;
+
+        // 0.9 (IS NOT NULL) + 0.2 (default) - 0.9 * 0.2 = 0.92 of 1000 rows.
+        assert_eq!(stats.num_rows, Precision::Inexact(920));
+        Ok(())
     }
 
     /// Verify that `FilterExec` uses NDV-based fallback selectivity for predicates
@@ -6311,7 +6634,12 @@ mod tests {
             distinct_count: Precision::Inexact(80),
             ..Default::default()
         }];
-        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        let result = compute_fallback_selectivity(
+            &predicate,
+            &Precision::Inexact(1000),
+            &col_stats,
+            20,
+        );
         let expected = 1.0 / 80.0;
         assert!(
             (result - expected).abs() < 1e-12,
@@ -6331,7 +6659,12 @@ mod tests {
             distinct_count: Precision::Exact(0), // ndv == 0 → column_ndv returns None
             ..Default::default()
         }];
-        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        let result = compute_fallback_selectivity(
+            &predicate,
+            &Precision::Inexact(1000),
+            &col_stats,
+            20,
+        );
         assert!(
             (result - 0.2).abs() < 1e-12,
             "expected default 0.2 when ndv=0, got {result}"
@@ -6358,7 +6691,12 @@ mod tests {
             ColumnStatistics::new_unknown(), // no NDV
             ColumnStatistics::new_unknown(), // no NDV
         ];
-        let result = compute_fallback_selectivity(&predicate, &col_stats, 20);
+        let result = compute_fallback_selectivity(
+            &predicate,
+            &Precision::Inexact(1000),
+            &col_stats,
+            20,
+        );
         assert!(
             (result - 0.2).abs() < 1e-12,
             "expected default 0.2 when both columns lack NDV, got {result}"
