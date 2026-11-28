@@ -16,7 +16,7 @@ use datafusion_common::{Result, internal_err};
 use futures::future::poll_fn;
 use parking_lot::Mutex;
 
-use super::exec::JoinBuildData;
+use super::exec::RegularBuildData;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
@@ -24,12 +24,12 @@ use crate::joins::hash_join::shared_bounds::{
 use crate::joins::utils::{BuildProbeJoinMetrics, OnceFut};
 
 /// Left-side data and mutable bookkeeping for one regular join execution.
-/// Shares immutable [`JoinBuildData`] and coordinates unmatched build rows for
+/// Shares immutable [`RegularBuildData`] and coordinates unmatched build rows for
 /// Left/Full joins, so only the last probe partition emits them.
 pub(super) struct RegularJoinLeftData {
     unmatched: Option<Mutex<UnmatchedRows>>,
     // Keep the build lease last: its reservation also covers the bitmap.
-    pub(super) data: Arc<JoinBuildData>,
+    pub(super) data: Arc<RegularBuildData>,
 }
 
 struct UnmatchedRows {
@@ -39,7 +39,7 @@ struct UnmatchedRows {
 
 impl RegularJoinLeftData {
     pub(super) fn new(
-        data: Arc<JoinBuildData>,
+        data: Arc<RegularBuildData>,
         visited: Option<BooleanBufferBuilder>,
         probe_partitions: usize,
     ) -> Self {
